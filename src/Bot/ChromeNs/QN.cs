@@ -135,28 +135,60 @@ namespace Bot.ChromeNs
 
         private void Cdp_EvRecieveNewMessage(object sender, RecieveNewMessageEventArgs e)
         {
-            if (EvRecieveNewMessage != null)
+            try
             {
-                EvRecieveNewMessage(this, e);
-            }
-
-            var chatRes = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
-            var messages = chatRes.result;
-            messages.ForEach(async m =>
-            {
-                if (m.fromid.nick != _seller.Nick && m.toid.nick == _seller.Nick)
+                if (EvRecieveNewMessage != null)
                 {
-                    var isAutoReply = Params.Robot.GetIsAutoReply();
-                    var answer = MyOpenAI.GetAnswer(m.toid.nick, m.fromid.nick, m.summary);
-                    Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, m.summary, answer, isAutoReply);
-
-                    if (isAutoReply)
-                    {
-                        await SendTextAsync(m.fromid.nick, answer);
-                    }
+                    EvRecieveNewMessage(this, e);
                 }
-                await Task.Delay(2000);
-            });
+
+                var chatRes = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
+                if (chatRes == null || chatRes.result == null)
+                {
+                    Log.Error("收到新消息但无法解析: " + e.Message);
+                    return;
+                }
+
+                var messages = chatRes.result;
+                messages.ForEach(async m =>
+                {
+                    try
+                    {
+                        if (m.fromid.nick != _seller.Nick && m.toid.nick == _seller.Nick)
+                        {
+                            var isAutoReply = Params.Robot.GetIsAutoReply();
+                            var answer = string.Empty;
+
+                            // 原版本即使取消“自动回复”，买家一发消息仍会调用AI生成草稿；AI接口异常会导致程序闪退。
+                            // 这里改成：自动回复关闭时不调用AI，只记录会话。
+                            if (isAutoReply)
+                            {
+                                answer = MyOpenAI.GetAnswer(m.toid.nick, m.fromid.nick, m.summary);
+                            }
+                            else
+                            {
+                                answer = "自动回复已关闭，未调用AI。";
+                            }
+
+                            Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, m.summary, answer, isAutoReply);
+
+                            if (isAutoReply && !string.IsNullOrWhiteSpace(answer) && !answer.StartsWith("错误："))
+                            {
+                                await SendTextAsync(m.fromid.nick, answer);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Exception(ex);
+                    }
+                    await Task.Delay(2000);
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
 
         }
 
@@ -218,91 +250,5 @@ namespace Bot.ChromeNs
         {
             return await cdp.GetCurrentUser();
         }
-
-        public void InsertText2Inputbox(string uid, string text)
-        {
-            cdp.InsertText2Inputbox(uid, text);
-        }
-
-        public async Task<bool> IsInputboxEmpty()
-        {
-            return await cdp.IsInputboxEmpty();
-        }
-
-        public void BrowserUrl(string url)
-        {
-            cdp.BrowserUrl(url);
-        }
-
-        public void SendRemindPayCard(string encryptedBuyerId, string orderId)
-        {
-            cdp.SendRemindPayCard(encryptedBuyerId, orderId);
-        }
-
-        public void RecallMessage(string ccode, string clientId, string messageId)
-        {
-            cdp.RecallMessage(ccode, clientId, messageId);
-        }
-
-        public void OpenChat(string nick)
-        {
-            cdp.OpenChat(nick);
-        }
-
-        public void GetRemoteHisMsg(string ccode)
-        {
-            cdp.GetRemoteHisMsg(ccode);
-        }
-
-
-        public void SendCoupon(string buyerNick, string activityId)
-        {
-            cdp.SendCoupon(buyerNick, activityId);
-        }
-
-        public void CloseChat(string contactID)
-        {
-            cdp.CloseChat(contactID);
-        }
-
-
-        public async Task<AccountStatusResponse> GetAccountStatus()
-        {
-            return await cdp.GetAccountStatus();
-        }
-
-        public async Task<ItemRecordResponse> GetItemRecords(string encryptId)
-        {
-            return await cdp.GetItemRecords(encryptId);
-        }
-
-
-        public async Task<SearchUserResponse> SearchBuyerUser(string searchQuery)
-        {
-            return await cdp.SearchBuyerUser(searchQuery);
-        }
-
-        public async Task<BuyerInfoResponse> GetBuyerInfo(string encryptId)
-        {
-            return await cdp.GetBuyerInfo(encryptId);
-        }
-
-        public async Task<ZnkfTradeQueryResponse> GetBuyerTrades(string securityBuyerUid, string bizOrderId)
-        {
-            return await cdp.GetBuyerTrades(securityBuyerUid, bizOrderId);
-        }
-
-        public async Task<ConversationResponse> GetCurrentConversationID()
-        {
-            var res = await cdp.GetCurrentConversationID();
-            if (CurQN == null && res.Result != null && (Buyer == null || Buyer.Nick != res.Result.Nick))
-            {
-                Buyer = res.Result;
-                CurQN = this;
-                Desk.Inst.ChangeBuyer(Buyer.Nick);
-            }
-            return res;
-        }
-
     }
 }
