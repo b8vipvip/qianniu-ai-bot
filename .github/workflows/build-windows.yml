@@ -9,7 +9,7 @@ on:
       - 'src/BotLib/**'
       - 'src/DbEntity/**'
       - 'src/*.sln'
-      - 'src/packages.config'
+      - 'src/Directory.Build.props'
       - '.github/workflows/build-windows.yml'
 
 permissions:
@@ -17,7 +17,7 @@ permissions:
 
 env:
   CONFIGURATION: Debug
-  PLATFORM: Any CPU
+  PLATFORM: x64
 
 jobs:
   build:
@@ -31,22 +31,52 @@ jobs:
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
 
-      - name: Restore NuGet packages
-        run: nuget restore src\Bot.sln
-
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
+      - name: Show build environment
+        shell: pwsh
+        run: |
+          dotnet --info | Out-File env.log -Encoding utf8
+          nuget help | Out-File nuget-version.log -Encoding utf8
+          msbuild -version | Out-File msbuild-version.log -Encoding utf8
+          Get-ChildItem src\Bin | Select-Object Name,Length,LastWriteTime | Format-Table | Out-File bin-before.log -Encoding utf8
+          if (Test-Path src\Bin\TopSdk.dll) { Get-Item src\Bin\TopSdk.dll | Select-Object FullName,Length | Format-List | Out-File topsdk.log -Encoding utf8 }
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          nuget restore src\Bot.sln -NonInteractive -Verbosity detailed | Tee-Object -FilePath restore.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
       - name: Build
-        run: msbuild src\Bot.sln /m /t:Rebuild /p:Configuration="${{ env.CONFIGURATION }}" /p:Platform="${{ env.PLATFORM }}"
+        shell: pwsh
+        run: |
+          msbuild src\Bot.sln /m /t:Rebuild /p:Configuration="${{ env.CONFIGURATION }}" /p:Platform="${{ env.PLATFORM }}" /v:minimal /fl /flp:logfile=build.log`;verbosity=diagnostic
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "===== build.log tail ====="
+            Get-Content build.log -Tail 240
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qianniu-bot-build-logs
+          path: |
+            *.log
+            src\**\*.log
 
       - name: Upload Bin Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qianniu-bot-bin
           path: src\Bin\**
 
       - name: Commit compiled Bin back to master
+        if: success()
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
