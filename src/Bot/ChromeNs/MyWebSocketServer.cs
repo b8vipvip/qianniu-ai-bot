@@ -26,25 +26,42 @@ namespace Bot.ChromeNs
                 var webSocket = new WebSocketServer();
                 webSocket.NewSessionConnected += async (session) =>
                 {
-                    var cdp = new CDPClient(session);
-                    var user = await cdp.GetCurrentUser();
-                    var ver = await cdp.GetVersion();
-                    QN qn = QN.GetByNick(user.Result);
-                    qn.QnVersion = ver.version;
-                    qn.CDP = cdp;
-                    WndNotifyIcon.Inst.AddSellerMenuItem(qn.Seller.Nick);
+                    try
+                    {
+                        Log.Info("千牛注入脚本已连接 Bot WebSocket: " + session.SessionID);
+                        var cdp = new CDPClient(session);
+                        var user = await cdp.GetCurrentUser();
+                        var ver = await cdp.GetVersion();
+                        QN qn = QN.GetByNick(user.Result);
+                        qn.QnVersion = ver.version;
+                        qn.CDP = cdp;
+                        WndNotifyIcon.Inst.AddSellerMenuItem(qn.Seller.Nick);
+                        Log.Info("千牛CDP初始化成功, seller=" + qn.Seller.Nick + ", version=" + qn.QnVersion);
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Exception(ex);
+                    }
                 };
                 webSocket.NewMessageReceived += (session, value) =>
                 {
-                    var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
-                    if (wMsg.Type == "hi") return;
+                    try
+                    {
+                        var wMsg = JsonConvert.DeserializeObject<WSocketMessage>(value);
+                        if (wMsg.Type == "hi") return;
 
-                    if (OnRecieveMessage != null)
-                        OnRecieveMessage(session, new WSocketNewMessageEventArgs(wMsg.Type,wMsg.Response));
+                        Log.Info("收到千牛WebSocket事件: type=" + wMsg.Type);
+                        if (OnRecieveMessage != null)
+                            OnRecieveMessage(session, new WSocketNewMessageEventArgs(wMsg.Type,wMsg.Response));
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Exception(ex);
+                    }
                 };
                 webSocket.SessionClosed += (session, value) =>
                 {
-                    Console.Write(value);
+                    Log.Info("千牛注入脚本 WebSocket 已断开: " + session.SessionID + ", reason=" + value);
                 };
                 var config = new ServerConfig()
                 {
@@ -54,6 +71,7 @@ namespace Bot.ChromeNs
                 };
                 webSocket.Setup(config);//设置端口
                 webSocket.Start();
+                Log.Info("Bot WebSocket服务已启动: 127.0.0.1:41010");
             }
             catch (Exception ex)
             {
@@ -86,5 +104,4 @@ namespace Bot.ChromeNs
             Value = value;
         }
     }
-
 }
