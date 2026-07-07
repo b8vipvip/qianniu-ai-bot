@@ -34,30 +34,53 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Show build environment
+      - name: Restore and build
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Continue"
+          New-Item -ItemType Directory -Force -Path ci-last-build | Out-Null
+          $exitCode = 0
+
           dotnet --info | Out-File env.log -Encoding utf8
           nuget help | Out-File nuget-version.log -Encoding utf8
           msbuild -version | Out-File msbuild-version.log -Encoding utf8
           Get-ChildItem src\Bin | Select-Object Name,Length,LastWriteTime | Format-Table | Out-File bin-before.log -Encoding utf8
-          if (Test-Path src\Bin\TopSdk.dll) { Get-Item src\Bin\TopSdk.dll | Select-Object FullName,Length | Format-List | Out-File topsdk.log -Encoding utf8 }
-
-      - name: Restore NuGet packages
-        shell: pwsh
-        run: |
-          nuget restore src\Bot.sln -NonInteractive -Verbosity detailed | Tee-Object -FilePath restore.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Build
-        shell: pwsh
-        run: |
-          msbuild src\Bot.sln /m /t:Rebuild /p:Configuration="${{ env.CONFIGURATION }}" /p:Platform="${{ env.PLATFORM }}" /v:minimal /fl /flp:logfile=build.log`;verbosity=diagnostic
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "===== build.log tail ====="
-            Get-Content build.log -Tail 240
-            exit $LASTEXITCODE
+          if (Test-Path src\Bin\TopSdk.dll) {
+            Get-Item src\Bin\TopSdk.dll | Select-Object FullName,Length | Format-List | Out-File topsdk.log -Encoding utf8
           }
+
+          # The repository currently contains an empty src\Bin\TopSdk.dll. Remove TopSdk references at CI time.
+          foreach ($proj in @('src\Bot\Bot.csproj','src\DbEntity\DbEntity.csproj')) {
+            if (Test-Path $proj) {
+              $xml = Get-Content $proj -Raw
+              $xml = [regex]::Replace($xml, '(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>', '')
+              Set-Content $proj -Value $xml -Encoding UTF8
+            }
+          }
+
+          nuget restore src\Bot.sln -NonInteractive -Verbosity detailed *>&1 | Tee-Object -FilePath restore.log
+          if ($LASTEXITCODE -ne 0) {
+            $exitCode = $LASTEXITCODE
+          }
+
+          if ($exitCode -eq 0) {
+            msbuild src\Bot.sln /m /t:Rebuild /p:Configuration="${{ env.CONFIGURATION }}" /p:Platform="${{ env.PLATFORM }}" /v:minimal /fl /flp:logfile=build.log`;verbosity=diagnostic *>&1 | Tee-Object -FilePath build-console.log
+            if ($LASTEXITCODE -ne 0) { $exitCode = $LASTEXITCODE }
+          }
+
+          if (Test-Path build.log) {
+            Get-Content build.log -Tail 260 | Out-File ci-last-build\build-tail.txt -Encoding utf8
+          }
+          if (Test-Path build-console.log) {
+            Get-Content build-console.log -Tail 260 | Out-File ci-last-build\build-console-tail.txt -Encoding utf8
+          }
+          if (Test-Path restore.log) {
+            Get-Content restore.log -Tail 160 | Out-File ci-last-build\restore-tail.txt -Encoding utf8
+          }
+          Get-ChildItem src\Bin -ErrorAction SilentlyContinue | Select-Object Name,Length,LastWriteTime | Format-Table | Out-File ci-last-build\bin-after.txt -Encoding utf8
+          Set-Content ci-last-build\exit-code.txt -Value $exitCode -Encoding utf8
+
+          Write-Host "Build exit code: $exitCode"
 
       - name: Upload logs
         if: always()
@@ -66,6 +89,7 @@ jobs:
           name: qianniu-bot-build-logs
           path: |
             *.log
+            ci-last-build\**
             src\**\*.log
 
       - name: Upload Bin Artifact
@@ -75,17 +99,31 @@ jobs:
           name: qianniu-bot-bin
           path: src\Bin\**
 
-      - name: Commit compiled Bin back to master
-        if: success()
+      - name: Commit CI logs and compiled Bin
+        if: always()
         shell: pwsh
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f src/Bin
-          $changes = git status --porcelain src/Bin
+          git add -f ci-last-build
+          $exitCode = 1
+          if (Test-Path ci-last-build\exit-code.txt) { $exitCode = [int](Get-Content ci-last-build\exit-code.txt -Raw) }
+          if ($exitCode -eq 0) { git add -f src/Bin }
+          $changes = git status --porcelain ci-last-build src/Bin
           if ($changes) {
-            git commit -m "build: update compiled Bot binaries [skip ci]"
+            if ($exitCode -eq 0) {
+              git commit -m "build: update compiled Bot binaries [skip ci]"
+            } else {
+              git commit -m "ci: persist failed build logs [skip ci]"
+            }
             git push origin HEAD:master
           } else {
-            Write-Host "No compiled binary changes."
+            Write-Host "No CI log or binary changes."
           }
+
+      - name: Fail job if needed
+        shell: pwsh
+        run: |
+          $exitCode = 1
+          if (Test-Path ci-last-build\exit-code.txt) { $exitCode = [int](Get-Content ci-last-build\exit-code.txt -Raw) }
+          exit $exitCode
