@@ -98,12 +98,23 @@ namespace Bot.Options
             };
         }
 
+        private string GetJsonString(JObject json, params string[] names)
+        {
+            if (json == null || names == null) return string.Empty;
+            foreach (var name in names)
+            {
+                var token = json[name];
+                if (token != null) return token.ToString();
+            }
+            return string.Empty;
+        }
+
         private void ApplyConfigJson(JObject json)
         {
-            txtBaseUrl.Text = (json["baseUrl"] ?? json["BaseUrl"] ?? string.Empty).ToString();
-            txtApiKey.Text = (json["apiKey"] ?? json["ApiKey"] ?? string.Empty).ToString();
-            txtModelName.Text = (json["model"] ?? json["Model"] ?? json["modelName"] ?? string.Empty).ToString();
-            txtSystemPrompt.Text = (json["systemPrompt"] ?? json["SystemPrompt"] ?? string.Empty).ToString();
+            txtBaseUrl.Text = GetJsonString(json, "baseUrl", "BaseUrl");
+            txtApiKey.Text = GetJsonString(json, "apiKey", "ApiKey");
+            txtModelName.Text = GetJsonString(json, "model", "Model", "modelName", "ModelName");
+            txtSystemPrompt.Text = GetJsonString(json, "systemPrompt", "SystemPrompt");
             Save(_seller);
         }
 
