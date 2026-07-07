@@ -127,7 +127,7 @@ namespace Bot.ChromeNs
             var t = NormalizeText(text);
             if (string.IsNullOrEmpty(t)) return true;
             if (Regex.IsMatch(t, "^[0-9]+$")) return true;
-            if (Regex.IsMatch(t, "^[，。,.!！?？~～…、；;：:\\-_=+\uD83D\uDE00-\uD83D\uDE4F]+$")) return true;
+            if (Regex.IsMatch(t, "^[，。,.!！?？~～…、；;：:_=+-]+$")) return true;
             var words = new HashSet<string> { "好", "好的", "嗯", "恩", "哦", "噢", "是", "是的", "对", "对的", "谢谢", "谢了", "收到", "知道了", "可以", "行" };
             return words.Contains(t);
         }
