@@ -21,6 +21,7 @@ using System.Linq;
 using OpenAI.Chat;
 using BotLib.Extensions;
 using SuperSocket.SocketEngine.Configuration;
+using BotLib;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
@@ -59,7 +60,16 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void CtlRobot_Loaded(object sender, RoutedEventArgs e)
         {
+            cboxBotEnabled.IsChecked = Params.Robot.CanUseRobotReal;
             cboxAuto.IsChecked = Params.Robot.GetIsAutoReply();
+            RefreshAutoReplyEnabledState();
+        }
+
+        private void RefreshAutoReplyEnabledState()
+        {
+            var enabled = Params.Robot.CanUseRobotReal;
+            cboxAuto.IsEnabled = enabled;
+            cboxAuto.Opacity = enabled ? 1.0 : 0.55;
         }
 
         public void AddConversation(string seller, string buyer, string question, string answer,bool isAutoReply = false)
@@ -78,7 +88,8 @@ namespace Bot.AssistWindow.Widget.Robot
 
             buyerConversations.AddOrUpdate(key, id => conversations, (k, v) => conversations);
 
-            if (QN.CurQN.Seller.Nick == seller && QN.CurQN.Buyer.Nick == buyer)
+            if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null
+                && QN.CurQN.Seller.Nick == seller && QN.CurQN.Buyer.Nick == buyer)
             {
                 grdTipNoConv.Visibility = Visibility.Collapsed;
                 stkDialog.Children.Add(ctlConversation);
@@ -125,25 +136,33 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private async void RefreshItems()
         {
-            pgDownGoods.Visibility = Visibility.Visible;
-            RemoveCtlGoods();
-            //咨询的商品
-            var itemRecord = await _preQN.GetItemRecords(_preQN.Buyer.TargetId);
-            if (itemRecord.data == null || itemRecord.data.underInquiryItemList == null)
+            try
             {
-                pgDownGoods.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                var inquiryItems = itemRecord.data.underInquiryItemList;
-                if (inquiryItems != null && inquiryItems.Count > 0)
+                pgDownGoods.Visibility = Visibility.Visible;
+                RemoveCtlGoods();
+                //咨询的商品
+                var itemRecord = await _preQN.GetItemRecords(_preQN.Buyer.TargetId);
+                if (itemRecord.data == null || itemRecord.data.underInquiryItemList == null)
                 {
-                    foreach (var item in inquiryItems)
-                    {
-                        var ctlGoods = new CtlOneGoods(item);
-                        panelGoods.Children.Add(ctlGoods);
-                    }
+                    pgDownGoods.Visibility = Visibility.Collapsed;
                 }
+                else
+                {
+                    var inquiryItems = itemRecord.data.underInquiryItemList;
+                    if (inquiryItems != null && inquiryItems.Count > 0)
+                    {
+                        foreach (var item in inquiryItems)
+                        {
+                            var ctlGoods = new CtlOneGoods(item);
+                            panelGoods.Children.Add(ctlGoods);
+                        }
+                    }
+                    pgDownGoods.Visibility = Visibility.Collapsed;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
                 pgDownGoods.Visibility = Visibility.Collapsed;
             }
         }
@@ -170,9 +189,17 @@ namespace Bot.AssistWindow.Widget.Robot
             ReShowAfterQNChange();
         }
 
+        private void cboxBotEnabled_Click(object sender, RoutedEventArgs e)
+        {
+            Params.Robot.CanUseRobot = cboxBotEnabled.IsChecked ?? true;
+            RefreshAutoReplyEnabledState();
+            Log.Info("Bot总开关=" + (Params.Robot.CanUseRobotReal ? "启用" : "停用"));
+        }
+
         private void cboxAuto_Click(object sender, RoutedEventArgs e)
         {
             Params.Robot.SetIsAutoReply(cboxAuto.IsChecked ?? false);
+            Log.Info("自动回复=" + ((cboxAuto.IsChecked ?? false) ? "开启" : "关闭"));
         }
     }
 }
