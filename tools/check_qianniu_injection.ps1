@@ -65,12 +65,15 @@ try {
 
   if ($inject) {
     $m = [regex]::Match($inject, 'window\.__qnbotInjectVersion\s*=\s*"([^"]+)"')
+    $runtime = [regex]::Match($inject, 'window\.__qnbotRuntimePatch\s*=\s*"([^"]+)"')
     Write-Host "inject version: $($m.Groups[1].Value)"
-    Write-Host "inject contains body-ready patch: $($inject.Contains('__qnbotAppendOfficialImsupportWhenBodyReady'))"
+    Write-Host "inject runtime patch: $($runtime.Groups[1].Value)"
+    Write-Host "inject contains body-ready patch: $($inject.Contains('__qnbotAppendOfficialImsupportWhenBodyReady') -or $inject.Contains('appendOfficialWhenReady'))"
     Write-Host "inject contains websocket: $($inject.Contains('ws://127.0.0.1:41010'))"
     Write-Host "inject contains imsdk hook: $($inject.Contains('im.singlemsg.onReceiveNewMsg'))"
     Write-Host "inject contains status patch: $($inject.Contains('__qnbotStatusPatch'))"
     Write-Host "inject contains GetNewMsg patch: $($inject.Contains('__qnbotGetNewMsgPatch'))"
+    Write-Host "inject contains safe delayed hooks: $($inject.Contains('20260707-safe-hooks-v5'))"
   }
 
   $htmlEntries = @($zip.Entries | Where-Object { $_.FullName.EndsWith('.html') })
