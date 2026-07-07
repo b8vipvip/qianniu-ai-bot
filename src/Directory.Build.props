@@ -1,0 +1,6 @@
+<Project>
+  <PropertyGroup>
+    <!-- Legacy .NET Framework projects in this repo reference several vendor DLLs stored in src\Bin. -->
+    <ReferencePath>$(MSBuildThisFileDirectory)Bin;$(ReferencePath)</ReferencePath>
+  </PropertyGroup>
+</Project>
