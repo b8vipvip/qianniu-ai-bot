@@ -13,6 +13,7 @@
                     <RowDefinition/>
                     <RowDefinition/>
                     <RowDefinition/>
+                    <RowDefinition/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="50"/>
@@ -27,6 +28,11 @@
                 <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0 6 0 0">
                     <Button x:Name="btnTestApi" Width="90" Height="24" Click="btnTestApi_Click">测试API</Button>
                     <TextBlock x:Name="txtApiTestResult" Margin="10 0 0 0" Width="360" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="DarkBlue"></TextBlock>
+                </StackPanel>
+                <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0 6 0 0">
+                    <Button x:Name="btnExportConfig" Width="90" Height="24" Click="btnExportConfig_Click">导出配置</Button>
+                    <Button x:Name="btnImportConfig" Width="90" Height="24" Margin="8 0 0 0" Click="btnImportConfig_Click">导入配置</Button>
+                    <TextBlock Margin="10 0 0 0" VerticalAlignment="Center" Foreground="Gray">SystemPrompt 可留空，留空时使用内置默认客服提示词。</TextBlock>
                 </StackPanel>
             </Grid>
 
