@@ -1,0 +1,34 @@
+name: Build Windows Bot
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ master ]
+    paths:
+      - 'src/**'
+      - '.github/workflows/build-windows.yml'
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Restore NuGet packages
+        run: nuget restore src\Bot.sln
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build
+        run: msbuild src\Bot.sln /m /t:Rebuild /p:Configuration=Debug /p:Platform="Any CPU"
+
+      - name: Upload Bin Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qianniu-bot-bin
+          path: src\Bin\**
