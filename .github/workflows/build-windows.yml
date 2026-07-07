@@ -45,41 +45,32 @@ jobs:
           nuget help | Out-File nuget-version.log -Encoding utf8
           msbuild -version | Out-File msbuild-version.log -Encoding utf8
           Get-ChildItem src\Bin | Select-Object Name,Length,LastWriteTime | Format-Table | Out-File bin-before.log -Encoding utf8
-          if (Test-Path src\Bin\TopSdk.dll) {
-            Get-Item src\Bin\TopSdk.dll | Select-Object FullName,Length | Format-List | Out-File topsdk.log -Encoding utf8
-          }
 
-          # The repository currently contains an empty src\Bin\TopSdk.dll. Remove TopSdk references at CI time.
           foreach ($proj in @('src\Bot\Bot.csproj','src\DbEntity\DbEntity.csproj')) {
             if (Test-Path $proj) {
               $xml = Get-Content $proj -Raw
               $xml = [regex]::Replace($xml, '(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>', '')
+              if ($proj -like '*\Bot\Bot.csproj' -and $xml -notmatch 'ICSharpCode\.SharpZipLib') {
+                $sharpRef = '    <Reference Include="ICSharpCode.SharpZipLib"><HintPath>..\packages\SharpZipLib.1.4.2\lib\netstandard2.0\ICSharpCode.SharpZipLib.dll</HintPath><Private>True</Private></Reference>'
+                $xml = $xml -replace '(\s*<Reference Include="System" />)', "`r`n$sharpRef`$1"
+              }
               Set-Content $proj -Value $xml -Encoding UTF8
             }
           }
 
           nuget restore src\Bot.sln -NonInteractive -Verbosity detailed *>&1 | Tee-Object -FilePath restore.log
-          if ($LASTEXITCODE -ne 0) {
-            $exitCode = $LASTEXITCODE
-          }
+          if ($LASTEXITCODE -ne 0) { $exitCode = $LASTEXITCODE }
 
           if ($exitCode -eq 0) {
             msbuild src\Bot.sln /m /t:Rebuild /p:Configuration="${{ env.CONFIGURATION }}" /p:Platform="${{ env.PLATFORM }}" /v:minimal /fl /flp:logfile=build.log`;verbosity=diagnostic *>&1 | Tee-Object -FilePath build-console.log
             if ($LASTEXITCODE -ne 0) { $exitCode = $LASTEXITCODE }
           }
 
-          if (Test-Path build.log) {
-            Get-Content build.log -Tail 260 | Out-File ci-last-build\build-tail.txt -Encoding utf8
-          }
-          if (Test-Path build-console.log) {
-            Get-Content build-console.log -Tail 260 | Out-File ci-last-build\build-console-tail.txt -Encoding utf8
-          }
-          if (Test-Path restore.log) {
-            Get-Content restore.log -Tail 160 | Out-File ci-last-build\restore-tail.txt -Encoding utf8
-          }
+          if (Test-Path build.log) { Get-Content build.log -Tail 260 | Out-File ci-last-build\build-tail.txt -Encoding utf8 }
+          if (Test-Path build-console.log) { Get-Content build-console.log -Tail 260 | Out-File ci-last-build\build-console-tail.txt -Encoding utf8 }
+          if (Test-Path restore.log) { Get-Content restore.log -Tail 160 | Out-File ci-last-build\restore-tail.txt -Encoding utf8 }
           Get-ChildItem src\Bin -ErrorAction SilentlyContinue | Select-Object Name,Length,LastWriteTime | Format-Table | Out-File ci-last-build\bin-after.txt -Encoding utf8
           Set-Content ci-last-build\exit-code.txt -Value $exitCode -Encoding utf8
-
           Write-Host "Build exit code: $exitCode"
 
       - name: Upload logs
@@ -111,11 +102,7 @@ jobs:
           if ($exitCode -eq 0) { git add -f src/Bin }
           $changes = git status --porcelain ci-last-build src/Bin
           if ($changes) {
-            if ($exitCode -eq 0) {
-              git commit -m "build: update compiled Bot binaries [skip ci]"
-            } else {
-              git commit -m "ci: persist failed build logs [skip ci]"
-            }
+            if ($exitCode -eq 0) { git commit -m "build: update compiled Bot binaries [skip ci]" } else { git commit -m "ci: persist failed build logs [skip ci]" }
             git push origin HEAD:master
           } else {
             Write-Host "No CI log or binary changes."
