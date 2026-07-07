@@ -78,7 +78,8 @@ namespace Bot.ChromeNs
                     {
                         Log.Info("千牛注入脚本已连接 Bot WebSocket: " + session.SessionID);
                         GetOrCreateClient(session);
-                        Task.Run(() => TryInitSession(session, "connect"));
+                        // 不在连接时立即初始化。千牛会有很多普通 WebView，例如 dx-h5，里面没有 imsdk/_vs。
+                        // 等 qnbotStatus 报告 hasImsdk/hasLoginID 后再初始化，避免一直卡在“正在接待...”。
                     }
                     catch (Exception ex)
                     {
