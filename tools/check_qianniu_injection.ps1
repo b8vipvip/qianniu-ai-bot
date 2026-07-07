@@ -69,6 +69,8 @@ try {
     Write-Host "inject contains body-ready patch: $($inject.Contains('__qnbotAppendOfficialImsupportWhenBodyReady'))"
     Write-Host "inject contains websocket: $($inject.Contains('ws://127.0.0.1:41010'))"
     Write-Host "inject contains imsdk hook: $($inject.Contains('im.singlemsg.onReceiveNewMsg'))"
+    Write-Host "inject contains status patch: $($inject.Contains('__qnbotStatusPatch'))"
+    Write-Host "inject contains GetNewMsg patch: $($inject.Contains('__qnbotGetNewMsgPatch'))"
   }
 
   $htmlEntries = @($zip.Entries | Where-Object { $_.FullName.EndsWith('.html') })
