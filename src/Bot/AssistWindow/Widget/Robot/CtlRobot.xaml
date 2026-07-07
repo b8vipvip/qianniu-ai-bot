@@ -38,16 +38,25 @@
                 <ColumnDefinition Width="auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="auto" />
+                <ColumnDefinition Width="auto" />
             </Grid.ColumnDefinitions>
             <TextBlock Margin="5 0 0 0"  Text="正在接待" Foreground="#FFFFFFFF" VerticalAlignment="Center"></TextBlock>
             <TextBlock Margin="5 0 0 0" x:Name="txtBuyer" Text="..." Grid.Column="1"
                 Foreground="Yellow" FontWeight="Bold" FontSize="13"
                 VerticalAlignment="Center"></TextBlock>
             <CheckBox
-                Name="cboxAuto"
+                Name="cboxBotEnabled"
                 Grid.Column="3"
                 Margin="2 0 5 0"
-                ToolTip="自动切换到发送消息的客户，并将答案【直接发送】给顾客"
+                ToolTip="总开关。关闭后不调用AI、不自动发送，只保留插件窗口。"
+                Foreground="#FFFFFFFF"
+                VerticalAlignment="Center"
+                Click="cboxBotEnabled_Click">启用Bot</CheckBox>
+            <CheckBox
+                Name="cboxAuto"
+                Grid.Column="4"
+                Margin="2 0 5 0"
+                ToolTip="开启后AI答案会直接发送给顾客；关闭后只在右侧生成答案，不发送。"
                 Foreground="#FFFFFFFF"
                 VerticalAlignment="Center"
                 Click="cboxAuto_Click">自动回复</CheckBox>
@@ -68,41 +77,6 @@
                 <Grid Name="grdTipNoConv" Background="#FFFFFFFF" Height="200" Visibility="Collapsed">
                     <TextBlock  HorizontalAlignment="Center" VerticalAlignment="Center" FontSize="20" Text="暂无聊天内容" />
                 </Grid>
-                <!--<Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="24"></RowDefinition>
-                        <RowDefinition Height="*" MinHeight="24"></RowDefinition>
-                    </Grid.RowDefinitions>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="24"/>
-                        <ColumnDefinition/>
-                    </Grid.ColumnDefinitions>
-                    <Border Background="#B39DDB" CornerRadius="2" Margin="2"/>
-                    <TextBlock Text="Q" VerticalAlignment="Center" HorizontalAlignment="Center" />
-                    --><!--<Rectangle Width="20" Height="20" Fill="#B39DDB" RadiusX="2" RadiusY="2"/>--><!--
-                    <TextBlock Text="你好" Grid.Column="1" FontWeight="Bold" VerticalAlignment="Center"/>
-                    <Border Background="#B39DDB" Grid.Row="1"  CornerRadius="2" Margin="2"/>
-                    <TextBlock Text="A" Grid.Row="1" VerticalAlignment="Center"  HorizontalAlignment="Center" />
-                    <TextBlock Text="您好，欢迎光临本店..."  Grid.Row="1" Grid.Column="1" TextWrapping="Wrap" VerticalAlignment="Center"/>
-                </Grid>-->
-               
-                <!-- 聊天气泡 --><!--
-                <StackPanel Orientation="Horizontal" Margin="8 8 8 0">
-                    <Rectangle Width="24" Height="24" Fill="#B39DDB" RadiusX="12" RadiusY="12"/>
-                    <StackPanel Margin="8,0">
-                        <TextBlock Text="你好" FontWeight="Bold"/>
-                        <TextBlock Text="您好，欢迎光临本店..." TextWrapping="Wrap"/>
-                    </StackPanel>
-                </StackPanel>
-                --><!-- 其他消息仿照上面添加 --><!--
-                <StackPanel Orientation="Horizontal" Margin="8,8,8,0">
-                    <Rectangle Width="24" Height="24" Fill="#B39DDB" RadiusX="12" RadiusY="12"/>
-                    <StackPanel Margin="8 8">
-                        <TextBlock Text="在吗" FontWeight="Bold"/>
-                        <TextBlock Text="在的哦，请问有什么可以帮您的吗？" TextWrapping="Wrap"/>
-                    </StackPanel>
-                </StackPanel>
-                --><!-- 更多消息... -->
             </StackPanel>
         </ScrollViewer>
     </Grid>
