@@ -77,11 +77,11 @@ function Clear-QianniuWebCaches {
 
   $names = @("Cache", "Code Cache", "GPUCache", "Service Worker", "IndexedDB", "Local Storage", "Session Storage", "blob_storage")
   foreach ($root in $roots) {
-    Write-Host "扫描缓存目录: $root"
+    Write-Host "Scan cache root: $root"
     Get-ChildItem -Path $root -Recurse -Directory -ErrorAction SilentlyContinue |
       Where-Object { $names -contains $_.Name } |
       ForEach-Object {
-        Write-Host "删除缓存: $($_.FullName)"
+        Write-Host "Remove cache: $($_.FullName)"
         Remove-Item $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
       }
   }
@@ -90,48 +90,48 @@ function Clear-QianniuWebCaches {
 Stop-QianniuProcesses
 
 $installPath = Get-QianniuInstallPath
-if (!$installPath) { throw "没有找到千牛安装路径。请确认千牛已安装并至少启动过一次。" }
-Write-Host "千牛安装目录: $installPath"
+if (!$installPath) { throw "Qianniu install path not found. Please install and start Qianniu once." }
+Write-Host "Qianniu install path: $installPath"
 
 $resourcePath = Get-QianniuResourcePath $installPath
-if (!$resourcePath) { throw "没有找到千牛 Resources 目录。" }
-Write-Host "千牛资源目录: $resourcePath"
+if (!$resourcePath) { throw "Qianniu Resources path not found." }
+Write-Host "Qianniu resource path: $resourcePath"
 
 $webuiZip = Join-Path (Join-Path $resourcePath "newWebui") "webui.zip"
 $signPath = Join-Path (Join-Path $resourcePath "newWebui") "sign.json"
-if (!(Test-Path $webuiZip)) { throw "没有找到 webui.zip: $webuiZip" }
+if (!(Test-Path $webuiZip)) { throw "webui.zip not found: $webuiZip" }
 
 $backup = "$webuiZip.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 Copy-Item $webuiZip $backup -Force
-Write-Host "已备份: $backup"
+Write-Host "Backup created: $backup"
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::Open($webuiZip, [System.IO.Compression.ZipArchiveMode]::Update)
 try {
   $recent = Read-ZipEntryText $zip $recentEntryName
-  if ($null -eq $recent) { throw "webui.zip 内没有找到 $recentEntryName" }
+  if ($null -eq $recent) { throw "Entry not found in webui.zip: $recentEntryName" }
 
   if ($RestoreOfficial) {
-    Write-Host "恢复官方 imsupport 脚本，不注入 qnbot。"
+    Write-Host "Restore official imsupport script. qnbot injection will be removed."
     $recent = $recent.Replace($oldRemoteUrl, $officialUrl)
     $recent = $recent.Replace($injectSrc, $officialUrl)
     Remove-ZipEntry $zip $injectEntryName
   } else {
-    if (!(Test-Path $injectJs)) { throw "没有找到本地 inject.js: $injectJs" }
+    if (!(Test-Path $injectJs)) { throw "Local inject.js not found: $injectJs" }
     $injectContent = Get-Content $injectJs -Raw -Encoding UTF8
     if ($injectContent -notmatch [regex]::Escape($marker)) {
-      throw "本地 inject.js 不包含语言修复标记 $marker，请先 git pull 更新。"
+      throw "Local inject.js does not contain marker $marker. Run git pull first."
     }
 
-    Write-Host "强制写入本地 qnbot-inject.js，并设置 zh-CN。"
+    Write-Host "Write local qnbot-inject.js and force zh-CN locale."
     if ($recent.Contains($oldRemoteUrl)) {
       $recent = $recent.Replace($oldRemoteUrl, $injectSrc)
     } elseif ($recent.Contains($officialUrl)) {
       $recent = $recent.Replace($officialUrl, $injectSrc)
     } elseif (!$recent.Contains($injectSrc)) {
-      $tag = "<script src=\"$injectSrc\"></script>"
+      $tag = '<script src="' + $injectSrc + '"></script>'
       if ($recent -match '</body>') {
-        $recent = $recent -replace '</body>', "$tag</body>"
+        $recent = $recent -replace '</body>', ($tag + '</body>')
       } else {
         $recent += $tag
       }
@@ -146,11 +146,11 @@ try {
 
 if (Test-Path $signPath) {
   Clear-Content $signPath -ErrorAction SilentlyContinue
-  Write-Host "已清空签名文件: $signPath"
+  Write-Host "sign.json cleared: $signPath"
 }
 
 if (!$SkipCacheClear) {
   Clear-QianniuWebCaches
 }
 
-Write-Host "完成。现在请重新打开千牛，再打开 Bot.exe。"
+Write-Host "Done. Reopen Qianniu first, then start Bot.exe."
