@@ -1,0 +1,260 @@
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlConversation.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlOneGoods.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlRobot.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndLoading.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\NotifyIcon\WndNotifyIcon.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\RightPanel.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\WndAssist.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\EmojiInputer\WndEmojiInputer.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndInput.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndMsgBox.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNotTipAgain.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNoodles.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndTrayTip.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndRedBull.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\WndOption.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\App.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\GeneratedInternalTypeHelper.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.lref (TaskId:39)
+                     Task Parameter:Path=obj\x64\Debug\ (TaskId:39)
+                     Comparison path is "obj\x64\Debug\". (TaskId:39)
+                     Output Item(s): 
+                         _CleanCurrentFileWritesInIntermediate=
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.AssemblyReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Interop.IWshRuntimeLibrary.dll
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.ResolveComReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlConversation.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlOneGoods.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlRobot.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndLoading.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\NotifyIcon\WndNotifyIcon.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\RightPanel.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\WndAssist.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\EmojiInputer\WndEmojiInputer.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndInput.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndMsgBox.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNotTipAgain.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNoodles.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndTrayTip.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndRedBull.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\WndOption.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\App.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\GeneratedInternalTypeHelper.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.lref (TaskId:39)
+                   Done executing task "FindUnderPath". (TaskId:39)
+                   Added Item(s): 
+                       _CleanCurrentFileWritesWithNoReferences=
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.AssemblyReference.cache
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Interop.IWshRuntimeLibrary.dll
+                                   CopyLocal=false
+                                   EmbedInteropTypes=True
+                                   FusionName=Interop.IWshRuntimeLibrary, Version=1.0.0.0, Culture=neutral, PublicKeyToken=null
+                                   Guid={F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}
+                                   Isolated=False
+                                   Lcid=0
+                                   OriginalItemSpec=IWshRuntimeLibrary
+                                   ReferenceSourceTarget=ResolveComReference
+                                   VersionMajor=1
+                                   VersionMinor=0
+                                   WrapperTool=tlbimp
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.ResolveComReference.cache
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.baml
+                                   Link=
+                                   Localizable=
+                                   LogicalName=
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.baml
+                                   Link=
+                                   Localizable=
+                                   LogicalName=
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlConversation.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlOneGoods.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlRobot.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndLoading.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\NotifyIcon\WndNotifyIcon.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\RightPanel.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\WndAssist.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\EmojiInputer\WndEmojiInputer.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndInput.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndMsgBox.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNotTipAgain.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNoodles.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndTrayTip.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndRedBull.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\WndOption.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\App.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\GeneratedInternalTypeHelper.g.cs
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.cache
+                           D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.lref
+                   Task "RemoveDuplicates" (TaskId:40)
+                     Output Item(s): 
+                         _CleanCurrentFileWrites=
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.AssemblyReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Interop.IWshRuntimeLibrary.dll
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.ResolveComReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlConversation.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlOneGoods.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlRobot.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndLoading.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\NotifyIcon\WndNotifyIcon.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\RightPanel.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\WndAssist.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\EmojiInputer\WndEmojiInputer.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndInput.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndMsgBox.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNotTipAgain.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNoodles.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndTrayTip.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndRedBull.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\WndOption.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\App.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\GeneratedInternalTypeHelper.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.lref (TaskId:40)
+                   Done executing task "RemoveDuplicates". (TaskId:40)
+00:41:04.596     4>Done building target "_CleanGetCurrentAndPriorFileWrites" in project "Bot.csproj".: (TargetId:57)
+00:41:04.596     4>Target "_CleanRecordFileWrites: (TargetId:58)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "CoreBuild" depends on it):
+                   Task "RemoveDuplicates" (TaskId:41)
+                     Output Item(s): 
+                         _CleanUniqueFileWrites=
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.AssemblyReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Interop.IWshRuntimeLibrary.dll
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.ResolveComReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlConversation.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlOneGoods.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlRobot.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndLoading.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\NotifyIcon\WndNotifyIcon.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\RightPanel.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\WndAssist.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\EmojiInputer\WndEmojiInputer.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndInput.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndMsgBox.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNotTipAgain.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNoodles.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndTrayTip.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndRedBull.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\WndOption.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\App.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\GeneratedInternalTypeHelper.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.lref (TaskId:41)
+                   Done executing task "RemoveDuplicates". (TaskId:41)
+                   Task "MakeDir" (TaskId:42)
+                     Task Parameter:Directories=obj\x64\Debug\ (TaskId:42)
+                   Done executing task "MakeDir". (TaskId:42)
+                   Task "WriteLinesToFile" (TaskId:43)
+                     Task Parameter:WriteOnlyWhenDifferent=True (TaskId:43)
+                     Task Parameter:
+                         Lines=
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.AssemblyReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Interop.IWshRuntimeLibrary.dll
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot.csproj.ResolveComReference.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.baml
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlConversation.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlImage.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlOneGoods.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\Robot\CtlRobot.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndLoading.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\NotifyIcon\WndNotifyIcon.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\Widget\RightPanel.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\AssistWindow\WndAssist.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\EmojiInputer\WndEmojiInputer.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndInput.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndMsgBox.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNotTipAgain.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndNoodles.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndTrayTip.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Common\Windows\WndRedBull.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\CtlRobotOptions.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Options\WndOption.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\App.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\GeneratedInternalTypeHelper.g.cs
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.cache
+                             D:\a\qianniu-bot\qianniu-bot\src\Bot\obj\x64\Debug\Bot_MarkupCompile.lref (TaskId:43)
+                     Task Parameter:Overwrite=True (TaskId:43)
+                     Task Parameter:File=obj\x64\Debug\Bot.csproj.FileListAbsolute.txt (TaskId:43)
+                   Done executing task "WriteLinesToFile". (TaskId:43)
+00:41:04.598     4>Done building target "_CleanRecordFileWrites" in project "Bot.csproj".: (TargetId:58)
+00:41:04.598     4>Done Building Project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target(s)) -- FAILED.
+00:41:04.600     1>Done executing task "MSBuild" -- FAILED. (TaskId:3)
+00:41:04.600     1>Done building target "Rebuild" in project "Bot.sln" -- FAILED.: (TargetId:5)
+00:41:04.600     1>Done Building Project "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target(s)) -- FAILED.
+
+Build FAILED.
+
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target) (1) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj" (Rebuild target) (2) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj" (_CompileTemporaryAssembly target) (5) ->
+                   (CoreCompile target) -> 
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Misc\NoReEnterTimer.cs(17,24): warning CS0169: The field 'NoReEnterTimer._act' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(20,73): warning CS0067: The event 'WndInteliSence.EvItemFocused' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(41,39): warning CS0169: The field 'WndInteliSence.CollA' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(322,24): warning CS0649: Field 'WindowEx.RECT.bottom' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(320,24): warning CS0649: Field 'WindowEx.RECT.right' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(318,24): warning CS0649: Field 'WindowEx.RECT.left' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(19,73): warning CS0067: The event 'WndInteliSence.EvItemSelected' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(319,24): warning CS0649: Field 'WindowEx.RECT.top' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(42,39): warning CS0169: The field 'WndInteliSence.CollB' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(298,29): warning CS0414: The field 'WindowEx.WS_EX_WINDOWEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(294,29): warning CS0414: The field 'WindowEx.WS_POPUP' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(299,29): warning CS0414: The field 'WindowEx.WS_EX_CLIENTEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(296,29): warning CS0414: The field 'WindowEx.WS_THICKFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(295,29): warning CS0414: The field 'WindowEx.WS_CAPTION' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Extensions\StringEx.cs(15,31): warning CS0414: The field 'StringEx._numberPt' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(300,29): warning CS0414: The field 'WindowEx.WS_EX_STATICEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(297,29): warning CS0414: The field 'WindowEx.WS_EX_DLGMODALFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_n5dvmweo_wpftmp.csproj]
+
+
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target) (1) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj" (Rebuild target) (2) ->
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(20,73): warning CS0067: The event 'WndInteliSence.EvItemFocused' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(320,24): warning CS0649: Field 'WindowEx.RECT.right' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(318,24): warning CS0649: Field 'WindowEx.RECT.left' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(322,24): warning CS0649: Field 'WindowEx.RECT.bottom' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(319,24): warning CS0649: Field 'WindowEx.RECT.top' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(41,39): warning CS0169: The field 'WndInteliSence.CollA' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(19,73): warning CS0067: The event 'WndInteliSence.EvItemSelected' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(42,39): warning CS0169: The field 'WndInteliSence.CollB' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Misc\NoReEnterTimer.cs(17,24): warning CS0169: The field 'NoReEnterTimer._act' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(295,29): warning CS0414: The field 'WindowEx.WS_CAPTION' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(299,29): warning CS0414: The field 'WindowEx.WS_EX_CLIENTEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(300,29): warning CS0414: The field 'WindowEx.WS_EX_STATICEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Extensions\StringEx.cs(15,31): warning CS0414: The field 'StringEx._numberPt' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(297,29): warning CS0414: The field 'WindowEx.WS_EX_DLGMODALFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(298,29): warning CS0414: The field 'WindowEx.WS_EX_WINDOWEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(296,29): warning CS0414: The field 'WindowEx.WS_THICKFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(294,29): warning CS0414: The field 'WindowEx.WS_POPUP' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+
+
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target) (1) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target) (4) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_31vurkyd_wpftmp.csproj" (_CompileTemporaryAssembly target) (6) ->
+                   (CoreCompile target) -> 
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\AssistWindow\Widget\Robot\CtlRobot.xaml.cs(24,7): error CS0246: The type or namespace name 'Top' could not be found (are you missing a using directive or an assembly reference?) [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_31vurkyd_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Common\QNInject.cs(11,7): error CS0246: The type or namespace name 'ICSharpCode' could not be found (are you missing a using directive or an assembly reference?) [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_31vurkyd_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Common\QNInject.cs(196,40): error CS0246: The type or namespace name 'IStaticDataSource' could not be found (are you missing a using directive or an assembly reference?) [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_31vurkyd_wpftmp.csproj]
+
+    34 Warning(s)
+    3 Error(s)
+
+Time Elapsed 00:00:12.52
