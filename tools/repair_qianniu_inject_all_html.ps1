@@ -1,3 +1,7 @@
+param(
+  [switch]$EveryHtml
+)
+
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
@@ -87,15 +91,13 @@ try {
 
   $htmlNames = @($zip.Entries | Where-Object { $_.FullName.EndsWith('.html') } | ForEach-Object { $_.FullName })
   $patched = New-Object System.Collections.Generic.List[string]
+  $writeScriptCount = 0
 
   foreach ($name in $htmlNames) {
     $text = Read-ZipEntryText $zip $name
     if (!$text) { continue }
 
-    $shouldPatch = $false
-    if ($text.Contains($officialUrl) -or $text.Contains($oldRemoteUrl) -or $text.Contains($injectFileName)) {
-      $shouldPatch = $true
-    }
+    $shouldPatch = $EveryHtml -or $text.Contains($officialUrl) -or $text.Contains($oldRemoteUrl) -or $text.Contains($injectFileName)
     if (!$shouldPatch) { continue }
 
     $newText = $text.Replace($oldRemoteUrl, $injectFileName)
@@ -104,6 +106,7 @@ try {
     if (!$newText.Contains($injectFileName)) {
       $tag = '<script src="' + $injectFileName + '"></script>'
       if ($newText -match '</body>') { $newText = $newText -replace '</body>', ($tag + '</body>') }
+      elseif ($newText -match '</head>') { $newText = $newText -replace '</head>', ($tag + '</head>') }
       else { $newText += $tag }
     }
 
@@ -112,10 +115,13 @@ try {
     $dir = Get-DirNameInZip $name
     $injectEntry = $dir + $injectFileName
     Write-ZipEntryText $zip $injectEntry $injectContent
+    $writeScriptCount++
     $patched.Add($name) | Out-Null
   }
 
+  Write-Host "EveryHtml mode: $EveryHtml"
   Write-Host "Patched HTML entries: $($patched.Count)"
+  Write-Host "Injected script copies written: $writeScriptCount"
   foreach ($p in $patched) { Write-Host " - $p" }
 } finally {
   $zip.Dispose()
@@ -126,4 +132,4 @@ if (Test-Path $signPath) {
   Write-Host "sign.json cleared: $signPath"
 }
 
-Write-Host "Done. Reopen Qianniu, wait 15 seconds, then start Bot.exe."
+Write-Host "Done. Start Bot.exe first, then reopen Qianniu and wait 20 seconds."
