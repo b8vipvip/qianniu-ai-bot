@@ -87,6 +87,68 @@ function Clear-QianniuWebCaches {
   }
 }
 
+function Add-HansTextPatch($injectContent) {
+  $patch = @'
+(function(){
+  if (window.__qnbotHansPatchInstalled) return;
+  window.__qnbotHansPatchInstalled = true;
+  var map = {
+    "\u767c":"\u53d1","\u95dc":"\u5173","\u9589":"\u95ed","\u806f":"\u8054","\u7e6b":"\u7cfb","\u7d61":"\u7edc",
+    "\u8a02":"\u8ba2","\u55ae":"\u5355","\u865f":"\u53f7","\u8a18":"\u8bb0","\u9304":"\u5f55","\u8cb7":"\u4e70","\u8ce3":"\u5356",
+    "\u5f8c":"\u540e","\u8a73":"\u8be6","\u6b77":"\u5386","\u8aee":"\u54a8","\u8a62":"\u8be2","\u5bf6":"\u5b9d","\u8c9d":"\u8d1d",
+    "\u8a2d":"\u8bbe","\u85a6":"\u8350","\u512a":"\u4f18","\u8a08":"\u8ba1","\u5132":"\u50a8","\u8cc7":"\u8d44","\u8a55":"\u8bc4",
+    "\u50f9":"\u4ef7","\u5099":"\u5907","\u8a3b":"\u6ce8","\u6703":"\u4f1a","\u54e1":"\u5458","\u7522":"\u4ea7","\u7de8":"\u7f16",
+    "\u6a19":"\u6807","\u984c":"\u9898","\u8f38":"\u8f93","\u8f49":"\u8f6c","\u6a5f":"\u673a","\u500b":"\u4e2a","\u55ce":"\u5417",
+    "\u9019":"\u8fd9","\u7121":"\u65e0","\u8655":"\u5904","\u8cfc":"\u8d2d","\u9ede":"\u70b9","\u64ca":"\u51fb","\u555f":"\u542f",
+    "\u78ba":"\u786e","\u8a8d":"\u8ba4","\u7576":"\u5f53","\u4f86":"\u6765","\u9801":"\u9875","\u7db2":"\u7f51","\u958b":"\u5f00",
+    "\u8acb":"\u8bf7","\u8a0a":"\u8baf","\u88e1":"\u91cc","\u6eff":"\u6ee1","\u50c5":"\u4ec5","\u689d":"\u6761","\u6578":"\u6570"
+  };
+  function conv(s){
+    if (!s || typeof s !== "string") return s;
+    return s.replace(/[\u4e00-\u9fff]/g,function(ch){return map[ch] || ch;});
+  }
+  function skip(el){
+    if (!el || !el.tagName) return false;
+    var t = el.tagName.toUpperCase();
+    return t === "SCRIPT" || t === "STYLE" || t === "TEXTAREA";
+  }
+  function convert(root){
+    try{
+      if (!root) return;
+      if (root.nodeType === 3) {
+        var n = conv(root.nodeValue);
+        if (n !== root.nodeValue) root.nodeValue = n;
+        return;
+      }
+      if (root.nodeType !== 1 && root.nodeType !== 9) return;
+      if (skip(root)) return;
+      if (root.nodeType === 1) {
+        ["title","aria-label","placeholder","value"].forEach(function(a){
+          try{ if(root.hasAttribute && root.hasAttribute(a)){ var o=root.getAttribute(a); var n=conv(o); if(n!==o) root.setAttribute(a,n); } }catch(e){}
+        });
+      }
+      var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {acceptNode:function(node){return (!node.parentElement || skip(node.parentElement)) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;}});
+      var arr=[]; while(w.nextNode()) arr.push(w.currentNode); arr.forEach(convert);
+    }catch(e){}
+  }
+  function run(){ try{ convert(document.body || document.documentElement); }catch(e){} }
+  window.__qnbotForceHansText = run;
+  if(document.readyState === "loading") document.addEventListener("DOMContentLoaded", run); else run();
+  setTimeout(run,500); setTimeout(run,1500); setTimeout(run,3500); setInterval(run,4000);
+  try{
+    var obs = new MutationObserver(function(ms){ms.forEach(function(m){ if(m.type==="characterData") convert(m.target); if(m.addedNodes) m.addedNodes.forEach(convert); if(m.type==="attributes") convert(m.target); });});
+    var start=function(){var t=document.body||document.documentElement; if(t) obs.observe(t,{childList:true,subtree:true,characterData:true,attributes:true,attributeFilter:["title","aria-label","placeholder","value"]});};
+    if(document.body) start(); else document.addEventListener("DOMContentLoaded",start);
+  }catch(e){}
+})();
+'@
+
+  if ($injectContent -notmatch "__qnbotHansPatchInstalled") {
+    return $patch + "`r`n" + $injectContent
+  }
+  return $injectContent
+}
+
 Stop-QianniuProcesses
 
 $installPath = Get-QianniuInstallPath
@@ -123,8 +185,9 @@ try {
     if ($injectContent -notmatch [regex]::Escape($marker)) {
       throw "Local inject.js does not contain marker $marker. Run git pull first."
     }
+    $injectContent = Add-HansTextPatch $injectContent
 
-    Write-Host "Write local qnbot-inject.js and force zh-CN locale."
+    Write-Host "Write local qnbot-inject.js, force zh-CN locale, and patch UI text."
     if ($recent.Contains($oldRemoteUrl)) {
       $recent = $recent.Replace($oldRemoteUrl, $injectSrc)
     } elseif ($recent.Contains($officialUrl)) {
