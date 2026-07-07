@@ -68,9 +68,7 @@ function Patch-InjectContent($injectContent) {
   if (!$injectContent) { return $injectContent }
 
   if ($injectContent -notmatch "__qnbotStatusPatch") {
-    $oldOpen = 'window.chatWebsocket = socket; // 存储到全局变量'
-    $newOpen = @'
-window.chatWebsocket = socket; // 存储到全局变量
+    $statusBlock = @'
       try {
         socket.send(JSON.stringify({
           type: 'qnbotStatus',
@@ -87,9 +85,12 @@ window.chatWebsocket = socket; // 存储到全局变量
         }));
       } catch (e) {}
 '@
-    if ($injectContent.Contains($oldOpen)) {
+    $pattern = '(window\.chatWebsocket\s*=\s*socket\s*;[^\r\n]*(?:\r?\n))'
+    if ([regex]::IsMatch($injectContent, $pattern)) {
       Write-Host "Patch qnbot-inject.js: add websocket status diagnostic."
-      $injectContent = $injectContent.Replace($oldOpen, $newOpen)
+      $injectContent = [regex]::Replace($injectContent, $pattern, ('$1' + $statusBlock), 1)
+    } else {
+      Write-Host "WARN: status patch target not found."
     }
   }
 
