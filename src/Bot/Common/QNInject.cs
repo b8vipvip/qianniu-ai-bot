@@ -24,6 +24,7 @@ namespace Bot.Common
         private const string injectedScriptFile = @"web_chat-packer/qnbot-inject.js";
         private const string injectedScriptSrc = "qnbot-inject.js";
         private const string imSupportUrl = @"https://iseiya.taobao.com/imsupport";
+        private const string injectVersionMarker = "20260707-zh-cn-v2";
         // 旧版本使用外部 OSS 脚本，可能导致千牛接待台资源/语言异常。新版改为把本地 src\Bin\inject.js 写入 webui.zip。
         private const string oldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
 
@@ -129,8 +130,23 @@ namespace Bot.Common
                 using (var streamReader = new StreamReader(inputStream))
                 {
                     var chatRecentHtmlContent = streamReader.ReadToEnd();
-                    // 只有已经切到本地 qnbot-inject.js 时才认为注入完成；旧远程 OSS 注入需要被替换掉。
-                    return chatRecentHtmlContent.Contains(injectedScriptSrc) && !chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl);
+                    if (!chatRecentHtmlContent.Contains(injectedScriptSrc) || chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl))
+                    {
+                        return false;
+                    }
+                }
+
+                var injectEntry = zipFile.GetEntry(injectedScriptFile);
+                if (injectEntry == null)
+                {
+                    return false;
+                }
+
+                using (var inputStream = zipFile.GetInputStream(injectEntry))
+                using (var streamReader = new StreamReader(inputStream))
+                {
+                    var injectContent = streamReader.ReadToEnd();
+                    return injectContent.Contains(injectVersionMarker);
                 }
             }
         }
