@@ -35,8 +35,26 @@ namespace Bot.ChromeNs
         {
             get
             {
-                return "你是淘宝店铺客服助手。请用简短、礼貌、自然的中文回复买家。不要编造库存、价格、物流、订单状态。遇到退款、投诉、差评、赔偿、订单隐私问题时，回复：亲，这个问题我帮您转人工客服确认一下。";
+                return "你是淘宝店铺客服助手。只回复买家当前问题，语气像真人客服，简短自然。不要编造库存、价格、物流、订单状态。遇到退款、投诉、差评、赔偿、订单隐私问题时，回复：亲，这个问题我帮您转人工客服确认一下。";
             }
+        }
+
+        private static string ReplyStyleGuard
+        {
+            get
+            {
+                return "\n\n固定回复规则：每次最多1句话，优先20到35个字，最多不超过60个字；不要连续说多个解决方案；不要反复感谢、不要过度客套、不要像机器人话术；不要重复称呼“亲”；买家只发数字、表情、嗯/好/好的/是的/谢谢这类无明确问题时，不要主动扩展营销。";
+            }
+        }
+
+        private static string BuildSystemPrompt(string prompt)
+        {
+            var basePrompt = string.IsNullOrWhiteSpace(prompt) ? DefaultSystemPrompt : prompt.Trim();
+            if (basePrompt.Contains("固定回复规则"))
+            {
+                return basePrompt;
+            }
+            return basePrompt + ReplyStyleGuard;
         }
 
         private static bool EnsureConfig()
@@ -47,7 +65,7 @@ namespace Bot.ChromeNs
                 var baseUrl = (Params.Robot.GetBaseUrl() ?? string.Empty).Trim();
                 var model = (Params.Robot.GetModelName() ?? string.Empty).Trim();
                 var prompt = Params.Robot.GetSystemPrompt();
-                systemPrompt = string.IsNullOrWhiteSpace(prompt) ? DefaultSystemPrompt : prompt;
+                systemPrompt = BuildSystemPrompt(prompt);
 
                 if (string.IsNullOrEmpty(apikey) || string.IsNullOrEmpty(model))
                 {
@@ -125,6 +143,18 @@ namespace Bot.ChromeNs
             return content.ToString(Formatting.None);
         }
 
+        private static string CleanAnswer(string answer)
+        {
+            answer = (answer ?? string.Empty).Trim();
+            answer = answer.Replace("\r", " ").Replace("\n", " ");
+            while (answer.Contains("  ")) answer = answer.Replace("  ", " ");
+            if (answer.Length > 80)
+            {
+                answer = answer.Substring(0, 80).TrimEnd('，', '。', '；', '、', ' ') + "。";
+            }
+            return answer;
+        }
+
         private static ApiCallResult CallChatCompletions(string baseUrl, string apiKey, string model, JArray messages)
         {
             var url = NormalizeBaseUrl(baseUrl);
@@ -132,7 +162,8 @@ namespace Bot.ChromeNs
             {
                 ["model"] = model,
                 ["messages"] = messages,
-                ["temperature"] = 0.2
+                ["temperature"] = 0.15,
+                ["max_tokens"] = 120
             };
 
             using (var http = new HttpClient())
@@ -155,7 +186,7 @@ namespace Bot.ChromeNs
                         };
                     }
 
-                    var answer = ExtractAnswer(body);
+                    var answer = CleanAnswer(ExtractAnswer(body));
                     if (string.IsNullOrWhiteSpace(answer))
                     {
                         return new ApiCallResult
@@ -182,7 +213,7 @@ namespace Bot.ChromeNs
                 baseUrl = (baseUrl ?? string.Empty).Trim();
                 apiKey = (apiKey ?? string.Empty).Trim();
                 model = (model ?? string.Empty).Trim();
-                prompt = string.IsNullOrWhiteSpace(prompt) ? DefaultSystemPrompt : prompt;
+                prompt = BuildSystemPrompt(prompt);
 
                 if (string.IsNullOrEmpty(apiKey)) return "失败：ApiKey 为空。";
                 if (string.IsNullOrEmpty(model)) return "失败：Model 为空。";
