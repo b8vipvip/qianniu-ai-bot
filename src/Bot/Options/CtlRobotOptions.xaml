@@ -12,6 +12,7 @@
                     <RowDefinition/>
                     <RowDefinition/>
                     <RowDefinition/>
+                    <RowDefinition/>
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="50"/>
@@ -23,6 +24,10 @@
                 <TextBox x:Name="txtApiKey" Grid.Row="1" Grid.Column="1" Height="22" Padding="1"  VerticalAlignment="Center" HorizontalAlignment="Left" Width="300"></TextBox>
                 <TextBlock Margin="5"  Grid.Row="2" VerticalAlignment="Center">Model</TextBlock>
                 <TextBox x:Name="txtModelName"  Grid.Row="2" Grid.Column="1" Height="22" Padding="1"  VerticalAlignment="Center" HorizontalAlignment="Left" Width="300"></TextBox>
+                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0 6 0 0">
+                    <Button x:Name="btnTestApi" Width="90" Height="24" Click="btnTestApi_Click">测试API</Button>
+                    <TextBlock x:Name="txtApiTestResult" Margin="10 0 0 0" Width="360" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="DarkBlue"></TextBlock>
+                </StackPanel>
             </Grid>
 
             <GroupBox Header="SystemPrompt" Padding="2" Margin="0 5 0 0">
