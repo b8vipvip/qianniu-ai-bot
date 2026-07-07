@@ -21,9 +21,11 @@ namespace Bot.Common
         private const string webuiFile = "webui.zip";
         private const string signFile = "sign.json";
         private const string chatRecentHtmlFile = @"web_chat-packer/recent.html";
+        private const string injectedScriptFile = @"web_chat-packer/qnbot-inject.js";
+        private const string injectedScriptSrc = "qnbot-inject.js";
         private const string imSupportUrl = @"https://iseiya.taobao.com/imsupport";
-        private const string overWriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js"; 
-
+        // 旧版本使用外部 OSS 脚本，可能导致千牛接待台资源/语言异常。新版改为把本地 src\Bin\inject.js 写入 webui.zip。
+        private const string oldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
 
         public static async Task StartInject()
         {
@@ -54,7 +56,8 @@ namespace Bot.Common
                     {
                         return;
                     }
-                    else {
+                    else
+                    {
                         foreach (var p in Process.GetProcessesByName(processName))
                         {
                             p.Kill();
@@ -62,7 +65,6 @@ namespace Bot.Common
                     }
                     await Task.Delay(2000);
                 }
-
 
                 if (InjectScript(resourcePath))
                 {
@@ -111,7 +113,6 @@ namespace Bot.Common
             return string.Empty;
         }
 
-
         private static bool IsWorkbenchRunning()
         {
             var processes = Process.GetProcessesByName(processName);
@@ -125,48 +126,78 @@ namespace Bot.Common
             {
                 var entry = zipFile.GetEntry(chatRecentHtmlFile);
                 using (var inputStream = zipFile.GetInputStream(entry))
+                using (var streamReader = new StreamReader(inputStream))
                 {
-                    using (var streamReader = new StreamReader(inputStream))
-                    {
-                        var chatRecentHtmlContent = streamReader.ReadToEnd();
-                        return !chatRecentHtmlContent.Contains(imSupportUrl);
-                    }
+                    var chatRecentHtmlContent = streamReader.ReadToEnd();
+                    // 只有已经切到本地 qnbot-inject.js 时才认为注入完成；旧远程 OSS 注入需要被替换掉。
+                    return chatRecentHtmlContent.Contains(injectedScriptSrc) && !chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl);
                 }
             }
         }
 
+        private static string ReadLocalInjectJs()
+        {
+            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "inject.js");
+            if (!File.Exists(path))
+            {
+                Log.Error("没有找到本地 inject.js: " + path);
+                return string.Empty;
+            }
+            return File.ReadAllText(path, Encoding.UTF8);
+        }
+
         private static bool InjectScript(string resourcePath)
         {
-            var webuiResPath = Path.Combine(resourcePath, webuiResDir,webuiFile);
+            var webuiResPath = Path.Combine(resourcePath, webuiResDir, webuiFile);
             var signPath = Path.Combine(resourcePath, webuiResDir, signFile);
+            var injectJsContent = ReadLocalInjectJs();
+            if (string.IsNullOrWhiteSpace(injectJsContent)) return false;
 
             using (var zipFile = new ZipFile(webuiResPath))
             {
                 var entry = zipFile.GetEntry(chatRecentHtmlFile);
                 using (var inputStream = zipFile.GetInputStream(entry))
+                using (var streamReader = new StreamReader(inputStream))
                 {
-                    using (var streamReader = new StreamReader(inputStream))
+                    var chatRecentHtmlContent = streamReader.ReadToEnd();
+                    if (chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl))
                     {
-                        var chatRecentHtmlContent = streamReader.ReadToEnd();
-                        if (!chatRecentHtmlContent.Contains(imSupportUrl)) return true;
-                        chatRecentHtmlContent = chatRecentHtmlContent.Replace(imSupportUrl, overWriteUrl);
-                        zipFile.BeginUpdate();
-                        zipFile.Add(new ZipStaticDataSource(chatRecentHtmlContent), chatRecentHtmlFile);
-                        zipFile.CommitUpdate();
-                        if (File.Exists(signPath))
-                        {
-                            var signFi = new FileInfo(signPath);
-                            if (signFi.Length > 0)
-                            {
-                                signFi.Delete();
-                                File.Create(signPath);
-                            }
-                        }
-                        return true;
+                        chatRecentHtmlContent = chatRecentHtmlContent.Replace(oldRemoteOverwriteUrl, injectedScriptSrc);
                     }
+                    else if (chatRecentHtmlContent.Contains(imSupportUrl))
+                    {
+                        chatRecentHtmlContent = chatRecentHtmlContent.Replace(imSupportUrl, injectedScriptSrc);
+                    }
+                    else if (!chatRecentHtmlContent.Contains(injectedScriptSrc))
+                    {
+                        var tag = "<script src=\"" + injectedScriptSrc + "\"></script>";
+                        if (chatRecentHtmlContent.IndexOf("</body>", StringComparison.OrdinalIgnoreCase) >= 0)
+                        {
+                            chatRecentHtmlContent = chatRecentHtmlContent.Replace("</body>", tag + "</body>");
+                        }
+                        else
+                        {
+                            chatRecentHtmlContent += tag;
+                        }
+                    }
+
+                    zipFile.BeginUpdate();
+                    zipFile.Add(new ZipStaticDataSource(chatRecentHtmlContent), chatRecentHtmlFile);
+                    zipFile.Add(new ZipStaticDataSource(injectJsContent), injectedScriptFile);
+                    zipFile.CommitUpdate();
+
+                    if (File.Exists(signPath))
+                    {
+                        var signFi = new FileInfo(signPath);
+                        if (signFi.Length > 0)
+                        {
+                            signFi.Delete();
+                            File.Create(signPath).Dispose();
+                        }
+                    }
+                    return true;
                 }
             }
-
         }
 
         private static string ReadAliConfigFile(string path)
@@ -195,7 +226,6 @@ namespace Bot.Common
 
     public class ZipStaticDataSource : IStaticDataSource
     {
-
         private string _content;
         public ZipStaticDataSource(string content)
         {
