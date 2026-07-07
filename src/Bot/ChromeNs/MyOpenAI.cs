@@ -2,20 +2,20 @@
 using BotLib.Extensions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
-using OpenAI;
 using OpenAI.Chat;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Interop;
 
 namespace Bot.ChromeNs
 {
     public class MyOpenAI
     {
+        // 保留该属性，避免旧代码或 XAML 绑定引用失败；实际调用已改为原生 HTTP，兼容多数 OpenAI 中转站。
         public static ChatClient ChatClient { get; set; }
 
         private static string systemPrompt;
@@ -23,12 +23,12 @@ namespace Bot.ChromeNs
         private static string lastBaseUrl;
         private static string lastModel;
 
-        private static ConcurrentDictionary<string, List<ChatMessage>> buyerChatMessages;
+        private static ConcurrentDictionary<string, List<JObject>> buyerChatMessages;
 
         static MyOpenAI()
         {
-            buyerChatMessages = new ConcurrentDictionary<string, List<ChatMessage>>();
-            EnsureClient();
+            buyerChatMessages = new ConcurrentDictionary<string, List<JObject>>();
+            EnsureConfig();
         }
 
         private static string DefaultSystemPrompt
@@ -39,7 +39,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static bool EnsureClient()
+        private static bool EnsureConfig()
         {
             try
             {
@@ -51,53 +51,165 @@ namespace Bot.ChromeNs
 
                 if (string.IsNullOrEmpty(apikey) || string.IsNullOrEmpty(model))
                 {
-                    ChatClient = null;
                     return false;
                 }
 
-                // 设置窗口里保存后，不重启程序也能重新加载新配置。
-                if (ChatClient != null && apikey == lastApiKey && baseUrl == lastBaseUrl && model == lastModel)
+                if (!string.IsNullOrEmpty(baseUrl)
+                    && !baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    && !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 {
-                    return true;
+                    Log.Error("AI BaseUrl 格式错误：" + baseUrl);
+                    return false;
                 }
 
-                OpenAIClientOptions options = null;
-                if (!string.IsNullOrEmpty(baseUrl))
+                if (apikey != lastApiKey || baseUrl != lastBaseUrl || model != lastModel)
                 {
-                    if (!baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                        && !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
-                    {
-                        Log.Error("AI BaseUrl 格式错误：" + baseUrl);
-                        ChatClient = null;
-                        return false;
-                    }
-                    options = new OpenAIClientOptions
-                    {
-                        Endpoint = new Uri(baseUrl.TrimEnd('/'))
-                    };
+                    lastApiKey = apikey;
+                    lastBaseUrl = baseUrl;
+                    lastModel = model;
+                    Log.Info("AI配置加载成功, model=" + model + ", baseUrl=" + baseUrl);
                 }
-
-                ChatClient = new ChatClient(model: model, credential: new System.ClientModel.ApiKeyCredential(apikey), options: options);
-                lastApiKey = apikey;
-                lastBaseUrl = baseUrl;
-                lastModel = model;
-                Log.Info("AI客户端初始化成功, model=" + model + ", baseUrl=" + baseUrl);
                 return true;
             }
             catch (Exception ex)
             {
-                ChatClient = null;
                 Log.Exception(ex);
                 return false;
             }
+        }
+
+        private static string NormalizeBaseUrl(string baseUrl)
+        {
+            baseUrl = (baseUrl ?? string.Empty).Trim();
+            if (string.IsNullOrEmpty(baseUrl))
+            {
+                baseUrl = "https://api.openai.com/v1";
+            }
+            baseUrl = baseUrl.TrimEnd('/');
+            if (baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
+            {
+                return baseUrl;
+            }
+            return baseUrl + "/chat/completions";
         }
 
         private static string SafeError(string msg)
         {
             if (string.IsNullOrEmpty(msg)) return "未知错误";
             msg = msg.Replace("\r", " ").Replace("\n", " ").Trim();
-            if (msg.Length > 160) msg = msg.Substring(0, 160) + "...";
+            if (msg.Length > 500) msg = msg.Substring(0, 500) + "...";
             return msg;
+        }
+
+        private static JObject CreateMessage(string role, string content)
+        {
+            return new JObject
+            {
+                ["role"] = role,
+                ["content"] = content ?? string.Empty
+            };
+        }
+
+        private static string ExtractAnswer(string responseBody)
+        {
+            var json = JObject.Parse(responseBody);
+            var content = json["choices"]?[0]?["message"]?["content"];
+            if (content == null)
+            {
+                return string.Empty;
+            }
+            if (content.Type == JTokenType.String)
+            {
+                return content.ToString();
+            }
+            return content.ToString(Formatting.None);
+        }
+
+        private static ApiCallResult CallChatCompletions(string baseUrl, string apiKey, string model, JArray messages)
+        {
+            var url = NormalizeBaseUrl(baseUrl);
+            var payload = new JObject
+            {
+                ["model"] = model,
+                ["messages"] = messages,
+                ["temperature"] = 0.2
+            };
+
+            using (var http = new HttpClient())
+            {
+                http.Timeout = TimeSpan.FromSeconds(35);
+                http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+                http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
+
+                using (var content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json"))
+                {
+                    var response = http.PostAsync(url, content).GetAwaiter().GetResult();
+                    var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    if (!response.IsSuccessStatusCode)
+                    {
+                        return new ApiCallResult
+                        {
+                            Success = false,
+                            Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body)
+                        };
+                    }
+
+                    var answer = ExtractAnswer(body);
+                    if (string.IsNullOrWhiteSpace(answer))
+                    {
+                        return new ApiCallResult
+                        {
+                            Success = false,
+                            Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body)
+                        };
+                    }
+
+                    return new ApiCallResult
+                    {
+                        Success = true,
+                        Answer = answer,
+                        Raw = body
+                    };
+                }
+            }
+        }
+
+        public static string TestConnection(string baseUrl, string apiKey, string model, string prompt)
+        {
+            try
+            {
+                baseUrl = (baseUrl ?? string.Empty).Trim();
+                apiKey = (apiKey ?? string.Empty).Trim();
+                model = (model ?? string.Empty).Trim();
+                prompt = string.IsNullOrWhiteSpace(prompt) ? DefaultSystemPrompt : prompt;
+
+                if (string.IsNullOrEmpty(apiKey)) return "失败：ApiKey 为空。";
+                if (string.IsNullOrEmpty(model)) return "失败：Model 为空。";
+                if (!string.IsNullOrEmpty(baseUrl)
+                    && !baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    && !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    return "失败：BaseUrl 必须以 http:// 或 https:// 开头。";
+                }
+
+                var messages = new JArray
+                {
+                    CreateMessage("system", prompt),
+                    CreateMessage("user", "请只回复：连接测试成功")
+                };
+                var result = CallChatCompletions(baseUrl, apiKey, model, messages);
+                if (!result.Success)
+                {
+                    return "失败：" + result.Error;
+                }
+                return "成功：API 连接正常。模型回复：" + SafeError(result.Answer);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                return "失败：" + SafeError(ex.Message);
+            }
         }
 
         public static string GetAnswer(string seller, string buyer, string question)
@@ -109,43 +221,61 @@ namespace Bot.ChromeNs
                     return "错误：买家消息为空，未调用AI。";
                 }
 
-                if (!EnsureClient() || ChatClient == null)
+                if (!EnsureConfig())
                 {
-                    return "错误：AI客户端未正确初始化，请检查 BaseUrl / ApiKey / Model。";
+                    return "错误：AI配置不完整，请检查 BaseUrl / ApiKey / Model。";
                 }
+
+                var baseUrl = (Params.Robot.GetBaseUrl() ?? string.Empty).Trim();
+                var apiKey = (Params.Robot.GetApiKey() ?? string.Empty).Trim();
+                var model = (Params.Robot.GetModelName() ?? string.Empty).Trim();
 
                 var key = string.Format("{0}#{1}", seller, buyer);
-                var messages = buyerChatMessages.xTryGetValue(key);
-                if (messages == null || messages.Count < 1)
+                var history = buyerChatMessages.xTryGetValue(key);
+                if (history == null || history.Count < 1)
                 {
-                    messages = new List<ChatMessage>() {
-                        ChatMessage.CreateSystemMessage(systemPrompt),
-                        ChatMessage.CreateUserMessage(question),
+                    history = new List<JObject>
+                    {
+                        CreateMessage("system", systemPrompt)
                     };
                 }
-                else
+
+                history.Add(CreateMessage("user", question));
+
+                // 避免长会话无限增长，保留 system + 最近 18 条。
+                if (history.Count > 20)
                 {
-                    messages.Add(ChatMessage.CreateUserMessage(question));
+                    var trimmed = new List<JObject>();
+                    trimmed.Add(history[0]);
+                    trimmed.AddRange(history.Skip(Math.Max(1, history.Count - 18)));
+                    history = trimmed;
                 }
 
-                var completion = ChatClient.CompleteChat(messages);
-                var completionContent = completion.GetRawResponse().Content.ToString();
-                var answer = JObject.Parse(completionContent)["choices"][0]["message"]["content"].ToString();
-                if (string.IsNullOrWhiteSpace(answer))
+                var messages = new JArray(history.Select(m => (JObject)m.DeepClone()));
+                var result = CallChatCompletions(baseUrl, apiKey, model, messages);
+                if (!result.Success)
                 {
-                    return "错误：AI返回内容为空。";
+                    Log.Error("AI接口调用失败：" + result.Error);
+                    return "错误：AI接口调用失败，未自动回复。" + result.Error;
                 }
 
-                messages.Add(ChatMessage.CreateAssistantMessage(answer));
-                buyerChatMessages.AddOrUpdate(key, id => messages, (k, v) => messages);
-                return answer;
+                history.Add(CreateMessage("assistant", result.Answer));
+                buyerChatMessages.AddOrUpdate(key, id => history, (k, v) => history);
+                return result.Answer;
             }
             catch (Exception ex)
             {
-                // 原版本没有捕获 OpenAI.ClientResultException，导致买家一发消息程序直接闪退。
                 Log.Exception(ex);
                 return "错误：AI接口调用失败，未自动回复。" + SafeError(ex.Message);
             }
+        }
+
+        private class ApiCallResult
+        {
+            public bool Success { get; set; }
+            public string Answer { get; set; }
+            public string Error { get; set; }
+            public string Raw { get; set; }
         }
     }
 }
