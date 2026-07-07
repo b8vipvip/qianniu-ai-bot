@@ -10,6 +10,7 @@ on:
       - 'src/DbEntity/**'
       - 'src/*.sln'
       - 'src/Directory.Build.props'
+      - 'tools/**'
       - '.github/workflows/build-windows.yml'
 
 permissions:
@@ -103,6 +104,7 @@ jobs:
           $changes = git status --porcelain ci-last-build src/Bin
           if ($changes) {
             if ($exitCode -eq 0) { git commit -m "build: update compiled Bot binaries [skip ci]" } else { git commit -m "ci: persist failed build logs [skip ci]" }
+            git pull --rebase origin master
             git push origin HEAD:master
           } else {
             Write-Host "No CI log or binary changes."
