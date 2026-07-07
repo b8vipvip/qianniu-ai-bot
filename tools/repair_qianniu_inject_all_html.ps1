@@ -64,6 +64,69 @@ function Get-DirNameInZip($entryName) {
   return $entryName.Substring(0, $idx + 1)
 }
 
+function Patch-InjectContent($injectContent) {
+  if (!$injectContent) { return $injectContent }
+
+  if ($injectContent -notmatch "__qnbotStatusPatch") {
+    $oldOpen = 'window.chatWebsocket = socket; // 存储到全局变量'
+    $newOpen = @'
+window.chatWebsocket = socket; // 存储到全局变量
+      try {
+        socket.send(JSON.stringify({
+          type: 'qnbotStatus',
+          response: JSON.stringify({
+            patch: '__qnbotStatusPatch',
+            href: location.href,
+            title: document.title || '',
+            hasImsdk: !!window.imsdk,
+            hasQN: !!window.QN,
+            hasVs: !!window._vs,
+            hasLoginID: !!(window._vs && window._vs.loginID),
+            hasConversationID: !!(window._vs && window._vs.conversationID)
+          })
+        }));
+      } catch (e) {}
+'@
+    if ($injectContent.Contains($oldOpen)) {
+      Write-Host "Patch qnbot-inject.js: add websocket status diagnostic."
+      $injectContent = $injectContent.Replace($oldOpen, $newOpen)
+    }
+  }
+
+  if ($injectContent -notmatch "__qnbotGetNewMsgPatch") {
+    $oldBlock = @'
+        // if(cid.ccode !== window._conversationId.ccode)
+        // {
+        //     imsdk.invoke('im.singlemsg.GetNewMsg', {
+        //         ccode: cid.ccode
+        //     }).then(response => {
+        //         window.chatWebsocket.send(JSON.stringify({type:'receiveNewMsg',response:JSON.stringify(response)}));                       
+        //     });
+        // }
+'@
+    $newBlock = @'
+        // __qnbotGetNewMsgPatch: actively fetch unread messages and send them to Bot.
+        try {
+          imsdk.invoke('im.singlemsg.GetNewMsg', {
+            ccode: cid.ccode
+          }).then(response => {
+            window.chatWebsocket.send(JSON.stringify({type:'receiveNewMsg',response:JSON.stringify(response)}));
+          }).catch(err => console.error('qnbot GetNewMsg failed', err));
+        } catch (e) {
+          console.error('qnbot GetNewMsg exception', e);
+        }
+'@
+    if ($injectContent.Contains($oldBlock)) {
+      Write-Host "Patch qnbot-inject.js: actively call GetNewMsg on new message."
+      $injectContent = $injectContent.Replace($oldBlock, $newBlock)
+    } else {
+      Write-Host "WARN: GetNewMsg patch target not found. It may already be patched or source changed."
+    }
+  }
+
+  return $injectContent
+}
+
 Stop-QianniuProcesses
 
 $installPath = Get-QianniuInstallPath
@@ -88,6 +151,7 @@ try {
     if (!(Test-Path $localInject)) { throw "Cannot find qnbot inject content." }
     $injectContent = Get-Content $localInject -Raw -Encoding UTF8
   }
+  $injectContent = Patch-InjectContent $injectContent
 
   $htmlNames = @($zip.Entries | Where-Object { $_.FullName.EndsWith('.html') } | ForEach-Object { $_.FullName })
   $patched = New-Object System.Collections.Generic.List[string]
