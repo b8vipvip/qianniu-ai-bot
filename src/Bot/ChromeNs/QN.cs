@@ -86,7 +86,6 @@ namespace Bot.ChromeNs
             this.rpa = new QNRpa(this);
         }
 
-
         public async Task SendTextAsync(string buyer, string text)
         {
             var comparison = String.Compare(QnVersion, "9.19.06N", StringComparison.OrdinalIgnoreCase);
@@ -100,7 +99,6 @@ namespace Bot.ChromeNs
             }
         }
 
-
         public async void SendImageAsync(string buyer, string imagePath)
         {
             await rpa.SendImageAsync(buyer, imagePath);
@@ -110,7 +108,6 @@ namespace Bot.ChromeNs
         {
             if (Params.Robot.GetIsAutoReply())
             {
-                //打开买家
                 OpenChat(e.Buyer.Nick);
             }
             if (EvShopRobotReceriveNewMessage != null)
@@ -159,8 +156,6 @@ namespace Bot.ChromeNs
                             var isAutoReply = Params.Robot.GetIsAutoReply();
                             var answer = string.Empty;
 
-                            // 原版本即使取消“自动回复”，买家一发消息仍会调用AI生成草稿；AI接口异常会导致程序闪退。
-                            // 这里改成：自动回复关闭时不调用AI，只记录会话。
                             if (isAutoReply)
                             {
                                 answer = MyOpenAI.GetAnswer(m.toid.nick, m.fromid.nick, m.summary);
@@ -189,9 +184,7 @@ namespace Bot.ChromeNs
             {
                 Log.Exception(ex);
             }
-
         }
-
 
         private void Cdp_EvMessageNotity(object sender, MessageNotifyEventArgs e)
         {
@@ -230,7 +223,6 @@ namespace Bot.ChromeNs
             cdp.SendTimiMsg(userId, smartTip);
         }
 
-
         public void TransferContact(string contactID, string targetID, string reason = "")
         {
             cdp.TransferContact(contactID, targetID, reason);
@@ -249,6 +241,81 @@ namespace Bot.ChromeNs
         public async Task<LocalUserResponse> GetCurrentUser()
         {
             return await cdp.GetCurrentUser();
+        }
+
+        public void InsertText2Inputbox(string uid, string text)
+        {
+            cdp.InsertText2Inputbox(uid, text);
+        }
+
+        public async Task<bool> IsInputboxEmpty()
+        {
+            return await cdp.IsInputboxEmpty();
+        }
+
+        public void BrowserUrl(string url)
+        {
+            cdp.BrowserUrl(url);
+        }
+
+        public void SendRemindPayCard(string encryptedBuyerId, string orderId)
+        {
+            cdp.SendRemindPayCard(encryptedBuyerId, orderId);
+        }
+
+        public void RecallMessage(string ccode, string clientId, string messageId)
+        {
+            cdp.RecallMessage(ccode, clientId, messageId);
+        }
+
+        public void OpenChat(string nick)
+        {
+            cdp.OpenChat(nick);
+        }
+
+        public void SendCoupon(string buyerNick, string activityId)
+        {
+            cdp.SendCoupon(buyerNick, activityId);
+        }
+
+        public void CloseChat(string contactID)
+        {
+            cdp.CloseChat(contactID);
+        }
+
+        public void GetRemoteHisMsg(string ccode)
+        {
+            cdp.GetRemoteHisMsg(ccode);
+        }
+
+        public async Task<AccountStatusResponse> GetAccountStatus()
+        {
+            return await cdp.GetAccountStatus();
+        }
+
+        public async Task<ItemRecordResponse> GetItemRecords(string encryptId)
+        {
+            return await cdp.GetItemRecords(encryptId);
+        }
+
+        public async Task<SearchUserResponse> SearchBuyerUser(string searchQuery)
+        {
+            return await cdp.SearchBuyerUser(searchQuery);
+        }
+
+        public async Task<BuyerInfoResponse> GetBuyerInfo(string encryptId)
+        {
+            return await cdp.GetBuyerInfo(encryptId);
+        }
+
+        public async Task<ZnkfTradeQueryResponse> GetBuyerTrades(string securityBuyerUid, string bizOrderId)
+        {
+            return await cdp.GetBuyerTrades(securityBuyerUid, bizOrderId);
+        }
+
+        public async Task<ConversationResponse> GetCurrentConversationID()
+        {
+            return await cdp.GetCurrentConversationID();
         }
     }
 }
