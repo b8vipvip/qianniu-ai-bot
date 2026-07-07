@@ -21,7 +21,6 @@ using System.Linq;
 using OpenAI.Chat;
 using BotLib.Extensions;
 using SuperSocket.SocketEngine.Configuration;
-using Top.Api.Domain;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
