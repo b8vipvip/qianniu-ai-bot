@@ -120,7 +120,7 @@ namespace Bot.ChromeNs
 
         private void Cdp_EvShopRobotReceriveNewMessage(object sender, ShopRobotReceriveNewMessageEventArgs e)
         {
-            if (Params.Robot.GetIsAutoReply())
+            if (Params.Robot.CanUseRobotReal && Params.Robot.GetIsAutoReply())
             {
                 OpenChat(e.Buyer.Nick);
             }
@@ -153,6 +153,8 @@ namespace Bot.ChromeNs
                     EvRecieveNewMessage(this, e);
                 }
 
+                Log.Info("收到千牛新消息事件: " + e.Message);
+
                 var chatRes = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
                 if (chatRes == null || chatRes.result == null)
                 {
@@ -168,7 +170,6 @@ namespace Bot.ChromeNs
                         var msgText = GetMessageText(m);
 
                         // 卖家消息只记录为聊天流的一部分，不再自动触发“人工接管”。
-                        // 是否停止自动回复，只以右侧 Bot 面板的“自动回复”勾选状态为准。
                         if (IsSellerMessage(m))
                         {
                             return;
@@ -176,22 +177,23 @@ namespace Bot.ChromeNs
 
                         if (IsBuyerMessage(m))
                         {
-                            var isAutoReply = Params.Robot.GetIsAutoReply();
+                            var botEnabled = Params.Robot.CanUseRobotReal;
+                            var autoSend = Params.Robot.GetIsAutoReply();
                             var answer = string.Empty;
 
-                            if (isAutoReply)
+                            if (!botEnabled)
                             {
-                                // 买家发纯数字、表情、短句等无意义内容也交给 AI 处理，不再本地拦截。
-                                answer = MyOpenAI.GetAnswer(m.toid.nick, m.fromid.nick, msgText);
-                            }
-                            else
-                            {
-                                answer = "自动回复已关闭，未调用AI。";
+                                answer = "Bot已停用，未调用AI。";
+                                Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, msgText, answer, false);
+                                Log.Info("Bot已停用，跳过买家消息: buyer=" + m.fromid.nick + ", msg=" + msgText);
+                                return;
                             }
 
-                            Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, msgText, answer, isAutoReply);
+                            // 启用Bot后，所有买家消息都交给AI；自动回复只决定是否直接发送。
+                            answer = MyOpenAI.GetAnswer(m.toid.nick, m.fromid.nick, msgText);
+                            Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, msgText, answer, autoSend);
 
-                            if (isAutoReply && !string.IsNullOrWhiteSpace(answer) && !answer.StartsWith("错误："))
+                            if (autoSend && !string.IsNullOrWhiteSpace(answer) && !answer.StartsWith("错误："))
                             {
                                 await SendTextAsync(m.fromid.nick, answer);
                             }
