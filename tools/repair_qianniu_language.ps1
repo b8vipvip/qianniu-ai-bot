@@ -149,6 +149,39 @@ function Add-HansTextPatch($injectContent) {
   return $injectContent
 }
 
+function Add-BodyReadyOfficialScriptPatch($injectContent) {
+  if ($injectContent -match "__qnbotAppendOfficialImsupportWhenBodyReady") {
+    return $injectContent
+  }
+  $old = @'
+const script = document.createElement("script");
+script.type = "text/javascript";
+script.src = "https://iseiya.taobao.com/imsupport?locale=zh-CN&lang=zh-CN";
+document.getElementsByTagName("body")[0].appendChild(script);
+'@
+  $new = @'
+(function __qnbotAppendOfficialImsupportWhenBodyReady(){
+  function append(){
+    try{
+      if(!document.body){ setTimeout(append, 300); return; }
+      const script = document.createElement("script");
+      script.type = "text/javascript";
+      script.src = "https://iseiya.taobao.com/imsupport?locale=zh-CN&lang=zh-CN";
+      document.body.appendChild(script);
+      console.log("[qnbot] official imsupport appended after body ready");
+    }catch(e){ console.error("[qnbot] append official imsupport failed", e); }
+  }
+  append();
+})();
+'@
+  if ($injectContent.Contains($old)) {
+    Write-Host "Patch qnbot-inject.js: wait document.body before loading official imsupport."
+    return $injectContent.Replace($old, $new)
+  }
+  Write-Host "WARN: Body-ready patch target not found in inject.js."
+  return $injectContent
+}
+
 Stop-QianniuProcesses
 
 $installPath = Get-QianniuInstallPath
@@ -186,6 +219,7 @@ try {
       throw "Local inject.js does not contain marker $marker. Run git pull first."
     }
     $injectContent = Add-HansTextPatch $injectContent
+    $injectContent = Add-BodyReadyOfficialScriptPatch $injectContent
 
     Write-Host "Write local qnbot-inject.js, force zh-CN locale, and patch UI text."
     if ($recent.Contains($oldRemoteUrl)) {
