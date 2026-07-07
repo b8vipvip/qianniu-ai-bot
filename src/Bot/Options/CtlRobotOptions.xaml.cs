@@ -25,6 +25,8 @@ using Bot.Asset;
 using Bot.Automation.ChatDeskNs;
 using SuperSocket.Common;
 using SuperSocket.SocketEngine.Configuration;
+using Bot.ChromeNs;
+using System.Threading.Tasks;
 
 namespace Bot.Options
 {
@@ -59,6 +61,7 @@ namespace Bot.Options
             txtApiKey.Text = Params.Robot.GetApiKey();
             txtModelName.Text = Params.Robot.GetModelName();
             txtSystemPrompt.Text = Params.Robot.GetSystemPrompt();
+            txtApiTestResult.Text = string.Empty;
 
         }
 
@@ -83,12 +86,34 @@ namespace Bot.Options
             Params.Robot.SetSystemPrompt(txtSystemPrompt.Text.Trim());
         }
 
+        private async void btnTestApi_Click(object sender, RoutedEventArgs e)
+        {
+            btnTestApi.IsEnabled = false;
+            txtApiTestResult.Text = "正在测试...";
+            try
+            {
+                var baseUrl = txtBaseUrl.Text.Trim();
+                var apiKey = txtApiKey.Text.Trim();
+                var model = txtModelName.Text.Trim();
+                var prompt = txtSystemPrompt.Text.Trim();
+                var result = await Task.Run(() => MyOpenAI.TestConnection(baseUrl, apiKey, model, prompt));
+                txtApiTestResult.Text = result;
+                Log.Info("AI连接测试结果：" + result);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                txtApiTestResult.Text = "测试异常：" + ex.Message;
+            }
+            finally
+            {
+                btnTestApi.IsEnabled = true;
+            }
+        }
 
         private void btnHelp_Click(object sender, RoutedEventArgs e)
         {
 
         }
-
-
     }
 }
