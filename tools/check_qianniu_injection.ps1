@@ -1,5 +1,4 @@
 $ErrorActionPreference = "Stop"
-$repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
 function Get-QianniuInstallPath {
   try {
@@ -31,6 +30,12 @@ function Read-ZipEntryText($zip, $entryName) {
   if ($null -eq $entry) { return $null }
   $reader = New-Object System.IO.StreamReader($entry.Open(), [System.Text.Encoding]::UTF8)
   try { return $reader.ReadToEnd() } finally { $reader.Dispose() }
+}
+
+function Get-DirNameInZip($entryName) {
+  $idx = $entryName.LastIndexOf('/')
+  if ($idx -lt 0) { return "" }
+  return $entryName.Substring(0, $idx + 1)
 }
 
 $installPath = Get-QianniuInstallPath
@@ -66,14 +71,25 @@ try {
     Write-Host "inject contains imsdk hook: $($inject.Contains('im.singlemsg.onReceiveNewMsg'))"
   }
 
-  Write-Host "HTML entries mentioning qnbot/imsupport:"
-  foreach ($entry in $zip.Entries) {
-    if (!$entry.FullName.EndsWith('.html')) { continue }
+  $htmlEntries = @($zip.Entries | Where-Object { $_.FullName.EndsWith('.html') })
+  $covered = 0
+  $mentioned = New-Object System.Collections.Generic.List[string]
+  Write-Host "HTML injection coverage:"
+  foreach ($entry in $htmlEntries) {
     $text = Read-ZipEntryText $zip $entry.FullName
+    $dir = Get-DirNameInZip $entry.FullName
+    $sameDirInject = $dir + "qnbot-inject.js"
+    $hasInjectEntry = $null -ne $zip.GetEntry($sameDirInject)
+    $containsInject = $text -and $text.Contains('qnbot-inject.js')
+    if ($containsInject -and $hasInjectEntry) { $covered++ }
     if ($text -and ($text.Contains('qnbot-inject') -or $text.Contains('iseiya.taobao.com/imsupport') -or $text.Contains('5CFB5E11D17E63CDD8CB37B52FA6ACFD'))) {
-      Write-Host " - $($entry.FullName)"
+      $mentioned.Add($entry.FullName) | Out-Null
     }
+    Write-Host (" - {0} | html_has_qnbot={1} | same_dir_script={2}" -f $entry.FullName, $containsInject, $hasInjectEntry)
   }
+  Write-Host "HTML total: $($htmlEntries.Count), covered: $covered"
+  Write-Host "HTML entries mentioning qnbot/imsupport:"
+  foreach ($m in $mentioned) { Write-Host " - $m" }
 } finally {
   $zip.Dispose()
 }
