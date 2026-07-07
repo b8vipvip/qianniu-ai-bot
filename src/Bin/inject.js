@@ -1,6 +1,47 @@
+window.__qnbotInjectVersion = "20260707-zh-cn-v2";
+
+(function forceSimplifiedChineseLocale() {
+  try {
+    document.documentElement.setAttribute("lang", "zh-CN");
+
+    const keys = [
+      "locale",
+      "lang",
+      "language",
+      "i18nextLng",
+      "umi_locale",
+      "appLocale",
+      "localeCode",
+      "ALI_LANG",
+      "qn_lang"
+    ];
+
+    keys.forEach((key) => {
+      try { localStorage.setItem(key, "zh-CN"); } catch (e) {}
+      try { sessionStorage.setItem(key, "zh-CN"); } catch (e) {}
+    });
+
+    try { document.cookie = "locale=zh-CN; path=/; max-age=31536000"; } catch (e) {}
+    try { document.cookie = "lang=zh-CN; path=/; max-age=31536000"; } catch (e) {}
+
+    try {
+      Object.defineProperty(navigator, "language", {
+        get: function () { return "zh-CN"; },
+        configurable: true
+      });
+      Object.defineProperty(navigator, "languages", {
+        get: function () { return ["zh-CN", "zh"]; },
+        configurable: true
+      });
+    } catch (e) {}
+  } catch (e) {
+    console.warn("[qnbot] force zh-CN locale failed", e);
+  }
+})();
+
 const script = document.createElement("script");
 script.type = "text/javascript";
-script.src = "https://iseiya.taobao.com/imsupport";
+script.src = "https://iseiya.taobao.com/imsupport?locale=zh-CN&lang=zh-CN";
 document.getElementsByTagName("body")[0].appendChild(script);
 
 if (typeof window.___setupWebSocket === 'undefined') {
