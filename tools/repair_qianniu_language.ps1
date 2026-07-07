@@ -105,6 +105,7 @@ $backup = "$webuiZip.bak-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 Copy-Item $webuiZip $backup -Force
 Write-Host "Backup created: $backup"
 
+Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::Open($webuiZip, [System.IO.Compression.ZipArchiveMode]::Update)
 try {
