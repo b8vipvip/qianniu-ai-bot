@@ -44,15 +44,20 @@ namespace Bot.ChromeNs
             _qn = qn;
             automationApplication = FlaUI.Core.Application.Attach(Desk.Inst.ProcessId);
             uia3Automation = new UIA3Automation();
-            UpdateChatBrowserRect();
+            UpdateChatBrowserRect(true);
         }
 
+        private bool IsSendButtonName(string name)
+        {
+            name = (name ?? string.Empty).Trim();
+            return name == "发送" || name == "發送" || name.Equals("Send", StringComparison.OrdinalIgnoreCase);
+        }
 
-        public async void UpdateChatBrowserRect()
+        public async void UpdateChatBrowserRect(bool force = false)
         {
             if (Desk.Inst.IsVisibleAndNotMinimized)
             {
-                if ((DateTime.Now - _preUpdateChatBrowserRectTime).TotalSeconds >= 3)
+                if (force || (DateTime.Now - _preUpdateChatBrowserRectTime).TotalSeconds >= 3)
                 {
                     _preUpdateChatBrowserRectTime = DateTime.Now;
                     if (automationApplication.MainWindowHandle.ToInt32() < 1) return;
@@ -67,24 +72,13 @@ namespace Bot.ChromeNs
                             var descendants = mainWnd.FindAllDescendants();
                             var sendMessageButton = descendants.FirstOrDefault(k =>
                             {
-                                if (k.Properties.Name.IsSupported && k.Name == "发送")
+                                if (k.Properties.Name.IsSupported && IsSendButtonName(k.Name))
                                 {
                                     return true;
                                 }
                                 return false;
                             });
                             _sendMessageButton = sendMessageButton;
-
-                            //var closeContactButton = descendants.FirstOrDefault(k =>
-                            //{
-
-                            //    if (k.Properties.Name.IsSupported && k.Name == "关闭")
-                            //    {
-                            //        return true;
-                            //    }
-                            //    return false;
-                            //});
-                            //_closeContactButton = closeContactButton;
 
                             var messageInputTextArea = descendants.FirstOrDefault(k =>
                             {
@@ -94,18 +88,19 @@ namespace Bot.ChromeNs
                                 }
                                 return false;
                             });
-                            _messageInputTextArea = messageInputTextArea.AsTextBox();
+                            if (messageInputTextArea != null)
+                            {
+                                _messageInputTextArea = messageInputTextArea.AsTextBox();
+                            }
                         }
-                        catch
+                        catch (Exception ex)
                         {
-
+                            Log.Exception(ex);
                         }
                     });
 
                 }
             }
-
-
         }
 
         public async Task SendImageAsync(string buyer, string imagePath)
@@ -139,6 +134,43 @@ namespace Bot.ChromeNs
             return sendResult;
         }
 
+        private bool TryClickSendButton()
+        {
+            try
+            {
+                if (_sendMessageButton == null)
+                {
+                    UpdateChatBrowserRect(true);
+                    Thread.Sleep(300);
+                }
+
+                if (_sendMessageButton != null)
+                {
+                    _sendMessageButton.Click();
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
+
+            // 兜底：如果千牛按钮文字变成繁体或 UIA 找不到按钮，则聚焦输入框后按 Enter。
+            try
+            {
+                FocusEditor();
+                WinApi.Api.keybd_event(0x0D, 0, 0, 0);
+                Thread.Sleep(80);
+                WinApi.Api.keybd_event(0x0D, 0, 2, 0);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                return false;
+            }
+        }
+
         private bool SetAndSendImage(BitmapImage image)
         {
             bool rt = false;
@@ -153,13 +185,7 @@ namespace Bot.ChromeNs
                 _preSendPlainTextAndImageImage = image;
                 if (SetImage(image))
                 {
-                    if (_sendMessageButton == null)
-                    {
-                        UpdateChatBrowserRect();
-                    }
-                    _sendMessageButton.Click();
-                    //WinApi.PressEnter();
-                    rt = true;
+                    rt = TryClickSendButton();
                 }
                 else
                 {
@@ -181,7 +207,7 @@ namespace Bot.ChromeNs
                 DateTime now = DateTime.Now;
                 do
                 {
-                    if (!string.IsNullOrEmpty(_messageInputTextArea.Text))
+                    if (_messageInputTextArea != null && !string.IsNullOrEmpty(_messageInputTextArea.Text))
                     {
                         isok = true;
                         break;
@@ -201,6 +227,12 @@ namespace Bot.ChromeNs
                 Desk.Inst.BringTop();
                 try
                 {
+                    if (_messageInputTextArea == null)
+                    {
+                        UpdateChatBrowserRect(true);
+                        Thread.Sleep(300);
+                    }
+                    if (_messageInputTextArea == null) return;
                     var point = _messageInputTextArea.GetClickablePoint();
                     FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = point.X + 5, Y = point.Y + 5 });
                     isok = true;
@@ -234,53 +266,32 @@ namespace Bot.ChromeNs
                     Desk.Inst.Show();
                     Util.WaitFor(new Func<bool>(() => Desk.Inst.IsVisible), 3000, 10, false);
                 }
-                //SetAndSendText(text);
+
+                try
+                {
+                    if (!await _qn.IsInputboxEmpty())
+                    {
+                        Log.Info("千牛输入框已有内容，疑似人工正在编辑或上次内容未发送，跳过自动发送。buyer=" + buyer);
+                        return false;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex);
+                }
 
                 _qn.InsertText2Inputbox(buyer, text);
-                Thread.Sleep(500);
-                if (_sendMessageButton == null)
-                {
-                    UpdateChatBrowserRect();
-                }
-                _sendMessageButton.Click();
+                Thread.Sleep(600);
+                sendResult = TryClickSendButton();
             }
-            sendResult = true;
             return sendResult;
         }
-
 
         private bool SetAndSendText(string text)
         {
             var isok = false;
             try
             {
-                //_messageInputTextArea.Text = text;
-                //await Task.Delay(200);
-
-                //ClipboardEx.UseClipboardWithAutoRestoreInUiThread(() =>
-                //{
-                //    FocusEditor();
-                //    Clipboard.Clear();
-                //    ClipboardEx.SetTextSafe(text);
-                //    WinApi.PressCtrlV();
-                //    DateTime now = DateTime.Now;
-                //    do
-                //    {
-                //        if (!_qn.IsInputboxEmpty().GetAwaiter().GetResult())
-                //        {
-                //            isok = true;
-                //            break;
-                //        }
-                //        DispatcherEx.DoEvents();
-                //    } while ((DateTime.Now - now).TotalSeconds < 2.0);
-                //    Util.WriteTimeElapsed(now, "等待时间");
-                //});
-                //var point = _sendMessageButton.GetClickablePoint();
-
-                //_qn.InsertText2Inputbox(text);
-
-                //_sendMessageButton.Click();
-                //WinApi.PressEnter();
             }
             catch (Exception e)
             {
@@ -288,6 +299,5 @@ namespace Bot.ChromeNs
             }
             return isok;
         }
-
     }
 }
