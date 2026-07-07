@@ -5,8 +5,19 @@ on:
   push:
     branches: [ master ]
     paths:
-      - 'src/**'
+      - 'src/Bot/**'
+      - 'src/BotLib/**'
+      - 'src/DbEntity/**'
+      - 'src/*.sln'
+      - 'src/packages.config'
       - '.github/workflows/build-windows.yml'
+
+permissions:
+  contents: write
+
+env:
+  CONFIGURATION: Debug
+  PLATFORM: Any CPU
 
 jobs:
   build:
@@ -14,6 +25,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
@@ -25,10 +38,24 @@ jobs:
         uses: microsoft/setup-msbuild@v2
 
       - name: Build
-        run: msbuild src\Bot.sln /m /t:Rebuild /p:Configuration=Debug /p:Platform="Any CPU"
+        run: msbuild src\Bot.sln /m /t:Rebuild /p:Configuration="${{ env.CONFIGURATION }}" /p:Platform="${{ env.PLATFORM }}"
 
       - name: Upload Bin Artifact
         uses: actions/upload-artifact@v4
         with:
           name: qianniu-bot-bin
           path: src\Bin\**
+
+      - name: Commit compiled Bin back to master
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f src/Bin
+          $changes = git status --porcelain src/Bin
+          if ($changes) {
+            git commit -m "build: update compiled Bot binaries [skip ci]"
+            git push origin HEAD:master
+          } else {
+            Write-Host "No compiled binary changes."
+          }
