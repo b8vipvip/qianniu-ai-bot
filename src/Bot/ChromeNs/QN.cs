@@ -82,17 +82,32 @@ namespace Bot.ChromeNs
             this.rpa = new QNRpa(this);
         }
 
-        public async Task SendTextAsync(string buyer, string text)
+        public async Task<bool> SendTextAsync(string buyer, string text)
         {
             var comparison = String.Compare(QnVersion, "9.19.06N", StringComparison.OrdinalIgnoreCase);
             if (comparison < 0)
             {
                 SendTimiMsg(buyer, text);
+                BotConnectionDiagnostics.RecordSendAttempt(true, "旧版接口发送");
+                return true;
             }
             else
             {
-                await rpa.SendTextAsync(buyer, text);
+                return await rpa.SendTextAsync(buyer, text);
             }
+        }
+
+        public async Task<bool> SendTextWithRetryAsync(string buyer, string text, int retryCount = 1)
+        {
+            var ok = await SendTextAsync(buyer, text);
+            var retry = Math.Max(0, retryCount);
+            for (var i = 0; !ok && i < retry; i++)
+            {
+                Log.Info("自动发送失败，准备重试第" + (i + 1) + "次。buyer=" + buyer + ", text=" + text);
+                await Task.Delay(900);
+                ok = await SendTextAsync(buyer, text);
+            }
+            return ok;
         }
 
         public async void SendImageAsync(string buyer, string imagePath)
@@ -255,11 +270,22 @@ namespace Bot.ChromeNs
 
                             // 启用Bot后，所有买家消息都交给AI；自动回复只决定是否直接发送。
                             answer = MyOpenAI.GetAnswer(m.toid.nick, m.fromid.nick, msgText);
-                            Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, msgText, answer, autoSend);
+                            var conversationCtl = Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, msgText, answer, autoSend);
 
-                            if (autoSend && !string.IsNullOrWhiteSpace(answer) && !answer.StartsWith("错误："))
+                            if (autoSend)
                             {
-                                await SendTextAsync(m.fromid.nick, answer);
+                                if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误："))
+                                {
+                                    if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：AI错误");
+                                }
+                                else
+                                {
+                                    var sendOk = await SendTextWithRetryAsync(m.fromid.nick, answer, 1);
+                                    if (conversationCtl != null)
+                                    {
+                                        conversationCtl.SetSendResult(sendOk, sendOk ? "已发送" : "发送失败，已重试1次");
+                                    }
+                                }
                             }
                         }
                     }
