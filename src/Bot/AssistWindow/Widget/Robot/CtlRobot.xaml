@@ -36,7 +36,7 @@
         <Style x:Key="StatusText" TargetType="TextBlock">
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
             <Setter Property="FontSize" Value="11"/>
-            <Setter Property="Margin" Value="0 2 10 2"/>
+            <Setter Property="Margin" Value="0 2 14 2"/>
         </Style>
     </UserControl.Resources>
     <Grid Background="{StaticResource Bg}">
@@ -50,17 +50,12 @@
         <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="9 7">
             <StackPanel>
                 <DockPanel Margin="0 0 0 4">
-                    <TextBlock Text="连接状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" />
+                    <TextBlock Text="状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" />
                     <TextBlock x:Name="txtStatusSummary" Text="正在检测..." HorizontalAlignment="Right" Foreground="{StaticResource PrimaryBlue}" FontSize="11" />
                 </DockPanel>
                 <WrapPanel>
-                    <TextBlock x:Name="txtStatusWs" Text="WS：未连接" Style="{StaticResource StatusText}" />
-                    <TextBlock x:Name="txtStatusInject" Text="注入：未连接" Style="{StaticResource StatusText}" />
-                    <TextBlock x:Name="txtStatusQn" Text="千牛参数：未获取" Style="{StaticResource StatusText}" />
-                    <TextBlock x:Name="txtStatusAccess" Text="无障碍：未确认" Style="{StaticResource StatusText}" />
-                    <TextBlock x:Name="txtStatusButton" Text="按钮：未识别" Style="{StaticResource StatusText}" />
-                    <TextBlock x:Name="txtStatusSend" Text="发送：未测试" Style="{StaticResource StatusText}" />
-                    <TextBlock x:Name="txtStatusApi" Text="API：未配置" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtConnectionStatus" Text="连接状态：正在检测" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtStatusApi" Text="API连接：未配置" Style="{StaticResource StatusText}" />
                 </WrapPanel>
             </StackPanel>
         </Border>
