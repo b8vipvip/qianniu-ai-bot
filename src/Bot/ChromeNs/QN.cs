@@ -20,6 +20,7 @@ namespace Bot.ChromeNs
         public event EventHandler<RecieveNewMessageEventArgs> EvRecieveNewMessage;
         public event EventHandler<ShopRobotReceriveNewMessageEventArgs> EvShopRobotReceriveNewMessage;
         public static HashSet<QN> QNSet { get; set; }
+        private static readonly object QNSetLock = new object();
         public string QnVersion { get; set; }
 
         private CDPClient cdp;
@@ -28,7 +29,21 @@ namespace Bot.ChromeNs
             get { return cdp; }
             set
             {
+                // 千牛新版会同时打开多个 recent.html / iframe，多个 WebSocket session 会重复初始化。
+                // 旧代码先把 cdp 字段替换成新对象，再 -= 事件，导致旧 CDP 事件没有真正解绑，
+                // 后续同一个买家第二条消息可能由旧 session 触发、却用新 session 发送，表现为 Bot 右侧有答案但千牛未发送。
+                if (cdp != null)
+                {
+                    cdp.EvBuyerSwitched -= Cdp_EvBuyerSwitched;
+                    cdp.EvMessageNotity -= Cdp_EvMessageNotity;
+                    cdp.EvRecieveNewMessage -= Cdp_EvRecieveNewMessage;
+                    cdp.EvSellerSwitched -= Cdp_EvSellerSwitched;
+                    cdp.EvShopRobotReceriveNewMessage -= Cdp_EvShopRobotReceriveNewMessage;
+                }
+
                 cdp = value;
+                if (cdp == null) return;
+
                 cdp.EvBuyerSwitched -= Cdp_EvBuyerSwitched;
                 cdp.EvMessageNotity -= Cdp_EvMessageNotity;
                 cdp.EvRecieveNewMessage -= Cdp_EvRecieveNewMessage;
@@ -235,13 +250,17 @@ namespace Bot.ChromeNs
 
         public static QN GetByNick(LocalUser seller)
         {
-            var qn = QNSet.FirstOrDefault(q => q._seller.Nick == seller.Nick || q._seller.Display == seller.Display);
-            if (qn == null)
+            if (seller == null) throw new ArgumentNullException("seller");
+            lock (QNSetLock)
             {
-                qn = new QN(seller);
-                QNSet.Add(qn);
+                var qn = QNSet.FirstOrDefault(q => q._seller != null && (q._seller.Nick == seller.Nick || q._seller.Display == seller.Display));
+                if (qn == null)
+                {
+                    qn = new QN(seller);
+                    QNSet.Add(qn);
+                }
+                return qn;
             }
-            return qn;
         }
 
         public void SendTimiMsg(string userId, string smartTip)
