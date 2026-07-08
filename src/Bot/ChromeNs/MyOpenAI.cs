@@ -6,6 +6,7 @@ using OpenAI.Chat;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -19,10 +20,7 @@ namespace Bot.ChromeNs
         public static ChatClient ChatClient { get; set; }
 
         private static string systemPrompt;
-        private static string lastApiKey;
-        private static string lastBaseUrl;
-        private static string lastModel;
-
+        private static string lastConfigFingerprint;
         private static ConcurrentDictionary<string, List<JObject>> buyerChatMessages;
 
         static MyOpenAI()
@@ -61,31 +59,19 @@ namespace Bot.ChromeNs
         {
             try
             {
-                var apikey = (Params.Robot.GetApiKey() ?? string.Empty).Trim();
-                var baseUrl = (Params.Robot.GetBaseUrl() ?? string.Empty).Trim();
-                var model = (Params.Robot.GetModelName() ?? string.Empty).Trim();
-                var prompt = Params.Robot.GetSystemPrompt();
-                systemPrompt = BuildSystemPrompt(prompt);
-
-                if (string.IsNullOrEmpty(apikey) || string.IsNullOrEmpty(model))
+                var endpoints = AiEndpointStore.GetEnabledEndpoints();
+                if (endpoints.Count < 1)
                 {
                     return false;
                 }
 
-                if (!string.IsNullOrEmpty(baseUrl)
-                    && !baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                    && !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                var primary = endpoints.First();
+                systemPrompt = BuildSystemPrompt(string.IsNullOrWhiteSpace(primary.SystemPrompt) ? Params.Robot.GetSystemPrompt() : primary.SystemPrompt);
+                var fingerprint = string.Join("|", endpoints.Select(e => string.Format("{0}:{1}:{2}:{3}", e.Name, e.BaseUrl, e.Model, e.Enabled)));
+                if (fingerprint != lastConfigFingerprint)
                 {
-                    Log.Error("AI BaseUrl 格式错误：" + baseUrl);
-                    return false;
-                }
-
-                if (apikey != lastApiKey || baseUrl != lastBaseUrl || model != lastModel)
-                {
-                    lastApiKey = apikey;
-                    lastBaseUrl = baseUrl;
-                    lastModel = model;
-                    Log.Info("AI配置加载成功, model=" + model + ", baseUrl=" + baseUrl);
+                    lastConfigFingerprint = fingerprint;
+                    Log.Info("AI配置加载成功, endpointCount=" + endpoints.Count + ", primary=" + primary.Name + ", model=" + primary.Model + ", baseUrl=" + primary.BaseUrl);
                 }
                 return true;
             }
@@ -143,6 +129,37 @@ namespace Bot.ChromeNs
             return content.ToString(Formatting.None);
         }
 
+        private static int GetIntToken(JToken token)
+        {
+            if (token == null) return 0;
+            int value;
+            return int.TryParse(token.ToString(), out value) ? value : 0;
+        }
+
+        private static int EstimateTokens(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return 0;
+            return Math.Max(1, text.Length / 2);
+        }
+
+        private static void FillUsage(ApiCallResult result, string payloadText, string answerText, string responseBody)
+        {
+            try
+            {
+                var json = JObject.Parse(responseBody);
+                result.InputTokens = GetIntToken(json["usage"]?["prompt_tokens"]);
+                result.OutputTokens = GetIntToken(json["usage"]?["completion_tokens"]);
+                result.TotalTokens = GetIntToken(json["usage"]?["total_tokens"]);
+            }
+            catch
+            {
+            }
+
+            if (result.InputTokens <= 0) result.InputTokens = EstimateTokens(payloadText);
+            if (result.OutputTokens <= 0) result.OutputTokens = EstimateTokens(answerText);
+            if (result.TotalTokens <= 0) result.TotalTokens = result.InputTokens + result.OutputTokens;
+        }
+
         private static string CleanAnswer(string answer)
         {
             answer = (answer ?? string.Empty).Trim();
@@ -155,86 +172,136 @@ namespace Bot.ChromeNs
             return answer;
         }
 
-        private static ApiCallResult CallChatCompletions(string baseUrl, string apiKey, string model, JArray messages)
+        private static ApiCallResult CallChatCompletions(AiEndpointConfig endpoint, JArray messages)
         {
-            var url = NormalizeBaseUrl(baseUrl);
+            var sw = Stopwatch.StartNew();
+            var url = NormalizeBaseUrl(endpoint.BaseUrl);
             var payload = new JObject
             {
-                ["model"] = model,
+                ["model"] = endpoint.Model,
                 ["messages"] = messages,
                 ["temperature"] = 0.15,
                 ["max_tokens"] = 120
             };
+            var payloadText = payload.ToString(Formatting.None);
 
-            using (var http = new HttpClient())
+            try
             {
-                http.Timeout = TimeSpan.FromSeconds(35);
-                http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-                http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
-                http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
-
-                using (var content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json"))
+                using (var http = new HttpClient())
                 {
-                    var response = http.PostAsync(url, content).GetAwaiter().GetResult();
-                    var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        return new ApiCallResult
-                        {
-                            Success = false,
-                            Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body)
-                        };
-                    }
+                    http.Timeout = TimeSpan.FromSeconds(endpoint.TimeoutSeconds <= 0 ? 35 : endpoint.TimeoutSeconds);
+                    http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
 
-                    var answer = CleanAnswer(ExtractAnswer(body));
-                    if (string.IsNullOrWhiteSpace(answer))
+                    using (var content = new StringContent(payloadText, Encoding.UTF8, "application/json"))
                     {
-                        return new ApiCallResult
+                        var response = http.PostAsync(url, content).GetAwaiter().GetResult();
+                        var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        sw.Stop();
+                        if (!response.IsSuccessStatusCode)
                         {
-                            Success = false,
-                            Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body)
-                        };
-                    }
+                            var failed = new ApiCallResult
+                            {
+                                Success = false,
+                                LatencyMs = sw.ElapsedMilliseconds,
+                                Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body)
+                            };
+                            failed.InputTokens = EstimateTokens(payloadText);
+                            failed.TotalTokens = failed.InputTokens;
+                            return failed;
+                        }
 
-                    return new ApiCallResult
-                    {
-                        Success = true,
-                        Answer = answer,
-                        Raw = body
-                    };
+                        var answer = CleanAnswer(ExtractAnswer(body));
+                        if (string.IsNullOrWhiteSpace(answer))
+                        {
+                            var empty = new ApiCallResult
+                            {
+                                Success = false,
+                                LatencyMs = sw.ElapsedMilliseconds,
+                                Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body)
+                            };
+                            empty.InputTokens = EstimateTokens(payloadText);
+                            empty.TotalTokens = empty.InputTokens;
+                            return empty;
+                        }
+
+                        var ok = new ApiCallResult
+                        {
+                            Success = true,
+                            Answer = answer,
+                            Raw = body,
+                            LatencyMs = sw.ElapsedMilliseconds
+                        };
+                        FillUsage(ok, payloadText, answer, body);
+                        return ok;
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                return new ApiCallResult
+                {
+                    Success = false,
+                    LatencyMs = sw.ElapsedMilliseconds,
+                    Error = SafeError(ex.Message),
+                    InputTokens = EstimateTokens(payloadText),
+                    TotalTokens = EstimateTokens(payloadText)
+                };
             }
         }
 
         public static string TestConnection(string baseUrl, string apiKey, string model, string prompt)
         {
+            var endpoint = new AiEndpointConfig
+            {
+                Name = "测试接口",
+                Type = "OpenAI兼容",
+                BaseUrl = (baseUrl ?? string.Empty).Trim(),
+                ApiKey = (apiKey ?? string.Empty).Trim(),
+                Model = (model ?? string.Empty).Trim(),
+                SystemPrompt = prompt ?? string.Empty,
+                Enabled = true,
+                Priority = 1,
+                TimeoutSeconds = 35
+            };
+            return TestConnection(endpoint);
+        }
+
+        public static string TestConnection(AiEndpointConfig endpoint)
+        {
             try
             {
-                baseUrl = (baseUrl ?? string.Empty).Trim();
-                apiKey = (apiKey ?? string.Empty).Trim();
-                model = (model ?? string.Empty).Trim();
-                prompt = BuildSystemPrompt(prompt);
+                if (endpoint == null) return "失败：接口配置为空。";
+                endpoint.BaseUrl = (endpoint.BaseUrl ?? string.Empty).Trim();
+                endpoint.ApiKey = (endpoint.ApiKey ?? string.Empty).Trim();
+                endpoint.Model = (endpoint.Model ?? string.Empty).Trim();
 
-                if (string.IsNullOrEmpty(apiKey)) return "失败：ApiKey 为空。";
-                if (string.IsNullOrEmpty(model)) return "失败：Model 为空。";
-                if (!string.IsNullOrEmpty(baseUrl)
-                    && !baseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
-                    && !baseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                if (string.IsNullOrEmpty(endpoint.ApiKey)) return "失败：ApiKey 为空。";
+                if (string.IsNullOrEmpty(endpoint.Model)) return "失败：Model 为空。";
+                if (!string.IsNullOrEmpty(endpoint.BaseUrl)
+                    && !endpoint.BaseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                    && !endpoint.BaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 {
                     return "失败：BaseUrl 必须以 http:// 或 https:// 开头。";
                 }
 
+                var prompt = BuildSystemPrompt(endpoint.SystemPrompt);
                 var messages = new JArray
                 {
                     CreateMessage("system", prompt),
                     CreateMessage("user", "请只回复：连接测试成功")
                 };
-                var result = CallChatCompletions(baseUrl, apiKey, model, messages);
+                var result = CallChatCompletions(endpoint, messages);
+                endpoint.LastLatencyMs = result.LatencyMs;
+                endpoint.LastTestTime = DateTime.Now;
+                endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
                 if (!result.Success)
                 {
                     return "失败：" + result.Error;
                 }
-                return "成功：API 连接正常。模型回复：" + SafeError(result.Answer);
+                return "成功：API 连接正常。模型回复：" + SafeError(result.Answer) + "，耗时 " + result.LatencyMs + "ms";
             }
             catch (Exception ex)
             {
@@ -254,12 +321,14 @@ namespace Bot.ChromeNs
 
                 if (!EnsureConfig())
                 {
-                    return "错误：AI配置不完整，请检查 BaseUrl / ApiKey / Model。";
+                    return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
                 }
 
-                var baseUrl = (Params.Robot.GetBaseUrl() ?? string.Empty).Trim();
-                var apiKey = (Params.Robot.GetApiKey() ?? string.Empty).Trim();
-                var model = (Params.Robot.GetModelName() ?? string.Empty).Trim();
+                var endpoints = AiEndpointStore.GetEnabledEndpoints();
+                if (endpoints.Count < 1)
+                {
+                    return "错误：没有可用的AI接口，请在设置-API接口中启用至少一个接口。";
+                }
 
                 var key = string.Format("{0}#{1}", seller, buyer);
                 var history = buyerChatMessages.xTryGetValue(key);
@@ -283,16 +352,26 @@ namespace Bot.ChromeNs
                 }
 
                 var messages = new JArray(history.Select(m => (JObject)m.DeepClone()));
-                var result = CallChatCompletions(baseUrl, apiKey, model, messages);
-                if (!result.Success)
+                var errors = new List<string>();
+                foreach (var endpoint in endpoints)
                 {
-                    Log.Error("AI接口调用失败：" + result.Error);
-                    return "错误：AI接口调用失败，未自动回复。" + result.Error;
+                    var result = CallChatCompletions(endpoint, messages);
+                    BotRuntimeStats.RecordAiCall(endpoint, result.InputTokens, result.OutputTokens, result.Success, result.LatencyMs, result.Success ? "成功" : result.Error);
+                    endpoint.LastLatencyMs = result.LatencyMs;
+                    endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
+                    if (result.Success)
+                    {
+                        history.Add(CreateMessage("assistant", result.Answer));
+                        buyerChatMessages.AddOrUpdate(key, id => history, (k, v) => history);
+                        return result.Answer;
+                    }
+
+                    var err = endpoint.Name + "：" + result.Error;
+                    errors.Add(err);
+                    Log.Error("AI接口调用失败：" + err);
                 }
 
-                history.Add(CreateMessage("assistant", result.Answer));
-                buyerChatMessages.AddOrUpdate(key, id => history, (k, v) => history);
-                return result.Answer;
+                return "错误：AI接口调用失败，未自动回复。" + string.Join("；", errors);
             }
             catch (Exception ex)
             {
@@ -307,6 +386,10 @@ namespace Bot.ChromeNs
             public string Answer { get; set; }
             public string Error { get; set; }
             public string Raw { get; set; }
+            public int InputTokens { get; set; }
+            public int OutputTokens { get; set; }
+            public int TotalTokens { get; set; }
+            public long LatencyMs { get; set; }
         }
     }
 }
