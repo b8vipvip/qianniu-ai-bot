@@ -28,7 +28,6 @@ namespace Bot.AssistWindow.Widget.Robot
             InitializeComponent();
         }
 
-
         public static CtlConversation Create(string question, string answer,bool isAutoReply = false)
         {
             var dlg = new CtlConversation();
@@ -39,15 +38,22 @@ namespace Bot.AssistWindow.Widget.Robot
         public void Setup(string question,string answer,bool isAutoReply)
         {
             txtQuestion.Text = question;
-            txtAnswer.Text = answer + (isAutoReply ? sendedChar : "");
+            txtAnswer.Text = answer;
+            txtStatus.Text = isAutoReply ? "已自动发送" : "仅生成答案";
+            txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
+            if (isAutoReply)
+            {
+                txtAnswer.Text += sendedChar;
+            }
         }
 
         private void txtAnswer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             var tb = sender as TextBlock;
-            if (!tb.Text.EndsWith(sendedChar))
+            if (tb.Text != null && !tb.Text.EndsWith(sendedChar))
             {
                 tb.Text += sendedChar;
+                txtStatus.Text = "已手动标记发送";
             }
         }
     }
