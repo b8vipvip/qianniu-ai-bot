@@ -146,13 +146,6 @@ namespace Bot.ChromeNs
             WinApi.Api.keybd_event(0x0D, 0, 2, 0);
         }
 
-        private static void PressEsc()
-        {
-            WinApi.Api.keybd_event(0x1B, 0, 0, 0);
-            Thread.Sleep(60);
-            WinApi.Api.keybd_event(0x1B, 0, 2, 0);
-        }
-
         private string GetEditorTextSafe()
         {
             try
@@ -171,18 +164,49 @@ namespace Bot.ChromeNs
             return string.IsNullOrWhiteSpace(GetEditorTextSafe());
         }
 
-        private bool TryPressEnterSend()
+        private bool WaitForSendConfirmed(string buyer, string text, DateTime sendStart, string method, int timeoutMs)
+        {
+            var end = DateTime.Now.AddMilliseconds(timeoutMs);
+            while (DateTime.Now < end)
+            {
+                if (IsEditorEmptySafe())
+                {
+                    BotConnectionDiagnostics.RecordSendAttempt(true, method + "，输入框已清空");
+                    Log.Info(method + "发送确认成功：输入框已清空。text=" + text);
+                    return true;
+                }
+
+                try
+                {
+                    if (_qn != null && _qn.HasRecentSellerEcho(buyer, text, sendStart))
+                    {
+                        BotConnectionDiagnostics.RecordSendAttempt(true, method + "，卖家消息已回显");
+                        Log.Info(method + "发送确认成功：已收到卖家消息回显。buyer=" + buyer + ", text=" + text);
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("检查卖家消息回显失败: " + ex.Message);
+                }
+
+                Thread.Sleep(150);
+            }
+
+            var editorText = GetEditorTextSafe();
+            BotConnectionDiagnostics.RecordSendAttempt(false, method + "后未确认发送");
+            Log.Info(method + "发送未确认，editorText=" + editorText + ", text=" + text);
+            return false;
+        }
+
+        private bool TryPressEnterSend(string buyer, string text, DateTime sendStart)
         {
             try
             {
-                PressEsc();
+                // 不再按 Esc。千牛在输入框有草稿时按 Esc 会弹出“您还未回复买家/关闭会话确认”，反而阻断发送。
                 FocusEditor();
                 PressEnter();
-                Thread.Sleep(850);
-                var ok = IsEditorEmptySafe();
-                BotConnectionDiagnostics.RecordSendAttempt(ok, ok ? "Enter发送" : "Enter后未发送");
-                Log.Info("Enter发送结果=" + ok + ", text=" + LastSetPlainText);
-                return ok;
+                return WaitForSendConfirmed(buyer, text, sendStart, "Enter", 3500);
             }
             catch (Exception ex)
             {
@@ -192,7 +216,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool TryClickSendButtonLeftPart()
+        private bool TryClickSendButtonLeftPart(string buyer, string text, DateTime sendStart)
         {
             if (_sendMessageButton == null) return false;
             try
@@ -203,32 +227,26 @@ namespace Bot.ChromeNs
                 var x = (int)(rect.Left + Math.Min(Math.Max(rect.Width * 0.35, 10), Math.Max(rect.Width - 32, 10)));
                 var y = (int)(rect.Top + rect.Height / 2);
                 FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = x, Y = y });
-                Thread.Sleep(850);
-                var ok = IsEditorEmptySafe();
-                BotConnectionDiagnostics.RecordSendAttempt(ok, ok ? "按钮左侧点击" : "按钮点击后未发送");
-                Log.Info("按钮左侧点击发送结果=" + ok + ", text=" + LastSetPlainText);
-                if (!ok) PressEsc();
-                return ok;
+                return WaitForSendConfirmed(buyer, text, sendStart, "按钮左侧点击", 4000);
             }
             catch (Exception ex)
             {
                 BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
                 Log.Exception(ex);
-                try { PressEsc(); } catch { }
                 return false;
             }
         }
 
-        private bool TryClickSendButton()
+        private bool TryClickSendButton(string buyer, string text, DateTime sendStart)
         {
             // 首选 Enter。当前千牛菜单已勾选“按Enter发送”，这比点击分裂按钮更稳定，也不会误点下拉箭头。
-            if (TryPressEnterSend()) return true;
+            if (TryPressEnterSend(buyer, text, sendStart)) return true;
 
             try
             {
                 UpdateChatBrowserRect(true);
                 Thread.Sleep(350);
-                if (_sendMessageButton != null && TryClickSendButtonLeftPart()) return true;
+                if (_sendMessageButton != null && TryClickSendButtonLeftPart(buyer, text, sendStart)) return true;
             }
             catch (Exception ex)
             {
@@ -250,7 +268,7 @@ namespace Bot.ChromeNs
             {
                 _preSendPlainTextAndImageTime = DateTime.Now;
                 _preSendPlainTextAndImageImage = image;
-                if (SetImage(image)) rt = TryClickSendButton();
+                if (SetImage(image)) rt = TryClickSendButton(_qn == null || _qn.Buyer == null ? string.Empty : _qn.Buyer.Nick, string.Empty, DateTime.Now);
                 else rt = false;
             }
             return rt;
@@ -365,7 +383,8 @@ namespace Bot.ChromeNs
                 }
 
                 Thread.Sleep(250);
-                sendResult = TryClickSendButton();
+                var sendStart = DateTime.Now;
+                sendResult = TryClickSendButton(buyer, text, sendStart);
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer + ", text=" + text);
             }
             catch (Exception ex)
