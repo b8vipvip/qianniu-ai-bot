@@ -50,6 +50,8 @@ jobs:
           foreach ($proj in @('src\Bot\Bot.csproj','src\DbEntity\DbEntity.csproj')) {
             if (Test-Path $proj) {
               $xml = Get-Content $proj -Raw
+              # 修复被压缩/改写时漏掉末尾 0B 的 WSH COM GUID，否则 MSBuild 会报 MSB3296 Guid invalid。
+              $xml = $xml -replace '\{F935DC20-1CF0-11D0-ADB9-00C04FD58A\}', '{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}'
               $xml = [regex]::Replace($xml, '(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>', '')
               if ($proj -like '*\Bot\Bot.csproj' -and $xml -notmatch 'ICSharpCode\.SharpZipLib') {
                 $sharpRef = '    <Reference Include="ICSharpCode.SharpZipLib"><HintPath>..\packages\SharpZipLib.1.4.2\lib\netstandard2.0\ICSharpCode.SharpZipLib.dll</HintPath><Private>True</Private></Reference>'
