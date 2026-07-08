@@ -15,6 +15,7 @@ namespace Bot.AssistWindow.Widget.Robot
     {
         private DispatcherTimer _diagnosticsTimer;
         private DataDeskWindow _dataDeskWindow;
+        private DateTime _badConnectionSince = DateTime.MinValue;
 
         public bool IsDataDeskVisible
         {
@@ -41,7 +42,7 @@ namespace Bot.AssistWindow.Widget.Robot
                     return;
                 }
 
-                _dataDeskWindow = new DataDeskWindow(owner);
+                _dataDeskWindow = new DataDeskWindow(owner, this);
                 _dataDeskWindow.Closed += (s, e) => _dataDeskWindow = null;
                 _dataDeskWindow.Show();
                 _dataDeskWindow.DockToOwner();
@@ -97,6 +98,8 @@ namespace Bot.AssistWindow.Widget.Robot
             sb.AppendLine("WS连接：" + diag.WebSocketStatus);
             sb.AppendLine("注入状态：" + diag.InjectionStatus);
             sb.AppendLine("千牛参数：" + diag.QnParamStatus);
+            sb.AppendLine("客服ID：" + (string.IsNullOrWhiteSpace(diag.Seller) ? "未识别" : diag.Seller));
+            sb.AppendLine("买家ID：" + (string.IsNullOrWhiteSpace(diag.Buyer) ? "未识别" : diag.Buyer));
             sb.AppendLine("无障碍/可访问UI：" + diag.AccessibilityStatus);
             sb.AppendLine("发送按钮识别：" + diag.ButtonStatus);
             sb.AppendLine("最近发送结果：" + diag.SendStatus);
@@ -108,6 +111,44 @@ namespace Bot.AssistWindow.Widget.Robot
             return new SolidColorBrush(ok ? Color.FromRgb(39, 174, 96) : Color.FromRgb(242, 153, 74));
         }
 
+        private bool ShouldRecoverQianniu(ConnectionDiagnosticsSnapshot diag, string summary)
+        {
+            if (diag == null) return false;
+            if (!Params.Robot.CanUseRobotReal) return false;
+            if (diag.WebSocketSessionCount < 1) return false;
+            if (summary == "连接正常") return false;
+            if (string.IsNullOrWhiteSpace(summary)) return false;
+            return summary.Contains("客服ID未识别") || summary.Contains("千牛参数未获取");
+        }
+
+        private void MaybeRecoverQianniu(ConnectionDiagnosticsSnapshot diag, string summary)
+        {
+            try
+            {
+                if (!ShouldRecoverQianniu(diag, summary))
+                {
+                    _badConnectionSince = DateTime.MinValue;
+                    return;
+                }
+
+                if (_badConnectionSince == DateTime.MinValue)
+                {
+                    _badConnectionSince = DateTime.Now;
+                    return;
+                }
+
+                if ((DateTime.Now - _badConnectionSince).TotalSeconds >= 45)
+                {
+                    QianniuRecoveryManager.RequestRecover(summary);
+                    _badConnectionSince = DateTime.Now;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
+        }
+
         private void RefreshStatusDiagnostics()
         {
             try
@@ -117,6 +158,18 @@ namespace Bot.AssistWindow.Widget.Robot
                 var connectionOk = diag != null && diag.Summary == "连接正常";
                 var summary = diag == null || string.IsNullOrWhiteSpace(diag.Summary) ? "正在检测" : diag.Summary;
                 var detail = BuildConnectionDetail(diag);
+
+                if (diag != null)
+                {
+                    if (!string.IsNullOrWhiteSpace(diag.Seller) && (txtSeller == null || string.IsNullOrWhiteSpace(txtSeller.Text) || txtSeller.Text == "..."))
+                    {
+                        txtSeller.Text = diag.Seller;
+                    }
+                    if (!string.IsNullOrWhiteSpace(diag.Buyer) && (txtBuyer == null || string.IsNullOrWhiteSpace(txtBuyer.Text) || txtBuyer.Text == "..."))
+                    {
+                        txtBuyer.Text = diag.Buyer;
+                    }
+                }
 
                 if (txtStatusSummary != null)
                 {
@@ -134,6 +187,8 @@ namespace Bot.AssistWindow.Widget.Robot
                 {
                     txtStatusApi.Text = "API连接：" + BuildApiStatus(stats);
                 }
+
+                MaybeRecoverQianniu(diag, summary);
             }
             catch (Exception ex)
             {
@@ -145,6 +200,7 @@ namespace Bot.AssistWindow.Widget.Robot
     internal class DataDeskWindow : Window
     {
         private readonly Window _owner;
+        private readonly FrameworkElement _anchor;
         private readonly DispatcherTimer _timer;
         private TextBlock _txtTotalReception;
         private TextBlock _txtTodayReception;
@@ -158,13 +214,14 @@ namespace Bot.AssistWindow.Widget.Robot
         private TextBlock _txtLastError;
         private StackPanel _panelApiStats;
 
-        public DataDeskWindow(Window owner)
+        public DataDeskWindow(Window owner, FrameworkElement anchor)
         {
             _owner = owner;
+            _anchor = anchor;
             Title = "数据台";
             Width = 335;
             MinWidth = 300;
-            Height = owner != null && owner.ActualHeight > 200 ? owner.ActualHeight : 680;
+            Height = anchor != null && anchor.ActualHeight > 200 ? anchor.ActualHeight : 680;
             WindowStartupLocation = WindowStartupLocation.Manual;
             ShowInTaskbar = false;
             ResizeMode = ResizeMode.CanResize;
@@ -177,6 +234,11 @@ namespace Bot.AssistWindow.Widget.Robot
                 _owner.LocationChanged += OwnerChanged;
                 _owner.SizeChanged += OwnerChanged;
             }
+            if (_anchor != null)
+            {
+                _anchor.SizeChanged += OwnerChanged;
+                _anchor.LayoutUpdated += Anchor_LayoutUpdated;
+            }
             Closed += DataDeskWindow_Closed;
             Loaded += (s, e) => DockToOwner();
 
@@ -187,6 +249,11 @@ namespace Bot.AssistWindow.Widget.Robot
             RefreshStats();
         }
 
+        private void Anchor_LayoutUpdated(object sender, EventArgs e)
+        {
+            DockToOwner();
+        }
+
         private void DataDeskWindow_Closed(object sender, EventArgs e)
         {
             if (_timer != null) _timer.Stop();
@@ -194,6 +261,11 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 _owner.LocationChanged -= OwnerChanged;
                 _owner.SizeChanged -= OwnerChanged;
+            }
+            if (_anchor != null)
+            {
+                _anchor.SizeChanged -= OwnerChanged;
+                _anchor.LayoutUpdated -= Anchor_LayoutUpdated;
             }
         }
 
@@ -206,13 +278,46 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             try
             {
-                if (_owner == null) return;
-                Left = _owner.Left + _owner.ActualWidth + 6;
-                Top = _owner.Top;
-                if (_owner.ActualHeight > 200) Height = _owner.ActualHeight;
+                double anchorLeft = _owner == null ? SystemParameters.WorkArea.Right - Width - 4 : _owner.Left;
+                double anchorTop = _owner == null ? SystemParameters.WorkArea.Top + 4 : _owner.Top;
+                double anchorWidth = _owner == null ? 0 : _owner.ActualWidth;
+                double anchorHeight = _owner != null && _owner.ActualHeight > 200 ? _owner.ActualHeight : 680;
+
+                if (_anchor != null && _anchor.IsVisible && _anchor.ActualWidth > 0 && _anchor.ActualHeight > 0)
+                {
+                    var p1 = _anchor.PointToScreen(new Point(0, 0));
+                    var p2 = _anchor.PointToScreen(new Point(_anchor.ActualWidth, _anchor.ActualHeight));
+                    anchorLeft = p1.X;
+                    anchorTop = p1.Y;
+                    anchorWidth = Math.Max(0, p2.X - p1.X);
+                    anchorHeight = Math.Max(200, p2.Y - p1.Y);
+                }
+
+                Height = anchorHeight > 200 ? anchorHeight : Height;
+                var work = SystemParameters.WorkArea;
+                var rightLeft = anchorLeft + anchorWidth + 6;
+                var leftLeft = anchorLeft - Width - 6;
+                double targetLeft;
+                if (rightLeft + Width <= work.Right - 4)
+                {
+                    targetLeft = rightLeft;
+                }
+                else if (leftLeft >= work.Left + 4)
+                {
+                    targetLeft = leftLeft;
+                }
+                else
+                {
+                    targetLeft = Math.Max(work.Left + 4, Math.Min(rightLeft, work.Right - Width - 4));
+                }
+
+                var targetTop = Math.Max(work.Top + 4, Math.Min(anchorTop, work.Bottom - Height - 4));
+                Left = targetLeft;
+                Top = targetTop;
             }
-            catch
+            catch (Exception ex)
             {
+                Log.Exception(ex);
             }
         }
 
