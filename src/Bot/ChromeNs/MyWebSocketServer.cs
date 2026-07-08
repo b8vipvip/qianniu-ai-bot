@@ -37,6 +37,63 @@ namespace Bot.ChromeNs
             return _clients.GetOrAdd(session.SessionID, id => new CDPClient(session));
         }
 
+        private static string ReadJsonString(JObject jo, string name)
+        {
+            if (jo == null) return string.Empty;
+            var token = jo[name];
+            return token == null ? string.Empty : token.ToString().Trim();
+        }
+
+        private async Task TryBindStatusConversation(WebSocketSession session, string loginNick, string conversationNick)
+        {
+            if (session == null) return;
+            loginNick = (loginNick ?? string.Empty).Trim();
+            conversationNick = (conversationNick ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(loginNick) && string.IsNullOrWhiteSpace(conversationNick)) return;
+
+            try
+            {
+                var cdp = GetOrCreateClient(session);
+                QN qn = null;
+                if (!string.IsNullOrWhiteSpace(loginNick))
+                {
+                    qn = QN.FindExistingBySellerNick(loginNick);
+                }
+
+                if (qn == null)
+                {
+                    try
+                    {
+                        var user = await cdp.GetCurrentUser();
+                        if (user != null && user.Result != null && !string.IsNullOrWhiteSpace(user.Result.Nick))
+                        {
+                            qn = QN.GetByNick(user.Result);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Info("状态绑定当前会话时获取登录用户失败: " + ex.Message);
+                    }
+                }
+
+                if (qn == null)
+                {
+                    BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
+                    return;
+                }
+
+                qn.CDP = cdp;
+                var sellerNick = qn.Seller == null ? loginNick : qn.Seller.Nick;
+                qn.SetActiveConversationByNick(sellerNick, conversationNick, "qnbotStatus");
+                BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", sellerNick, conversationNick);
+                _initialized[session.SessionID] = true;
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
+        }
+
         private async Task TryInitSession(WebSocketSession session, string reason)
         {
             if (session == null) return;
@@ -60,9 +117,25 @@ namespace Bot.ChromeNs
                 qn.QnVersion = ver != null ? ver.version : string.Empty;
                 qn.CDP = cdp;
                 _initialized[session.SessionID] = true;
-                BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", qn.Seller.Nick, string.Empty);
+
+                var buyerNick = string.Empty;
+                try
+                {
+                    var conv = await cdp.GetCurrentConversationID();
+                    if (conv != null && conv.Result != null && !string.IsNullOrWhiteSpace(conv.Result.Nick))
+                    {
+                        buyerNick = conv.Result.Nick;
+                        qn.SetActiveConversationByNick(qn.Seller.Nick, buyerNick, "initConversation");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("初始化时获取当前买家失败: " + ex.Message);
+                }
+
+                BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", qn.Seller.Nick, buyerNick);
                 WndNotifyIcon.Inst.AddSellerMenuItem(qn.Seller.Nick);
-                Log.Info("千牛CDP初始化成功, seller=" + qn.Seller.Nick + ", version=" + qn.QnVersion + ", session=" + session.SessionID);
+                Log.Info("千牛CDP初始化成功, seller=" + qn.Seller.Nick + ", buyer=" + buyerNick + ", version=" + qn.QnVersion + ", session=" + session.SessionID);
             }
             catch (Exception ex)
             {
@@ -113,10 +186,17 @@ namespace Bot.ChromeNs
                                 var hasImsdk = jo["hasImsdk"] != null && jo["hasImsdk"].Value<bool>();
                                 var hasQn = jo["hasQN"] != null && jo["hasQN"].Value<bool>();
                                 var hasVs = jo["hasVs"] != null && jo["hasVs"].Value<bool>();
+                                var loginNick = ReadJsonString(jo, "loginNick");
+                                var conversationNick = ReadJsonString(jo, "conversationNick");
                                 BotConnectionDiagnostics.RecordInjectionStatus(true, hasImsdk, hasLoginId, hasQn, hasVs, wMsg.Response);
+                                BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
                                 if (hasLoginId || hasImsdk)
                                 {
                                     Task.Run(() => TryInitSession(session, "status"));
+                                    if (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick))
+                                    {
+                                        Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
+                                    }
                                 }
                             }
                             catch (Exception ex)
