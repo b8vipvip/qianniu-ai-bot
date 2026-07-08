@@ -1,12 +1,18 @@
 ﻿using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
+using Microsoft.Win32;
 using BotLib;
 using SuperWebSocket;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Bot.ChromeNs;
 using Bot.Automation;
+using Bot.Automation.ChatDeskNs;
 using SuperSocket.SocketBase.Config;
 using Bot.AssistWindow.NotifyIcon;
 
@@ -300,13 +306,14 @@ namespace Bot.ChromeNs
             return lastSendStatus.StartsWith("成功", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static string BuildSummary(bool wsOk, bool injectionOk, bool qnOk, bool uiOk, bool buttonOk, bool inputOk, bool sendOk)
+        private static string BuildSummary(bool wsOk, bool injectionOk, bool qnOk, bool sellerOk, bool uiOk, bool buttonOk, bool inputOk, bool sendOk)
         {
-            if (wsOk && injectionOk && qnOk && uiOk && buttonOk && inputOk && sendOk) return "连接正常";
+            if (wsOk && injectionOk && qnOk && sellerOk && uiOk && buttonOk && inputOk && sendOk) return "连接正常";
             if (!wsStarted) return string.IsNullOrWhiteSpace(lastWsError) ? "WS服务未启动" : "WS服务异常";
             if (!wsOk) return "WS未连接";
             if (!injectionOk) return "注入未连接";
             if (!qnOk) return "千牛参数未获取";
+            if (!sellerOk) return "客服ID未识别";
             if (!uiOk || !buttonOk || !inputOk) return "无障碍/按钮未就绪";
             if (!sendOk) return "最近发送失败";
             return "检测中/需检查";
@@ -322,8 +329,9 @@ namespace Bot.ChromeNs
                 {
                     inject += "｜imsdk=" + (hasImsdk ? "是" : "否") + "｜login=" + (hasLoginId ? "是" : "否");
                 }
+                var sellerOk = !string.IsNullOrWhiteSpace(seller);
                 var qnStatus = cdpReady ? "已获取" : cdpMessage;
-                if (cdpReady && !string.IsNullOrWhiteSpace(seller)) qnStatus += "｜客服=" + seller;
+                if (cdpReady) qnStatus += sellerOk ? "｜客服=" + seller : "｜客服未识别";
                 var access = uiAccessible ? "可用" : (inputFound || sendButtonFound ? "部分可用" : "未确认");
                 var btn = sendButtonFound ? "已识别发送按钮" : "未识别发送按钮";
                 if (!inputFound) btn += "｜输入框未识别";
@@ -335,7 +343,7 @@ namespace Bot.ChromeNs
                 var buttonOk = sendButtonFound;
                 var inputOk = inputFound;
                 var sendOk = LastSendStatusIsOk();
-                var summary = BuildSummary(wsOk, injectionOk, qnOk, uiOk, buttonOk, inputOk, sendOk);
+                var summary = BuildSummary(wsOk, injectionOk, qnOk, sellerOk, uiOk, buttonOk, inputOk, sendOk);
 
                 return new ConnectionDiagnosticsSnapshot
                 {
@@ -353,6 +361,228 @@ namespace Bot.ChromeNs
                     LastUpdateTime = lastUpdate
                 };
             }
+        }
+    }
+
+    public static class QianniuRecoveryManager
+    {
+        private static readonly object SyncObj = new object();
+        private static bool recovering;
+        private static DateTime lastRecoverTime = DateTime.MinValue;
+
+        public static void RequestRecover(string reason)
+        {
+            lock (SyncObj)
+            {
+                if (recovering) return;
+                if ((DateTime.Now - lastRecoverTime).TotalMinutes < 3) return;
+                recovering = true;
+                lastRecoverTime = DateTime.Now;
+            }
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await RecoverAsync(reason);
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex);
+                }
+                finally
+                {
+                    lock (SyncObj)
+                    {
+                        recovering = false;
+                    }
+                }
+            });
+        }
+
+        private static async Task RecoverAsync(string reason)
+        {
+            var lastBuyer = string.Empty;
+            try
+            {
+                var snapshot = BotConnectionDiagnostics.GetSnapshot();
+                if (snapshot != null) lastBuyer = snapshot.Buyer;
+            }
+            catch
+            {
+            }
+
+            Log.Error("触发千牛自动恢复：" + reason);
+            KillQianniuProcesses();
+            await Task.Delay(3000);
+
+            var exe = FindLaunchFile();
+            if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe))
+            {
+                Log.Error("千牛自动恢复失败：未找到 AliWorkbench.exe/wwcmd.exe");
+                return;
+            }
+
+            try
+            {
+                Process.Start(new ProcessStartInfo(exe)
+                {
+                    WorkingDirectory = Path.GetDirectoryName(exe),
+                    UseShellExecute = true
+                });
+                Log.Info("已启动千牛：" + exe);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                return;
+            }
+
+            var started = await WaitForProcessAsync("AliWorkbench", 60);
+            if (!started)
+            {
+                Log.Error("千牛自动恢复失败：启动后60秒内未检测到 AliWorkbench 进程");
+                return;
+            }
+
+            Log.Info("千牛进程已启动，等待接待窗口和客服参数恢复...");
+            await WaitForChatDeskAndOpenLastBuyerAsync(lastBuyer, 75);
+        }
+
+        private static void KillQianniuProcesses()
+        {
+            foreach (var name in new[] { "AliWorkbench", "AliRender", "wwcmd", "wangwang" })
+            {
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    try
+                    {
+                        p.Kill();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Exception(ex);
+                    }
+                }
+            }
+        }
+
+        private static async Task<bool> WaitForProcessAsync(string processName, int seconds)
+        {
+            var end = DateTime.Now.AddSeconds(seconds);
+            while (DateTime.Now < end)
+            {
+                try
+                {
+                    if (Process.GetProcessesByName(processName).Length > 0) return true;
+                }
+                catch
+                {
+                }
+                await Task.Delay(1000);
+            }
+            return false;
+        }
+
+        private static async Task WaitForChatDeskAndOpenLastBuyerAsync(string lastBuyer, int seconds)
+        {
+            var end = DateTime.Now.AddSeconds(seconds);
+            while (DateTime.Now < end)
+            {
+                try
+                {
+                    if (Desk.Inst != null)
+                    {
+                        Desk.Inst.Show();
+                        Desk.Inst.BringTop();
+                    }
+
+                    if (QN.CurQN != null && QN.CurQN.Seller != null && !string.IsNullOrWhiteSpace(QN.CurQN.Seller.Nick))
+                    {
+                        Log.Info("千牛自动恢复成功：客服=" + QN.CurQN.Seller.Nick);
+                        if (!string.IsNullOrWhiteSpace(lastBuyer))
+                        {
+                            try
+                            {
+                                QN.CurQN.OpenChat(lastBuyer);
+                                Log.Info("已尝试恢复打开最近买家会话：" + lastBuyer);
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.Exception(ex);
+                            }
+                        }
+                        return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex);
+                }
+                await Task.Delay(1000);
+            }
+            Log.Error("千牛已启动，但未能在限定时间内识别到接待窗口/客服ID。请确认千牛设置中已开启无障碍模式，并至少打开一次客服接待窗口。");
+        }
+
+        private static string FindLaunchFile()
+        {
+            var installPath = FindInstallPathFromRegistry();
+            var candidates = new List<string>();
+            if (!string.IsNullOrWhiteSpace(installPath))
+            {
+                candidates.Add(Path.Combine(installPath, "AliWorkbench.exe"));
+                candidates.Add(Path.Combine(installPath, "wwcmd.exe"));
+            }
+            candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AliWorkbench", "AliWorkbench.exe"));
+            candidates.Add(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "AliWorkbench", "AliWorkbench.exe"));
+
+            foreach (var path in candidates)
+            {
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(path) && File.Exists(path)) return path;
+                }
+                catch
+                {
+                }
+            }
+            return string.Empty;
+        }
+
+        private static string FindInstallPathFromRegistry()
+        {
+            try
+            {
+                using (var key = Registry.ClassesRoot.OpenSubKey(@"aliim\Shell\Open\Command"))
+                {
+                    if (key == null) return string.Empty;
+                    var raw = (key.GetValue("") ?? string.Empty).ToString();
+                    var exe = ExtractExePath(raw);
+                    if (string.IsNullOrWhiteSpace(exe) || !File.Exists(exe)) return string.Empty;
+                    var dir = Directory.GetParent(exe);
+                    if (dir == null) return string.Empty;
+                    var parent = dir.Parent;
+                    return parent == null ? dir.FullName : parent.FullName;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                return string.Empty;
+            }
+        }
+
+        private static string ExtractExePath(string command)
+        {
+            command = (command ?? string.Empty).Trim();
+            if (command.Length < 1) return string.Empty;
+            if (command.StartsWith("\""))
+            {
+                var end = command.IndexOf('"', 1);
+                return end > 1 ? command.Substring(1, end - 1) : string.Empty;
+            }
+            var idx = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            return idx >= 0 ? command.Substring(0, idx + 4).Trim() : command;
         }
     }
 
