@@ -5,24 +5,46 @@
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008" 
              xmlns:local="clr-namespace:Bot.AssistWindow.Widget.Robot"
              mc:Ignorable="d">
-    <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="3" Margin="0 0 0 2">
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="CardBorder" Color="#E5EAF2" />
+        <SolidColorBrush x:Key="QuestionBg" Color="#EAF5FF" />
+        <SolidColorBrush x:Key="AnswerBg" Color="#F8FAFC" />
+        <SolidColorBrush x:Key="PrimaryText" Color="#1F2937" />
+        <SolidColorBrush x:Key="MutedText" Color="#6B7280" />
+        <SolidColorBrush x:Key="AccentBlue" Color="#2F80ED" />
+        <SolidColorBrush x:Key="SuccessGreen" Color="#27AE60" />
+    </UserControl.Resources>
+    <Border Background="#FFFFFFFF" BorderBrush="{StaticResource CardBorder}" BorderThickness="1" CornerRadius="8" Margin="8 5 8 7" Padding="0">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="*" MinHeight="30"></RowDefinition>
-                <RowDefinition Height="*" MinHeight="30"></RowDefinition>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="30"/>
-                <ColumnDefinition/>
-            </Grid.ColumnDefinitions>
-            <Border Background="LightSkyBlue" CornerRadius="2" Margin="2"/>
-            <TextBlock Text="问:" VerticalAlignment="Center" HorizontalAlignment="Center" />
-            <TextBlock x:Name="txtQuestion" Text="你好" Padding="2" Grid.Column="1" FontWeight="Bold" TextWrapping="Wrap" VerticalAlignment="Center"/>
-            <Border Background="LightSkyBlue" Grid.Row="1"  CornerRadius="2" Margin="2"/>
-            <TextBlock Text="答:" Grid.Row="1" VerticalAlignment="Center"  HorizontalAlignment="Center" />
-            <TextBlock x:Name="txtAnswer" Text="您好，欢迎光临本店..." Padding="2" Grid.Row="1" Grid.Column="1" TextWrapping="Wrap" 
-                       MouseLeftButtonDown="txtAnswer_MouseLeftButtonDown"
-                       VerticalAlignment="Center"/>
+            <Grid Grid.Row="0" Background="{StaticResource QuestionBg}" MinHeight="38">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="38"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Background="#BFE8FF" CornerRadius="6" Margin="6" />
+                <TextBlock Text="问" VerticalAlignment="Center" HorizontalAlignment="Center" FontWeight="Bold" Foreground="#164E63" />
+                <TextBlock x:Name="txtQuestion" Grid.Column="1" Padding="4 8 8 8" Foreground="{StaticResource PrimaryText}" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center" />
+            </Grid>
+            <Grid Grid.Row="1" Background="{StaticResource AnswerBg}" MinHeight="42">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="38"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+                <Border Background="#D6F5E1" CornerRadius="6" Margin="6" />
+                <TextBlock Text="答" VerticalAlignment="Center" HorizontalAlignment="Center" FontWeight="Bold" Foreground="#166534" />
+                <StackPanel Grid.Column="1" Margin="4 7 8 7">
+                    <TextBlock x:Name="txtAnswer" Foreground="{StaticResource PrimaryText}" TextWrapping="Wrap" MouseLeftButtonDown="txtAnswer_MouseLeftButtonDown" />
+                    <StackPanel Orientation="Horizontal" Margin="0 5 0 0">
+                        <TextBlock x:Name="txtStatus" Foreground="{StaticResource SuccessGreen}" FontSize="11" />
+                        <TextBlock Text="  ·  " Foreground="{StaticResource MutedText}" FontSize="11" />
+                        <TextBlock x:Name="txtTime" Foreground="{StaticResource MutedText}" FontSize="11" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
         </Grid>
     </Border>
 </UserControl>
