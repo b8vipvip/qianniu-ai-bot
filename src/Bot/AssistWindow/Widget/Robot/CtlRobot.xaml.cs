@@ -24,6 +24,7 @@ using SuperSocket.SocketEngine.Configuration;
 using BotLib;
 using System.Windows.Threading;
 using System.Windows.Media;
+using System.Threading.Tasks;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
@@ -103,13 +104,14 @@ namespace Bot.AssistWindow.Widget.Robot
             }
         }
 
-        public void AddConversation(string seller, string buyer, string question, string answer,bool isAutoReply = false)
+        public CtlConversation AddConversation(string seller, string buyer, string question, string answer, bool isAutoReply = false)
         {
             BotRuntimeStats.RecordDisplayedAnswer(isAutoReply);
             RefreshStats();
 
             var key = string.Format("{0}#{1}", seller, buyer);
-            var ctlConversation = CtlConversation.Create(question, answer, isAutoReply);
+            var ctlConversation = CtlConversation.Create(seller, buyer, question, answer, isAutoReply);
+            ctlConversation.ResendRequested += CtlConversation_ResendRequested;
             var conversations = buyerConversations.xTryGetValue(key);
             if (conversations == null || conversations.Count < 1)
             {
@@ -129,6 +131,37 @@ namespace Bot.AssistWindow.Widget.Robot
                 stkDialog.Children.Add(ctlConversation);
             }
             scvBody.ScrollToEnd();
+            return ctlConversation;
+        }
+
+        private async void CtlConversation_ResendRequested(object sender, ConversationResendEventArgs e)
+        {
+            var ctl = sender as CtlConversation;
+            if (ctl == null) return;
+            if (string.IsNullOrWhiteSpace(e.Answer))
+            {
+                ctl.SetSendResult(false, "重发失败：答案为空");
+                return;
+            }
+
+            try
+            {
+                ctl.SetSendPending("手动重发中...");
+                var qn = QN.CurQN;
+                if (qn == null)
+                {
+                    ctl.SetSendResult(false, "重发失败：未识别千牛会话");
+                    return;
+                }
+
+                var ok = await qn.SendTextWithRetryAsync(e.Buyer, e.Answer, 1);
+                ctl.SetSendResult(ok, ok ? "重发成功" : "重发失败，已重试1次");
+            }
+            catch (Exception ex)
+            {
+                ctl.SetSendResult(false, "重发异常");
+                Log.Exception(ex);
+            }
         }
 
         private void ShowGridTip(Border gd)
