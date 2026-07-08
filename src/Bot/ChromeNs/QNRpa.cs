@@ -67,7 +67,11 @@ namespace Bot.ChromeNs
                         {
                             var topWnds = automationApplication.GetAllTopLevelWindows(uia3Automation);
                             var mainWnd = topWnds.FirstOrDefault(k => k.ClassName == "MutilChatView");
-                            if (mainWnd == null) return;
+                            if (mainWnd == null)
+                            {
+                                BotConnectionDiagnostics.RecordRpaScan(false, false, "未找到MutilChatView");
+                                return;
+                            }
 
                             var descendants = mainWnd.FindAllDescendants();
                             var sendMessageButton = descendants.FirstOrDefault(k =>
@@ -92,9 +96,11 @@ namespace Bot.ChromeNs
                             {
                                 _messageInputTextArea = messageInputTextArea.AsTextBox();
                             }
+                            BotConnectionDiagnostics.RecordRpaScan(_sendMessageButton != null, _messageInputTextArea != null, "UIA扫描完成");
                         }
                         catch (Exception ex)
                         {
+                            BotConnectionDiagnostics.RecordRpaScan(false, false, ex.Message);
                             Log.Exception(ex);
                         }
                     });
@@ -184,6 +190,7 @@ namespace Bot.ChromeNs
                     Thread.Sleep(700);
                     if (IsEditorEmptySafe())
                     {
+                        BotConnectionDiagnostics.RecordSendAttempt(true, "按钮点击");
                         Log.Info("自动点击发送成功，输入框已清空。text=" + LastSetPlainText);
                         return true;
                     }
@@ -193,6 +200,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
                 Log.Exception(ex);
             }
 
@@ -203,11 +211,13 @@ namespace Bot.ChromeNs
                 PressEnter();
                 Thread.Sleep(700);
                 var ok = IsEditorEmptySafe();
+                BotConnectionDiagnostics.RecordSendAttempt(ok, ok ? "Enter兜底" : "Enter后输入框未清空");
                 Log.Info("Enter 兜底发送结果=" + ok + ", text=" + LastSetPlainText);
                 return ok;
             }
             catch (Exception ex)
             {
+                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
                 Log.Exception(ex);
                 return false;
             }
@@ -310,6 +320,7 @@ namespace Bot.ChromeNs
                 if (_qn.Buyer == null || _qn.Buyer.Nick != buyer)
                 {
                     Log.Info("自动发送跳过：当前会话不是目标买家。target=" + buyer + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
+                    BotConnectionDiagnostics.RecordSendAttempt(false, "当前会话不是目标买家");
                     return false;
                 }
 
@@ -325,6 +336,7 @@ namespace Bot.ChromeNs
                 if (!SetPlainText(text))
                 {
                     Log.Info("自动发送失败：写入输入框失败。buyer=" + buyer + ", text=" + text);
+                    BotConnectionDiagnostics.RecordSendAttempt(false, "写入输入框失败");
                     return false;
                 }
 
@@ -334,6 +346,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
                 Log.Exception(ex);
                 sendResult = false;
             }
