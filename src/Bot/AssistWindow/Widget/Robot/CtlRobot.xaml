@@ -33,21 +33,45 @@
             <Setter Property="FontSize" Value="18"/>
             <Setter Property="FontWeight" Value="Bold"/>
         </Style>
+        <Style x:Key="StatusText" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="Margin" Value="0 2 10 2"/>
+        </Style>
     </UserControl.Resources>
     <Grid Background="{StaticResource Bg}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="8 6" Visibility="Visible">
+        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="9 7">
+            <StackPanel>
+                <DockPanel Margin="0 0 0 4">
+                    <TextBlock Text="连接状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" />
+                    <TextBlock x:Name="txtStatusSummary" Text="正在检测..." HorizontalAlignment="Right" Foreground="{StaticResource PrimaryBlue}" FontSize="11" />
+                </DockPanel>
+                <WrapPanel>
+                    <TextBlock x:Name="txtStatusWs" Text="WS：未连接" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtStatusInject" Text="注入：未连接" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtStatusQn" Text="千牛参数：未获取" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtStatusAccess" Text="无障碍：未确认" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtStatusButton" Text="按钮：未识别" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtStatusSend" Text="发送：未测试" Style="{StaticResource StatusText}" />
+                    <TextBlock x:Name="txtStatusApi" Text="API：未配置" Style="{StaticResource StatusText}" />
+                </WrapPanel>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="1" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="8 6" Visibility="Visible">
             <StackPanel x:Name="panelGoods">
                 <ProgressBar x:Name="pgDownGoods" Height="4" Margin="0 0 0 6" Visibility="Collapsed" IsIndeterminate="True" />
             </StackPanel>
         </Border>
 
-        <Border Grid.Row="1" Background="#00B8D9" CornerRadius="0" Margin="0 0 0 6" Padding="10 8">
+        <Border Grid.Row="2" Background="#00B8D9" CornerRadius="0" Margin="0 0 0 6" Padding="10 8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -68,7 +92,7 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Row="2">
+        <Grid Grid.Row="3">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition x:Name="colDashboard" Width="0"/>
@@ -90,7 +114,7 @@
             <Border x:Name="gridDashboard" Grid.Column="1" Background="#F3F7FB" BorderBrush="{StaticResource Border}" BorderThickness="1 0 0 0" Padding="10" Visibility="Collapsed">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <StackPanel>
-                        <TextBlock Text="接待工作台" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextMain}" Margin="0 0 0 10"/>
+                        <TextBlock Text="数据台" FontSize="16" FontWeight="Bold" Foreground="{StaticResource TextMain}" Margin="0 0 0 10"/>
                         <Border Style="{StaticResource StatsCard}">
                             <StackPanel>
                                 <TextBlock Text="接待概览" FontWeight="Bold" Foreground="{StaticResource TextMain}" Margin="0 0 0 8"/>
