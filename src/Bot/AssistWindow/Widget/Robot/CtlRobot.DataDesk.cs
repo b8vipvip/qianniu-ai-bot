@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Linq;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -89,20 +90,50 @@ namespace Bot.AssistWindow.Widget.Robot
             }
         }
 
+        private string BuildConnectionDetail(ConnectionDiagnosticsSnapshot diag)
+        {
+            if (diag == null) return string.Empty;
+            var sb = new StringBuilder();
+            sb.AppendLine("WS连接：" + diag.WebSocketStatus);
+            sb.AppendLine("注入状态：" + diag.InjectionStatus);
+            sb.AppendLine("千牛参数：" + diag.QnParamStatus);
+            sb.AppendLine("无障碍/可访问UI：" + diag.AccessibilityStatus);
+            sb.AppendLine("发送按钮识别：" + diag.ButtonStatus);
+            sb.AppendLine("最近发送结果：" + diag.SendStatus);
+            return sb.ToString().Trim();
+        }
+
+        private SolidColorBrush StatusBrush(bool ok)
+        {
+            return new SolidColorBrush(ok ? Color.FromRgb(39, 174, 96) : Color.FromRgb(242, 153, 74));
+        }
+
         private void RefreshStatusDiagnostics()
         {
             try
             {
                 var diag = BotConnectionDiagnostics.GetSnapshot();
                 var stats = BotRuntimeStats.GetSnapshot();
-                if (txtStatusSummary != null) txtStatusSummary.Text = diag.Summary;
-                if (txtStatusWs != null) txtStatusWs.Text = "WS：" + diag.WebSocketStatus;
-                if (txtStatusInject != null) txtStatusInject.Text = "注入：" + diag.InjectionStatus;
-                if (txtStatusQn != null) txtStatusQn.Text = "千牛参数：" + diag.QnParamStatus;
-                if (txtStatusAccess != null) txtStatusAccess.Text = "无障碍：" + diag.AccessibilityStatus;
-                if (txtStatusButton != null) txtStatusButton.Text = "按钮：" + diag.ButtonStatus;
-                if (txtStatusSend != null) txtStatusSend.Text = "发送：" + diag.SendStatus;
-                if (txtStatusApi != null) txtStatusApi.Text = "API：" + BuildApiStatus(stats);
+                var connectionOk = diag != null && diag.Summary == "连接正常";
+                var summary = diag == null || string.IsNullOrWhiteSpace(diag.Summary) ? "正在检测" : diag.Summary;
+                var detail = BuildConnectionDetail(diag);
+
+                if (txtStatusSummary != null)
+                {
+                    txtStatusSummary.Text = summary;
+                    txtStatusSummary.Foreground = StatusBrush(connectionOk);
+                    txtStatusSummary.ToolTip = detail;
+                }
+                if (txtConnectionStatus != null)
+                {
+                    txtConnectionStatus.Text = "连接状态：" + summary;
+                    txtConnectionStatus.Foreground = StatusBrush(connectionOk);
+                    txtConnectionStatus.ToolTip = detail;
+                }
+                if (txtStatusApi != null)
+                {
+                    txtStatusApi.Text = "API连接：" + BuildApiStatus(stats);
+                }
             }
             catch (Exception ex)
             {
