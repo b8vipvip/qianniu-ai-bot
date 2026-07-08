@@ -42,7 +42,8 @@ namespace Bot.AssistWindow.Widget.Robot
                     return;
                 }
 
-                _dataDeskWindow = new DataDeskWindow(owner, this);
+                var anchor = _rightPanel as FrameworkElement;
+                _dataDeskWindow = new DataDeskWindow(owner, anchor ?? this);
                 _dataDeskWindow.Closed += (s, e) => _dataDeskWindow = null;
                 _dataDeskWindow.Show();
                 _dataDeskWindow.DockToOwner();
@@ -278,8 +279,8 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             try
             {
-                double anchorLeft = _owner == null ? SystemParameters.WorkArea.Right - Width - 4 : _owner.Left;
-                double anchorTop = _owner == null ? SystemParameters.WorkArea.Top + 4 : _owner.Top;
+                double anchorLeft = _owner == null ? SystemParameters.WorkArea.Right - Width : _owner.Left;
+                double anchorTop = _owner == null ? SystemParameters.WorkArea.Top : _owner.Top;
                 double anchorWidth = _owner == null ? 0 : _owner.ActualWidth;
                 double anchorHeight = _owner != null && _owner.ActualHeight > 200 ? _owner.ActualHeight : 680;
 
@@ -295,23 +296,23 @@ namespace Bot.AssistWindow.Widget.Robot
 
                 Height = anchorHeight > 200 ? anchorHeight : Height;
                 var work = SystemParameters.WorkArea;
-                var rightLeft = anchorLeft + anchorWidth + 6;
-                var leftLeft = anchorLeft - Width - 6;
+                var rightLeft = anchorLeft + anchorWidth;
+                var leftLeft = anchorLeft - Width;
                 double targetLeft;
-                if (rightLeft + Width <= work.Right - 4)
+                if (rightLeft + Width <= work.Right)
                 {
                     targetLeft = rightLeft;
                 }
-                else if (leftLeft >= work.Left + 4)
+                else if (leftLeft >= work.Left)
                 {
                     targetLeft = leftLeft;
                 }
                 else
                 {
-                    targetLeft = Math.Max(work.Left + 4, Math.Min(rightLeft, work.Right - Width - 4));
+                    targetLeft = Math.Max(work.Left, Math.Min(rightLeft, work.Right - Width));
                 }
 
-                var targetTop = Math.Max(work.Top + 4, Math.Min(anchorTop, work.Bottom - Height - 4));
+                var targetTop = Math.Max(work.Top, Math.Min(anchorTop, work.Bottom - Height));
                 Left = targetLeft;
                 Top = targetTop;
             }
