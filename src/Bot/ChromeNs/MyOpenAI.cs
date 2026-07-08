@@ -319,6 +319,13 @@ namespace Bot.ChromeNs
                     return "错误：买家消息为空，未调用AI。";
                 }
 
+                string manualAnswer;
+                string manualReason;
+                if (BotFeatureStore.TryMatchManualRule(question, out manualAnswer, out manualReason))
+                {
+                    return "错误：命中人工确认规则，未自动回复。" + manualAnswer + " 原因：" + manualReason;
+                }
+
                 if (!EnsureConfig())
                 {
                     return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
