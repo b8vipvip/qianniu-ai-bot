@@ -128,21 +128,21 @@
                      Task Parameter:Overwrite=True (TaskId:111)
                      Task Parameter:File=obj\x64\Debug\Bot.csproj.FileListAbsolute.txt (TaskId:111)
                    Done executing task "WriteLinesToFile". (TaskId:111)
-06:25:03.481     3>Done building target "IncrementalClean" in project "Bot.csproj".: (TargetId:111)
-06:25:03.481     3>Target "CoreBuild: (TargetId:112)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Build" depends on it):
-06:25:03.481     3>Done building target "CoreBuild" in project "Bot.csproj".: (TargetId:112)
-06:25:03.481     3>Target "AfterBuild: (TargetId:113)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Build" depends on it):
-06:25:03.481     3>Done building target "AfterBuild" in project "Bot.csproj".: (TargetId:113)
-06:25:03.481     3>Target "Build: (TargetId:114)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Rebuild" depends on it):
-06:25:03.481     3>Done building target "Build" in project "Bot.csproj".: (TargetId:114)
+07:00:40.822     4>Done building target "IncrementalClean" in project "Bot.csproj".: (TargetId:111)
+07:00:40.822     4>Target "CoreBuild: (TargetId:112)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Build" depends on it):
+07:00:40.822     4>Done building target "CoreBuild" in project "Bot.csproj".: (TargetId:112)
+07:00:40.822     4>Target "AfterBuild: (TargetId:113)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Build" depends on it):
+07:00:40.822     4>Done building target "AfterBuild" in project "Bot.csproj".: (TargetId:113)
+07:00:40.822     4>Target "Build: (TargetId:114)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Rebuild" depends on it):
+07:00:40.822     4>Done building target "Build" in project "Bot.csproj".: (TargetId:114)
                    Target "_CalculatePostXamarinTelemetry" skipped. Previously built successfully.
-06:25:03.481     3>Target "AfterRebuild: (TargetId:115)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Rebuild" depends on it):
-06:25:03.481     3>Done building target "AfterRebuild" in project "Bot.csproj".: (TargetId:115)
+07:00:40.822     4>Target "AfterRebuild: (TargetId:115)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (target "Rebuild" depends on it):
+07:00:40.822     4>Done building target "AfterRebuild" in project "Bot.csproj".: (TargetId:115)
                    Target "_CheckForInvalidConfigurationAndPlatform" skipped. Previously built successfully.
-06:25:03.481     3>Target "Rebuild: (TargetId:116)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (entry point):
-06:25:03.481     3>Done building target "Rebuild" in project "Bot.csproj".: (TargetId:116)
-06:25:03.481     3>Done Building Project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target(s)).
-06:24:49.794     1>Rebuild: (TargetId:5)
+07:00:40.822     4>Target "Rebuild: (TargetId:116)" in file "C:\Program Files\Microsoft Visual Studio\18\Enterprise\MSBuild\Current\Bin\Microsoft.Common.CurrentVersion.targets" from project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (entry point):
+07:00:40.822     4>Done building target "Rebuild" in project "Bot.csproj".: (TargetId:116)
+07:00:40.824     4>Done Building Project "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target(s)).
+07:00:24.448     1>Rebuild: (TargetId:5)
                      Output Item(s): 
                          CollectedBuildOutput=
                              D:\a\qianniu-bot\qianniu-bot\src\Bin\BotLib.dll
@@ -173,88 +173,88 @@
                                      SkipNonexistentProjects=False
                                      ToolsVersion= (TaskId:3)
                    Done executing task "MSBuild". (TaskId:3)
-06:25:03.485     1>Done building target "Rebuild" in project "Bot.sln".: (TargetId:5)
-06:25:03.485     1>Done Building Project "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target(s)).
+07:00:40.826     1>Done building target "Rebuild" in project "Bot.sln".: (TargetId:5)
+07:00:40.826     1>Done Building Project "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target(s)).
 
 Build succeeded.
 
                    "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target) (1) ->
                    "D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj" (Rebuild target) (2) ->
-                   "D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj" (_CompileTemporaryAssembly target) (5) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj" (_CompileTemporaryAssembly target) (5) ->
                    (CoreCompile target) -> 
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(19,73): warning CS0067: The event 'WndInteliSence.EvItemSelected' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Misc\NoReEnterTimer.cs(17,24): warning CS0169: The field 'NoReEnterTimer._act' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(319,24): warning CS0649: Field 'WindowEx.RECT.top' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(318,24): warning CS0649: Field 'WindowEx.RECT.left' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(42,39): warning CS0169: The field 'WndInteliSence.CollB' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(20,73): warning CS0067: The event 'WndInteliSence.EvItemFocused' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(320,24): warning CS0649: Field 'WindowEx.RECT.right' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(41,39): warning CS0169: The field 'WndInteliSence.CollA' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(322,24): warning CS0649: Field 'WindowEx.RECT.bottom' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(295,29): warning CS0414: The field 'WindowEx.WS_CAPTION' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Extensions\StringEx.cs(15,31): warning CS0414: The field 'StringEx._numberPt' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(294,29): warning CS0414: The field 'WindowEx.WS_POPUP' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(300,29): warning CS0414: The field 'WindowEx.WS_EX_STATICEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(297,29): warning CS0414: The field 'WindowEx.WS_EX_DLGMODALFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(296,29): warning CS0414: The field 'WindowEx.WS_THICKFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(298,29): warning CS0414: The field 'WindowEx.WS_EX_WINDOWEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(299,29): warning CS0414: The field 'WindowEx.WS_EX_CLIENTEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_m5vs3h4z_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Misc\NoReEnterTimer.cs(17,24): warning CS0169: The field 'NoReEnterTimer._act' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(318,24): warning CS0649: Field 'WindowEx.RECT.left' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(19,73): warning CS0067: The event 'WndInteliSence.EvItemSelected' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(322,24): warning CS0649: Field 'WindowEx.RECT.bottom' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(319,24): warning CS0649: Field 'WindowEx.RECT.top' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(20,73): warning CS0067: The event 'WndInteliSence.EvItemFocused' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(41,39): warning CS0169: The field 'WndInteliSence.CollA' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(42,39): warning CS0169: The field 'WndInteliSence.CollB' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(320,24): warning CS0649: Field 'WindowEx.RECT.right' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(296,29): warning CS0414: The field 'WindowEx.WS_THICKFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(299,29): warning CS0414: The field 'WindowEx.WS_EX_CLIENTEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(295,29): warning CS0414: The field 'WindowEx.WS_CAPTION' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(297,29): warning CS0414: The field 'WindowEx.WS_EX_DLGMODALFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Extensions\StringEx.cs(15,31): warning CS0414: The field 'StringEx._numberPt' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(300,29): warning CS0414: The field 'WindowEx.WS_EX_STATICEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(298,29): warning CS0414: The field 'WindowEx.WS_EX_WINDOWEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(294,29): warning CS0414: The field 'WindowEx.WS_POPUP' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib_mrwlqjw1_wpftmp.csproj]
 
 
                    "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target) (1) ->
                    "D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj" (Rebuild target) (2) ->
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(41,39): warning CS0169: The field 'WndInteliSence.CollA' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(42,39): warning CS0169: The field 'WndInteliSence.CollB' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(319,24): warning CS0649: Field 'WindowEx.RECT.top' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Misc\NoReEnterTimer.cs(17,24): warning CS0169: The field 'NoReEnterTimer._act' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(19,73): warning CS0067: The event 'WndInteliSence.EvItemSelected' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(322,24): warning CS0649: Field 'WindowEx.RECT.bottom' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(20,73): warning CS0067: The event 'WndInteliSence.EvItemFocused' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(19,73): warning CS0067: The event 'WndInteliSence.EvItemSelected' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\InteliSense\WndInteliSence.xaml.cs(41,39): warning CS0169: The field 'WndInteliSence.CollA' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(318,24): warning CS0649: Field 'WindowEx.RECT.left' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Misc\NoReEnterTimer.cs(17,24): warning CS0169: The field 'NoReEnterTimer._act' is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(320,24): warning CS0649: Field 'WindowEx.RECT.right' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Extensions\StringEx.cs(15,31): warning CS0414: The field 'StringEx._numberPt' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(298,29): warning CS0414: The field 'WindowEx.WS_EX_WINDOWEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(319,24): warning CS0649: Field 'WindowEx.RECT.top' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(318,24): warning CS0649: Field 'WindowEx.RECT.left' is never assigned to, and will always have its default value 0 [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(295,29): warning CS0414: The field 'WindowEx.WS_CAPTION' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(294,29): warning CS0414: The field 'WindowEx.WS_POPUP' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(296,29): warning CS0414: The field 'WindowEx.WS_THICKFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(298,29): warning CS0414: The field 'WindowEx.WS_EX_WINDOWEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(297,29): warning CS0414: The field 'WindowEx.WS_EX_DLGMODALFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(299,29): warning CS0414: The field 'WindowEx.WS_EX_CLIENTEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(300,29): warning CS0414: The field 'WindowEx.WS_EX_STATICEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(299,29): warning CS0414: The field 'WindowEx.WS_EX_CLIENTEDGE' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Extensions\StringEx.cs(15,31): warning CS0414: The field 'StringEx._numberPt' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(296,29): warning CS0414: The field 'WindowEx.WS_THICKFRAME' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\BotLib\Wpf\Extensions\WindowEx.cs(294,29): warning CS0414: The field 'WindowEx.WS_POPUP' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\BotLib\BotLib.csproj]
 
 
                    "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target) (1) ->
-                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target) (3) ->
-                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj" (_CompileTemporaryAssembly target) (6) ->
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\StartUp\BootStrap.cs(24,13): warning CS4014: Because this call is not awaited, execution of the current method continues before the call is completed. Consider applying the 'await' operator to the result of the call. [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\ChatDeskNs\Desk.cs(462,30): warning CS0168: The variable 'ex' is declared but never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChromeNs\QNRpa.cs(28,35): warning CS0169: The field 'QNRpa._closeContactButton' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(41,32): warning CS0169: The field 'ChatDialog._timerInviteOrder' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(42,32): warning CS0169: The field 'ChatDialog._timerRemindPay' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\WinEventHooker.cs(31,62): warning CS0169: The field 'WinEventHooker.DlgTestCallback' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\ChatDeskNs\Desk.cs(119,60): warning CS0067: The event 'Desk.EvSellerSwitched' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\WinEventHooker.cs(32,39): warning CS0169: The field 'WinEventHooker._hook' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(39,22): warning CS0414: The field 'ChatDialog._remindPayRuning' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\AssistWindow\Widget\Robot\CtlImage.xaml.cs(26,22): warning CS0414: The field 'CtlImage._isMouseInsideImageControl' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\AssistWindow\WndAssist.xaml.cs(54,25): warning CS0414: The field 'WndAssist._ratio' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(40,22): warning CS0414: The field 'ChatDialog._inviteOrderRuning' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_2ub4lop1_wpftmp.csproj]
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target) (4) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj" (_CompileTemporaryAssembly target) (6) ->
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\StartUp\BootStrap.cs(24,13): warning CS4014: Because this call is not awaited, execution of the current method continues before the call is completed. Consider applying the 'await' operator to the result of the call. [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\ChatDeskNs\Desk.cs(462,30): warning CS0168: The variable 'ex' is declared but never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\ChatDeskNs\Desk.cs(119,60): warning CS0067: The event 'Desk.EvSellerSwitched' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(41,32): warning CS0169: The field 'ChatDialog._timerInviteOrder' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\WinEventHooker.cs(31,62): warning CS0169: The field 'WinEventHooker.DlgTestCallback' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChromeNs\QNRpa.cs(28,35): warning CS0169: The field 'QNRpa._closeContactButton' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(42,32): warning CS0169: The field 'ChatDialog._timerRemindPay' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\WinEventHooker.cs(32,39): warning CS0169: The field 'WinEventHooker._hook' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(39,22): warning CS0414: The field 'ChatDialog._remindPayRuning' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\AssistWindow\WndAssist.xaml.cs(54,25): warning CS0414: The field 'WndAssist._ratio' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(40,22): warning CS0414: The field 'ChatDialog._inviteOrderRuning' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\AssistWindow\Widget\Robot\CtlImage.xaml.cs(26,22): warning CS0414: The field 'CtlImage._isMouseInsideImageControl' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot_bqh0wf5c_wpftmp.csproj]
 
 
                    "D:\a\qianniu-bot\qianniu-bot\src\Bot.sln" (Rebuild target) (1) ->
-                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target) (3) ->
+                   "D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj" (Rebuild target) (4) ->
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\StartUp\BootStrap.cs(24,13): warning CS4014: Because this call is not awaited, execution of the current method continues before the call is completed. Consider applying the 'await' operator to the result of the call. [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\ChatDeskNs\Desk.cs(462,30): warning CS0168: The variable 'ex' is declared but never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\ChatDeskNs\Desk.cs(119,60): warning CS0067: The event 'Desk.EvSellerSwitched' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(41,32): warning CS0169: The field 'ChatDialog._timerInviteOrder' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(42,32): warning CS0169: The field 'ChatDialog._timerRemindPay' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\WinEventHooker.cs(31,62): warning CS0169: The field 'WinEventHooker.DlgTestCallback' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChromeNs\QNRpa.cs(28,35): warning CS0169: The field 'QNRpa._closeContactButton' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\WinEventHooker.cs(32,39): warning CS0169: The field 'WinEventHooker._hook' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
-                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(39,22): warning CS0414: The field 'ChatDialog._remindPayRuning' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChromeNs\QNRpa.cs(28,35): warning CS0169: The field 'QNRpa._closeContactButton' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\WinEventHooker.cs(31,62): warning CS0169: The field 'WinEventHooker.DlgTestCallback' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\Automation\ChatDeskNs\Desk.cs(119,60): warning CS0067: The event 'Desk.EvSellerSwitched' is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(40,22): warning CS0414: The field 'ChatDialog._inviteOrderRuning' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\AssistWindow\Widget\Robot\CtlImage.xaml.cs(26,22): warning CS0414: The field 'CtlImage._isMouseInsideImageControl' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
+                     D:\a\qianniu-bot\qianniu-bot\src\Bot\ChatRecord\ChatDialog.cs(39,22): warning CS0414: The field 'ChatDialog._remindPayRuning' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
                      D:\a\qianniu-bot\qianniu-bot\src\Bot\AssistWindow\WndAssist.xaml.cs(54,25): warning CS0414: The field 'WndAssist._ratio' is assigned but its value is never used [D:\a\qianniu-bot\qianniu-bot\src\Bot\Bot.csproj]
 
     58 Warning(s)
     0 Error(s)
 
-Time Elapsed 00:00:13.86
+Time Elapsed 00:00:16.84
