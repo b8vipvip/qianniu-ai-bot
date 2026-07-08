@@ -234,6 +234,7 @@
     <Compile Include="AssistWindow\Widget\Robot\CtlOneGoods.xaml.cs">
       <DependentUpon>CtlOneGoods.xaml</DependentUpon>
     </Compile>
+    <Compile Include="AssistWindow\Widget\Robot\CtlRobot.DataDesk.cs" />
     <Compile Include="AssistWindow\Widget\Robot\CtlRobot.xaml.cs">
       <DependentUpon>CtlRobot.xaml</DependentUpon>
     </Compile>
@@ -428,73 +429,4 @@
     <Resource Include="Asset\image\wangwang_16.png" />
     <Resource Include="Asset\image\yellow.ico" />
   </ItemGroup>
-  <ItemGroup>
-    <Service Include="{508349B6-6B84-4DF5-91F0-309BEEBAD82D}" />
-  </ItemGroup>
-  <ItemGroup>
-    <BootstrapperPackage Include=".NETFramework,Version=v4.5">
-      <Visible>False</Visible>
-      <ProductName>Microsoft .NET Framework 4.5 %28x86 和 x64%29</ProductName>
-      <Install>true</Install>
-    </BootstrapperPackage>
-    <BootstrapperPackage Include="Microsoft.Net.Client.3.5">
-      <Visible>False</Visible>
-      <ProductName>.NET Framework 3.5 SP1 Client Profile</ProductName>
-      <Install>false</Install>
-    </BootstrapperPackage>
-    <BootstrapperPackage Include="Microsoft.Net.Framework.3.5.SP1">
-      <Visible>False</Visible>
-      <ProductName>.NET Framework 3.5 SP1</ProductName>
-      <Install>false</Install>
-    </BootstrapperPackage>
-  </ItemGroup>
-  <ItemGroup>
-    <ProjectReference Include="..\BotLib\BotLib.csproj">
-      <Project>{ee3d2c1a-1a43-4446-a169-27d8e860e2c3}</Project>
-      <Name>BotLib</Name>
-    </ProjectReference>
-    <ProjectReference Include="..\DbEntity\DbEntity.csproj">
-      <Project>{8ff347e0-6e56-4e63-bc8b-d840c41e0f02}</Project>
-      <Name>DbEntity</Name>
-    </ProjectReference>
-  </ItemGroup>
-  <ItemGroup>
-    <Resource Include="Asset\image\remindpay_16.png" />
-  </ItemGroup>
-  <ItemGroup>
-    <Resource Include="Asset\image\decrypt.png" />
-  </ItemGroup>
-  <ItemGroup>
-    <Resource Include="Asset\image\plus.png" />
-  </ItemGroup>
-  <ItemGroup>
-    <Resource Include="Asset\image\noodles.png" />
-    <Resource Include="Asset\image\redbull.png" />
-  </ItemGroup>
-  <ItemGroup>
-    <COMReference Include="IWshRuntimeLibrary">
-      <Guid>{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}</Guid>
-      <VersionMajor>1</VersionMajor>
-      <VersionMinor>0</VersionMinor>
-      <Lcid>0</Lcid>
-      <WrapperTool>tlbimp</WrapperTool>
-      <Isolated>False</Isolated>
-      <EmbedInteropTypes>True</EmbedInteropTypes>
-    </COMReference>
-  </ItemGroup>
-  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
-  <Import Project="..\packages\Interop.UIAutomationClient.10.19041.0\build\Interop.UIAutomationClient.targets" Condition="Exists('..\packages\Interop.UIAutomationClient.10.19041.0\build\Interop.UIAutomationClient.targets')" />
-  <Target Name="EnsureNuGetPackageBuildImports" BeforeTargets="PrepareForBuild">
-    <PropertyGroup>
-      <ErrorText>This project references NuGet package(s) that are missing on this computer. Use NuGet Package Restore to download them.  For more information, see http://go.microsoft.com/fwlink/?LinkID=322105. The missing file is {0}.</ErrorText>
-    </PropertyGroup>
-    <Error Condition="!Exists('..\packages\Interop.UIAutomationClient.10.19041.0\build\Interop.UIAutomationClient.targets')" Text="$([System.String]::Format('$(ErrorText)', '..\packages\Interop.UIAutomationClient.10.19041.0\build\Interop.UIAutomationClient.targets'))" />
-  </Target>
-  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
-       Other similar extension points exist, see Microsoft.Common.targets.
-  <Target Name="BeforeBuild">
-  </Target>
-  <Target Name="AfterBuild">
-  </Target>
-  -->
 </Project>
