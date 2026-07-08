@@ -16,7 +16,6 @@ namespace Bot.ChromeNs
 {
     public class MyOpenAI
     {
-        // 保留该属性，避免旧代码或 XAML 绑定引用失败；实际调用已改为原生 HTTP，兼容多数 OpenAI 中转站。
         public static ChatClient ChatClient { get; set; }
 
         private static string systemPrompt;
@@ -33,7 +32,7 @@ namespace Bot.ChromeNs
         {
             get
             {
-                return "你是淘宝店铺客服助手。只回复买家当前问题，语气像真人客服，简短自然。不要编造库存、价格、物流、订单状态。遇到退款、投诉、差评、赔偿、订单隐私问题时，回复：亲，这个问题我帮您转人工客服确认一下。";
+                return "你是淘宝店铺客服助手。只回复买家当前问题，语气像真人客服，简短自然。不要编造库存、价格、物流、订单状态。遇到退款、投诉、差评、赔偿、订单隐私等高风险问题时，建议转人工客服确认。";
             }
         }
 
@@ -67,7 +66,8 @@ namespace Bot.ChromeNs
 
                 var primary = endpoints.First();
                 systemPrompt = BuildSystemPrompt(string.IsNullOrWhiteSpace(primary.SystemPrompt) ? Params.Robot.GetSystemPrompt() : primary.SystemPrompt);
-                var fingerprint = string.Join("|", endpoints.Select(e => string.Format("{0}:{1}:{2}:{3}", e.Name, e.BaseUrl, e.Model, e.Enabled)));
+                var featureFingerprint = BotFeatureStore.GetMessagePolicy().Tone + ":" + BotFeatureStore.GetKnowledgeBase().Count + ":" + BotFeatureStore.GetAutoReplyRules().Enabled;
+                var fingerprint = string.Join("|", endpoints.Select(e => string.Format("{0}:{1}:{2}:{3}", e.Name, e.BaseUrl, e.Model, e.Enabled))) + "|" + featureFingerprint;
                 if (fingerprint != lastConfigFingerprint)
                 {
                     lastConfigFingerprint = fingerprint;
@@ -330,19 +330,23 @@ namespace Bot.ChromeNs
                     return "错误：没有可用的AI接口，请在设置-API接口中启用至少一个接口。";
                 }
 
+                var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(question);
                 var key = string.Format("{0}#{1}", seller, buyer);
                 var history = buyerChatMessages.xTryGetValue(key);
                 if (history == null || history.Count < 1)
                 {
                     history = new List<JObject>
                     {
-                        CreateMessage("system", systemPrompt)
+                        CreateMessage("system", dynamicSystemPrompt)
                     };
+                }
+                else
+                {
+                    history[0] = CreateMessage("system", dynamicSystemPrompt);
                 }
 
                 history.Add(CreateMessage("user", question));
 
-                // 避免长会话无限增长，保留 system + 最近 18 条。
                 if (history.Count > 20)
                 {
                     var trimmed = new List<JObject>();
@@ -361,9 +365,10 @@ namespace Bot.ChromeNs
                     endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
                     if (result.Success)
                     {
-                        history.Add(CreateMessage("assistant", result.Answer));
+                        var finalAnswer = BotFeatureStore.ApplyOutputPolicy(result.Answer);
+                        history.Add(CreateMessage("assistant", finalAnswer));
                         buyerChatMessages.AddOrUpdate(key, id => history, (k, v) => history);
-                        return result.Answer;
+                        return finalAnswer;
                     }
 
                     var err = endpoint.Name + "：" + result.Error;
