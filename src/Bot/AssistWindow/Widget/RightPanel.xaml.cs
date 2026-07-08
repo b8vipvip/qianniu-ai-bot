@@ -443,39 +443,50 @@ namespace Bot.AssistWindow.Widget
             WndOption.MyShow(Wnd.Desk.WndTitle, Wnd, OptionEnum.Robot);
         }
 
+        private void menuFeatureSettings_Click(object sender, RoutedEventArgs e)
+        {
+            var item = sender as MenuItem;
+            var page = "知识库";
+            if (item != null)
+            {
+                page = (item.Tag ?? item.Header ?? page).ToString();
+            }
+            FeatureSettingsWindow.MyShow(Wnd, page);
+        }
+
         private void menuKnowledge_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("知识库页面将在下一步接入：商品知识、店铺规则、售后政策、常见问答。", "知识库", MessageBoxButton.OK, MessageBoxImage.Information);
+            FeatureSettingsWindow.MyShow(Wnd, "知识库");
         }
 
         private void menuRule_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("自动回复规则将在下一步接入：转人工条件、无意义消息策略、连续追问策略。", "自动回复规则", MessageBoxButton.OK, MessageBoxImage.Information);
+            FeatureSettingsWindow.MyShow(Wnd, "自动回复规则");
         }
 
         private void menuMessagePolicy_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("消息策略将在下一步接入：回复长度、语气风格、知识库优先级、敏感问题处理。", "消息策略", MessageBoxButton.OK, MessageBoxImage.Information);
+            FeatureSettingsWindow.MyShow(Wnd, "消息策略");
         }
 
         private void menuLogs_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("日志文件在 Bot 目录或程序日志目录中。后续版本会增加内置日志查看器。", "日志与调试", MessageBoxButton.OK, MessageBoxImage.Information);
+            FeatureSettingsWindow.MyShow(Wnd, "日志与调试");
         }
 
         private void menuLicense_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("当前为本地自用版本。商业授权、设备绑定和到期时间将在商业版接入。", "账号与授权", MessageBoxButton.OK, MessageBoxImage.Information);
+            FeatureSettingsWindow.MyShow(Wnd, "账号与授权");
         }
 
         private void menuHelp_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("使用前请确认：1. 千牛已开启无障碍/讲述人模式；2. Bot 已启用；3. API接口测试通过；4. 自动回复开关按需开启。", "帮助", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("使用前请确认：1. 千牛已开启无障碍/讲述人模式；2. Bot 已启用；3. API接口测试通过；4. 自动回复开关按需开启；5. 高风险问题建议在【自动回复规则】里转人工。", "帮助", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void menuAbout_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("AI客服控制台 v2\n定位：千牛客服辅助回复工具。\n建议商业化时以“辅助工具”定位，并做好隐私、授权、日志与风险提示。", "关于", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("AI客服控制台 v2\n定位：千牛客服辅助回复工具。\n已接入：多API、知识库、自动回复规则、消息策略、日志、授权信息、商业化合规清单。", "关于", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void cboxPanelBotEnabled_Click(object sender, RoutedEventArgs e)
