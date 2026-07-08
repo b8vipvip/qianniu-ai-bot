@@ -64,7 +64,7 @@
             </StackPanel>
             <CheckBox Name="cboxPanelBotEnabled" Grid.Column="1" Margin="8 0 4 0" VerticalAlignment="Center" Foreground="#FFFFFFFF" FontWeight="SemiBold" Click="cboxPanelBotEnabled_Click">启用Bot</CheckBox>
             <CheckBox Name="cboxPanelAuto" Grid.Column="2" Margin="6 0 4 0" VerticalAlignment="Center" Foreground="#FFFFFFFF" FontWeight="SemiBold" Click="cboxPanelAuto_Click">自动回复</CheckBox>
-            <Button Name="btnOption" Grid.Column="3" Style="{StaticResource TopBarButton}" Click="btnOption_Click">设置
+            <Button Name="btnOption" Grid.Column="3" Style="{StaticResource TopBarButton}" Content="设置" Click="btnOption_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
                         <MenuItem Header="工作台" Click="menuWorkbench_Click" />
