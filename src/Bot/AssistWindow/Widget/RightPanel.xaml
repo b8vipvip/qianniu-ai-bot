@@ -69,15 +69,15 @@
                     <ContextMenu>
                         <MenuItem Header="工作台" Click="menuWorkbench_Click" />
                         <MenuItem Header="API接口" Click="menuApi_Click" />
-                        <MenuItem Header="知识库" Click="menuKnowledge_Click" />
-                        <MenuItem Header="自动回复规则" Click="menuRule_Click" />
-                        <MenuItem Header="消息策略" Click="menuMessagePolicy_Click" />
+                        <MenuItem Header="知识库" Tag="知识库" Click="menuFeatureSettings_Click" />
+                        <MenuItem Header="自动回复规则" Tag="自动回复规则" Click="menuFeatureSettings_Click" />
+                        <MenuItem Header="消息策略" Tag="消息策略" Click="menuFeatureSettings_Click" />
                         <Separator />
                         <MenuItem Header="数据统计" Click="menuWorkbench_Click" />
-                        <MenuItem Header="日志与调试" Click="menuLogs_Click" />
+                        <MenuItem Header="日志与调试" Tag="日志与调试" Click="menuFeatureSettings_Click" />
                         <MenuItem Header="配置导入/导出" Click="menuApi_Click" />
-                        <MenuItem Header="账号与授权" Click="menuLicense_Click" />
-                        <MenuItem Header="商业化合规清单" Click="menuCompliance_Click" />
+                        <MenuItem Header="账号与授权" Tag="账号与授权" Click="menuFeatureSettings_Click" />
+                        <MenuItem Header="商业化合规清单" Tag="商业化合规清单" Click="menuFeatureSettings_Click" />
                         <Separator />
                         <MenuItem Header="帮助" Click="menuHelp_Click" />
                         <MenuItem Header="关于" Click="menuAbout_Click" />
