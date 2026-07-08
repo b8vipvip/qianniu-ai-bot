@@ -178,7 +178,7 @@ namespace Bot.AssistWindow.Widget
         {
             return new TabItem
             {
-                Header = "接待监控",
+                Header = "状态",
                 Content = new CtlRobot(Wnd.Desk, this)
             };
         }
@@ -225,7 +225,11 @@ namespace Bot.AssistWindow.Widget
                 cboxPanelAuto.Opacity = Params.Robot.CanUseRobotReal ? 1.0 : 0.55;
             }
             var robot = GetRobotControl();
-            if (robot != null) robot.RefreshSwitchState();
+            if (robot != null)
+            {
+                robot.RefreshSwitchState();
+                if (menuDataDesk != null) menuDataDesk.IsChecked = robot.IsDataDeskVisible;
+            }
         }
 
         private void rectWiden_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -423,19 +427,37 @@ namespace Bot.AssistWindow.Widget
 
         private void btnHide_Click(object sender, RoutedEventArgs e)
         {
+            var robot = GetRobotControl();
+            if (robot != null) robot.CloseDataDesk();
             Wnd.HidePanelRight();
         }
 
         private void btnOption_Click(object sender, RoutedEventArgs e)
         {
+            var robot = GetRobotControl();
+            if (menuDataDesk != null) menuDataDesk.IsChecked = robot != null && robot.IsDataDeskVisible;
             btnOption.ContextMenu.PlacementTarget = btnOption;
             btnOption.ContextMenu.IsOpen = true;
         }
 
-        private void menuWorkbench_Click(object sender, RoutedEventArgs e)
+        private void menuDataDesk_Click(object sender, RoutedEventArgs e)
         {
             var robot = GetRobotControl();
-            if (robot != null) robot.ToggleDashboard();
+            if (robot == null) return;
+            if (robot.IsDataDeskVisible)
+            {
+                robot.CloseDataDesk();
+            }
+            else
+            {
+                robot.ShowDataDesk(Wnd);
+            }
+            if (menuDataDesk != null) menuDataDesk.IsChecked = robot.IsDataDeskVisible;
+        }
+
+        private void menuWorkbench_Click(object sender, RoutedEventArgs e)
+        {
+            menuDataDesk_Click(sender, e);
         }
 
         private void menuApi_Click(object sender, RoutedEventArgs e)
@@ -486,7 +508,7 @@ namespace Bot.AssistWindow.Widget
 
         private void menuAbout_Click(object sender, RoutedEventArgs e)
         {
-            MessageBox.Show("AI客服控制台 v2\n定位：千牛客服辅助回复工具。\n已接入：多API、知识库、自动回复规则、消息策略、日志、授权信息、商业化合规清单。", "关于", MessageBoxButton.OK, MessageBoxImage.Information);
+            MessageBox.Show("AI客服 v2\n定位：千牛客服辅助回复工具。\n已接入：多API、知识库、自动回复规则、消息策略、日志、授权信息、商业化合规清单、独立数据台。", "关于", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
         private void cboxPanelBotEnabled_Click(object sender, RoutedEventArgs e)
