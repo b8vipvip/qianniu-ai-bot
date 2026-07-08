@@ -1,447 +1,495 @@
 ﻿using System;
-using System.CodeDom.Compiler;
-using System.Collections;
-using System.Collections.Generic;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.Runtime.CompilerServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Markup;
 using System.Windows.Media;
 using System.Windows.Shapes;
-using Bot.Common;
 using Bot.Automation.ChatDeskNs;
 using BotLib;
 using BotLib.Wpf.Extensions;
-using Bot.Common.Db;
-using DbEntity;
-using System.IO;
-using BotLib.Extensions;
-using Newtonsoft.Json;
 using Bot.Options;
-using System.Linq;
-using System.Threading.Tasks;
 using Bot.AssistWindow.Widget.Robot;
 
 namespace Bot.AssistWindow.Widget
 {
-	public partial class RightPanel : UserControl, IWakable
-	{
-		private WndAssist _wndDontUse;
-		private bool _isWiden;
-		private bool _isHighden;
-		private bool _isSouthEast;
-		public enum TabTypeEnum
-		{
-			Unknown,
-			Logis,
-			ShortCut,
-			Robot,
-			Goods,
-			Order,
-			Coupon,
-			Test
-		}
+    public partial class RightPanel : UserControl, IWakable
+    {
+        private WndAssist _wndDontUse;
+        private bool _isWiden;
+        private bool _isHighden;
+        private bool _isSouthEast;
+        public enum TabTypeEnum
+        {
+            Unknown,
+            Logis,
+            ShortCut,
+            Robot,
+            Goods,
+            Order,
+            Coupon,
+            Test
+        }
 
-		private WndAssist Wnd
-		{
-			get
-			{
-				if (_wndDontUse == null)
-				{
-					WndAssist wnd = this.xFindParentWindow() as WndAssist;
-					Init(wnd);
-					Util.Assert(_wndDontUse != null);
-				}
-				return _wndDontUse;
-			}
-			set
-			{
-				_wndDontUse = value;
-			}
-		}
+        private WndAssist Wnd
+        {
+            get
+            {
+                if (_wndDontUse == null)
+                {
+                    WndAssist wnd = this.xFindParentWindow() as WndAssist;
+                    Init(wnd);
+                    Util.Assert(_wndDontUse != null);
+                }
+                return _wndDontUse;
+            }
+            set
+            {
+                _wndDontUse = value;
+            }
+        }
 
-		public RightPanel()
-		{
-			_isWiden = false;
-			_isHighden = false;
-			_isSouthEast = false;
-			InitializeComponent();
-		}
+        public RightPanel()
+        {
+            _isWiden = false;
+            _isHighden = false;
+            _isSouthEast = false;
+            InitializeComponent();
+            Loaded += RightPanel_Loaded;
+        }
 
-		public void Init(WndAssist wnd)
-		{
-			if (_wndDontUse == null)
-			{
-				Wnd = wnd;
-				var tabCsv = Params.Panel.GetRightPanelCompOrderCsv(Wnd.Desk.WndTitle);
-				var tabs = tabCsv.Split(',');
-				foreach (var tabName in tabs)
-				{
-					//var tabVisible = Params.Panel.GetPanelOptionVisible(seller, tabName);
-					var tabType = GetTabType(tabName);
-					var tabItem = CreateTabItem(tabType);
-					if (tabItem != null)
-					{
-						//tabItem.xIsVisible(tabVisible);
-						AddTabItem(tabItem, tabType);
-					}
-				}
-				tabControl.SelectionChanged -= tabControl_SelectionChanged;
-				tabControl.SelectionChanged += tabControl_SelectionChanged;
-			}
-		}
+        private void RightPanel_Loaded(object sender, RoutedEventArgs e)
+        {
+            RefreshSwitches();
+        }
+
+        public void Init(WndAssist wnd)
+        {
+            if (_wndDontUse == null)
+            {
+                Wnd = wnd;
+                var tabCsv = Params.Panel.GetRightPanelCompOrderCsv(Wnd.Desk.WndTitle);
+                var tabs = tabCsv.Split(',');
+                foreach (var tabName in tabs)
+                {
+                    var tabType = GetTabType(tabName);
+                    var tabItem = CreateTabItem(tabType);
+                    if (tabItem != null)
+                    {
+                        AddTabItem(tabItem, tabType);
+                    }
+                }
+                tabControl.SelectionChanged -= tabControl_SelectionChanged;
+                tabControl.SelectionChanged += tabControl_SelectionChanged;
+                RefreshSwitches();
+            }
+        }
 
         public void ReShowAfterChangePanelOption()
-		{
-			Util.Assert(_wndDontUse != null);
-			tabControl.Items.Clear();
-			var tabCsv = Params.Panel.GetRightPanelCompOrderCsv(Wnd.Desk.WndTitle);
-			var tabs = tabCsv.Split(',');
-			foreach (var tabName in tabs)
-			{
-				var tabVisible = Params.Panel.GetPanelOptionVisible(Wnd.Desk.WndTitle, tabName);
-				var tabType = GetTabType(tabName);
-				var tabItem = CreateTabItem(tabType);
-				if (tabItem != null)
-				{
-					tabItem.xIsVisible(tabVisible);
-					AddTabItem(tabItem, tabType);
-				}
-			}
-			tabControl.SelectionChanged -= tabControl_SelectionChanged;
-			tabControl.SelectionChanged += tabControl_SelectionChanged;
-		}
+        {
+            Util.Assert(_wndDontUse != null);
+            tabControl.Items.Clear();
+            var tabCsv = Params.Panel.GetRightPanelCompOrderCsv(Wnd.Desk.WndTitle);
+            var tabs = tabCsv.Split(',');
+            foreach (var tabName in tabs)
+            {
+                var tabVisible = Params.Panel.GetPanelOptionVisible(Wnd.Desk.WndTitle, tabName);
+                var tabType = GetTabType(tabName);
+                var tabItem = CreateTabItem(tabType);
+                if (tabItem != null)
+                {
+                    tabItem.xIsVisible(tabVisible);
+                    AddTabItem(tabItem, tabType);
+                }
+            }
+            tabControl.SelectionChanged -= tabControl_SelectionChanged;
+            tabControl.SelectionChanged += tabControl_SelectionChanged;
+        }
 
         public void ChangeSeller(string seller)
         {
-            lblSeller.Content = seller;
+            var robot = GetRobotControl();
+            if (robot != null)
+            {
+                robot.ChangeSeller(seller);
+            }
         }
 
         private TabItem CreateTabItem(TabTypeEnum tabType)
-		{
-			TabItem tabItem = null;
-			switch (tabType)
-			{
+        {
+            TabItem tabItem = null;
+            switch (tabType)
+            {
                 case TabTypeEnum.Robot:
                     tabItem = TabRobot();
                     break;
                 default:
-					break;
-			}
-			return tabItem;
-		}
+                    break;
+            }
+            return tabItem;
+        }
 
-		private TabTypeEnum GetTabType(string typeName)
-		{
-			var tabType = TabTypeEnum.Unknown;
-			switch (typeName)
-			{
-				case "商品":
-					tabType = TabTypeEnum.Goods;
-					break;
+        private TabTypeEnum GetTabType(string typeName)
+        {
+            var tabType = TabTypeEnum.Unknown;
+            switch (typeName)
+            {
+                case "商品":
+                    tabType = TabTypeEnum.Goods;
+                    break;
                 case "工作台":
                     tabType = TabTypeEnum.Robot;
                     break;
             }
-			return tabType;
-		}
+            return tabType;
+        }
 
-		private void tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
-		{
-			if (e.OriginalSource == tabControl)
-			{
-				SetTabStyle(e);
-				ActivateTab(e);
-			}
-		}
+        private void tabControl_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (e.OriginalSource == tabControl)
+            {
+                SetTabStyle(e);
+                ActivateTab(e);
+            }
+        }
 
-		private void SetTabStyle(SelectionChangedEventArgs e)
-		{
-			if (e.AddedItems.Count > 0)
-			{
-				var tabIt = e.AddedItems[0] as TabItem;
-				if (tabIt != null)
-				{
-					var tb = tabIt.Header as TextBlock;
-					tb.Foreground = Brushes.White;
-				}
-			}
-			if (e.RemovedItems.Count > 0)
-			{
-				var tabIt = e.RemovedItems[0] as TabItem;
-				if (tabIt != null)
-				{
-					var tb = tabIt.Header as TextBlock;
-					tb.Foreground = Brushes.Black;
-				}
-			}
-		}
+        private void SetTabStyle(SelectionChangedEventArgs e)
+        {
+            if (e.AddedItems.Count > 0)
+            {
+                var tabIt = e.AddedItems[0] as TabItem;
+                if (tabIt != null)
+                {
+                    var tb = tabIt.Header as TextBlock;
+                    if (tb != null) tb.Foreground = new SolidColorBrush(Color.FromRgb(47, 128, 237));
+                }
+            }
+            if (e.RemovedItems.Count > 0)
+            {
+                var tabIt = e.RemovedItems[0] as TabItem;
+                if (tabIt != null)
+                {
+                    var tb = tabIt.Header as TextBlock;
+                    if (tb != null) tb.Foreground = Brushes.Black;
+                }
+            }
+        }
 
         private TabItem TabRobot()
         {
             return new TabItem
             {
-                Header = "工作台",
-                Content = new CtlRobot(Wnd.Desk,this)
+                Header = "接待监控",
+                Content = new CtlRobot(Wnd.Desk, this)
             };
         }
-		private void AddTabItem(TabItem tabItem, TabTypeEnum tabType)
-		{
-			tabItem.Tag = tabType;
-			if (!(tabItem.Header is TextBlock))
-			{
-				tabItem.Header = TextBlockEx.Create(tabItem.Header.ToString(), new object[0]);
-			}
-			tabItem.Style = (Style)FindResource("tabRightPanel");
-			tabControl.Items.Add(tabItem);
-		}
 
-		public TabItem GetTabItem(TabTypeEnum tabType)
-		{
-			TabItem tabItem = null;
-			foreach (TabItem item in tabControl.Items)
-			{
-				TabTypeEnum ty = (TabTypeEnum)item.Tag;
-				if (ty == tabType)
-				{
-					tabItem = item;
-					break;
-				}
-			}
-			return tabItem;
-		}
+        private void AddTabItem(TabItem tabItem, TabTypeEnum tabType)
+        {
+            tabItem.Tag = tabType;
+            if (!(tabItem.Header is TextBlock))
+            {
+                tabItem.Header = TextBlockEx.Create(tabItem.Header.ToString(), new object[0]);
+            }
+            tabItem.Style = (Style)FindResource("tabRightPanel");
+            tabControl.Items.Add(tabItem);
+        }
 
-		private void rectWiden_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-		{
-			_isWiden = true;
-		}
+        public TabItem GetTabItem(TabTypeEnum tabType)
+        {
+            TabItem tabItem = null;
+            foreach (TabItem item in tabControl.Items)
+            {
+                TabTypeEnum ty = (TabTypeEnum)item.Tag;
+                if (ty == tabType)
+                {
+                    tabItem = item;
+                    break;
+                }
+            }
+            return tabItem;
+        }
 
-		private void rectWiden_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-		{
-			if (_isWiden)
-			{
-				_isWiden = false;
-				Rectangle rectangle = sender as Rectangle;
-				rectangle.ReleaseMouseCapture();
-				int width = (int)e.GetPosition(this).X + 5;
-				SetRightPanelWidth(width, 0);
-			}
-		}
+        private CtlRobot GetRobotControl()
+        {
+            var tab = GetTabItem(TabTypeEnum.Robot);
+            return tab == null ? null : tab.Content as CtlRobot;
+        }
 
-		private void rectWiden_MouseMove(object sender, MouseEventArgs e)
-		{
-			if (_isWiden)
-			{
-				if (e.LeftButton == MouseButtonState.Released)
-				{
-					_isWiden = false;
-					var captured = Mouse.Captured;
-					if (captured != null)
-					{
-						captured.ReleaseMouseCapture();
-					}
-				}
-				else
-				{
-					var rectangle = sender as Rectangle;
-					rectangle.CaptureMouse();
-					int width = (int)e.GetPosition(this).X + 5;
-					SetRightPanelWidth(width, 5);
-				}
-			}
-		}
+        private void RefreshSwitches()
+        {
+            if (cboxPanelBotEnabled != null) cboxPanelBotEnabled.IsChecked = Params.Robot.CanUseRobotReal;
+            if (cboxPanelAuto != null)
+            {
+                cboxPanelAuto.IsChecked = Params.Robot.GetIsAutoReply();
+                cboxPanelAuto.IsEnabled = Params.Robot.CanUseRobotReal;
+                cboxPanelAuto.Opacity = Params.Robot.CanUseRobotReal ? 1.0 : 0.55;
+            }
+            var robot = GetRobotControl();
+            if (robot != null) robot.RefreshSwitchState();
+        }
 
-		private void SetRightPanelWidth(int width, int minVal = 5)
-		{
-			if (width < 365)
-			{
-				width = 365;
-			}
-			if (Math.Abs(ActualWidth - (double)width) > (double)minVal)
-			{
-				this.xSetWidth(width);
-				WndAssist.WaParams.SetRightPanelWidth(Wnd.Desk.WndTitle, width);
-			}
-		}
+        private void rectWiden_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _isWiden = true;
+        }
 
-		private void rectHighden_MouseMove(object sender, MouseEventArgs e)
-		{
-			if (_isHighden)
-			{
-				if (e.LeftButton == MouseButtonState.Released)
-				{
-					_isHighden = false;
-					var captured = Mouse.Captured;
-					if (captured != null)
-					{
-						captured.ReleaseMouseCapture();
-					}
-				}
-				else
-				{
-					var rectangle = sender as Rectangle;
-					rectangle.CaptureMouse();
-					int height = (int)e.GetPosition(this).Y + 5;
-				}
-			}
-		}
+        private void rectWiden_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isWiden)
+            {
+                _isWiden = false;
+                Rectangle rectangle = sender as Rectangle;
+                rectangle.ReleaseMouseCapture();
+                int width = (int)e.GetPosition(this).X + 5;
+                SetRightPanelWidth(width, 0);
+            }
+        }
 
+        private void rectWiden_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isWiden)
+            {
+                if (e.LeftButton == MouseButtonState.Released)
+                {
+                    _isWiden = false;
+                    var captured = Mouse.Captured;
+                    if (captured != null)
+                    {
+                        captured.ReleaseMouseCapture();
+                    }
+                }
+                else
+                {
+                    var rectangle = sender as Rectangle;
+                    rectangle.CaptureMouse();
+                    int width = (int)e.GetPosition(this).X + 5;
+                    SetRightPanelWidth(width, 5);
+                }
+            }
+        }
+
+        private void SetRightPanelWidth(int width, int minVal = 5)
+        {
+            if (width < 365)
+            {
+                width = 365;
+            }
+            if (Math.Abs(ActualWidth - (double)width) > (double)minVal)
+            {
+                this.xSetWidth(width);
+                WndAssist.WaParams.SetRightPanelWidth(Wnd.Desk.WndTitle, width);
+            }
+        }
+
+        private void rectHighden_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isHighden)
+            {
+                if (e.LeftButton == MouseButtonState.Released)
+                {
+                    _isHighden = false;
+                    var captured = Mouse.Captured;
+                    if (captured != null)
+                    {
+                        captured.ReleaseMouseCapture();
+                    }
+                }
+                else
+                {
+                    var rectangle = sender as Rectangle;
+                    rectangle.CaptureMouse();
+                    int height = (int)e.GetPosition(this).Y + 5;
+                }
+            }
+        }
 
         public TabItem GetSelectedTabItem(TabTypeEnum tabType)
-		{
-			TabItem tabItem = null;
-			foreach (TabItem tab in tabControl.Items)
-			{
-				var tabTypeEnum = (TabTypeEnum)tab.Tag;
-				if (tabTypeEnum == tabType)
-				{
-					tabItem = tab;
-					break;
-				}
-			}
-			return tabItem;
-		}
-
-		private void rectHighden_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-		{
-			_isHighden = false;
-			Rectangle rectangle = sender as Rectangle;
-			rectangle.ReleaseMouseCapture();
-			int height = (int)e.GetPosition(this).Y + 5;
-		}
-
-		private void rectHighden_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-		{
-			_isHighden = true;
-		}
-
-		private void rectCorner_MouseMove(object sender, MouseEventArgs e)
-		{
-			if (_isSouthEast)
-			{
-				if (e.LeftButton == MouseButtonState.Released)
-				{
-					_isHighden = false;
-					var captured = Mouse.Captured;
-					if (captured != null)
-					{
-						captured.ReleaseMouseCapture();
-					}
-				}
-				else
-				{
-					Rectangle rectangle = sender as Rectangle;
-					rectangle.CaptureMouse();
-					int width = (int)e.GetPosition(this).X + 5;
-					int height = (int)e.GetPosition(this).Y + 5;
-					SetRightPanelWidth(width, 5);
-				}
-			}
-		}
-
-		private void rectCorner_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
-		{
-			_isSouthEast = false;
-			var rectangle = sender as Rectangle;
-			rectangle.ReleaseMouseCapture();
-			int width = (int)e.GetPosition(this).X + 5;
-			int height = (int)e.GetPosition(this).Y + 5;
-			SetRightPanelWidth(width, 0);
-		}
-
-		private void rectCorner_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-		{
-			_isSouthEast = true;
-		}
-
-		public void WakeUp()
-		{
-			IWakable wakable = tabControl.SelectedContent as IWakable;
-			if (wakable != null)
-			{
-				wakable.WakeUp();
-			}
-		}
-
-		public void Sleep()
-		{
-			IWakable wakable = tabControl.SelectedContent as IWakable;
-			if (wakable != null)
-			{
-				wakable.Sleep();
-			}
-		}
-
-		private void ActivateTab(SelectionChangedEventArgs e)
-		{
-			if (e.AddedItems != null)
-			{
-				foreach (TabItem tabItem in e.AddedItems)
-				{
-					if (tabItem != null)
-					{
-						IWakable wakable = tabItem.Content as IWakable;
-						if (wakable != null)
-						{
-							wakable.WakeUp();
-						}
-					}
-				}
-			}
-			if (e.RemovedItems != null)
-			{
-				foreach (TabItem tabItem in e.RemovedItems)
-				{
-					if (tabItem != null)
-					{
-						IWakable wakable = tabItem.Content as IWakable;
-						if (wakable != null)
-						{
-							wakable.Sleep();
-						}
-					}
-				}
-			}
-		}
-
-		private void btnHelp_Click(object sender, RoutedEventArgs e)
-		{
-			TabItem tabItem = tabControl.SelectedItem as TabItem;
-			var text = "Help";
-			if (tabItem != null)
-			{
-				switch ((TabTypeEnum)tabItem.Tag)
-				{
-					case TabTypeEnum.Logis:
-						text = "Logis";
-						break;
-					case TabTypeEnum.ShortCut:
-						text = "Shortcut";
-						break;
-					case TabTypeEnum.Robot:
-						text = "Robot";
-						break;
-					case TabTypeEnum.Goods:
-						text = "Knowledge";
-						break;
-					case TabTypeEnum.Order:
-						text = "Trade";
-						break;
-				}
-			}
-		}
-
-		private void btnHide_Click(object sender, RoutedEventArgs e)
         {
-			Wnd.HidePanelRight();
+            TabItem tabItem = null;
+            foreach (TabItem tab in tabControl.Items)
+            {
+                var tabTypeEnum = (TabTypeEnum)tab.Tag;
+                if (tabTypeEnum == tabType)
+                {
+                    tabItem = tab;
+                    break;
+                }
+            }
+            return tabItem;
+        }
+
+        private void rectHighden_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            _isHighden = false;
+            Rectangle rectangle = sender as Rectangle;
+            rectangle.ReleaseMouseCapture();
+            int height = (int)e.GetPosition(this).Y + 5;
+        }
+
+        private void rectHighden_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _isHighden = true;
+        }
+
+        private void rectCorner_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isSouthEast)
+            {
+                if (e.LeftButton == MouseButtonState.Released)
+                {
+                    _isHighden = false;
+                    var captured = Mouse.Captured;
+                    if (captured != null)
+                    {
+                        captured.ReleaseMouseCapture();
+                    }
+                }
+                else
+                {
+                    Rectangle rectangle = sender as Rectangle;
+                    rectangle.CaptureMouse();
+                    int width = (int)e.GetPosition(this).X + 5;
+                    int height = (int)e.GetPosition(this).Y + 5;
+                    SetRightPanelWidth(width, 5);
+                }
+            }
+        }
+
+        private void rectCorner_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+        {
+            _isSouthEast = false;
+            var rectangle = sender as Rectangle;
+            rectangle.ReleaseMouseCapture();
+            int width = (int)e.GetPosition(this).X + 5;
+            int height = (int)e.GetPosition(this).Y + 5;
+            SetRightPanelWidth(width, 0);
+        }
+
+        private void rectCorner_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            _isSouthEast = true;
+        }
+
+        public void WakeUp()
+        {
+            RefreshSwitches();
+            IWakable wakable = tabControl.SelectedContent as IWakable;
+            if (wakable != null)
+            {
+                wakable.WakeUp();
+            }
+        }
+
+        public void Sleep()
+        {
+            IWakable wakable = tabControl.SelectedContent as IWakable;
+            if (wakable != null)
+            {
+                wakable.Sleep();
+            }
+        }
+
+        private void ActivateTab(SelectionChangedEventArgs e)
+        {
+            if (e.AddedItems != null)
+            {
+                foreach (TabItem tabItem in e.AddedItems)
+                {
+                    if (tabItem != null)
+                    {
+                        IWakable wakable = tabItem.Content as IWakable;
+                        if (wakable != null)
+                        {
+                            wakable.WakeUp();
+                        }
+                    }
+                }
+            }
+            if (e.RemovedItems != null)
+            {
+                foreach (TabItem tabItem in e.RemovedItems)
+                {
+                    if (tabItem != null)
+                    {
+                        IWakable wakable = tabItem.Content as IWakable;
+                        if (wakable != null)
+                        {
+                            wakable.Sleep();
+                        }
+                    }
+                }
+            }
+        }
+
+        private void btnHide_Click(object sender, RoutedEventArgs e)
+        {
+            Wnd.HidePanelRight();
         }
 
         private void btnOption_Click(object sender, RoutedEventArgs e)
         {
+            btnOption.ContextMenu.PlacementTarget = btnOption;
+            btnOption.ContextMenu.IsOpen = true;
+        }
+
+        private void menuWorkbench_Click(object sender, RoutedEventArgs e)
+        {
+            var robot = GetRobotControl();
+            if (robot != null) robot.ToggleDashboard();
+        }
+
+        private void menuApi_Click(object sender, RoutedEventArgs e)
+        {
             WndOption.MyShow(Wnd.Desk.WndTitle, Wnd, OptionEnum.Robot);
+        }
+
+        private void menuKnowledge_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("知识库页面将在下一步接入：商品知识、店铺规则、售后政策、常见问答。", "知识库", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void menuRule_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("自动回复规则将在下一步接入：转人工条件、无意义消息策略、连续追问策略。", "自动回复规则", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void menuMessagePolicy_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("消息策略将在下一步接入：回复长度、语气风格、知识库优先级、敏感问题处理。", "消息策略", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void menuLogs_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("日志文件在 Bot 目录或程序日志目录中。后续版本会增加内置日志查看器。", "日志与调试", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void menuLicense_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("当前为本地自用版本。商业授权、设备绑定和到期时间将在商业版接入。", "账号与授权", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void menuHelp_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("使用前请确认：1. 千牛已开启无障碍/讲述人模式；2. Bot 已启用；3. API接口测试通过；4. 自动回复开关按需开启。", "帮助", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void menuAbout_Click(object sender, RoutedEventArgs e)
+        {
+            MessageBox.Show("AI客服控制台 v2\n定位：千牛客服辅助回复工具。\n建议商业化时以“辅助工具”定位，并做好隐私、授权、日志与风险提示。", "关于", MessageBoxButton.OK, MessageBoxImage.Information);
+        }
+
+        private void cboxPanelBotEnabled_Click(object sender, RoutedEventArgs e)
+        {
+            Params.Robot.CanUseRobot = cboxPanelBotEnabled.IsChecked ?? true;
+            RefreshSwitches();
+            Log.Info("Bot总开关=" + (Params.Robot.CanUseRobotReal ? "启用" : "停用"));
+        }
+
+        private void cboxPanelAuto_Click(object sender, RoutedEventArgs e)
+        {
+            Params.Robot.SetIsAutoReply(cboxPanelAuto.IsChecked ?? false);
+            RefreshSwitches();
+            Log.Info("自动回复=" + ((cboxPanelAuto.IsChecked ?? false) ? "开启" : "关闭"));
         }
     }
 }
