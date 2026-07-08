@@ -37,6 +37,7 @@
             <Setter Property="Foreground" Value="{StaticResource TextMuted}"/>
             <Setter Property="FontSize" Value="11"/>
             <Setter Property="Margin" Value="0 2 14 2"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
         </Style>
     </UserControl.Resources>
     <Grid Background="{StaticResource Bg}">
@@ -48,16 +49,17 @@
         </Grid.RowDefinitions>
 
         <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="9 5">
-            <StackPanel>
-                <DockPanel Margin="0" Visibility="Collapsed">
-                    <TextBlock Text="状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" />
-                    <TextBlock x:Name="txtStatusSummary" Text="正在检测..." HorizontalAlignment="Right" Foreground="{StaticResource PrimaryBlue}" FontSize="11" />
-                </DockPanel>
-                <WrapPanel>
-                    <TextBlock x:Name="txtConnectionStatus" Text="连接状态：正在检测" Style="{StaticResource StatusText}" />
-                    <TextBlock x:Name="txtStatusApi" Text="API连接：未配置" Style="{StaticResource StatusText}" />
-                </WrapPanel>
-            </StackPanel>
+            <WrapPanel VerticalAlignment="Center">
+                <TextBlock Text="状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" Margin="0 2 12 2" VerticalAlignment="Center" />
+                <TextBlock x:Name="txtStatusSummary" Text="正在检测..." Visibility="Collapsed" />
+                <TextBlock x:Name="txtConnectionStatus" Text="连接状态：正在检测" Style="{StaticResource StatusText}" />
+                <TextBlock x:Name="txtStatusApi" Text="API连接：未配置" Style="{StaticResource StatusText}" />
+                <TextBlock Text="客服：" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0 2 2 2" VerticalAlignment="Center" />
+                <TextBlock x:Name="txtSeller" Text="..." Foreground="{StaticResource TextMain}" FontSize="11" FontWeight="SemiBold" Margin="0 2 14 2" VerticalAlignment="Center" />
+                <Border Background="#2EE59D" CornerRadius="10" Padding="8 2" Margin="0 1 0 1" VerticalAlignment="Center">
+                    <TextBlock x:Name="txtRunStatus" Text="自动回复中" Foreground="#FFFFFFFF" FontSize="11" FontWeight="Bold"/>
+                </Border>
+            </WrapPanel>
         </Border>
 
         <Border Grid.Row="1" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="8 6" Visibility="Visible">
@@ -67,24 +69,10 @@
         </Border>
 
         <Border Grid.Row="2" Background="#00B8D9" CornerRadius="0" Margin="0 0 0 6" Padding="10 8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <TextBlock Text="正在接待" Foreground="#FFFFFFFF" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="txtBuyer" Text="..." Margin="8 0 0 0" Foreground="#FFF9D423" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="8 0">
-                    <TextBlock Text="客服：" Foreground="#DFF7FF" VerticalAlignment="Center"/>
-                    <TextBlock x:Name="txtSeller" Text="..." Foreground="#FFFFFFFF" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                </StackPanel>
-                <Border Grid.Column="2" Background="#2EE59D" CornerRadius="10" Padding="8 2" VerticalAlignment="Center">
-                    <TextBlock x:Name="txtRunStatus" Text="自动回复中" Foreground="#FFFFFFFF" FontSize="11" FontWeight="Bold"/>
-                </Border>
-            </Grid>
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="正在接待" Foreground="#FFFFFFFF" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <TextBlock x:Name="txtBuyer" Text="..." Margin="8 0 0 0" Foreground="#FFF9D423" FontWeight="Bold" FontSize="15" VerticalAlignment="Center"/>
+            </StackPanel>
         </Border>
 
         <Grid Grid.Row="3">
