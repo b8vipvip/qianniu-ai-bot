@@ -388,16 +388,18 @@ namespace Bot.Automation.ChatDeskNs
             }));
         }
 
-        public void AddConversation(string seller, string buyer, string question, string answer,bool isAutoReply)
+        public CtlConversation AddConversation(string seller, string buyer, string question, string answer, bool isAutoReply)
         {
+            CtlConversation ctlConversation = null;
             DispatcherEx.xInvoke(new Action(() =>
             {
                 if (CtlRobot == null)
                 {
                     CtlRobot = inst.AssistWindow.ctlRightPanel.GetTabItem(Bot.AssistWindow.Widget.RightPanel.TabTypeEnum.Robot).Content as CtlRobot;
                 }
-                CtlRobot.AddConversation(seller, buyer, question, answer, isAutoReply);
+                ctlConversation = CtlRobot.AddConversation(seller, buyer, question, answer, isAutoReply);
             }));
+            return ctlConversation;
         }
 
         public void SetActiveQn()
@@ -546,10 +548,6 @@ namespace Bot.Automation.ChatDeskNs
         {
             return IsForeground || IsMostlyVisible(useCache);
         }
-        public bool IsMostlyVisible(bool useCache = true)
-        {
-            return GetVisiblePercent(useCache) > 0.7;
-        }
         public double GetVisiblePercent(bool useCache)
         {
             double visiblePercent;
@@ -567,6 +565,10 @@ namespace Bot.Automation.ChatDeskNs
                 visiblePercent = _getVisiblePercentCache;
             }
             return visiblePercent;
+        }
+        public bool IsMostlyVisible(bool useCache = true)
+        {
+            return GetVisiblePercent(useCache) > 0.7;
         }
         private double GetVisiblePercent()
         {
@@ -757,5 +759,4 @@ namespace Bot.Automation.ChatDeskNs
             }
         }
     }
-
 }
