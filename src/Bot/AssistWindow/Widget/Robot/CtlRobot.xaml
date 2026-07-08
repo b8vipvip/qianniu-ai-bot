@@ -47,9 +47,9 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="9 7">
+        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="0 0 0 1" Padding="9 5">
             <StackPanel>
-                <DockPanel Margin="0 0 0 4">
+                <DockPanel Margin="0" Visibility="Collapsed">
                     <TextBlock Text="状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" />
                     <TextBlock x:Name="txtStatusSummary" Text="正在检测..." HorizontalAlignment="Right" Foreground="{StaticResource PrimaryBlue}" FontSize="11" />
                 </DockPanel>
