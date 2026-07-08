@@ -69,6 +69,11 @@ namespace Bot.ChromeNs
         public QNRpa Rpa { get { return rpa; } }
         public Conversation Buyer { get; set; }
 
+        private readonly object _sellerEchoLock = new object();
+        private string _lastSellerEchoBuyer = string.Empty;
+        private string _lastSellerEchoText = string.Empty;
+        private DateTime _lastSellerEchoTime = DateTime.MinValue;
+
         public static QN CurQN = null;
 
         static QN()
@@ -104,7 +109,7 @@ namespace Bot.ChromeNs
             for (var i = 0; !ok && i < retry; i++)
             {
                 Log.Info("自动发送失败，准备重试第" + (i + 1) + "次。buyer=" + buyer + ", text=" + text);
-                await Task.Delay(900);
+                await Task.Delay(1800);
                 ok = await SendTextAsync(buyer, text);
             }
             return ok;
@@ -134,6 +139,40 @@ namespace Bot.ChromeNs
             {
             }
             return (m.summary ?? string.Empty).Trim();
+        }
+
+        private static string NormalizeMessageText(string value)
+        {
+            return (value ?? string.Empty).Replace("\r", string.Empty).Replace("\n", string.Empty).Trim();
+        }
+
+        private void RecordSellerEcho(string buyerNick, string text)
+        {
+            buyerNick = (buyerNick ?? string.Empty).Trim();
+            text = NormalizeMessageText(text);
+            if (string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(text)) return;
+
+            lock (_sellerEchoLock)
+            {
+                _lastSellerEchoBuyer = buyerNick;
+                _lastSellerEchoText = text;
+                _lastSellerEchoTime = DateTime.Now;
+            }
+            Log.Info("已记录卖家消息回显: buyer=" + buyerNick + ", text=" + text);
+        }
+
+        public bool HasRecentSellerEcho(string buyerNick, string text, DateTime since)
+        {
+            buyerNick = (buyerNick ?? string.Empty).Trim();
+            text = NormalizeMessageText(text);
+            if (string.IsNullOrWhiteSpace(buyerNick) || string.IsNullOrWhiteSpace(text)) return false;
+
+            lock (_sellerEchoLock)
+            {
+                if (_lastSellerEchoTime < since.AddMilliseconds(-500)) return false;
+                if (_lastSellerEchoBuyer != buyerNick) return false;
+                return _lastSellerEchoText == text;
+            }
         }
 
         private bool IsBuyerMessage(QNChatMessage m)
@@ -249,6 +288,7 @@ namespace Bot.ChromeNs
                         if (IsSellerMessage(m))
                         {
                             SetActiveConversationByNick(m.fromid.nick, m.toid.nick, "sellerMessage");
+                            RecordSellerEcho(m.toid.nick, msgText);
                             return;
                         }
 
