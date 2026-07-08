@@ -176,6 +176,32 @@ namespace Bot.ChromeNs
             return string.IsNullOrWhiteSpace(GetEditorTextSafe());
         }
 
+        private bool TryInvokeSendButton()
+        {
+            if (_sendMessageButton == null) return false;
+            try
+            {
+                // 优先使用 UIA Invoke，不依赖鼠标坐标，能降低人工移动鼠标导致点偏的概率。
+                _sendMessageButton.AsButton().Invoke();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("发送按钮 Invoke 失败，改用鼠标点击: " + ex.Message);
+            }
+
+            try
+            {
+                _sendMessageButton.Click();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                return false;
+            }
+        }
+
         private bool TryClickSendButton()
         {
             try
@@ -186,16 +212,18 @@ namespace Bot.ChromeNs
 
                 if (_sendMessageButton != null)
                 {
-                    _sendMessageButton.Click();
-                    Thread.Sleep(700);
-                    if (IsEditorEmptySafe())
+                    if (TryInvokeSendButton())
                     {
-                        BotConnectionDiagnostics.RecordSendAttempt(true, "按钮点击");
-                        Log.Info("自动点击发送成功，输入框已清空。text=" + LastSetPlainText);
-                        return true;
+                        Thread.Sleep(700);
+                        if (IsEditorEmptySafe())
+                        {
+                            BotConnectionDiagnostics.RecordSendAttempt(true, "按钮发送");
+                            Log.Info("自动发送成功，输入框已清空。text=" + LastSetPlainText);
+                            return true;
+                        }
                     }
 
-                    Log.Info("点击发送后输入框仍有内容，尝试 Enter 兜底。text=" + LastSetPlainText);
+                    Log.Info("触发发送后输入框仍有内容，尝试 Enter 兜底。text=" + LastSetPlainText);
                 }
             }
             catch (Exception ex)
@@ -285,6 +313,19 @@ namespace Bot.ChromeNs
                         Thread.Sleep(300);
                     }
                     if (_messageInputTextArea == null) return;
+
+                    try
+                    {
+                        _messageInputTextArea.Focus();
+                        Thread.Sleep(120);
+                        isok = true;
+                        return;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Info("输入框 Focus 失败，改用鼠标点击: " + ex.Message);
+                    }
+
                     var point = _messageInputTextArea.GetClickablePoint();
                     FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = point.X + 5, Y = point.Y + 5 });
                     Thread.Sleep(120);
@@ -298,9 +339,9 @@ namespace Bot.ChromeNs
             return isok;
         }
 
-        public async Task SendTextAsync(string buyer, string text)
+        public async Task<bool> SendTextAsync(string buyer, string text)
         {
-            await OpenAndSendText(buyer, text);
+            return await OpenAndSendText(buyer, text);
         }
 
         private async Task<bool> OpenAndSendText(string buyer, string text)
@@ -314,7 +355,11 @@ namespace Bot.ChromeNs
                 {
                     _qn.OpenChat(buyer);
                     await Task.Delay(500);
-                    await _qn.GetCurrentConversationID();
+                    var conv = await _qn.GetCurrentConversationID();
+                    if (conv != null && conv.Result != null && !string.IsNullOrWhiteSpace(conv.Result.Nick))
+                    {
+                        _qn.SetActiveConversationByNick(_qn.Seller == null ? string.Empty : _qn.Seller.Nick, conv.Result.Nick, "beforeSend");
+                    }
                 }
 
                 if (_qn.Buyer == null || _qn.Buyer.Nick != buyer)
