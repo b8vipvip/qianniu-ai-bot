@@ -133,9 +133,55 @@ namespace Bot.ChromeNs
                 && m.fromid.nick == _seller.Nick && m.toid.nick != _seller.Nick;
         }
 
+        public void SetActiveConversationByNick(string sellerNick, string buyerNick, string source)
+        {
+            try
+            {
+                sellerNick = (sellerNick ?? string.Empty).Trim();
+                buyerNick = (buyerNick ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(sellerNick) && string.IsNullOrWhiteSpace(buyerNick)) return;
+
+                if (!string.IsNullOrWhiteSpace(sellerNick) && (_seller == null || _seller.Nick != sellerNick))
+                {
+                    _seller = new LocalUser { Nick = sellerNick, Display = sellerNick };
+                }
+
+                if (!string.IsNullOrWhiteSpace(buyerNick) && (Buyer == null || Buyer.Nick != buyerNick))
+                {
+                    Buyer = new Conversation { Nick = buyerNick, Display = buyerNick };
+                }
+
+                CurQN = this;
+                BotConnectionDiagnostics.RecordBuyerSeller(_seller == null ? sellerNick : _seller.Nick, Buyer == null ? buyerNick : Buyer.Nick);
+
+                try
+                {
+                    if (Desk.Inst != null)
+                    {
+                        if (_seller != null && !string.IsNullOrWhiteSpace(_seller.Nick)) Desk.Inst.ChangeSeller(_seller.Nick);
+                        if (Buyer != null && !string.IsNullOrWhiteSpace(Buyer.Nick)) Desk.Inst.ChangeBuyer(Buyer.Nick);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex);
+                }
+
+                Log.Info("当前会话已更新: source=" + source + ", seller=" + (_seller == null ? string.Empty : _seller.Nick) + ", buyer=" + (Buyer == null ? string.Empty : Buyer.Nick));
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
+        }
+
         private void Cdp_EvShopRobotReceriveNewMessage(object sender, ShopRobotReceriveNewMessageEventArgs e)
         {
-            if (Params.Robot.CanUseRobotReal && Params.Robot.GetIsAutoReply())
+            if (e != null && e.Seller != null && e.Buyer != null)
+            {
+                SetActiveConversationByNick(e.Seller.Nick, e.Buyer.Nick, "shopRobotNewMsg");
+            }
+            if (Params.Robot.CanUseRobotReal && Params.Robot.GetIsAutoReply() && e != null && e.Buyer != null)
             {
                 OpenChat(e.Buyer.Nick);
             }
@@ -147,11 +193,11 @@ namespace Bot.ChromeNs
 
         private void Cdp_EvSellerSwitched(object sender, SellerSwitchedEventArgs e)
         {
+            if (e == null) return;
             Seller = e.Seller;
             Buyer = e.Buyer;
             CurQN = this;
-            Desk.Inst.ChangeBuyer(e.Buyer.Nick);
-            Desk.Inst.ChangeSeller(e.Seller.Nick);
+            SetActiveConversationByNick(e.Seller == null ? string.Empty : e.Seller.Nick, e.Buyer == null ? string.Empty : e.Buyer.Nick, "sellerSwitched");
 
             if (EvSellerSwitched != null)
             {
@@ -187,11 +233,14 @@ namespace Bot.ChromeNs
                         // 卖家消息只记录为聊天流的一部分，不再自动触发“人工接管”。
                         if (IsSellerMessage(m))
                         {
+                            SetActiveConversationByNick(m.fromid.nick, m.toid.nick, "sellerMessage");
                             return;
                         }
 
                         if (IsBuyerMessage(m))
                         {
+                            SetActiveConversationByNick(m.toid.nick, m.fromid.nick, "buyerMessage");
+
                             var botEnabled = Params.Robot.CanUseRobotReal;
                             var autoSend = Params.Robot.GetIsAutoReply();
                             var answer = string.Empty;
@@ -237,11 +286,11 @@ namespace Bot.ChromeNs
 
         private void Cdp_EvBuyerSwitched(object sender, BuyerSwitchedEventArgs e)
         {
+            if (e == null) return;
             Seller = e.Seller;
             Buyer = e.Buyer;
             CurQN = this;
-            Desk.Inst.ChangeBuyer(e.Buyer.Nick);
-            Desk.Inst.ChangeSeller(e.Seller.Nick);
+            SetActiveConversationByNick(e.Seller == null ? string.Empty : e.Seller.Nick, e.Buyer == null ? string.Empty : e.Buyer.Nick, "buyerSwitched");
             if (EvBuyerSwitched != null)
             {
                 EvBuyerSwitched(this, e);
@@ -260,6 +309,15 @@ namespace Bot.ChromeNs
                     QNSet.Add(qn);
                 }
                 return qn;
+            }
+        }
+
+        public static QN FindExistingBySellerNick(string sellerNick)
+        {
+            if (string.IsNullOrWhiteSpace(sellerNick)) return null;
+            lock (QNSetLock)
+            {
+                return QNSet.FirstOrDefault(q => q._seller != null && (q._seller.Nick == sellerNick || q._seller.Display == sellerNick));
             }
         }
 
