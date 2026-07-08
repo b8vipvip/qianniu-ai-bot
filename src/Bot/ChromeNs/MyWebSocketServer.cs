@@ -293,6 +293,25 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static bool LastSendStatusIsOk()
+        {
+            if (string.IsNullOrWhiteSpace(lastSendStatus)) return true;
+            if (lastSendStatus == "未测试") return true;
+            return lastSendStatus.StartsWith("成功", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string BuildSummary(bool wsOk, bool injectionOk, bool qnOk, bool uiOk, bool buttonOk, bool inputOk, bool sendOk)
+        {
+            if (wsOk && injectionOk && qnOk && uiOk && buttonOk && inputOk && sendOk) return "连接正常";
+            if (!wsStarted) return string.IsNullOrWhiteSpace(lastWsError) ? "WS服务未启动" : "WS服务异常";
+            if (!wsOk) return "WS未连接";
+            if (!injectionOk) return "注入未连接";
+            if (!qnOk) return "千牛参数未获取";
+            if (!uiOk || !buttonOk || !inputOk) return "无障碍/按钮未就绪";
+            if (!sendOk) return "最近发送失败";
+            return "检测中/需检查";
+        }
+
         public static ConnectionDiagnosticsSnapshot GetSnapshot()
         {
             lock (SyncObj)
@@ -308,7 +327,16 @@ namespace Bot.ChromeNs
                 var access = uiAccessible ? "可用" : (inputFound || sendButtonFound ? "部分可用" : "未确认");
                 var btn = sendButtonFound ? "已识别发送按钮" : "未识别发送按钮";
                 if (!inputFound) btn += "｜输入框未识别";
-                var allOk = wsStarted && injectionConnected && cdpReady && uiAccessible;
+
+                var wsOk = wsStarted && wsSessionCount > 0;
+                var injectionOk = injectionConnected;
+                var qnOk = cdpReady;
+                var uiOk = uiAccessible;
+                var buttonOk = sendButtonFound;
+                var inputOk = inputFound;
+                var sendOk = LastSendStatusIsOk();
+                var summary = BuildSummary(wsOk, injectionOk, qnOk, uiOk, buttonOk, inputOk, sendOk);
+
                 return new ConnectionDiagnosticsSnapshot
                 {
                     WebSocketServerStarted = wsStarted,
@@ -319,7 +347,7 @@ namespace Bot.ChromeNs
                     AccessibilityStatus = access,
                     ButtonStatus = btn,
                     SendStatus = lastSendStatus,
-                    Summary = allOk ? "连接正常" : "检测中/需检查",
+                    Summary = summary,
                     Seller = seller,
                     Buyer = buyer,
                     LastUpdateTime = lastUpdate
