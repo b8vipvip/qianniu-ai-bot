@@ -1,46 +1,86 @@
-<UserControl
-	x:Class="Bot.Options.CtlRobotOptions" 
+﻿<UserControl
+    x:Class="Bot.Options.CtlRobotOptions" 
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" 
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml" 
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" 
-    xmlns:d="http://schemas.microsoft.com/expression/blend/2008" >
-    <StackPanel Name="spnOther"
-			Background="#FFE0FFFF">
-        <StackPanel	Margin="15 0 15 15">
-            <Grid Margin="5">
-                <Grid.RowDefinitions>
-                    <RowDefinition/>
-                    <RowDefinition/>
-                    <RowDefinition/>
-                    <RowDefinition/>
-                    <RowDefinition/>
-                </Grid.RowDefinitions>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="50"/>
-                    <ColumnDefinition/>
-                </Grid.ColumnDefinitions>
-                <TextBlock Margin="5" VerticalAlignment="Center">BaseUrl：</TextBlock>
-                <TextBox x:Name="txtBaseUrl" Grid.Column="1" Height="22" Padding="1" VerticalAlignment="Center" HorizontalAlignment="Left" Width="300"></TextBox>
-                <TextBlock Margin="5"  Grid.Row="1" VerticalAlignment="Center">ApiKey：</TextBlock>
-                <TextBox x:Name="txtApiKey" Grid.Row="1" Grid.Column="1" Height="22" Padding="1"  VerticalAlignment="Center" HorizontalAlignment="Left" Width="300"></TextBox>
-                <TextBlock Margin="5"  Grid.Row="2" VerticalAlignment="Center">Model</TextBlock>
-                <TextBox x:Name="txtModelName"  Grid.Row="2" Grid.Column="1" Height="22" Padding="1"  VerticalAlignment="Center" HorizontalAlignment="Left" Width="300"></TextBox>
-                <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" Margin="0 6 0 0">
-                    <Button x:Name="btnTestApi" Width="90" Height="24" Click="btnTestApi_Click">测试API</Button>
-                    <TextBlock x:Name="txtApiTestResult" Margin="10 0 0 0" Width="360" TextWrapping="Wrap" VerticalAlignment="Center" Foreground="DarkBlue"></TextBlock>
-                </StackPanel>
-                <StackPanel Grid.Row="4" Grid.Column="1" Orientation="Horizontal" Margin="0 6 0 0">
-                    <Button x:Name="btnExportConfig" Width="90" Height="24" Click="btnExportConfig_Click">导出配置</Button>
-                    <Button x:Name="btnImportConfig" Width="90" Height="24" Margin="8 0 0 0" Click="btnImportConfig_Click">导入配置</Button>
-                    <TextBlock Margin="10 0 0 0" VerticalAlignment="Center" Foreground="Gray">SystemPrompt 可留空，留空时使用内置默认客服提示词。</TextBlock>
-                </StackPanel>
-            </Grid>
+    xmlns:d="http://schemas.microsoft.com/expression/blend/2008">
+    <UserControl.Resources>
+        <SolidColorBrush x:Key="PageBg" Color="#F7F9FC" />
+        <SolidColorBrush x:Key="CardBg" Color="#FFFFFF" />
+        <SolidColorBrush x:Key="Border" Color="#E6ECF2" />
+        <Style TargetType="Button">
+            <Setter Property="Margin" Value="0 0 6 0" />
+            <Setter Property="Padding" Value="10 4" />
+            <Setter Property="MinHeight" Value="25" />
+        </Style>
+    </UserControl.Resources>
+    <Grid Background="{StaticResource PageBg}" Margin="0" MinHeight="480">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
 
-            <GroupBox Header="SystemPrompt" Padding="2" Margin="0 5 0 0">
-                <StackPanel	Orientation="Horizontal" Margin="2 2">
-                    <TextBox x:Name="txtSystemPrompt" TextWrapping="Wrap" AcceptsReturn="True" Height="200" Width="450" Margin="0 0" ></TextBox>
-                </StackPanel>
-            </GroupBox>
-        </StackPanel>
-    </StackPanel>
+        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="12" Margin="10 10 10 8">
+            <StackPanel>
+                <TextBlock Text="API接口管理" FontSize="18" FontWeight="Bold" Foreground="#1F2937" />
+                <TextBlock Text="支持配置多个官方或中转站 API。Bot 会按调度策略调用；默认策略为优先级顺序，失败自动切换下一个接口。" Foreground="#6B7280" Margin="0 6 0 0" TextWrapping="Wrap" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="1" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="10" Margin="10 0 10 8">
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="btnAddEndpoint" Click="btnAddEndpoint_Click">新增接口</Button>
+                <Button x:Name="btnDeleteEndpoint" Click="btnDeleteEndpoint_Click">删除</Button>
+                <Button x:Name="btnMoveUp" Click="btnMoveUp_Click">上移</Button>
+                <Button x:Name="btnMoveDown" Click="btnMoveDown_Click">下移</Button>
+                <Button x:Name="btnTestSelected" Click="btnTestSelected_Click">测试选中</Button>
+                <Button x:Name="btnTestAll" Click="btnTestAll_Click">测试全部</Button>
+                <Button x:Name="btnImportConfig" Click="btnImportConfig_Click">导入配置</Button>
+                <Button x:Name="btnExportConfig" Click="btnExportConfig_Click">导出配置</Button>
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="2" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="10" Margin="10 0 10 8">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <TextBlock Text="调度策略：" VerticalAlignment="Center" Foreground="#374151" Margin="0 0 6 0" />
+                <ComboBox x:Name="cmbStrategy" Width="180" Height="24">
+                    <ComboBoxItem Content="按优先级顺序调用" />
+                    <ComboBoxItem Content="主备模式" />
+                    <ComboBoxItem Content="低成本优先" />
+                    <ComboBoxItem Content="加权轮询（预留）" />
+                    <ComboBoxItem Content="场景路由（预留）" />
+                </ComboBox>
+                <TextBlock Text="  当前版本优先实现：按优先级失败切换；其它策略先保留配置入口。" VerticalAlignment="Center" Foreground="#6B7280" />
+            </StackPanel>
+        </Border>
+
+        <Border Grid.Row="3" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="8" Margin="10 0 10 8">
+            <DataGrid x:Name="gridEndpoints" AutoGenerateColumns="False" CanUserAddRows="False" CanUserDeleteRows="False" SelectionMode="Single" SelectionChanged="gridEndpoints_SelectionChanged" HeadersVisibility="Column" RowHeight="28" MinHeight="180">
+                <DataGrid.Columns>
+                    <DataGridCheckBoxColumn Header="启用" Binding="{Binding Enabled}" Width="50" />
+                    <DataGridTextColumn Header="优先级" Binding="{Binding Priority}" Width="60" />
+                    <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="110" />
+                    <DataGridTextColumn Header="类型" Binding="{Binding Type}" Width="100" />
+                    <DataGridTextColumn Header="BaseUrl" Binding="{Binding BaseUrl}" Width="200" />
+                    <DataGridTextColumn Header="Model" Binding="{Binding Model}" Width="110" />
+                    <DataGridTextColumn Header="ApiKey" Binding="{Binding ApiKey}" Width="170" />
+                    <DataGridTextColumn Header="权重" Binding="{Binding Weight}" Width="50" />
+                    <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds}" Width="60" />
+                    <DataGridTextColumn Header="状态" Binding="{Binding LastStatus}" Width="220" IsReadOnly="True" />
+                </DataGrid.Columns>
+            </DataGrid>
+        </Border>
+
+        <GroupBox Grid.Row="4" Header="选中接口的 SystemPrompt（可留空，留空使用默认客服提示词）" Margin="10 0 10 8" Padding="8" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}">
+            <TextBox x:Name="txtSystemPrompt" AcceptsReturn="True" TextWrapping="Wrap" Height="100" VerticalScrollBarVisibility="Auto" TextChanged="txtSystemPrompt_TextChanged" />
+        </GroupBox>
+
+        <Border Grid.Row="5" Background="#EAF5FF" BorderBrush="#BBD7FF" BorderThickness="1" CornerRadius="8" Padding="8" Margin="10 0 10 10">
+            <TextBlock x:Name="txtApiTestResult" Text="提示：编辑表格后点击保存；新增/导入/测试后也建议保存一次。" Foreground="#1C5DB6" TextWrapping="Wrap" />
+        </Border>
+    </Grid>
 </UserControl>
