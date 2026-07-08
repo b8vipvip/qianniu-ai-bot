@@ -22,6 +22,8 @@ using OpenAI.Chat;
 using BotLib.Extensions;
 using SuperSocket.SocketEngine.Configuration;
 using BotLib;
+using System.Windows.Threading;
+using System.Windows.Media;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
@@ -32,6 +34,8 @@ namespace Bot.AssistWindow.Widget.Robot
         private WndAssist _wndDontUse;
         private QN _preQN;
         private ConcurrentDictionary<string, List<CtlConversation>> buyerConversations;
+        private DispatcherTimer _statsTimer;
+        private bool _dashboardVisible;
 
         public CtlRobot(Desk desk, RightPanel rp)
         {
@@ -60,20 +64,50 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void CtlRobot_Loaded(object sender, RoutedEventArgs e)
         {
-            cboxBotEnabled.IsChecked = Params.Robot.CanUseRobotReal;
-            cboxAuto.IsChecked = Params.Robot.GetIsAutoReply();
-            RefreshAutoReplyEnabledState();
+            RefreshRunStatus();
+            RefreshStats();
+            _statsTimer = new DispatcherTimer();
+            _statsTimer.Interval = TimeSpan.FromSeconds(3);
+            _statsTimer.Tick += (s, args) => RefreshStats();
+            _statsTimer.Start();
         }
 
-        private void RefreshAutoReplyEnabledState()
+        private void RefreshRunStatus()
         {
-            var enabled = Params.Robot.CanUseRobotReal;
-            cboxAuto.IsEnabled = enabled;
-            cboxAuto.Opacity = enabled ? 1.0 : 0.55;
+            if (!Params.Robot.CanUseRobotReal)
+            {
+                txtRunStatus.Text = "Bot已停用";
+                return;
+            }
+            txtRunStatus.Text = Params.Robot.GetIsAutoReply() ? "自动回复中" : "仅生成答案";
+        }
+
+        public void RefreshSwitchState()
+        {
+            RefreshRunStatus();
+        }
+
+        public void ToggleDashboard()
+        {
+            ShowDashboard(!_dashboardVisible);
+        }
+
+        public void ShowDashboard(bool visible)
+        {
+            _dashboardVisible = visible;
+            gridDashboard.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            colDashboard.Width = visible ? new GridLength(310) : new GridLength(0);
+            if (visible)
+            {
+                RefreshStats();
+            }
         }
 
         public void AddConversation(string seller, string buyer, string question, string answer,bool isAutoReply = false)
         {
+            BotRuntimeStats.RecordDisplayedAnswer(isAutoReply);
+            RefreshStats();
+
             var key = string.Format("{0}#{1}", seller, buyer);
             var ctlConversation = CtlConversation.Create(question, answer, isAutoReply);
             var conversations = buyerConversations.xTryGetValue(key);
@@ -97,27 +131,26 @@ namespace Bot.AssistWindow.Widget.Robot
             scvBody.ScrollToEnd();
         }
 
-        private void ShowGridTip(Grid gd)
+        private void ShowGridTip(Border gd)
         {
             grdTipNoConv.xIsVisible(gd == grdTipNoConv);
-            grdShowConv.xIsVisible(gd == grdShowConv);
+            grdShowConv.xIsVisible(false);
         }
 
         public void ReShowAfterQNChange()
         {
-            if (QN.CurQN != null)
+            if (QN.CurQN != null && QN.CurQN.Seller != null && QN.CurQN.Buyer != null)
             {
                 _preQN = QN.CurQN;
-
                 RefreshItems();
-
                 RefreshConversations();
-
+                RefreshRunStatus();
             }
         }
 
         private void RefreshConversations()
         {
+            if (_preQN == null || _preQN.Seller == null || _preQN.Buyer == null) return;
             var key = string.Format("{0}#{1}", _preQN.Seller.Nick, _preQN.Buyer.Nick);
             var conversations = buyerConversations.xTryGetValue(key);
             stkDialog.Children.Clear();
@@ -138,11 +171,12 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             try
             {
+                if (_preQN == null || _preQN.Buyer == null) return;
                 pgDownGoods.Visibility = Visibility.Visible;
                 RemoveCtlGoods();
                 //咨询的商品
                 var itemRecord = await _preQN.GetItemRecords(_preQN.Buyer.TargetId);
-                if (itemRecord.data == null || itemRecord.data.underInquiryItemList == null)
+                if (itemRecord == null || itemRecord.data == null || itemRecord.data.underInquiryItemList == null)
                 {
                     pgDownGoods.Visibility = Visibility.Collapsed;
                 }
@@ -185,21 +219,75 @@ namespace Bot.AssistWindow.Widget.Robot
 
         public void ChangeBuyer(string buyer)
         {
-            txtBuyer.Text = buyer;
+            txtBuyer.Text = string.IsNullOrWhiteSpace(buyer) ? "..." : buyer;
+            BotRuntimeStats.RecordReception();
             ReShowAfterQNChange();
+            RefreshStats();
         }
 
-        private void cboxBotEnabled_Click(object sender, RoutedEventArgs e)
+        public void ChangeSeller(string seller)
         {
-            Params.Robot.CanUseRobot = cboxBotEnabled.IsChecked ?? true;
-            RefreshAutoReplyEnabledState();
-            Log.Info("Bot总开关=" + (Params.Robot.CanUseRobotReal ? "启用" : "停用"));
+            txtSeller.Text = string.IsNullOrWhiteSpace(seller) ? "..." : seller;
+            RefreshStats();
         }
 
-        private void cboxAuto_Click(object sender, RoutedEventArgs e)
+        private string FormatNum(long value)
         {
-            Params.Robot.SetIsAutoReply(cboxAuto.IsChecked ?? false);
-            Log.Info("自动回复=" + ((cboxAuto.IsChecked ?? false) ? "开启" : "关闭"));
+            if (value >= 1000000) return (value / 10000.0).ToString("0.0") + "万";
+            return value.ToString();
+        }
+
+        private void RefreshStats()
+        {
+            try
+            {
+                var snapshot = BotRuntimeStats.GetSnapshot();
+                txtTotalReception.Text = FormatNum(snapshot.TotalReceptionCount);
+                txtTodayReception.Text = FormatNum(snapshot.TodayReceptionCount);
+                txtTotalAutoReply.Text = FormatNum(snapshot.TotalAutoReplies);
+                txtTodayAutoReply.Text = FormatNum(snapshot.TodayAutoReplies);
+                txtTotalAiCall.Text = FormatNum(snapshot.TotalAiCalls);
+                txtTodayAiCall.Text = FormatNum(snapshot.TodayAiCalls);
+                txtTotalTokens.Text = FormatNum(snapshot.TotalTokens);
+                txtTodayTokens.Text = FormatNum(snapshot.TodayTokens);
+                txtAvgLatency.Text = "平均耗时：" + snapshot.AvgLatencyMs + "ms，失败：" + snapshot.TodayAiFailedCalls + "/今日";
+                txtLastError.Text = string.IsNullOrWhiteSpace(snapshot.LastError) ? "" : "最近错误：" + snapshot.LastError;
+
+                panelApiStats.Children.Clear();
+                if (snapshot.ApiUsages == null || snapshot.ApiUsages.Count < 1)
+                {
+                    panelApiStats.Children.Add(new TextBlock
+                    {
+                        Text = "暂无API调用数据",
+                        Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
+                        FontSize = 12
+                    });
+                    return;
+                }
+
+                foreach (var api in snapshot.ApiUsages)
+                {
+                    var border = new Border
+                    {
+                        Background = Brushes.White,
+                        BorderBrush = new SolidColorBrush(Color.FromRgb(230, 236, 242)),
+                        BorderThickness = new Thickness(1),
+                        CornerRadius = new CornerRadius(6),
+                        Padding = new Thickness(8),
+                        Margin = new Thickness(0, 0, 0, 6)
+                    };
+                    var sp = new StackPanel();
+                    sp.Children.Add(new TextBlock { Text = api.EndpointName, FontWeight = FontWeights.Bold, Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)) });
+                    sp.Children.Add(new TextBlock { Text = "今日调用 " + api.TodayCalls + " 次｜今日Token " + api.TodayTokens, FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)), Margin = new Thickness(0, 4, 0, 0) });
+                    sp.Children.Add(new TextBlock { Text = "总Token " + api.TotalTokens + "｜失败 " + api.FailedCalls + "｜均耗时 " + api.AvgLatencyMs + "ms", FontSize = 11, Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)) });
+                    border.Child = sp;
+                    panelApiStats.Children.Add(border);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
         }
     }
 }
