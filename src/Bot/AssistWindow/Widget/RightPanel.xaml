@@ -77,6 +77,7 @@
                         <MenuItem Header="日志与调试" Click="menuLogs_Click" />
                         <MenuItem Header="配置导入/导出" Click="menuApi_Click" />
                         <MenuItem Header="账号与授权" Click="menuLicense_Click" />
+                        <MenuItem Header="商业化合规清单" Click="menuCompliance_Click" />
                         <Separator />
                         <MenuItem Header="帮助" Click="menuHelp_Click" />
                         <MenuItem Header="关于" Click="menuAbout_Click" />
