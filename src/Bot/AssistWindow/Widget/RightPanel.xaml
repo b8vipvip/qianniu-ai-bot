@@ -60,20 +60,19 @@
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10 0 0 0">
                 <Image Source="{StaticResource iconYellow}" Width="18" Height="18" Margin="0 0 6 0" />
-                <TextBlock Text="AI客服控制台" Foreground="#FFFFFFFF" FontSize="17" FontWeight="Bold" VerticalAlignment="Center" />
+                <TextBlock Text="AI客服" Foreground="#FFFFFFFF" FontSize="17" FontWeight="Bold" VerticalAlignment="Center" />
             </StackPanel>
             <CheckBox Name="cboxPanelBotEnabled" Grid.Column="1" Margin="8 0 4 0" VerticalAlignment="Center" Foreground="#FFFFFFFF" FontWeight="SemiBold" Click="cboxPanelBotEnabled_Click">启用Bot</CheckBox>
             <CheckBox Name="cboxPanelAuto" Grid.Column="2" Margin="6 0 4 0" VerticalAlignment="Center" Foreground="#FFFFFFFF" FontWeight="SemiBold" Click="cboxPanelAuto_Click">自动回复</CheckBox>
             <Button Name="btnOption" Grid.Column="3" Style="{StaticResource TopBarButton}" Content="设置" Click="btnOption_Click">
                 <Button.ContextMenu>
                     <ContextMenu>
-                        <MenuItem Header="工作台" Click="menuWorkbench_Click" />
+                        <MenuItem x:Name="menuDataDesk" Header="数据台" IsCheckable="True" Click="menuDataDesk_Click" />
                         <MenuItem Header="API接口" Click="menuApi_Click" />
                         <MenuItem Header="知识库" Tag="知识库" Click="menuFeatureSettings_Click" />
                         <MenuItem Header="自动回复规则" Tag="自动回复规则" Click="menuFeatureSettings_Click" />
                         <MenuItem Header="消息策略" Tag="消息策略" Click="menuFeatureSettings_Click" />
                         <Separator />
-                        <MenuItem Header="数据统计" Click="menuWorkbench_Click" />
                         <MenuItem Header="日志与调试" Tag="日志与调试" Click="menuFeatureSettings_Click" />
                         <MenuItem Header="配置导入/导出" Click="menuApi_Click" />
                         <MenuItem Header="账号与授权" Tag="账号与授权" Click="menuFeatureSettings_Click" />
