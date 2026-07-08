@@ -18,7 +18,6 @@ namespace Bot.ChromeNs
 {
     public class QNRpa
     {
-
         private DateTime _preUpdateChatBrowserRectTime;
         private DateTime _preSendPlainTextAndImageTime;
         private BitmapImage _preSendPlainTextAndImageImage;
@@ -31,11 +30,7 @@ namespace Bot.ChromeNs
         private FlaUI.Core.Application automationApplication;
         private UIA3Automation uia3Automation;
 
-        public string LastSetPlainText
-        {
-            get;
-            private set;
-        }
+        public string LastSetPlainText { get; private set; }
 
         private QN _qn;
 
@@ -76,20 +71,14 @@ namespace Bot.ChromeNs
                             var descendants = mainWnd.FindAllDescendants();
                             var sendMessageButton = descendants.FirstOrDefault(k =>
                             {
-                                if (k.Properties.Name.IsSupported && IsSendButtonName(k.Name))
-                                {
-                                    return true;
-                                }
+                                if (k.Properties.Name.IsSupported && IsSendButtonName(k.Name)) return true;
                                 return false;
                             });
                             _sendMessageButton = sendMessageButton;
 
                             var messageInputTextArea = descendants.FirstOrDefault(k =>
                             {
-                                if (k.Properties.ClassName.IsSupported && k.ClassName == "TextRichEdit")
-                                {
-                                    return true;
-                                }
+                                if (k.Properties.ClassName.IsSupported && k.ClassName == "TextRichEdit") return true;
                                 return false;
                             });
                             if (messageInputTextArea != null)
@@ -104,7 +93,6 @@ namespace Bot.ChromeNs
                             Log.Exception(ex);
                         }
                     });
-
                 }
             }
         }
@@ -158,6 +146,13 @@ namespace Bot.ChromeNs
             WinApi.Api.keybd_event(0x0D, 0, 2, 0);
         }
 
+        private static void PressEsc()
+        {
+            WinApi.Api.keybd_event(0x1B, 0, 0, 0);
+            Thread.Sleep(60);
+            WinApi.Api.keybd_event(0x1B, 0, 2, 0);
+        }
+
         private string GetEditorTextSafe()
         {
             try
@@ -176,71 +171,17 @@ namespace Bot.ChromeNs
             return string.IsNullOrWhiteSpace(GetEditorTextSafe());
         }
 
-        private bool TryInvokeSendButton()
-        {
-            if (_sendMessageButton == null) return false;
-            try
-            {
-                // 优先使用 UIA Invoke，不依赖鼠标坐标，能降低人工移动鼠标导致点偏的概率。
-                _sendMessageButton.AsButton().Invoke();
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log.Info("发送按钮 Invoke 失败，改用鼠标点击: " + ex.Message);
-            }
-
-            try
-            {
-                _sendMessageButton.Click();
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log.Exception(ex);
-                return false;
-            }
-        }
-
-        private bool TryClickSendButton()
+        private bool TryPressEnterSend()
         {
             try
             {
-                // 每次发送都强制刷新一次控件。千牛发送按钮在发送后可能重建，缓存旧按钮会造成“右侧有答案但没有发出去”。
-                UpdateChatBrowserRect(true);
-                Thread.Sleep(350);
-
-                if (_sendMessageButton != null)
-                {
-                    if (TryInvokeSendButton())
-                    {
-                        Thread.Sleep(700);
-                        if (IsEditorEmptySafe())
-                        {
-                            BotConnectionDiagnostics.RecordSendAttempt(true, "按钮发送");
-                            Log.Info("自动发送成功，输入框已清空。text=" + LastSetPlainText);
-                            return true;
-                        }
-                    }
-
-                    Log.Info("触发发送后输入框仍有内容，尝试 Enter 兜底。text=" + LastSetPlainText);
-                }
-            }
-            catch (Exception ex)
-            {
-                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
-                Log.Exception(ex);
-            }
-
-            // 兜底：如果千牛按钮文字变成繁体或 UIA 找不到按钮，则聚焦输入框后按 Enter。
-            try
-            {
+                PressEsc();
                 FocusEditor();
                 PressEnter();
-                Thread.Sleep(700);
+                Thread.Sleep(850);
                 var ok = IsEditorEmptySafe();
-                BotConnectionDiagnostics.RecordSendAttempt(ok, ok ? "Enter兜底" : "Enter后输入框未清空");
-                Log.Info("Enter 兜底发送结果=" + ok + ", text=" + LastSetPlainText);
+                BotConnectionDiagnostics.RecordSendAttempt(ok, ok ? "Enter发送" : "Enter后未发送");
+                Log.Info("Enter发送结果=" + ok + ", text=" + LastSetPlainText);
                 return ok;
             }
             catch (Exception ex)
@@ -251,11 +192,57 @@ namespace Bot.ChromeNs
             }
         }
 
+        private bool TryClickSendButtonLeftPart()
+        {
+            if (_sendMessageButton == null) return false;
+            try
+            {
+                // 千牛“发送”是分裂按钮，右侧小箭头会打开“按Enter/按Ctrl+Enter发送”菜单。
+                // 这里只点击按钮左侧正文区域，避开右侧下拉箭头。
+                var rect = _sendMessageButton.BoundingRectangle;
+                var x = (int)(rect.Left + Math.Min(Math.Max(rect.Width * 0.35, 10), Math.Max(rect.Width - 32, 10)));
+                var y = (int)(rect.Top + rect.Height / 2);
+                FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = x, Y = y });
+                Thread.Sleep(850);
+                var ok = IsEditorEmptySafe();
+                BotConnectionDiagnostics.RecordSendAttempt(ok, ok ? "按钮左侧点击" : "按钮点击后未发送");
+                Log.Info("按钮左侧点击发送结果=" + ok + ", text=" + LastSetPlainText);
+                if (!ok) PressEsc();
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
+                Log.Exception(ex);
+                try { PressEsc(); } catch { }
+                return false;
+            }
+        }
+
+        private bool TryClickSendButton()
+        {
+            // 首选 Enter。当前千牛菜单已勾选“按Enter发送”，这比点击分裂按钮更稳定，也不会误点下拉箭头。
+            if (TryPressEnterSend()) return true;
+
+            try
+            {
+                UpdateChatBrowserRect(true);
+                Thread.Sleep(350);
+                if (_sendMessageButton != null && TryClickSendButtonLeftPart()) return true;
+            }
+            catch (Exception ex)
+            {
+                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
+                Log.Exception(ex);
+            }
+
+            return false;
+        }
+
         private bool SetAndSendImage(BitmapImage image)
         {
             bool rt = false;
-            if ((DateTime.Now - _preSendPlainTextAndImageTime).TotalSeconds < 1.1
-                && _preSendPlainTextAndImageImage == image)
+            if ((DateTime.Now - _preSendPlainTextAndImageTime).TotalSeconds < 1.1 && _preSendPlainTextAndImageImage == image)
             {
                 rt = false;
             }
@@ -263,14 +250,8 @@ namespace Bot.ChromeNs
             {
                 _preSendPlainTextAndImageTime = DateTime.Now;
                 _preSendPlainTextAndImageImage = image;
-                if (SetImage(image))
-                {
-                    rt = TryClickSendButton();
-                }
-                else
-                {
-                    rt = false;
-                }
+                if (SetImage(image)) rt = TryClickSendButton();
+                else rt = false;
             }
             return rt;
         }
@@ -349,8 +330,6 @@ namespace Bot.ChromeNs
             bool sendResult = false;
             try
             {
-                // 同一个买家连续发第二条消息时，千牛当前会话虽然没变，但输入区/发送按钮可能已重建。
-                // 所以每次发送前都确保聊天窗口在前台，并刷新一次控件。
                 if (_qn.Buyer == null || _qn.Buyer.Nick != buyer)
                 {
                     _qn.OpenChat(buyer);
@@ -385,7 +364,7 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                Thread.Sleep(500);
+                Thread.Sleep(250);
                 sendResult = TryClickSendButton();
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer + ", text=" + text);
             }
@@ -414,8 +393,6 @@ namespace Bot.ChromeNs
 
                     Clipboard.Clear();
                     Clipboard.SetText(text);
-
-                    // 先清掉输入框中可能残留的上一条未发送文本，再粘贴本次 AI 回复。
                     PressCtrlA();
                     Thread.Sleep(80);
                     WinApi.PressCtrlV();
