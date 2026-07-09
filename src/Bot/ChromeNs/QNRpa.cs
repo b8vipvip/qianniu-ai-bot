@@ -161,7 +161,33 @@ namespace Bot.ChromeNs
 
         private bool IsEditorEmptySafe()
         {
+            if (_messageInputTextArea == null) return false;
             return string.IsNullOrWhiteSpace(GetEditorTextSafe());
+        }
+
+        private bool TryIsInputboxEmptyByCdp(out bool isEmpty)
+        {
+            isEmpty = false;
+            try
+            {
+                if (_qn == null) return false;
+                isEmpty = _qn.IsInputboxEmpty().GetAwaiter().GetResult();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("CDP检查输入框是否为空失败: " + ex.Message);
+                return false;
+            }
+        }
+
+        private bool IsEditorOrCdpInputboxEmpty()
+        {
+            if (_messageInputTextArea != null) return IsEditorEmptySafe();
+
+            bool cdpEmpty;
+            if (TryIsInputboxEmptyByCdp(out cdpEmpty)) return cdpEmpty;
+            return false;
         }
 
         private bool WaitForSendConfirmed(string buyer, string text, DateTime sendStart, string method, int timeoutMs)
@@ -169,7 +195,7 @@ namespace Bot.ChromeNs
             var end = DateTime.Now.AddMilliseconds(timeoutMs);
             while (DateTime.Now < end)
             {
-                if (IsEditorEmptySafe())
+                if (IsEditorOrCdpInputboxEmpty())
                 {
                     BotConnectionDiagnostics.RecordSendAttempt(true, method + "，输入框已清空");
                     Log.Info(method + "发送确认成功：输入框已清空。text=" + text);
@@ -194,8 +220,10 @@ namespace Bot.ChromeNs
             }
 
             var editorText = GetEditorTextSafe();
+            bool cdpEmpty;
+            var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
             BotConnectionDiagnostics.RecordSendAttempt(false, method + "后未确认发送");
-            Log.Info(method + "发送未确认，editorText=" + editorText + ", text=" + text);
+            Log.Info(method + "发送未确认，editorText=" + editorText + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty + ", text=" + text);
             return false;
         }
 
@@ -309,9 +337,13 @@ namespace Bot.ChromeNs
                     if (_messageInputTextArea == null)
                     {
                         UpdateChatBrowserRect(true);
-                        Thread.Sleep(300);
+                        Thread.Sleep(500);
                     }
-                    if (_messageInputTextArea == null) return;
+                    if (_messageInputTextArea == null)
+                    {
+                        Log.Info("FocusEditor失败：未找到输入框TextRichEdit。");
+                        return;
+                    }
 
                     try
                     {
@@ -343,11 +375,42 @@ namespace Bot.ChromeNs
             return await OpenAndSendText(buyer, text);
         }
 
+        private async Task<bool> TrySetPlainTextByCdpAsync(string buyer, string text)
+        {
+            try
+            {
+                if (_qn == null) return false;
+
+                Log.Info("准备通过CDP写入输入框: buyer=" + buyer + ", text=" + text);
+                _qn.InsertText2Inputbox(buyer, text);
+
+                LastSetPlainText = text;
+                LatestSetTextTime = DateTime.Now;
+
+                await Task.Delay(800);
+
+                bool cdpEmpty;
+                var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
+                var editorText = GetEditorTextSafe();
+                var ok = (hasCdpEmpty && !cdpEmpty) || !string.IsNullOrWhiteSpace(editorText);
+
+                Log.Info("CDP写入输入框结果=" + ok + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty + ", editorText=" + editorText + ", text=" + text);
+                return ok;
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                return false;
+            }
+        }
+
         private async Task<bool> OpenAndSendText(string buyer, string text)
         {
             bool sendResult = false;
             try
             {
+                Log.Info("自动发送开始: buyer=" + buyer + ", text=" + text + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
+
                 if (_qn.Buyer == null || _qn.Buyer.Nick != buyer)
                 {
                     _qn.OpenChat(buyer);
@@ -373,9 +436,16 @@ namespace Bot.ChromeNs
                 }
 
                 UpdateChatBrowserRect(true);
-                Thread.Sleep(400);
+                Thread.Sleep(500);
 
-                if (!SetPlainText(text))
+                var setOk = SetPlainText(text);
+                if (!setOk)
+                {
+                    Log.Info("RPA写入输入框失败，改用CDP insertText2Inputbox。buyer=" + buyer + ", text=" + text);
+                    setOk = await TrySetPlainTextByCdpAsync(buyer, text);
+                }
+
+                if (!setOk)
                 {
                     Log.Info("自动发送失败：写入输入框失败。buyer=" + buyer + ", text=" + text);
                     BotConnectionDiagnostics.RecordSendAttempt(false, "写入输入框失败");
