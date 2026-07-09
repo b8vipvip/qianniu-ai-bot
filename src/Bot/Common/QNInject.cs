@@ -1,4 +1,4 @@
-﻿using IniParser.Model;
+using IniParser.Model;
 using IniParser;
 using Microsoft.Win32;
 using System;
@@ -16,7 +16,7 @@ namespace Bot.Common
 {
     public class QNInject
     {
-        private const string processName = "AliWorkbench.exe";
+        private static readonly string[] workbenchProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang" };
         private const string webuiResDir = "newWebui";
         private const string webuiFile = "webui.zip";
         private const string signFile = "sign.json";
@@ -32,44 +32,63 @@ namespace Bot.Common
         {
             try
             {
-                string installPath = FindInstallPath();
-                if (string.IsNullOrEmpty(installPath))
+                var installPaths = FindInstallPaths();
+                if (installPaths.Count < 1)
                 {
                     MessageBox.Show("没有检测到安装的千牛!!");
+                    return;
                 }
 
-                var resourcePath = FindResourcePath(installPath);
-                if (string.IsNullOrEmpty(resourcePath))
+                var resourcePaths = FindResourcePaths(installPaths);
+                if (resourcePaths.Count < 1)
                 {
                     MessageBox.Show("获取千牛资源目录失败!!");
                     return;
                 }
 
-                if (IsInjected(resourcePath))
+                var needInjectPaths = resourcePaths.Where(p => !IsInjected(p)).ToList();
+                if (needInjectPaths.Count < 1)
                 {
                     return;
                 }
 
                 if (IsWorkbenchRunning())
                 {
-                    if (MessageBox.Show("请先退出千牛，在运行此程序!!", "提示", MessageBoxButton.YesNo)
+                    if (MessageBox.Show("检测到千牛正在运行。需要先退出千牛后注入插件，是否现在关闭千牛并继续？", "提示", MessageBoxButton.YesNo)
                         == MessageBoxResult.No)
                     {
                         return;
                     }
                     else
                     {
-                        foreach (var p in Process.GetProcessesByName(processName))
-                        {
-                            p.Kill();
-                        }
+                        KillWorkbenchProcesses();
                     }
-                    await Task.Delay(2000);
+                    await Task.Delay(3000);
                 }
 
-                if (InjectScript(resourcePath))
+                int success = 0;
+                foreach (var resourcePath in needInjectPaths)
+                {
+                    try
+                    {
+                        if (InjectScript(resourcePath))
+                        {
+                            success++;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Exception(ex, "InjectScript:" + resourcePath);
+                    }
+                }
+
+                if (success == needInjectPaths.Count)
                 {
                     MessageBox.Show("千牛插件注入成功，请重新启动千牛!!");
+                }
+                else if (success > 0)
+                {
+                    MessageBox.Show("千牛插件部分注入成功，请重新启动千牛后检查连接状态。");
                 }
                 else
                 {
@@ -84,70 +103,246 @@ namespace Bot.Common
 
         private static string FindInstallPath()
         {
-            string installPath = null;
+            return FindInstallPaths().FirstOrDefault();
+        }
+
+        private static List<string> FindInstallPaths()
+        {
+            var paths = new List<string>();
+            AddInstallPath(paths, FindInstallPathFromRegistry());
+            foreach (var path in FindInstallPathsFromRunningProcesses())
+            {
+                AddInstallPath(paths, path);
+            }
+            AddInstallPath(paths, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "AliWorkbench"));
+            AddInstallPath(paths, Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86), "AliWorkbench"));
+            return paths
+                .Where(p => !string.IsNullOrWhiteSpace(p) && Directory.Exists(p))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static void AddInstallPath(List<string> paths, string path)
+        {
+            if (string.IsNullOrWhiteSpace(path)) return;
             try
             {
-                RegistryKey registryKey = Registry.ClassesRoot.OpenSubKey("aliim");
-                registryKey = registryKey.OpenSubKey("Shell");
-                registryKey = registryKey.OpenSubKey("Open");
-                registryKey = registryKey.OpenSubKey("Command");
-                installPath = registryKey.GetValue("").ToString();
-                int idx = installPath.IndexOf("wwcmd.exe");
-                installPath = installPath.Substring(1, idx + 8);
-                installPath = Directory.GetParent(installPath).Parent.FullName;
+                path = Path.GetFullPath(path.Trim().Trim('"'));
+                if (Directory.Exists(path) && !paths.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)))
+                {
+                    paths.Add(path);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        private static string FindInstallPathFromRegistry()
+        {
+            try
+            {
+                using (var registryKey = Registry.ClassesRoot.OpenSubKey(@"aliim\Shell\Open\Command"))
+                {
+                    if (registryKey == null) return string.Empty;
+                    var command = (registryKey.GetValue("") ?? string.Empty).ToString();
+                    var exePath = ExtractExePath(command);
+                    return InstallPathFromExe(exePath);
+                }
             }
             catch (Exception e)
             {
                 Log.Exception(e, "installPath");
+                return string.Empty;
             }
-            return installPath;
+        }
+
+        private static IEnumerable<string> FindInstallPathsFromRunningProcesses()
+        {
+            foreach (var name in workbenchProcessNames)
+            {
+                foreach (var process in Process.GetProcessesByName(name))
+                {
+                    string path = string.Empty;
+                    try
+                    {
+                        path = process.MainModule == null ? string.Empty : process.MainModule.FileName;
+                    }
+                    catch
+                    {
+                    }
+                    var installPath = InstallPathFromExe(path);
+                    if (!string.IsNullOrWhiteSpace(installPath))
+                    {
+                        yield return installPath;
+                    }
+                }
+            }
+        }
+
+        private static string ExtractExePath(string command)
+        {
+            command = (command ?? string.Empty).Trim();
+            if (command.Length < 1) return string.Empty;
+            if (command.StartsWith("\""))
+            {
+                var end = command.IndexOf('"', 1);
+                return end > 1 ? command.Substring(1, end - 1) : string.Empty;
+            }
+            var idx = command.IndexOf(".exe", StringComparison.OrdinalIgnoreCase);
+            return idx >= 0 ? command.Substring(0, idx + 4).Trim() : command;
+        }
+
+        private static string InstallPathFromExe(string exePath)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath)) return string.Empty;
+                var file = new FileInfo(exePath);
+                var name = file.Name;
+                if (name.Equals("AliRender.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return file.Directory == null || file.Directory.Parent == null ? string.Empty : file.Directory.Parent.FullName;
+                }
+                if (name.Equals("wwcmd.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("wangwang.exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return file.Directory == null || file.Directory.Parent == null ? string.Empty : file.Directory.Parent.FullName;
+                }
+                return file.Directory == null ? string.Empty : file.Directory.FullName;
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
+        private static List<string> FindResourcePaths(IEnumerable<string> installPaths)
+        {
+            var paths = new List<string>();
+            foreach (var installPath in installPaths)
+            {
+                AddResourcePathFromIni(paths, installPath);
+                AddAllVersionResourcePaths(paths, installPath);
+            }
+            return paths
+                .Where(p => !string.IsNullOrWhiteSpace(p) && File.Exists(Path.Combine(p, webuiResDir, webuiFile)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderByDescending(p => File.GetLastWriteTime(Path.Combine(p, webuiResDir, webuiFile)))
+                .ToList();
         }
 
         private static string FindResourcePath(string installPath)
         {
-            var aliWorkbenchConfigPath = Path.Combine(installPath, "AliWorkbench.ini");
-            if (File.Exists(aliWorkbenchConfigPath))
+            return FindResourcePaths(new[] { installPath }).FirstOrDefault() ?? string.Empty;
+        }
+
+        private static void AddResourcePathFromIni(List<string> paths, string installPath)
+        {
+            try
             {
+                var aliWorkbenchConfigPath = Path.Combine(installPath, "AliWorkbench.ini");
+                if (!File.Exists(aliWorkbenchConfigPath)) return;
                 var version = ReadAliConfigFile(aliWorkbenchConfigPath);
-                return Path.Combine(installPath, version, "Resources");
+                AddResourcePath(paths, Path.Combine(installPath, version, "Resources"));
             }
-            return string.Empty;
+            catch (Exception ex)
+            {
+                Log.Exception(ex, "AddResourcePathFromIni");
+            }
+        }
+
+        private static void AddAllVersionResourcePaths(List<string> paths, string installPath)
+        {
+            try
+            {
+                if (!Directory.Exists(installPath)) return;
+                foreach (var dir in Directory.GetDirectories(installPath))
+                {
+                    AddResourcePath(paths, Path.Combine(dir, "Resources"));
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex, "AddAllVersionResourcePaths");
+            }
+        }
+
+        private static void AddResourcePath(List<string> paths, string resourcePath)
+        {
+            try
+            {
+                if (File.Exists(Path.Combine(resourcePath, webuiResDir, webuiFile))
+                    && !paths.Any(p => string.Equals(p, resourcePath, StringComparison.OrdinalIgnoreCase)))
+                {
+                    paths.Add(resourcePath);
+                }
+            }
+            catch
+            {
+            }
         }
 
         private static bool IsWorkbenchRunning()
         {
-            var processes = Process.GetProcessesByName(processName);
-            return processes.Length > 0;
+            return workbenchProcessNames.Any(name => Process.GetProcessesByName(name).Length > 0);
+        }
+
+        private static void KillWorkbenchProcesses()
+        {
+            foreach (var name in workbenchProcessNames)
+            {
+                foreach (var p in Process.GetProcessesByName(name))
+                {
+                    try
+                    {
+                        p.Kill();
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Exception(ex);
+                    }
+                }
+            }
         }
 
         public static bool IsInjected(string resourcePath)
         {
-            var webuiResPath = Path.Combine(resourcePath, webuiResDir, webuiFile);
-            using (var zipFile = new ZipFile(webuiResPath))
+            try
             {
-                var entry = zipFile.GetEntry(chatRecentHtmlFile);
-                using (var inputStream = zipFile.GetInputStream(entry))
-                using (var streamReader = new StreamReader(inputStream))
+                var webuiResPath = Path.Combine(resourcePath, webuiResDir, webuiFile);
+                if (!File.Exists(webuiResPath)) return false;
+                using (var zipFile = new ZipFile(webuiResPath))
                 {
-                    var chatRecentHtmlContent = streamReader.ReadToEnd();
-                    if (!chatRecentHtmlContent.Contains(injectedScriptSrc) || chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl))
+                    var entry = zipFile.GetEntry(chatRecentHtmlFile);
+                    if (entry == null) return false;
+                    using (var inputStream = zipFile.GetInputStream(entry))
+                    using (var streamReader = new StreamReader(inputStream))
+                    {
+                        var chatRecentHtmlContent = streamReader.ReadToEnd();
+                        if (!chatRecentHtmlContent.Contains(injectedScriptSrc) || chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl))
+                        {
+                            return false;
+                        }
+                    }
+
+                    var injectEntry = zipFile.GetEntry(injectedScriptFile);
+                    if (injectEntry == null)
                     {
                         return false;
                     }
-                }
 
-                var injectEntry = zipFile.GetEntry(injectedScriptFile);
-                if (injectEntry == null)
-                {
-                    return false;
+                    using (var inputStream = zipFile.GetInputStream(injectEntry))
+                    using (var streamReader = new StreamReader(inputStream))
+                    {
+                        var injectContent = streamReader.ReadToEnd();
+                        return injectContent.Contains(injectVersionMarker);
+                    }
                 }
-
-                using (var inputStream = zipFile.GetInputStream(injectEntry))
-                using (var streamReader = new StreamReader(inputStream))
-                {
-                    var injectContent = streamReader.ReadToEnd();
-                    return injectContent.Contains(injectVersionMarker);
-                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex, "IsInjected:" + resourcePath);
+                return false;
             }
         }
 
@@ -169,9 +364,15 @@ namespace Bot.Common
             var injectJsContent = ReadLocalInjectJs();
             if (string.IsNullOrWhiteSpace(injectJsContent)) return false;
 
+            BackupWebuiZip(webuiResPath);
             using (var zipFile = new ZipFile(webuiResPath))
             {
                 var entry = zipFile.GetEntry(chatRecentHtmlFile);
+                if (entry == null)
+                {
+                    Log.Error("webui.zip中没有找到 " + chatRecentHtmlFile + ": " + webuiResPath);
+                    return false;
+                }
                 using (var inputStream = zipFile.GetInputStream(entry))
                 using (var streamReader = new StreamReader(inputStream))
                 {
@@ -213,6 +414,23 @@ namespace Bot.Common
                     }
                     return true;
                 }
+            }
+        }
+
+        private static void BackupWebuiZip(string webuiResPath)
+        {
+            try
+            {
+                var backupPath = webuiResPath + ".bak-qnbot-" + DateTime.Now.ToString("yyyyMMddHHmmss");
+                if (!File.Exists(backupPath))
+                {
+                    File.Copy(webuiResPath, backupPath);
+                    Log.Info("已备份千牛webui.zip: " + backupPath);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex, "BackupWebuiZip");
             }
         }
 
