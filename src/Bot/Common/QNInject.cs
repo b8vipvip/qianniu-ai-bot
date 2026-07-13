@@ -27,8 +27,10 @@ namespace Bot.Common
         private const string languageScriptFileName = "qnbot-language.js";
         private const string embeddedInjectResource = "Bot.Resources.inject.js";
         private const string embeddedLanguageResource = "Bot.Resources.language.js";
-        private const string injectVersionMarker = "20260713-zh-cn-v5";
+        private const string injectVersionMarker = "20260713-zh-cn-v6";
         private const string languageVersionMarker = "20260713-hans-all-pages-v3";
+        private const string injectedScriptVersionedSrc = injectedScriptSrc + "?v=" + injectVersionMarker;
+        private const string languageScriptVersionedSrc = languageScriptFileName + "?v=" + languageVersionMarker;
         // 注入负载随 Bot.exe 编译，外部 JS 只在开发环境中作为同版本兜底，避免 EXE 与脚本版本漂移。
         private const string oldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
 
@@ -87,6 +89,14 @@ namespace Bot.Common
                     {
                         Log.Exception(ex, "InjectScript:" + resourcePath);
                     }
+                }
+
+                // webui.zip can be updated successfully while Chromium continues to serve the
+                // previous HTML/JS from disk. Clear only disposable web caches after a real
+                // version upgrade. Keep Local Storage/IndexedDB/cookies so the user stays signed in.
+                if (success > 0)
+                {
+                    ClearQianniuWebCaches();
                 }
 
                 if (success == needInjectPaths.Count)
@@ -312,6 +322,102 @@ namespace Bot.Common
             }
         }
 
+        private static void ClearQianniuWebCaches()
+        {
+            var cacheNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+            {
+                "Cache",
+                "Code Cache",
+                "GPUCache",
+                "Service Worker",
+                "blob_storage"
+            };
+            var roots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.CommonDocuments), "AliWorkBench");
+            AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.CommonDocuments), "AliWorkbench");
+            AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "AliWorkbench");
+            AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AliWorkbench");
+            AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Alibaba", "AliWorkbench");
+            AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Alibaba", "AliWorkBench");
+
+            var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var root in roots.Where(Directory.Exists))
+            {
+                foreach (var path in FindCacheDirectories(root, cacheNames))
+                {
+                    targets.Add(path);
+                }
+            }
+
+            int cleared = 0;
+            int failed = 0;
+            foreach (var path in targets.OrderByDescending(p => p.Length))
+            {
+                try
+                {
+                    if (!Directory.Exists(path)) continue;
+                    Directory.Delete(path, true);
+                    cleared++;
+                    Log.Info("已清理千牛网页缓存: " + path);
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    Log.Exception(ex, "ClearQianniuWebCache:" + path);
+                }
+            }
+            Log.Info("千牛网页缓存清理完成: cleared=" + cleared + ", failed=" + failed + ", preserved=Local Storage/IndexedDB/cookies");
+        }
+
+        private static void AddCacheRoot(HashSet<string> roots, string basePath, params string[] parts)
+        {
+            if (string.IsNullOrWhiteSpace(basePath)) return;
+            try
+            {
+                var path = basePath;
+                foreach (var part in parts)
+                {
+                    path = Path.Combine(path, part);
+                }
+                if (Directory.Exists(path)) roots.Add(path);
+            }
+            catch
+            {
+            }
+        }
+
+        private static IEnumerable<string> FindCacheDirectories(string root, HashSet<string> cacheNames)
+        {
+            var pending = new Stack<string>();
+            pending.Push(root);
+            while (pending.Count > 0)
+            {
+                var current = pending.Pop();
+                string[] children;
+                try
+                {
+                    children = Directory.GetDirectories(current);
+                }
+                catch (Exception ex)
+                {
+                    Log.Exception(ex, "ScanQianniuWebCache:" + current);
+                    continue;
+                }
+
+                foreach (var child in children)
+                {
+                    if (cacheNames.Contains(Path.GetFileName(child)))
+                    {
+                        yield return child;
+                    }
+                    else
+                    {
+                        pending.Push(child);
+                    }
+                }
+            }
+        }
+
         public static bool IsInjected(string resourcePath)
         {
             try
@@ -492,7 +598,7 @@ namespace Bot.Common
                 @"<script\b[^>]*\bsrc\s*=\s*[\""'][^\""']*qnbot-language\.js[^\""']*[\""'][^>]*>\s*</script\s*>",
                 string.Empty,
                 RegexOptions.IgnoreCase | RegexOptions.Singleline);
-            return InsertFirstInHead(html, "<script src=\"" + languageScriptFileName + "\"></script>");
+            return InsertFirstInHead(html, "<script src=\"" + languageScriptVersionedSrc + "\"></script>");
         }
 
         private static string InsertFirstInHead(string html, string tag)
@@ -522,7 +628,7 @@ namespace Bot.Common
                 html = Regex.Replace(html, pattern, string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
             }
 
-            return InsertFirstInHead(html, "<script src=\"" + injectedScriptSrc + "\"></script>");
+            return InsertFirstInHead(html, "<script src=\"" + injectedScriptVersionedSrc + "\"></script>");
         }
 
         private static void BackupWebuiZip(string webuiResPath)

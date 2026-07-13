@@ -1,4 +1,4 @@
-window.__qnbotInjectVersion = "20260713-zh-cn-v5";
+window.__qnbotInjectVersion = "20260713-zh-cn-v6";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
 window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
 

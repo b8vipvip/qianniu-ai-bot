@@ -7,12 +7,14 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $injectJs = Join-Path $repoRoot "src\Bin\inject.js"
 $languageJs = Join-Path $repoRoot "src\Bin\language.js"
-$injectMarker = "20260713-zh-cn-v5"
+$injectMarker = "20260713-zh-cn-v6"
 $languageMarker = "20260713-hans-all-pages-v3"
 $officialUrl = "https://iseiya.taobao.com/imsupport"
 $oldRemoteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js"
 $injectFileName = "qnbot-inject.js"
 $languageFileName = "qnbot-language.js"
+$injectScriptSrc = $injectFileName + "?v=" + $injectMarker
+$languageScriptSrc = $languageFileName + "?v=" + $languageMarker
 $recentEntryName = "web_chat-packer/recent.html"
 $injectEntryName = "web_chat-packer/qnbot-inject.js"
 
@@ -95,7 +97,8 @@ function Clear-QianniuWebCaches {
     "$env:LOCALAPPDATA\Alibaba\AliWorkBench"
   ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
 
-  $names = @("Cache", "Code Cache", "GPUCache", "Service Worker", "IndexedDB", "Local Storage", "Session Storage", "blob_storage")
+  # Only remove disposable Chromium caches. Preserve account/session data.
+  $names = @("Cache", "Code Cache", "GPUCache", "Service Worker", "blob_storage")
   foreach ($root in $roots) {
     Write-Host "Scan cache root: $root"
     Get-ChildItem -Path $root -Recurse -Directory -ErrorAction SilentlyContinue |
@@ -162,12 +165,12 @@ try {
       $html = Read-ZipEntryText $zip $name
       if ($null -eq $html) { continue }
       $html = Remove-ScriptTags $html 'qnbot-language\.js'
-      $tags = '<script src="' + $languageFileName + '"></script>'
+      $tags = '<script src="' + $languageScriptSrc + '"></script>'
       if ($name -eq $recentEntryName) {
         $html = Remove-ScriptTags $html 'qnbot-inject\.js'
         $html = Remove-ScriptTags $html 'iseiya\.taobao\.com/imsupport'
         $html = Remove-ScriptTags $html '5CFB5E11D17E63CDD8CB37B52FA6ACFD\.js'
-        $tags += '<script src="' + $injectFileName + '"></script>'
+        $tags += '<script src="' + $injectScriptSrc + '"></script>'
       }
       $html = Insert-FirstInHead $html $tags
       Write-ZipEntryText $zip $name $html
