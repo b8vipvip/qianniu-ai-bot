@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $injectJs = Join-Path $repoRoot "src\Bin\inject.js"
-$marker = "20260712-zh-cn-v3"
+$marker = "20260713-zh-cn-v4"
 $officialUrl = "https://iseiya.taobao.com/imsupport"
 $oldRemoteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js"
 $injectSrc = "qnbot-inject.js"

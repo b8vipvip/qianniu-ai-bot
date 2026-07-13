@@ -61,19 +61,26 @@ try {
   if ($recent) {
     Write-Host "recent.html contains qnbot-inject.js: $($recent.Contains('qnbot-inject.js'))"
     Write-Host "recent.html contains official imsupport: $($recent.Contains('https://iseiya.taobao.com/imsupport'))"
+    $head = [regex]::Match($recent, '<head\b[^>]*>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    $scriptIndex = $recent.IndexOf('qnbot-inject.js', [StringComparison]::OrdinalIgnoreCase)
+    Write-Host "qnbot script is immediately after head: $($head.Success -and $scriptIndex -ge $head.Index -and $scriptIndex -lt ($head.Index + $head.Length + 80))"
   }
 
   if ($inject) {
     $m = [regex]::Match($inject, 'window\.__qnbotInjectVersion\s*=\s*"([^"]+)"')
     $runtime = [regex]::Match($inject, 'window\.__qnbotRuntimePatch\s*=\s*"([^"]+)"')
+    $language = [regex]::Match($inject, 'window\.__qnbotLanguagePatch\s*=\s*"([^"]+)"')
     Write-Host "inject version: $($m.Groups[1].Value)"
     Write-Host "inject runtime patch: $($runtime.Groups[1].Value)"
+    Write-Host "inject language patch: $($language.Groups[1].Value)"
     Write-Host "inject contains body-ready patch: $($inject.Contains('__qnbotAppendOfficialImsupportWhenBodyReady') -or $inject.Contains('appendOfficialWhenReady'))"
     Write-Host "inject contains websocket: $($inject.Contains('ws://127.0.0.1:41010'))"
     Write-Host "inject contains imsdk hook: $($inject.Contains('im.singlemsg.onReceiveNewMsg'))"
     Write-Host "inject contains status patch: $($inject.Contains('__qnbotStatusPatch'))"
     Write-Host "inject contains GetNewMsg patch: $($inject.Contains('__qnbotGetNewMsgPatch'))"
     Write-Host "inject contains safe delayed hooks: $($inject.Contains('20260707-safe-hooks-v5'))"
+    Write-Host "inject traverses Shadow DOM: $($inject.Contains('attachShadow') -and $inject.Contains('shadowRoots'))"
+    Write-Host "inject traverses iframe documents: $($inject.Contains('contentDocument') -and $inject.Contains('frameDocuments'))"
   }
 
   $htmlEntries = @($zip.Entries | Where-Object { $_.FullName.EndsWith('.html') })
