@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $injectJs = Join-Path $repoRoot "src\Bin\inject.js"
 $languageJs = Join-Path $repoRoot "src\Bin\language.js"
-$injectMarker = "20260713-zh-cn-v6"
+$injectMarker = "20260713-zh-cn-v7"
 $languageMarker = "20260713-hans-all-pages-v3"
 $officialUrl = "https://iseiya.taobao.com/imsupport"
 $oldRemoteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js"
@@ -88,17 +88,22 @@ function Insert-FirstInHead($html, $tags) {
 }
 
 function Clear-QianniuWebCaches {
-  $roots = @(
-    "$env:PUBLIC\Documents\AliWorkBench",
-    "$env:PUBLIC\Documents\AliWorkbench",
-    "$env:APPDATA\AliWorkbench",
-    "$env:LOCALAPPDATA\AliWorkbench",
-    "$env:LOCALAPPDATA\Alibaba\AliWorkbench",
-    "$env:LOCALAPPDATA\Alibaba\AliWorkBench"
-  ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
+  $cefRoots = @()
+  if ($env:LOCALAPPDATA -and (Test-Path $env:LOCALAPPDATA)) {
+    $cefRoots = @(Get-ChildItem -Path $env:LOCALAPPDATA -Directory -Filter "QNCEF*Temp" -ErrorAction SilentlyContinue |
+      Select-Object -ExpandProperty FullName)
+  }
+  $roots = @(@(
+      "$env:PUBLIC\Documents\AliWorkBench",
+      "$env:PUBLIC\Documents\AliWorkbench",
+      "$env:APPDATA\AliWorkbench",
+      "$env:LOCALAPPDATA\AliWorkbench",
+      "$env:LOCALAPPDATA\Alibaba\AliWorkbench",
+      "$env:LOCALAPPDATA\Alibaba\AliWorkBench"
+    ) + $cefRoots) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -Unique
 
   # Only remove disposable Chromium caches. Preserve account/session data.
-  $names = @("Cache", "Code Cache", "GPUCache", "Service Worker", "blob_storage")
+  $names = @("Cache", "Code Cache", "GPUCache", "DawnCache", "GrShaderCache", "GraphiteDawnCache", "Service Worker", "blob_storage")
   foreach ($root in $roots) {
     Write-Host "Scan cache root: $root"
     Get-ChildItem -Path $root -Recurse -Directory -ErrorAction SilentlyContinue |
