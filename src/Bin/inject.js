@@ -1,6 +1,6 @@
-window.__qnbotInjectVersion = "20260713-zh-cn-v4";
+window.__qnbotInjectVersion = "20260713-zh-cn-v5";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
-window.__qnbotLanguagePatch = "20260713-hans-v2";
+window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
 
 (function () {
   if (window.__qnbotMainInstalled) return;
@@ -246,6 +246,38 @@ window.__qnbotLanguagePatch = "20260713-hans-v2";
     try { return window._vs && window._vs.conversationID ? window._vs.conversationID : window._conversationId || null; } catch (e) { return null; }
   }
 
+  function collectLanguageReports() {
+    var reports = [];
+    var prefix = "__qnbotLanguageReport:";
+    var now = Date.now();
+    try {
+      for (var i = 0; i < localStorage.length; i++) {
+        var key = localStorage.key(i) || "";
+        if (key.indexOf(prefix) !== 0) continue;
+        try {
+          var report = JSON.parse(localStorage.getItem(key) || "{}");
+          if (!report.lastSeenAt || now - report.lastSeenAt > 15000) continue;
+          reports.push({
+            version: report.version || "",
+            path: report.path || key.substring(prefix.length),
+            title: report.title || "",
+            convertedTextNodes: report.convertedTextNodes || 0,
+            convertedAttributes: report.convertedAttributes || 0,
+            shadowRoots: report.shadowRoots || 0,
+            frameDocuments: report.frameDocuments || 0
+          });
+        } catch (e) {}
+      }
+    } catch (e) {}
+    reports.sort(function (a, b) {
+      var aCount = a.convertedTextNodes + a.convertedAttributes;
+      var bCount = b.convertedTextNodes + b.convertedAttributes;
+      if (aCount !== bCount) return bCount - aCount;
+      return (a.path || "").localeCompare(b.path || "");
+    });
+    return reports.slice(0, 20);
+  }
+
   function statusObject(extra) {
     var login = getLoginID();
     var conv = getConversationID();
@@ -261,6 +293,7 @@ window.__qnbotLanguagePatch = "20260713-hans-v2";
       convertedAttributes: window.__qnbotHansStats ? window.__qnbotHansStats.convertedAttributes : 0,
       shadowRoots: window.__qnbotHansStats ? window.__qnbotHansStats.shadowRoots : 0,
       frameDocuments: window.__qnbotHansStats ? window.__qnbotHansStats.frameDocuments : 0,
+      languagePages: collectLanguageReports(),
       href: location.href,
       title: document.title || "",
       hasImsdk: !!(window.imsdk && typeof window.imsdk.invoke === "function"),
