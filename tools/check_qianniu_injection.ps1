@@ -1,4 +1,6 @@
 $ErrorActionPreference = "Stop"
+$expectedInjectVersion = "20260713-zh-cn-v6"
+$expectedLanguageVersion = "20260713-hans-all-pages-v3"
 
 function Get-QianniuInstallPath {
   try {
@@ -65,7 +67,10 @@ try {
     Write-Host "recent.html contains official imsupport: $($recent.Contains('https://iseiya.taobao.com/imsupport'))"
     $head = [regex]::Match($recent, '<head\b[^>]*>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     $scriptIndex = $recent.IndexOf('qnbot-inject.js', [StringComparison]::OrdinalIgnoreCase)
-    Write-Host "qnbot script is immediately after head: $($head.Success -and $scriptIndex -ge $head.Index -and $scriptIndex -lt ($head.Index + $head.Length + 80))"
+    $languageScriptIndex = $recent.IndexOf('qnbot-language.js', [StringComparison]::OrdinalIgnoreCase)
+    Write-Host "language script precedes bot script: $($languageScriptIndex -ge 0 -and $scriptIndex -gt $languageScriptIndex)"
+    Write-Host "recent uses versioned bot script URL: $($recent.Contains('qnbot-inject.js?v=' + $expectedInjectVersion))"
+    Write-Host "recent uses versioned language script URL: $($recent.Contains('qnbot-language.js?v=' + $expectedLanguageVersion))"
   }
 
   if ($inject) {
@@ -106,7 +111,7 @@ try {
     $sameDirLanguage = $dir + "qnbot-language.js"
     $hasInjectEntry = $null -ne $zip.GetEntry($sameDirInject)
     $languageEntry = Read-ZipEntryText $zip $sameDirLanguage
-    $hasCurrentLanguageEntry = $languageEntry -and $languageEntry.Contains('20260713-hans-all-pages-v3')
+    $hasCurrentLanguageEntry = $languageEntry -and $languageEntry.Contains($expectedLanguageVersion)
     $containsInject = $text -and $text.Contains('qnbot-inject.js')
     $containsLanguage = $text -and $text.Contains('qnbot-language.js')
     if ($containsInject -and $hasInjectEntry) { $botCovered++ }
