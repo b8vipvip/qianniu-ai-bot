@@ -234,6 +234,16 @@
     <None Include="packages.config"><SubType>Designer</SubType></None>
   </ItemGroup>
   <ItemGroup>
+    <EmbeddedResource Include="..\Bin\inject.js">
+      <Link>Resources\inject.js</Link>
+      <LogicalName>Bot.Resources.inject.js</LogicalName>
+    </EmbeddedResource>
+    <EmbeddedResource Include="..\Bin\language.js">
+      <Link>Resources\language.js</Link>
+      <LogicalName>Bot.Resources.language.js</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+  <ItemGroup>
     <Resource Include="Asset\image\clear.png" />
     <Resource Include="Asset\image\close20.png" />
     <Resource Include="Asset\image\cod_16.gif" />
