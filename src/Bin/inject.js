@@ -1,3 +1,14 @@
+﻿
+// force zh-CN persistent
+(function(){
+ try{
+   localStorage.setItem("locale","zh-CN");
+   localStorage.setItem("language","zh-CN");
+   localStorage.setItem("lang","zh-CN");
+   document.cookie="locale=zh-CN";
+   document.cookie="language=zh-CN";
+ }catch(e){}
+})();
 window.__qnbotInjectVersion = "20260713-zh-cn-v7";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
 window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
@@ -546,3 +557,4 @@ window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
   loop();
   setInterval(loop, 1000);
 })();
+

@@ -1,4 +1,4 @@
-using IniParser.Model;
+﻿using IniParser.Model;
 using IniParser;
 using Microsoft.Win32;
 using System;
@@ -15,7 +15,10 @@ using System.Windows;
 
 namespace Bot.Common
 {
-    public class QNInject
+    // zh-CN-persistent
+// language repair enabled
+
+public class QNInject
     {
         private static readonly string[] workbenchProcessNames = { "AliWorkbench", "new_AliWorkbench", "AliRender", "wwcmd", "wangwang" };
         private const string webuiResDir = "newWebui";
@@ -716,3 +719,4 @@ namespace Bot.Common
         }
     }
 }
+
