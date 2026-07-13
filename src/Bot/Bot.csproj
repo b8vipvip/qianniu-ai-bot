@@ -161,6 +161,7 @@
     <Compile Include="ChatRecord\ChatDialog.cs" />
     <Compile Include="ChatRecord\ChatResponse.cs" />
     <Compile Include="ChromeNs\QNRpa.cs" />
+    <Compile Include="Common\LanguageRepairService.cs" />
     <Compile Include="Common\QNInject.cs" />
     <Compile Include="Common\Trivial\SynableImageHelper.cs" />
     <Compile Include="Common\Windows\WndLoading.xaml.cs"><DependentUpon>WndLoading.xaml</DependentUpon></Compile>

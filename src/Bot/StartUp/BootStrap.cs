@@ -16,9 +16,11 @@ namespace Bot
 {
     public class BootStrap
     {
-        public static void Init()
+        public static async Task Init()
         {
             ClearTmpPathFiles();
+            var languageResult = await LanguageRepairService.CheckAndRepairLanguage();
+            BotConnectionDiagnostics.RecordLanguageStatus(languageResult.IsOk, languageResult.StatusText, languageResult.Detail);
             DeskScanner.LoopScan();
             MyWebSocketServer.WSocketSvrInst.Start();
             QNInject.StartInject();

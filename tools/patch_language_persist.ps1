@@ -11,19 +11,28 @@ if(Test-Path $inject){
 $content = Get-Content $inject -Raw -Encoding UTF8
 
 
-if($content -notmatch "force zh-CN persistent"){
+if($content -notmatch "qnbot persistent zh-CN language lock"){
 
 $patch=@'
 
-// force zh-CN persistent
+// qnbot persistent zh-CN language lock
 (function(){
- try{
-   localStorage.setItem("locale","zh-CN");
-   localStorage.setItem("language","zh-CN");
-   localStorage.setItem("lang","zh-CN");
-   document.cookie="locale=zh-CN";
-   document.cookie="language=zh-CN";
- }catch(e){}
+  function lockZhCnLanguage(){
+    try{
+      localStorage.setItem("locale","zh-CN");
+      localStorage.setItem("language","zh-CN");
+      localStorage.setItem("lang","zh-CN");
+      sessionStorage.setItem("locale","zh-CN");
+      sessionStorage.setItem("language","zh-CN");
+      sessionStorage.setItem("lang","zh-CN");
+      document.cookie="locale=zh-CN; path=/; max-age=31536000";
+      document.cookie="language=zh-CN; path=/; max-age=31536000";
+      document.cookie="lang=zh-CN; path=/; max-age=31536000";
+    }catch(e){}
+  }
+  lockZhCnLanguage();
+  try { window.addEventListener("DOMContentLoaded", lockZhCnLanguage, true); } catch(e) {}
+  try { window.addEventListener("load", lockZhCnLanguage, true); } catch(e) {}
 })();
 
 '@

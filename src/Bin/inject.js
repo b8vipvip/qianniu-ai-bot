@@ -1,15 +1,40 @@
 ﻿
-// force zh-CN persistent
+// qnbot persistent zh-CN language lock
 (function(){
- try{
-   localStorage.setItem("locale","zh-CN");
-   localStorage.setItem("language","zh-CN");
-   localStorage.setItem("lang","zh-CN");
-   document.cookie="locale=zh-CN";
-   document.cookie="language=zh-CN";
- }catch(e){}
+  function lockZhCnLanguage(){
+    try{
+      localStorage.setItem("locale","zh-CN");
+      localStorage.setItem("language","zh-CN");
+      localStorage.setItem("lang","zh-CN");
+      sessionStorage.setItem("locale","zh-CN");
+      sessionStorage.setItem("language","zh-CN");
+      sessionStorage.setItem("lang","zh-CN");
+      document.cookie="locale=zh-CN; path=/; max-age=31536000";
+      document.cookie="language=zh-CN; path=/; max-age=31536000";
+      document.cookie="lang=zh-CN; path=/; max-age=31536000";
+    }catch(e){}
+  }
+  function repairIfChanged(){
+    try{
+      var values = [
+        localStorage.getItem("locale"),
+        localStorage.getItem("language"),
+        localStorage.getItem("lang")
+      ].join("|").toLowerCase();
+      if (values.indexOf("zh-tw") >= 0 || values.indexOf("zh_hk") >= 0 || values.indexOf("traditional") >= 0 || values.indexOf("繁体") >= 0 || values.indexOf("繁體") >= 0) {
+        lockZhCnLanguage();
+      }
+    }catch(e){
+      lockZhCnLanguage();
+    }
+  }
+  lockZhCnLanguage();
+  try { window.addEventListener("DOMContentLoaded", lockZhCnLanguage, true); } catch(e) {}
+  try { window.addEventListener("load", lockZhCnLanguage, true); } catch(e) {}
+  try { window.addEventListener("storage", repairIfChanged, true); } catch(e) {}
+  setInterval(repairIfChanged, 1000);
 })();
-window.__qnbotInjectVersion = "20260713-zh-cn-v7";
+window.__qnbotInjectVersion = "20260713-zh-cn-v8";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
 window.__qnbotLanguagePatch = "20260713-hans-all-pages-v3";
 

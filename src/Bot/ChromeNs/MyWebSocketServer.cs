@@ -256,6 +256,9 @@ namespace Bot.ChromeNs
         public string AccessibilityStatus { get; set; }
         public string ButtonStatus { get; set; }
         public string SendStatus { get; set; }
+        public string LanguageStatus { get; set; }
+        public string LanguageDetail { get; set; }
+        public bool LanguageOk { get; set; }
         public string Summary { get; set; }
         public string Seller { get; set; }
         public string Buyer { get; set; }
@@ -280,8 +283,22 @@ namespace Bot.ChromeNs
         private static bool sendButtonFound;
         private static bool inputFound;
         private static string lastSendStatus = "未测试";
+        private static bool languageOk = true;
+        private static string languageStatus = "语言：正在检测";
+        private static string languageDetail = string.Empty;
         private static string lastWsError = string.Empty;
         private static DateTime lastUpdate = DateTime.MinValue;
+
+        public static void RecordLanguageStatus(bool ok, string status, string detail)
+        {
+            lock (SyncObj)
+            {
+                languageOk = ok;
+                languageStatus = string.IsNullOrWhiteSpace(status) ? (ok ? "语言：简体中文 ✓" : "语言：检测异常") : status;
+                languageDetail = detail ?? string.Empty;
+                lastUpdate = DateTime.Now;
+            }
+        }
 
         public static void RecordWebSocketServerStarted()
         {
@@ -435,6 +452,9 @@ namespace Bot.ChromeNs
                     AccessibilityStatus = access,
                     ButtonStatus = btn,
                     SendStatus = lastSendStatus,
+                    LanguageStatus = languageStatus,
+                    LanguageDetail = languageDetail,
+                    LanguageOk = languageOk,
                     Summary = summary,
                     Seller = seller,
                     Buyer = buyer,

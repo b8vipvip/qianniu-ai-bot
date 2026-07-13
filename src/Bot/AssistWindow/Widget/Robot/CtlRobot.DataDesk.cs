@@ -98,6 +98,7 @@ namespace Bot.AssistWindow.Widget.Robot
             var sb = new StringBuilder();
             sb.AppendLine("WS连接：" + diag.WebSocketStatus);
             sb.AppendLine("注入状态：" + diag.InjectionStatus);
+            sb.AppendLine("语言状态：" + diag.LanguageStatus);
             sb.AppendLine("千牛参数：" + diag.QnParamStatus);
             sb.AppendLine("客服ID：" + (string.IsNullOrWhiteSpace(diag.Seller) ? "未识别" : diag.Seller));
             sb.AppendLine("买家ID：" + (string.IsNullOrWhiteSpace(diag.Buyer) ? "未识别" : diag.Buyer));
@@ -187,6 +188,12 @@ namespace Bot.AssistWindow.Widget.Robot
                 if (txtStatusApi != null)
                 {
                     txtStatusApi.Text = "API连接：" + BuildApiStatus(stats);
+                }
+                if (txtLanguageStatus != null)
+                {
+                    txtLanguageStatus.Text = diag == null || string.IsNullOrWhiteSpace(diag.LanguageStatus) ? "语言：正在检测" : diag.LanguageStatus;
+                    txtLanguageStatus.Foreground = StatusBrush(diag != null && diag.LanguageOk);
+                    txtLanguageStatus.ToolTip = diag == null ? string.Empty : diag.LanguageDetail;
                 }
 
                 MaybeRecoverQianniu(diag, summary);

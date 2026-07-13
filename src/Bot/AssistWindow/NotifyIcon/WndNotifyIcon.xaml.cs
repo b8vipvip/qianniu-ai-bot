@@ -43,7 +43,7 @@ namespace Bot.AssistWindow.NotifyIcon
             Loaded += WndNotifyIcon_Loaded;
         }
 
-        private void WndNotifyIcon_Loaded(object sender, RoutedEventArgs e)
+        private async void WndNotifyIcon_Loaded(object sender, RoutedEventArgs e)
         {
             Loaded -= WndNotifyIcon_Loaded;
             this.xMoveToWorkAreaCenter();
@@ -56,7 +56,7 @@ namespace Bot.AssistWindow.NotifyIcon
             CreateHelpMenu();
             notifyIcon.StartBlink(base.FindResource("iconGray") as ImageSource);
 
-            BootStrap.Init();
+            await BootStrap.Init();
             notifyIcon.StopBlink();
             Visibility = Visibility.Collapsed;
         }

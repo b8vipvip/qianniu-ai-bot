@@ -53,6 +53,7 @@
                 <TextBlock Text="状态" FontWeight="Bold" Foreground="{StaticResource TextMain}" Margin="0 2 12 2" VerticalAlignment="Center" />
                 <TextBlock x:Name="txtStatusSummary" Text="正在检测..." Visibility="Collapsed" />
                 <TextBlock x:Name="txtConnectionStatus" Text="连接状态：正在检测" Style="{StaticResource StatusText}" />
+                <TextBlock x:Name="txtLanguageStatus" Text="语言：正在检测" Style="{StaticResource StatusText}" />
                 <TextBlock x:Name="txtStatusApi" Text="API连接：未配置" Style="{StaticResource StatusText}" />
                 <TextBlock Text="客服：" Foreground="{StaticResource TextMuted}" FontSize="11" Margin="0 2 2 2" VerticalAlignment="Center" />
                 <TextBlock x:Name="txtSeller" Text="..." Foreground="{StaticResource TextMain}" FontSize="11" FontWeight="SemiBold" Margin="0 2 14 2" VerticalAlignment="Center" />
