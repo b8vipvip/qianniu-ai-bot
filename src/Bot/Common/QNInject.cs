@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using ICSharpCode.SharpZipLib.Zip;
 using BotLib;
@@ -24,7 +25,7 @@ namespace Bot.Common
         private const string injectedScriptFile = @"web_chat-packer/qnbot-inject.js";
         private const string injectedScriptSrc = "qnbot-inject.js";
         private const string imSupportUrl = @"https://iseiya.taobao.com/imsupport";
-        private const string injectVersionMarker = "20260707-zh-cn-v2";
+        private const string injectVersionMarker = "20260712-zh-cn-v3";
         // 旧版本使用外部 OSS 脚本，可能导致千牛接待台资源/语言异常。新版改为把本地 src\Bin\inject.js 写入 webui.zip。
         private const string oldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
 
@@ -377,26 +378,7 @@ namespace Bot.Common
                 using (var streamReader = new StreamReader(inputStream))
                 {
                     var chatRecentHtmlContent = streamReader.ReadToEnd();
-                    if (chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl))
-                    {
-                        chatRecentHtmlContent = chatRecentHtmlContent.Replace(oldRemoteOverwriteUrl, injectedScriptSrc);
-                    }
-                    else if (chatRecentHtmlContent.Contains(imSupportUrl))
-                    {
-                        chatRecentHtmlContent = chatRecentHtmlContent.Replace(imSupportUrl, injectedScriptSrc);
-                    }
-                    else if (!chatRecentHtmlContent.Contains(injectedScriptSrc))
-                    {
-                        var tag = "<script src=\"" + injectedScriptSrc + "\"></script>";
-                        if (chatRecentHtmlContent.IndexOf("</body>", StringComparison.OrdinalIgnoreCase) >= 0)
-                        {
-                            chatRecentHtmlContent = chatRecentHtmlContent.Replace("</body>", tag + "</body>");
-                        }
-                        else
-                        {
-                            chatRecentHtmlContent += tag;
-                        }
-                    }
+                    chatRecentHtmlContent = PlaceInjectedScriptFirst(chatRecentHtmlContent);
 
                     zipFile.BeginUpdate();
                     zipFile.Add(new ZipStaticDataSource(chatRecentHtmlContent), chatRecentHtmlFile);
@@ -415,6 +397,32 @@ namespace Bot.Common
                     return true;
                 }
             }
+        }
+
+        private static string PlaceInjectedScriptFirst(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html)) return html;
+
+            // Locale must be selected before Qianniu's application bundles start.
+            // Remove old/late injection tags and place our bootstrap first in <head>.
+            var scriptPatterns = new[]
+            {
+                @"<script\b[^>]*\bsrc\s*=\s*[\""'][^\""']*qnbot-inject\.js[^\""']*[\""'][^>]*>\s*</script\s*>",
+                @"<script\b[^>]*\bsrc\s*=\s*[\""'][^\""']*iseiya\.taobao\.com/imsupport[^\""']*[\""'][^>]*>\s*</script\s*>",
+                @"<script\b[^>]*\bsrc\s*=\s*[\""'][^\""']*5CFB5E11D17E63CDD8CB37B52FA6ACFD\.js[^\""']*[\""'][^>]*>\s*</script\s*>"
+            };
+            foreach (var pattern in scriptPatterns)
+            {
+                html = Regex.Replace(html, pattern, string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            }
+
+            var tag = "<script src=\"" + injectedScriptSrc + "\"></script>";
+            var head = Regex.Match(html, @"<head\b[^>]*>", RegexOptions.IgnoreCase);
+            if (head.Success)
+            {
+                return html.Insert(head.Index + head.Length, tag);
+            }
+            return tag + html;
         }
 
         private static void BackupWebuiZip(string webuiResPath)
