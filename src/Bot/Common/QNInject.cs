@@ -27,7 +27,7 @@ namespace Bot.Common
         private const string languageScriptFileName = "qnbot-language.js";
         private const string embeddedInjectResource = "Bot.Resources.inject.js";
         private const string embeddedLanguageResource = "Bot.Resources.language.js";
-        private const string injectVersionMarker = "20260713-zh-cn-v6";
+        private const string injectVersionMarker = "20260713-zh-cn-v7";
         private const string languageVersionMarker = "20260713-hans-all-pages-v3";
         private const string injectedScriptVersionedSrc = injectedScriptSrc + "?v=" + injectVersionMarker;
         private const string languageScriptVersionedSrc = languageScriptFileName + "?v=" + languageVersionMarker;
@@ -329,6 +329,9 @@ namespace Bot.Common
                 "Cache",
                 "Code Cache",
                 "GPUCache",
+                "DawnCache",
+                "GrShaderCache",
+                "GraphiteDawnCache",
                 "Service Worker",
                 "blob_storage"
             };
@@ -339,6 +342,9 @@ namespace Bot.Common
             AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AliWorkbench");
             AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Alibaba", "AliWorkbench");
             AddCacheRoot(roots, Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Alibaba", "AliWorkBench");
+            AddQianniuCefCacheRoots(roots);
+
+            Log.Info("千牛网页缓存扫描目录: " + string.Join(" | ", roots.OrderBy(p => p)));
 
             var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             foreach (var root in roots.Where(Directory.Exists))
@@ -383,6 +389,29 @@ namespace Bot.Common
             }
             catch
             {
+            }
+        }
+
+        private static void AddQianniuCefCacheRoots(HashSet<string> roots)
+        {
+            try
+            {
+                var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+                if (string.IsNullOrWhiteSpace(localAppData) || !Directory.Exists(localAppData)) return;
+
+                // Qianniu 9.97+ launches AliRender with --cef_dir/--user-data-dir under
+                // %LOCALAPPDATA%\QNCEF<version>Temp\instance_*. These are the active Chromium
+                // profiles used by bench_home/bench_im. Previous cache cleanup only scanned
+                // AliWorkbench folders, so it found zero targets and stale remote UI bundles
+                // survived a successful webui.zip injection.
+                foreach (var path in Directory.GetDirectories(localAppData, "QNCEF*Temp", SearchOption.TopDirectoryOnly))
+                {
+                    if (!string.IsNullOrWhiteSpace(path)) roots.Add(path);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex, "FindQianniuCefCacheRoots");
             }
         }
 

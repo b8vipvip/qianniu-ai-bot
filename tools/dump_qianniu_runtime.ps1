@@ -143,10 +143,10 @@ try {
     $w = $wins.Item($i)
     $name = $w.Current.Name
     $class = $w.Current.ClassName
-    $pid = $w.Current.ProcessId
-    if (($class -match 'MutilChatView|AliWorkbench|Chrome|Cef|Qt' -or $name -match '千牛|接待|客服|旺旺|Ali') -and $pid) {
+    $windowProcessId = $w.Current.ProcessId
+    if (($class -match 'MutilChatView|AliWorkbench|Chrome|Cef|Qt' -or $name -match '千牛|接待|客服|旺旺|Ali') -and $windowProcessId) {
       $targets += $w
-      Write-Line ("TOP-WINDOW hwnd={0} pid={1} class={2} name={3}" -f $w.Current.NativeWindowHandle, $pid, $class, $name)
+      Write-Line ("TOP-WINDOW hwnd={0} pid={1} class={2} name={3}" -f $w.Current.NativeWindowHandle, $windowProcessId, $class, $name)
     }
   }
 
