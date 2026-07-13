@@ -1,6 +1,6 @@
-window.__qnbotInjectVersion = "20260712-zh-cn-v3";
+window.__qnbotInjectVersion = "20260713-zh-cn-v4";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
-window.__qnbotLanguagePatch = "20260712-hans-v1";
+window.__qnbotLanguagePatch = "20260713-hans-v2";
 
 (function () {
   if (window.__qnbotMainInstalled) return;
@@ -50,8 +50,22 @@ window.__qnbotLanguagePatch = "20260712-hans-v1";
       "開":"开","請":"请","訊":"讯","裡":"里","滿":"满","僅":"仅","條":"条","數":"数","補":"补","遲":"迟",
       "幫":"帮","該":"该","讓":"让","與":"与","為":"为","將":"将","顯":"显","傳":"传","圖":"图","覽":"览",
       "應":"应","實":"实","樣":"样","類":"类","別":"别","選":"选","擇":"择","導":"导","戶":"户","務":"务",
-      "獲":"获","時":"时","間":"间","從":"从","進":"进","還":"还","據":"据","權":"权","檔":"档","庫":"库"
+      "獲":"获","時":"时","間":"间","從":"从","進":"进","還":"还","據":"据","權":"权","檔":"档","庫":"库",
+      "並":"并","於":"于","對":"对","話":"话","軟":"软","體":"体","帳":"账","載":"载","讀":"读","寫":"写",
+      "錯":"错","誤":"误","刪":"删","舊":"旧","復":"复","離":"离","區":"区","遠":"远","幣":"币","繼":"继"
     };
+
+    var observedRoots = [];
+    var observedFrameDocuments = [];
+    var observedFrames = [];
+    var stats = window.__qnbotHansStats = {
+      convertedTextNodes: 0,
+      convertedAttributes: 0,
+      shadowRoots: 0,
+      frameDocuments: 0,
+      lastRunAt: 0
+    };
+    var observer = null;
 
     function convertText(value) {
       if (!value || typeof value !== "string") return value;
@@ -65,60 +79,125 @@ window.__qnbotLanguagePatch = "20260712-hans-v1";
         tag === "PRE" || tag === "CODE" || element.isContentEditable;
     }
 
-    function convertNode(root) {
+    function convertAttributes(element) {
+      if (!element || element.nodeType !== 1 || shouldSkip(element)) return;
+      ["title", "aria-label", "placeholder"].forEach(function (name) {
+        try {
+          if (!element.hasAttribute(name)) return;
+          var oldValue = element.getAttribute(name);
+          var newValue = convertText(oldValue);
+          if (newValue !== oldValue) {
+            element.setAttribute(name, newValue);
+            stats.convertedAttributes++;
+          }
+        } catch (e) {}
+      });
+    }
+
+    function convertTextNode(node) {
+      if (!node || node.nodeType !== 3 || shouldSkip(node.parentElement)) return;
+      var converted = convertText(node.nodeValue);
+      if (converted !== node.nodeValue) {
+        node.nodeValue = converted;
+        stats.convertedTextNodes++;
+      }
+    }
+
+    function observeRoot(root) {
+      if (!root || observedRoots.indexOf(root) >= 0) return;
+      observedRoots.push(root);
+      if (root.nodeType === 11) stats.shadowRoots++;
+      try {
+        var ownerDocument = root.nodeType === 9 ? root : root.ownerDocument;
+        if (ownerDocument && ownerDocument !== document && observedFrameDocuments.indexOf(ownerDocument) < 0) {
+          observedFrameDocuments.push(ownerDocument);
+          stats.frameDocuments = observedFrameDocuments.length;
+        }
+      } catch (e) {}
+      try {
+        if (observer) observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["title", "aria-label", "placeholder"] });
+      } catch (e) { warn("observeRoot failed", e); }
+      scanRoot(root);
+    }
+
+    function scanFrame(frame) {
+      if (!frame) return;
+      if (observedFrames.indexOf(frame) < 0) {
+        observedFrames.push(frame);
+        try { frame.addEventListener("load", function () { scanFrame(frame); }); } catch (e) {}
+      }
+      try {
+        var frameDocument = frame.contentDocument;
+        if (!frameDocument) return;
+        observeRoot(frameDocument.documentElement || frameDocument);
+      } catch (e) {}
+    }
+
+    function scanRoot(root) {
       try {
         if (!root) return;
         if (root.nodeType === 3) {
-          if (shouldSkip(root.parentElement)) return;
-          var converted = convertText(root.nodeValue);
-          if (converted !== root.nodeValue) root.nodeValue = converted;
+          convertTextNode(root);
           return;
         }
-        if (root.nodeType !== 1 && root.nodeType !== 9) return;
+        if (root.nodeType !== 1 && root.nodeType !== 9 && root.nodeType !== 11) return;
         if (shouldSkip(root)) return;
-        if (root.nodeType === 1) {
-          ["title", "aria-label", "placeholder"].forEach(function (name) {
-            try {
-              if (!root.hasAttribute(name)) return;
-              var oldValue = root.getAttribute(name);
-              var newValue = convertText(oldValue);
-              if (newValue !== oldValue) root.setAttribute(name, newValue);
-            } catch (e) {}
-          });
-        }
-        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+        convertAttributes(root);
+        var ownerDocument = root.nodeType === 9 ? root : (root.ownerDocument || document);
+        var walker = ownerDocument.createTreeWalker(root, 4, {
           acceptNode: function (node) {
-            return shouldSkip(node.parentElement) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+            return shouldSkip(node.parentElement) ? 2 : 1;
           }
         });
         var nodes = [];
         while (walker.nextNode()) nodes.push(walker.currentNode);
-        nodes.forEach(convertNode);
-      } catch (e) { warn("convertNode failed", e); }
+        nodes.forEach(convertTextNode);
+
+        if (root.querySelectorAll) {
+          Array.prototype.forEach.call(root.querySelectorAll("*"), function (element) {
+            convertAttributes(element);
+            try { if (element.shadowRoot) observeRoot(element.shadowRoot); } catch (e) {}
+            try { if ((element.tagName || "").toUpperCase() === "IFRAME") scanFrame(element); } catch (e) {}
+          });
+        }
+      } catch (e) { warn("scanRoot failed", e); }
     }
 
-    function run() { convertNode(document.body || document.documentElement); }
+    function run() {
+      stats.lastRunAt = Date.now();
+      scanRoot(document.body || document.documentElement);
+    }
     window.__qnbotForceHansText = run;
+    try {
+      observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+          if (mutation.type === "characterData") convertTextNode(mutation.target);
+          if (mutation.addedNodes) Array.prototype.forEach.call(mutation.addedNodes, scanRoot);
+          if (mutation.type === "attributes") convertAttributes(mutation.target);
+        });
+      });
+    } catch (e) { warn("language observer failed", e); }
+
+    // Capture open and closed Shadow DOM roots created after this early script.
+    try {
+      if (window.Element && Element.prototype.attachShadow && !Element.prototype.__qnbotOriginalAttachShadow) {
+        var originalAttachShadow = Element.prototype.attachShadow;
+        Element.prototype.__qnbotOriginalAttachShadow = originalAttachShadow;
+        Element.prototype.attachShadow = function () {
+          var shadowRoot = originalAttachShadow.apply(this, arguments);
+          observeRoot(shadowRoot);
+          return shadowRoot;
+        };
+      }
+    } catch (e) { warn("attachShadow hook failed", e); }
+
+    observeRoot(document.documentElement || document);
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
     else run();
     setTimeout(run, 500);
     setTimeout(run, 1500);
     setTimeout(run, 3500);
-    try {
-      var observer = new MutationObserver(function (mutations) {
-        mutations.forEach(function (mutation) {
-          if (mutation.type === "characterData") convertNode(mutation.target);
-          if (mutation.addedNodes) Array.prototype.forEach.call(mutation.addedNodes, convertNode);
-          if (mutation.type === "attributes") convertNode(mutation.target);
-        });
-      });
-      var observe = function () {
-        var target = document.body || document.documentElement;
-        if (target) observer.observe(target, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["title", "aria-label", "placeholder"] });
-      };
-      if (document.body) observe();
-      else document.addEventListener("DOMContentLoaded", observe);
-    } catch (e) { warn("language observer failed", e); }
+    setInterval(run, 3000);
   }
 
   function appendOfficialWhenReady() {
@@ -172,7 +251,16 @@ window.__qnbotLanguagePatch = "20260712-hans-v1";
     var conv = getConversationID();
     var obj = {
       patch: "__qnbotStatusPatch",
+      injectVersion: window.__qnbotInjectVersion || "",
       runtime: window.__qnbotRuntimePatch,
+      languagePatch: window.__qnbotLanguagePatch || "",
+      languageInstalled: !!window.__qnbotHansPatchInstalled,
+      documentLang: document.documentElement ? document.documentElement.getAttribute("lang") || "" : "",
+      navigatorLanguage: navigator.language || "",
+      convertedTextNodes: window.__qnbotHansStats ? window.__qnbotHansStats.convertedTextNodes : 0,
+      convertedAttributes: window.__qnbotHansStats ? window.__qnbotHansStats.convertedAttributes : 0,
+      shadowRoots: window.__qnbotHansStats ? window.__qnbotHansStats.shadowRoots : 0,
+      frameDocuments: window.__qnbotHansStats ? window.__qnbotHansStats.frameDocuments : 0,
       href: location.href,
       title: document.title || "",
       hasImsdk: !!(window.imsdk && typeof window.imsdk.invoke === "function"),

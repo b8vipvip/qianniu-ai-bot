@@ -25,7 +25,7 @@ namespace Bot.Common
         private const string injectedScriptFile = @"web_chat-packer/qnbot-inject.js";
         private const string injectedScriptSrc = "qnbot-inject.js";
         private const string imSupportUrl = @"https://iseiya.taobao.com/imsupport";
-        private const string injectVersionMarker = "20260712-zh-cn-v3";
+        private const string injectVersionMarker = "20260713-zh-cn-v4";
         // 旧版本使用外部 OSS 脚本，可能导致千牛接待台资源/语言异常。新版改为把本地 src\Bin\inject.js 写入 webui.zip。
         private const string oldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
 
@@ -48,8 +48,10 @@ namespace Bot.Common
                 }
 
                 var needInjectPaths = resourcePaths.Where(p => !IsInjected(p)).ToList();
+                Log.Info("千牛注入检测: marker=" + injectVersionMarker + ", resources=" + resourcePaths.Count + ", needInject=" + needInjectPaths.Count);
                 if (needInjectPaths.Count < 1)
                 {
+                    Log.Info("千牛注入已是最新版本: " + injectVersionMarker);
                     return;
                 }
 
@@ -75,6 +77,7 @@ namespace Bot.Common
                         if (InjectScript(resourcePath))
                         {
                             success++;
+                            Log.Info("千牛插件注入成功: marker=" + injectVersionMarker + ", resourcePath=" + resourcePath);
                         }
                     }
                     catch (Exception ex)
