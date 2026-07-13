@@ -1,5 +1,6 @@
-window.__qnbotInjectVersion = "20260707-zh-cn-v2";
+window.__qnbotInjectVersion = "20260712-zh-cn-v3";
 window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
+window.__qnbotLanguagePatch = "20260712-hans-v1";
 
 (function () {
   if (window.__qnbotMainInstalled) return;
@@ -31,6 +32,93 @@ window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
       try { Object.defineProperty(navigator, "language", { get: function () { return "zh-CN"; }, configurable: true }); } catch (e) {}
       try { Object.defineProperty(navigator, "languages", { get: function () { return ["zh-CN", "zh"]; }, configurable: true }); } catch (e) {}
     } catch (e) { warn("forceZhCn failed", e); }
+  }
+
+  function installSimplifiedChineseGuard() {
+    if (window.__qnbotHansPatchInstalled) return;
+    window.__qnbotHansPatchInstalled = true;
+
+    // Qianniu may restore a zh-TW/zh-HK profile after the page has started. Keep
+    // the locale fixed and convert already-rendered UI labels as a fallback.
+    var map = {
+      "發":"发","關":"关","閉":"闭","聯":"联","繫":"系","絡":"络","連":"连","線":"线","狀":"状","態":"态",
+      "訂":"订","單":"单","號":"号","記":"记","錄":"录","買":"买","賣":"卖","貨":"货","總":"总","價":"价",
+      "後":"后","詳":"详","歷":"历","諮":"咨","詢":"询","寶":"宝","貝":"贝","設":"设","薦":"荐","優":"优",
+      "計":"计","儲":"储","資":"资","評":"评","備":"备","註":"注","會":"会","員":"员","產":"产","編":"编",
+      "標":"标","題":"题","輸":"输","轉":"转","機":"机","個":"个","嗎":"吗","這":"这","無":"无","處":"处",
+      "購":"购","點":"点","擊":"击","啟":"启","確":"确","認":"认","當":"当","來":"来","頁":"页","網":"网",
+      "開":"开","請":"请","訊":"讯","裡":"里","滿":"满","僅":"仅","條":"条","數":"数","補":"补","遲":"迟",
+      "幫":"帮","該":"该","讓":"让","與":"与","為":"为","將":"将","顯":"显","傳":"传","圖":"图","覽":"览",
+      "應":"应","實":"实","樣":"样","類":"类","別":"别","選":"选","擇":"择","導":"导","戶":"户","務":"务",
+      "獲":"获","時":"时","間":"间","從":"从","進":"进","還":"还","據":"据","權":"权","檔":"档","庫":"库"
+    };
+
+    function convertText(value) {
+      if (!value || typeof value !== "string") return value;
+      return value.replace(/[\u4e00-\u9fff]/g, function (ch) { return map[ch] || ch; });
+    }
+
+    function shouldSkip(element) {
+      if (!element || !element.tagName) return false;
+      var tag = element.tagName.toUpperCase();
+      return tag === "SCRIPT" || tag === "STYLE" || tag === "TEXTAREA" || tag === "INPUT" ||
+        tag === "PRE" || tag === "CODE" || element.isContentEditable;
+    }
+
+    function convertNode(root) {
+      try {
+        if (!root) return;
+        if (root.nodeType === 3) {
+          if (shouldSkip(root.parentElement)) return;
+          var converted = convertText(root.nodeValue);
+          if (converted !== root.nodeValue) root.nodeValue = converted;
+          return;
+        }
+        if (root.nodeType !== 1 && root.nodeType !== 9) return;
+        if (shouldSkip(root)) return;
+        if (root.nodeType === 1) {
+          ["title", "aria-label", "placeholder"].forEach(function (name) {
+            try {
+              if (!root.hasAttribute(name)) return;
+              var oldValue = root.getAttribute(name);
+              var newValue = convertText(oldValue);
+              if (newValue !== oldValue) root.setAttribute(name, newValue);
+            } catch (e) {}
+          });
+        }
+        var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+          acceptNode: function (node) {
+            return shouldSkip(node.parentElement) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+          }
+        });
+        var nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        nodes.forEach(convertNode);
+      } catch (e) { warn("convertNode failed", e); }
+    }
+
+    function run() { convertNode(document.body || document.documentElement); }
+    window.__qnbotForceHansText = run;
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+    else run();
+    setTimeout(run, 500);
+    setTimeout(run, 1500);
+    setTimeout(run, 3500);
+    try {
+      var observer = new MutationObserver(function (mutations) {
+        mutations.forEach(function (mutation) {
+          if (mutation.type === "characterData") convertNode(mutation.target);
+          if (mutation.addedNodes) Array.prototype.forEach.call(mutation.addedNodes, convertNode);
+          if (mutation.type === "attributes") convertNode(mutation.target);
+        });
+      });
+      var observe = function () {
+        var target = document.body || document.documentElement;
+        if (target) observer.observe(target, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["title", "aria-label", "placeholder"] });
+      };
+      if (document.body) observe();
+      else document.addEventListener("DOMContentLoaded", observe);
+    } catch (e) { warn("language observer failed", e); }
   }
 
   function appendOfficialWhenReady() {
@@ -320,6 +408,7 @@ window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
 
   function loop() {
     forceZhCn();
+    installSimplifiedChineseGuard();
     appendOfficialWhenReady();
     setupWebSocket();
     installOnEventNotifyHook();
@@ -330,6 +419,7 @@ window.__qnbotRuntimePatch = "20260707-safe-hooks-v5";
   }
 
   forceZhCn();
+  installSimplifiedChineseGuard();
   appendOfficialWhenReady();
   setupWebSocket();
   loop();

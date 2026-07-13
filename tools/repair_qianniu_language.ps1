@@ -6,7 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $injectJs = Join-Path $repoRoot "src\Bin\inject.js"
-$marker = "20260707-zh-cn-v2"
+$marker = "20260712-zh-cn-v3"
 $officialUrl = "https://iseiya.taobao.com/imsupport"
 $oldRemoteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js"
 $injectSrc = "qnbot-inject.js"
@@ -222,17 +222,19 @@ try {
     $injectContent = Add-BodyReadyOfficialScriptPatch $injectContent
 
     Write-Host "Write local qnbot-inject.js, force zh-CN locale, and patch UI text."
-    if ($recent.Contains($oldRemoteUrl)) {
-      $recent = $recent.Replace($oldRemoteUrl, $injectSrc)
-    } elseif ($recent.Contains($officialUrl)) {
-      $recent = $recent.Replace($officialUrl, $injectSrc)
-    } elseif (!$recent.Contains($injectSrc)) {
-      $tag = '<script src="' + $injectSrc + '"></script>'
-      if ($recent -match '</body>') {
-        $recent = $recent -replace '</body>', ($tag + '</body>')
-      } else {
-        $recent += $tag
-      }
+    foreach ($pattern in @(
+      '<script\b[^>]*\bsrc\s*=\s*["''][^"'']*qnbot-inject\.js[^"'']*["''][^>]*>\s*</script\s*>',
+      '<script\b[^>]*\bsrc\s*=\s*["''][^"'']*iseiya\.taobao\.com/imsupport[^"'']*["''][^>]*>\s*</script\s*>',
+      '<script\b[^>]*\bsrc\s*=\s*["''][^"'']*5CFB5E11D17E63CDD8CB37B52FA6ACFD\.js[^"'']*["''][^>]*>\s*</script\s*>'
+    )) {
+      $recent = [regex]::Replace($recent, $pattern, '', [System.Text.RegularExpressions.RegexOptions]'IgnoreCase, Singleline')
+    }
+    $tag = '<script src="' + $injectSrc + '"></script>'
+    $head = [regex]::Match($recent, '<head\b[^>]*>', [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($head.Success) {
+      $recent = $recent.Insert($head.Index + $head.Length, $tag)
+    } else {
+      $recent = $tag + $recent
     }
     Write-ZipEntryText $zip $injectEntryName $injectContent
   }
