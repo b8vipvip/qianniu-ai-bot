@@ -21,12 +21,15 @@ namespace Bot.Common
         private const string webuiResDir = "newWebui";
         private const string webuiFile = "webui.zip";
         private const string signFile = "sign.json";
-        private const string chatRecentHtmlFile = @"web_chat-packer/recent.html";
-        private const string injectedScriptFile = @"web_chat-packer/qnbot-inject.js";
+        private const string chatRecentHtmlFile = "web_chat-packer/recent.html";
+        private const string injectedScriptFile = "web_chat-packer/qnbot-inject.js";
         private const string injectedScriptSrc = "qnbot-inject.js";
-        private const string imSupportUrl = @"https://iseiya.taobao.com/imsupport";
-        private const string injectVersionMarker = "20260713-zh-cn-v4";
-        // 旧版本使用外部 OSS 脚本，可能导致千牛接待台资源/语言异常。新版改为把本地 src\Bin\inject.js 写入 webui.zip。
+        private const string languageScriptFileName = "qnbot-language.js";
+        private const string embeddedInjectResource = "Bot.Resources.inject.js";
+        private const string embeddedLanguageResource = "Bot.Resources.language.js";
+        private const string injectVersionMarker = "20260713-zh-cn-v5";
+        private const string languageVersionMarker = "20260713-hans-all-pages-v3";
+        // 注入负载随 Bot.exe 编译，外部 JS 只在开发环境中作为同版本兜底，避免 EXE 与脚本版本漂移。
         private const string oldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
 
         public static async Task StartInject()
@@ -48,7 +51,7 @@ namespace Bot.Common
                 }
 
                 var needInjectPaths = resourcePaths.Where(p => !IsInjected(p)).ToList();
-                Log.Info("千牛注入检测: marker=" + injectVersionMarker + ", resources=" + resourcePaths.Count + ", needInject=" + needInjectPaths.Count);
+                Log.Info("千牛注入检测: marker=" + injectVersionMarker + ", languageMarker=" + languageVersionMarker + ", resources=" + resourcePaths.Count + ", needInject=" + needInjectPaths.Count);
                 if (needInjectPaths.Count < 1)
                 {
                     Log.Info("千牛注入已是最新版本: " + injectVersionMarker);
@@ -317,30 +320,28 @@ namespace Bot.Common
                 if (!File.Exists(webuiResPath)) return false;
                 using (var zipFile = new ZipFile(webuiResPath))
                 {
-                    var entry = zipFile.GetEntry(chatRecentHtmlFile);
-                    if (entry == null) return false;
-                    using (var inputStream = zipFile.GetInputStream(entry))
-                    using (var streamReader = new StreamReader(inputStream))
-                    {
-                        var chatRecentHtmlContent = streamReader.ReadToEnd();
-                        if (!chatRecentHtmlContent.Contains(injectedScriptSrc) || chatRecentHtmlContent.Contains(oldRemoteOverwriteUrl))
-                        {
-                            return false;
-                        }
-                    }
+                    var recentContent = ReadZipEntryText(zipFile, chatRecentHtmlFile);
+                    if (string.IsNullOrWhiteSpace(recentContent)
+                        || !ContainsScriptReference(recentContent, injectedScriptSrc)
+                        || recentContent.Contains(oldRemoteOverwriteUrl)) return false;
 
-                    var injectEntry = zipFile.GetEntry(injectedScriptFile);
-                    if (injectEntry == null)
-                    {
-                        return false;
-                    }
+                    var injectContent = ReadZipEntryText(zipFile, injectedScriptFile);
+                    if (string.IsNullOrWhiteSpace(injectContent) || !injectContent.Contains(injectVersionMarker)) return false;
 
-                    using (var inputStream = zipFile.GetInputStream(injectEntry))
-                    using (var streamReader = new StreamReader(inputStream))
+                    var htmlEntries = GetHtmlEntryNames(zipFile);
+                    if (htmlEntries.Count < 1) return false;
+                    var checkedLanguageEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var htmlEntryName in htmlEntries)
                     {
-                        var injectContent = streamReader.ReadToEnd();
-                        return injectContent.Contains(injectVersionMarker);
+                        var html = ReadZipEntryText(zipFile, htmlEntryName);
+                        if (string.IsNullOrWhiteSpace(html) || !ContainsScriptReference(html, languageScriptFileName)) return false;
+
+                        var languageEntryName = GetZipDirectory(htmlEntryName) + languageScriptFileName;
+                        if (!checkedLanguageEntries.Add(languageEntryName)) continue;
+                        var languageContent = ReadZipEntryText(zipFile, languageEntryName);
+                        if (string.IsNullOrWhiteSpace(languageContent) || !languageContent.Contains(languageVersionMarker)) return false;
                     }
+                    return true;
                 }
             }
             catch (Exception ex)
@@ -350,56 +351,158 @@ namespace Bot.Common
             }
         }
 
-        private static string ReadLocalInjectJs()
+        private static string ReadScriptPayload(string resourceName, string externalFileName, string requiredMarker)
         {
-            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "inject.js");
+            try
+            {
+                using (var stream = typeof(QNInject).Assembly.GetManifestResourceStream(resourceName))
+                {
+                    if (stream != null)
+                    {
+                        using (var reader = new StreamReader(stream, Encoding.UTF8))
+                        {
+                            var embeddedContent = reader.ReadToEnd();
+                            if (embeddedContent.Contains(requiredMarker))
+                            {
+                                Log.Info("使用Bot.exe内置注入资源: " + resourceName + ", marker=" + requiredMarker);
+                                return embeddedContent;
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex, "ReadEmbeddedResource:" + resourceName);
+            }
+
+            var path = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, externalFileName);
             if (!File.Exists(path))
             {
-                Log.Error("没有找到本地 inject.js: " + path);
+                Log.Error("没有找到内置或本地注入资源: " + resourceName + ", " + path);
                 return string.Empty;
             }
-            return File.ReadAllText(path, Encoding.UTF8);
+            var externalContent = File.ReadAllText(path, Encoding.UTF8);
+            if (!externalContent.Contains(requiredMarker))
+            {
+                Log.Error("本地注入资源版本不匹配: " + path + ", requiredMarker=" + requiredMarker);
+                return string.Empty;
+            }
+            Log.Info("使用本地注入资源兜底: " + path + ", marker=" + requiredMarker);
+            return externalContent;
         }
 
         private static bool InjectScript(string resourcePath)
         {
             var webuiResPath = Path.Combine(resourcePath, webuiResDir, webuiFile);
             var signPath = Path.Combine(resourcePath, webuiResDir, signFile);
-            var injectJsContent = ReadLocalInjectJs();
-            if (string.IsNullOrWhiteSpace(injectJsContent)) return false;
+            var injectJsContent = ReadScriptPayload(embeddedInjectResource, "inject.js", injectVersionMarker);
+            var languageJsContent = ReadScriptPayload(embeddedLanguageResource, "language.js", languageVersionMarker);
+            if (string.IsNullOrWhiteSpace(injectJsContent) || string.IsNullOrWhiteSpace(languageJsContent)) return false;
 
             BackupWebuiZip(webuiResPath);
             using (var zipFile = new ZipFile(webuiResPath))
             {
-                var entry = zipFile.GetEntry(chatRecentHtmlFile);
-                if (entry == null)
+                var htmlEntryNames = GetHtmlEntryNames(zipFile);
+                if (!htmlEntryNames.Any(name => string.Equals(name, chatRecentHtmlFile, StringComparison.OrdinalIgnoreCase)))
                 {
                     Log.Error("webui.zip中没有找到 " + chatRecentHtmlFile + ": " + webuiResPath);
                     return false;
                 }
-                using (var inputStream = zipFile.GetInputStream(entry))
-                using (var streamReader = new StreamReader(inputStream))
+
+                var patchedHtml = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var languageEntryNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var htmlEntryName in htmlEntryNames)
                 {
-                    var chatRecentHtmlContent = streamReader.ReadToEnd();
-                    chatRecentHtmlContent = PlaceInjectedScriptFirst(chatRecentHtmlContent);
-
-                    zipFile.BeginUpdate();
-                    zipFile.Add(new ZipStaticDataSource(chatRecentHtmlContent), chatRecentHtmlFile);
-                    zipFile.Add(new ZipStaticDataSource(injectJsContent), injectedScriptFile);
-                    zipFile.CommitUpdate();
-
-                    if (File.Exists(signPath))
+                    var html = ReadZipEntryText(zipFile, htmlEntryName);
+                    if (html == null) continue;
+                    if (string.Equals(htmlEntryName, chatRecentHtmlFile, StringComparison.OrdinalIgnoreCase))
                     {
-                        var signFi = new FileInfo(signPath);
-                        if (signFi.Length > 0)
-                        {
-                            signFi.Delete();
-                            File.Create(signPath).Dispose();
-                        }
+                        html = PlaceInjectedScriptFirst(html);
                     }
-                    return true;
+                    html = PlaceLanguageScriptFirst(html);
+                    patchedHtml[htmlEntryName] = html;
+                    languageEntryNames.Add(GetZipDirectory(htmlEntryName) + languageScriptFileName);
                 }
+
+                zipFile.BeginUpdate();
+                foreach (var item in patchedHtml)
+                {
+                    zipFile.Add(new ZipStaticDataSource(item.Value), item.Key);
+                }
+                foreach (var languageEntryName in languageEntryNames)
+                {
+                    zipFile.Add(new ZipStaticDataSource(languageJsContent), languageEntryName);
+                }
+                zipFile.Add(new ZipStaticDataSource(injectJsContent), injectedScriptFile);
+                zipFile.CommitUpdate();
+                Log.Info("千牛简体中文脚本覆盖HTML入口: " + patchedHtml.Count + ", languageFiles=" + languageEntryNames.Count);
+
+                if (File.Exists(signPath))
+                {
+                    var signFi = new FileInfo(signPath);
+                    if (signFi.Length > 0)
+                    {
+                        signFi.Delete();
+                        File.Create(signPath).Dispose();
+                    }
+                }
+                return true;
             }
+        }
+
+        private static List<string> GetHtmlEntryNames(ZipFile zipFile)
+        {
+            return zipFile.Cast<ZipEntry>()
+                .Where(entry => !entry.IsDirectory && entry.Name.EndsWith(".html", StringComparison.OrdinalIgnoreCase))
+                .Select(entry => entry.Name.Replace('\\', '/'))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static string ReadZipEntryText(ZipFile zipFile, string entryName)
+        {
+            var entry = zipFile.GetEntry(entryName);
+            if (entry == null) return null;
+            using (var inputStream = zipFile.GetInputStream(entry))
+            using (var streamReader = new StreamReader(inputStream, Encoding.UTF8))
+            {
+                return streamReader.ReadToEnd();
+            }
+        }
+
+        private static string GetZipDirectory(string entryName)
+        {
+            var normalized = (entryName ?? string.Empty).Replace('\\', '/');
+            var index = normalized.LastIndexOf('/');
+            return index < 0 ? string.Empty : normalized.Substring(0, index + 1);
+        }
+
+        private static bool ContainsScriptReference(string html, string scriptFileName)
+        {
+            return !string.IsNullOrWhiteSpace(html)
+                && html.IndexOf(scriptFileName, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private static string PlaceLanguageScriptFirst(string html)
+        {
+            if (string.IsNullOrWhiteSpace(html)) return html;
+            html = Regex.Replace(
+                html,
+                @"<script\b[^>]*\bsrc\s*=\s*[\""'][^\""']*qnbot-language\.js[^\""']*[\""'][^>]*>\s*</script\s*>",
+                string.Empty,
+                RegexOptions.IgnoreCase | RegexOptions.Singleline);
+            return InsertFirstInHead(html, "<script src=\"" + languageScriptFileName + "\"></script>");
+        }
+
+        private static string InsertFirstInHead(string html, string tag)
+        {
+            var head = Regex.Match(html, @"<head\b[^>]*>", RegexOptions.IgnoreCase);
+            if (head.Success)
+            {
+                return html.Insert(head.Index + head.Length, tag);
+            }
+            return tag + html;
         }
 
         private static string PlaceInjectedScriptFirst(string html)
@@ -419,13 +522,7 @@ namespace Bot.Common
                 html = Regex.Replace(html, pattern, string.Empty, RegexOptions.IgnoreCase | RegexOptions.Singleline);
             }
 
-            var tag = "<script src=\"" + injectedScriptSrc + "\"></script>";
-            var head = Regex.Match(html, @"<head\b[^>]*>", RegexOptions.IgnoreCase);
-            if (head.Success)
-            {
-                return html.Insert(head.Index + head.Length, tag);
-            }
-            return tag + html;
+            return InsertFirstInHead(html, "<script src=\"" + injectedScriptSrc + "\"></script>");
         }
 
         private static void BackupWebuiZip(string webuiResPath)
