@@ -3,14 +3,16 @@ name: One-time IMSDK discovery v2 build
 on:
   workflow_dispatch:
   push:
-    branches: [ agent/imsdk-discovery-v2 ]
+    branches:
+      - agent/imsdk-discovery-v2
+    paths:
+      - tools/.imsdk-v2-trigger
 
 permissions:
   contents: write
 
 jobs:
   patch-and-build:
-    if: github.event_name == 'workflow_dispatch' || github.event.head_commit.message == 'chore: trigger IMSDK discovery v2 build'
     runs-on: windows-latest
     steps:
       - name: Checkout branch
@@ -23,8 +25,10 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          ./tools/apply_imsdk_discovery_v2_patch.ps1
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\apply_imsdk_discovery_v2_patch.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Patch failed: $LASTEXITCODE" }
           git diff --check
+          if ($LASTEXITCODE -ne 0) { throw "git diff --check failed: $LASTEXITCODE" }
 
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
