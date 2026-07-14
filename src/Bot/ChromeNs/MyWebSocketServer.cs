@@ -204,6 +204,14 @@ namespace Bot.ChromeNs
                                 BotConnectionDiagnostics.RecordInjectionStatus(false, false, false, false, false, "解析注入状态失败：" + ex.Message);
                             }
                         }
+                        else if (wMsg.Type == "imsdkApiScan")
+                        {
+                            Log.Info("IMSDK API鎵弿缁撴灉: " + wMsg.Response);
+                        }
+                        else if (wMsg.Type == "imsdkInvokeTrace")
+                        {
+                            Log.Info("IMSDK璋冪敤璺熻釜: " + wMsg.Response);
+                        }
                         else if (wMsg.Type == "receiveNewMsg" || wMsg.Type == "onShopRobotReceriveNewMsgs" || wMsg.Type == "onChatDlgActive")
                         {
                             Task.Run(() => TryInitSession(session, "event:" + wMsg.Type));

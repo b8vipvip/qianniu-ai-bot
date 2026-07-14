@@ -1,5 +1,5 @@
-$ErrorActionPreference = "Stop"
-$expectedInjectVersion = "20260713-zh-cn-v8"
+﻿$ErrorActionPreference = "Stop"
+$expectedInjectVersion = "20260714-zh-cn-v9"
 $expectedLanguageVersion = "20260713-hans-all-pages-v3"
 
 function Get-QianniuInstallPath {
