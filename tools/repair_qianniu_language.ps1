@@ -1,4 +1,4 @@
-param(
+﻿param(
   [switch]$RestoreOfficial,
   [switch]$SkipCacheClear
 )
@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $injectJs = Join-Path $repoRoot "src\Bin\inject.js"
 $languageJs = Join-Path $repoRoot "src\Bin\language.js"
-$injectMarker = "20260713-zh-cn-v8"
+$injectMarker = "20260714-zh-cn-v9"
 $languageMarker = "20260713-hans-all-pages-v3"
 $officialUrl = "https://iseiya.taobao.com/imsupport"
 $oldRemoteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js"
