@@ -35,7 +35,7 @@ namespace Bot.Common
         private const string LanguageScriptFileName = "qnbot-language.js";
         private const string EmbeddedInjectResource = "Bot.Resources.inject.js";
         private const string EmbeddedLanguageResource = "Bot.Resources.language.js";
-        private const string InjectVersionMarker = "20260714-zh-cn-v9";
+        private const string InjectVersionMarker = "20260714-zh-cn-v10";
         private const string LanguageVersionMarker = "20260713-hans-all-pages-v3";
         private const string LanguageLockMarker = "qnbot persistent zh-CN language lock";
         private const string OldRemoteOverwriteUrl = "https://worklink.oss-cn-hangzhou.aliyuncs.com/5CFB5E11D17E63CDD8CB37B52FA6ACFD.js";
