@@ -1,0 +1,77 @@
+name: One-time IMSDK discovery v2 build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/imsdk-send-discovery-v3
+    paths:
+      - tools/.imsdk-v2-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/imsdk-send-discovery-v3
+          fetch-depth: 0
+
+      - name: Apply v2 patch
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\tools\apply_imsdk_discovery_v2_patch.ps1
+          if ($LASTEXITCODE -ne 0) { throw "Patch failed: $LASTEXITCODE" }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw "git diff --check failed: $LASTEXITCODE" }
+
+      - name: Setup NuGet
+        uses: NuGet/setup-nuget@v2
+
+      - name: Setup MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore and build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($proj in @('src\Bot\Bot.csproj','src\DbEntity\DbEntity.csproj')) {
+            if (Test-Path $proj) {
+              $xml = Get-Content $proj -Raw
+              $xml = $xml -replace '\{F935DC20-1CF0-11D0-ADB9-00C04FD58A\}', '{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}'
+              $xml = [regex]::Replace($xml, '(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>', '')
+              if ($proj -like '*\Bot\Bot.csproj' -and $xml -notmatch 'ICSharpCode\.SharpZipLib') {
+                $sharpRef = '    <Reference Include="ICSharpCode.SharpZipLib"><HintPath>..\packages\SharpZipLib.1.4.2\lib\netstandard2.0\ICSharpCode.SharpZipLib.dll</HintPath><Private>True</Private></Reference>'
+                $xml = $xml -replace '(\s*<Reference Include="System" />)', "`r`n$sharpRef`$1"
+              }
+              Set-Content $proj -Value $xml -Encoding UTF8
+            }
+          }
+          nuget restore src\Bot.sln -NonInteractive -Verbosity normal
+          if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed: $LASTEXITCODE" }
+          msbuild src\Bot.sln /m /t:Rebuild /p:Configuration=Debug /p:Platform=x64 /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed: $LASTEXITCODE" }
+          git checkout -- src/Bot/Bot.csproj src/DbEntity/DbEntity.csproj
+
+      - name: Commit patched source and binaries
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if (Test-Path tools/apply_imsdk_discovery_patch.ps1) {
+            git rm tools/apply_imsdk_discovery_patch.ps1
+          }
+          git add src/Bin/inject.js
+          git add src/Bot/Common/LanguageRepairService.cs
+          git add src/Bot/Common/QNInject.cs
+          git add tools/check_qianniu_injection.ps1
+          git add tools/repair_qianniu_language.ps1
+          git add -f src/Bin
+          git commit -m 'feat: add focused IMSDK bridge discovery v2 [skip ci]'
+          git push origin HEAD:agent/imsdk-send-discovery-v3
