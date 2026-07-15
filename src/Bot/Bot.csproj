@@ -200,6 +200,12 @@
     <Compile Include="Automation\WinApi.cs" />
     <Compile Include="Automation\WinEventHooker.cs" />
     <Compile Include="ChromeNs\MyWebSocketServer.cs" />
+    <Compile Include="Knowledge\KnowledgeAiService.cs" />
+    <Compile Include="Knowledge\KnowledgeCenterWindow.cs" />
+    <Compile Include="Knowledge\KnowledgeClipboardParser.cs" />
+    <Compile Include="Knowledge\KnowledgeEditWindow.cs" />
+    <Compile Include="Knowledge\KnowledgeImportControl.cs" />
+    <Compile Include="Knowledge\KnowledgeManagerControl.cs" />
     <Compile Include="Options\CtlRobotOptions.xaml.cs"><DependentUpon>CtlRobotOptions.xaml</DependentUpon></Compile>
     <Compile Include="Options\IOptions.cs" />
     <Compile Include="Options\WndOption.xaml.cs"><DependentUpon>WndOption.xaml</DependentUpon></Compile>

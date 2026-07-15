@@ -13,6 +13,7 @@ using Microsoft.Win32;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Bot.ChromeNs;
+using Bot.Knowledge;
 using BotLib;
 
 namespace Bot.Options
@@ -480,45 +481,21 @@ namespace Bot.Options
 
         private UIElement BuildKnowledgeTab()
         {
-            _kbItems = new ObservableCollection<KnowledgeBaseEntry>(BotFeatureStore.GetKnowledgeBase());
-            var panel = new DockPanel();
-            var tip = new TextBlock
+            var currentKnowledge = BotFeatureStore.GetKnowledgeBase();
+            var panel = new StackPanel { Margin = new Thickness(18) };
+            panel.Children.Add(new TextBlock
             {
-                Text = "用于维护商品知识、店铺规则、售后政策、常见问答。关键词命中后会自动加入AI提示词，提升回答准确度。",
+                Text = "知识库已升级为独立中心。智能导入、问答搜索、编辑、JSON导入导出都在新中心中完成，仍然使用同一个 BotFeatureStore 数据源。",
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(107, 114, 128)),
-                Margin = new Thickness(8)
-            };
-            DockPanel.SetDock(tip, Dock.Top);
-            panel.Children.Add(tip);
-
-            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(8, 0, 8, 8) };
-            DockPanel.SetDock(buttons, Dock.Top);
-            panel.Children.Add(buttons);
-            var add = MakeButton("新增知识", 90);
-            add.Click += (s, e) => _kbItems.Add(new KnowledgeBaseEntry { Title = "新知识", Category = "商品", Keywords = "关键词1,关键词2", Answer = "这里填写标准答案或注意事项", Enabled = true });
-            buttons.Children.Add(add);
-            var del = MakeButton("删除选中", 90);
-            del.Click += (s, e) => { var it = _kbGrid.SelectedItem as KnowledgeBaseEntry; if (it != null) _kbItems.Remove(it); };
-            buttons.Children.Add(del);
-            var import = MakeButton("导入", 70);
-            import.Click += (s, e) => ImportKnowledge();
-            buttons.Children.Add(import);
-            var export = MakeButton("导出", 70);
-            export.Click += (s, e) => ExportKnowledge();
-            buttons.Children.Add(export);
-
-            _kbGrid = new DataGrid
-            {
-                AutoGenerateColumns = true,
-                CanUserAddRows = true,
-                CanUserDeleteRows = true,
-                ItemsSource = _kbItems,
-                Margin = new Thickness(8),
-                MinHeight = 380
-            };
-            panel.Children.Add(_kbGrid);
-            return panel;
+                Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
+                Margin = new Thickness(0, 0, 0, 12)
+            });
+            panel.Children.Add(new TextBlock { Text = "知识数量：" + currentKnowledge.Count, FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 6) });
+            panel.Children.Add(new TextBlock { Text = "分类数量：" + currentKnowledge.Select(x => x.Category ?? string.Empty).Where(x => x.Length > 0).Distinct().Count(), FontWeight = FontWeights.Bold, Margin = new Thickness(0, 0, 0, 16) });
+            var open = MakeButton("打开知识库中心", 140);
+            open.Click += (s, e) => KnowledgeCenterWindow.MyShow(this);
+            panel.Children.Add(open);
+            return Card(panel);
         }
 
         private UIElement BuildRulesTab()
@@ -710,9 +687,28 @@ namespace Bot.Options
                 if (dlg.ShowDialog() != true) return;
                 var list = JsonConvert.DeserializeObject<List<KnowledgeBaseEntry>>(File.ReadAllText(dlg.FileName, Encoding.UTF8));
                 if (list == null) throw new Exception("JSON中没有知识库数据");
-                _kbItems.Clear();
-                foreach (var it in list) _kbItems.Add(it);
-                _status.Text = "知识库已导入，请保存。";
+                var overwrite = MessageBox.Show("是否覆盖全部知识？\n\n选择“否”将追加导入并按问题去重。", "导入方式", MessageBoxButton.YesNoCancel, MessageBoxImage.Question);
+                if (overwrite == MessageBoxResult.Cancel) return;
+                if (overwrite == MessageBoxResult.Yes)
+                {
+                    _kbItems.Clear();
+                    foreach (var it in list) _kbItems.Add(it);
+                    _status.Text = "知识库已覆盖导入，请保存。";
+                }
+                else
+                {
+                    var seen = new HashSet<string>(_kbItems.Select(x => KnowledgeAiService.NormalizeQuestion(x.Title)));
+                    var added = 0;
+                    foreach (var it in list)
+                    {
+                        var key = KnowledgeAiService.NormalizeQuestion(it.Title);
+                        if (seen.Contains(key)) continue;
+                        _kbItems.Add(it);
+                        seen.Add(key);
+                        added++;
+                    }
+                    _status.Text = "知识库已追加导入 " + added + " 条，请保存。";
+                }
             }
             catch (Exception ex)
             {
@@ -1034,6 +1030,10 @@ namespace Bot.ChromeNs
         public string Keywords { get; set; }
         public string Answer { get; set; }
         public string UpdatedAt { get; set; }
+        public string Id { get; set; }
+        public string CreatedAt { get; set; }
+        public bool AiGenerated { get; set; }
+        public string SourceType { get; set; }
 
         public KnowledgeBaseEntry()
         {
@@ -1043,6 +1043,10 @@ namespace Bot.ChromeNs
             Keywords = string.Empty;
             Answer = string.Empty;
             UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            CreatedAt = UpdatedAt;
+            Id = string.Empty;
+            AiGenerated = false;
+            SourceType = string.Empty;
         }
     }
 
@@ -1234,7 +1238,8 @@ namespace Bot.ChromeNs
             return (text ?? string.Empty)
                 .Split(new[] { ',', '，', ';', '；', '\n', '\r', '|', ' ' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim())
-                .Where(x => x.Length > 0);
+                .Where(x => x.Length > 0)
+                .Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
         private static bool ContainsAny(string text, string keywords, out string hit)
