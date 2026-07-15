@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Read loaded Qianniu messages with verified direction classification.
+"""Read loaded Qianniu messages with verified direction and stable keys.
 
 This public entry point reuses the original read-only extractor core and replaces
-only direction detection. Direction is inferred from a shallow avatar control at
-the left or right edge of a PNM row, then from body geometry, and finally from
-the row container. Privacy defaults, CLI arguments, JSON schema, and read-only
-safety behavior remain unchanged.
+only direction detection and final JSON normalization. Direction is inferred from
+a shallow avatar control at the left or right edge of a PNM row, then from body
+geometry, and finally from the row container.
+
+Every message receives a privacy-safe stable key. The preferred source is the
+message-node AutomationId; a content/time fingerprint is used only when that ID
+is absent. Duplicate keys inside one snapshot are emitted once. CLI arguments,
+privacy defaults, and read-only safety behavior remain unchanged.
 """
 from __future__ import annotations
 
-from typing import Iterable
+import hashlib
+from typing import Any, Iterable
 
 import uiautomation as auto
 
 import qn_uia_extract_messages_core as core
 from qn_uia_extract_messages_core import *  # noqa: F401,F403
+
+SCHEMA_VERSION = "qn_uia_messages.v2"
+_ORIGINAL_WRITE_JSON = core.write_json
 
 
 def _valid_rect(rect: tuple[int, int, int, int] | None) -> bool:
@@ -224,8 +232,77 @@ def classify_direction(
     return _direction_from_rect(core.rect_tuple(node), list_rect)
 
 
+def _digest(parts: Iterable[str]) -> str:
+    material = "\x1f".join(str(part) for part in parts)
+    return hashlib.sha256(material.encode("utf-8", errors="replace")).hexdigest()[:24]
+
+
+def _stable_message_key(message: dict[str, Any]) -> tuple[str, str]:
+    node_id = str(message.get("node_id", "")).strip()
+    if node_id:
+        return f"uia:{_digest([node_id])}", "automation_id"
+
+    fallback_parts = [
+        str(message.get("direction", "")),
+        str(message.get("type", "")),
+        str(message.get("sender", "")),
+        str(message.get("timestamp", "")),
+        str(message.get("text", "")),
+    ]
+    return f"fallback:{_digest(fallback_parts)}", "content_time_fallback"
+
+
+def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
+    raw_messages = payload.get("messages", [])
+    if not isinstance(raw_messages, list):
+        raw_messages = []
+
+    seen: set[str] = set()
+    messages: list[dict[str, Any]] = []
+    duplicate_count = 0
+    fallback_key_count = 0
+
+    for raw_message in raw_messages:
+        if not isinstance(raw_message, dict):
+            continue
+        message = dict(raw_message)
+        key, key_source = _stable_message_key(message)
+        message["message_key"] = key
+        message["key_source"] = key_source
+        if key_source == "content_time_fallback":
+            fallback_key_count += 1
+        if key in seen:
+            duplicate_count += 1
+            continue
+        seen.add(key)
+        messages.append(message)
+
+    payload["schema_version"] = SCHEMA_VERSION
+    payload["messages"] = messages
+
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        payload["meta"] = meta
+    meta["raw_message_count"] = len(raw_messages)
+    meta["message_count"] = len(messages)
+    meta["duplicate_count"] = duplicate_count
+    meta["fallback_key_count"] = fallback_key_count
+    meta["deduplication"] = {
+        "enabled": True,
+        "primary": "message_node_automation_id",
+        "fallback": "direction_type_sender_timestamp_text",
+    }
+    return payload
+
+
+def write_json(payload: dict[str, Any], output: str) -> None:
+    _ORIGINAL_WRITE_JSON(_normalize_and_deduplicate(payload), output)
+
+
 def main() -> int:
     core.classify_direction = classify_direction
+    core.write_json = write_json
     return core.main()
 
 
