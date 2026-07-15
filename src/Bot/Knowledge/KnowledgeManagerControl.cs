@@ -6,6 +6,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using Bot.ChromeNs;
 using Bot.Options;
 using Microsoft.Win32;
 using Newtonsoft.Json;
