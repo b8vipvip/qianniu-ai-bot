@@ -1,356 +1,200 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Read loaded Qianniu chat messages through Windows UI Automation.
+"""Read loaded Qianniu messages with verified direction classification.
 
-The extractor is read-only. It never writes to the chat input, invokes a button,
-sends keys, clicks, scrolls, or changes the selected conversation.
-
-Privacy is the default: message node IDs, sender names, and message bodies are
-hashed/redacted. Raw private values require both --include-sensitive and the
-exact confirmation token SHOW_PRIVATE_CHAT_TEXT. Never commit real output.
+This public entry point reuses the original read-only extractor core and replaces
+only direction detection. Direction is inferred from a shallow avatar control at
+the left or right edge of a PNM row, then from body geometry, and finally from
+the row container. Privacy defaults, CLI arguments, JSON schema, and read-only
+safety behavior remain unchanged.
 """
 from __future__ import annotations
 
-import argparse
-import hashlib
-import json
-import re
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any, Iterable
+from typing import Iterable
 
 import uiautomation as auto
 
-from qn_uia_send_probe import (
-    DOC_NAME,
-    WINDOW_CLASS,
-    WINDOW_NAME,
-    configure_console,
-    fail,
-    require,
-)
-
-MESSAGE_LIST_ID = "J_msg_list"
-PRIVATE_OUTPUT_TOKEN = "SHOW_PRIVATE_CHAT_TEXT"
-SCHEMA_VERSION = "qn_uia_messages.v1"
-
-MESSAGE_NODE_RE = re.compile(r"(?:^|[._-])[A-Za-z0-9_-]+\.PNM$|\.PNM(?:$|[._-])")
-URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
-PRICE_RE = re.compile(r"(?:¥|￥|RMB\s*)\s*\d+(?:\.\d{1,2})?", re.IGNORECASE)
-TIMESTAMP_RES = (
-    re.compile(r"\b20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?\b"),
-    re.compile(r"(?:今天|昨天|前天)\s*\d{1,2}:\d{2}(?::\d{2})?"),
-    re.compile(r"\b\d{1,2}:\d{2}(?::\d{2})?\b"),
-)
-
-GENERIC_LABELS = {
-    "千牛消息聊天",
-    "消息",
-    "聊天",
-    "发送",
-    "关闭",
-    "已读",
-    "未读",
-    "更多",
-    "复制",
-}
-SYSTEM_MARKERS = (
-    "系统消息",
-    "服务提醒",
-    "风险提示",
-    "撤回了一条消息",
-    "以上为历史消息",
-    "消息已撤回",
-)
-PRODUCT_MARKERS = ("商品", "宝贝", "SKU", "价格", "立即购买", "查看详情")
-IMAGE_MARKERS = ("[图片]", "图片消息", "查看图片")
+import qn_uia_extract_messages_core as core
+from qn_uia_extract_messages_core import *  # noqa: F401,F403
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="Read loaded Qianniu messages as redacted structured JSON",
-    )
-    parser.add_argument(
-        "--max-messages",
-        type=int,
-        default=100,
-        help="Maximum number of loaded message nodes to output; default 100",
-    )
-    parser.add_argument(
-        "--max-depth",
-        type=int,
-        default=30,
-        help="Maximum UIA traversal depth below J_msg_list; default 30",
-    )
-    parser.add_argument(
-        "--max-nodes",
-        type=int,
-        default=8000,
-        help="Maximum UIA nodes visited below J_msg_list; default 8000",
-    )
-    parser.add_argument(
-        "--expect-message",
-        default="",
-        help="Check whether exact text exists without printing that text",
-    )
-    parser.add_argument(
-        "--include-sensitive",
-        action="store_true",
-        help="Output raw node IDs, senders, and bodies; unsafe for shared logs",
-    )
-    parser.add_argument(
-        "--confirm-private-output",
-        default="",
-        help=f"Required token for raw output: {PRIVATE_OUTPUT_TOKEN}",
-    )
-    parser.add_argument(
-        "--output",
-        default="-",
-        help="Output file path, or - for stdout; never commit real output",
-    )
-    return parser.parse_args()
+def _valid_rect(rect: tuple[int, int, int, int] | None) -> bool:
+    return bool(rect and rect[2] > rect[0] and rect[3] > rect[1])
 
 
-def safe_attr(obj: Any, name: str, default: Any = None) -> Any:
-    try:
-        value = getattr(obj, name)
-    except Exception:
-        return default
-    return default if value is None else value
-
-
-def safe_text(value: Any) -> str:
-    if value is None:
-        return ""
-    try:
-        return str(value)
-    except Exception:
-        return ""
-
-
-def split_fragments(value: str) -> list[str]:
-    fragments: list[str] = []
-    for item in re.split(r"[\r\n]+", value or ""):
-        normalized = re.sub(r"\s+", " ", item).strip()
-        if normalized:
-            fragments.append(normalized)
-    return fragments
-
-
-def unique_strings(values: Iterable[str]) -> list[str]:
-    result: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if not value or value in seen:
-            continue
-        seen.add(value)
-        result.append(value)
-    return result
-
-
-def rect_tuple(control: auto.Control) -> tuple[int, int, int, int] | None:
-    rect = safe_attr(control, "BoundingRectangle")
-    if rect is None:
-        return None
-
-    for names in (("left", "top", "right", "bottom"), ("Left", "Top", "Right", "Bottom")):
-        try:
-            values = tuple(int(getattr(rect, name)) for name in names)
-        except Exception:
-            continue
-        return values  # type: ignore[return-value]
-
-    match = re.search(
-        r"\((-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\s*,\s*(-?\d+)\)",
-        safe_text(rect),
-    )
-    if not match:
-        return None
-    return tuple(int(group) for group in match.groups())  # type: ignore[return-value]
-
-
-def iter_tree(
-    root: auto.Control,
-    *,
-    max_depth: int,
-    max_nodes: int,
-    include_root: bool = True,
-) -> Iterable[tuple[auto.Control, int]]:
-    stack: list[tuple[auto.Control, int]] = [(root, 0)]
-    visited = 0
-
-    while stack and visited < max_nodes:
-        control, depth = stack.pop()
-        visited += 1
-
-        if include_root or depth > 0:
-            yield control, depth
-
-        if depth >= max_depth:
-            continue
-
-        try:
-            children = control.GetChildren()
-        except Exception:
-            children = []
-
-        for child in reversed(children):
-            stack.append((child, depth + 1))
-
-
-def control_automation_id(control: auto.Control) -> str:
-    return safe_text(safe_attr(control, "AutomationId", "")).strip()
-
-
-def is_message_node(control: auto.Control) -> bool:
-    automation_id = control_automation_id(control)
-    return bool(automation_id and MESSAGE_NODE_RE.search(automation_id))
-
-
-def find_message_nodes(
-    message_list: auto.Control,
-    *,
-    max_depth: int,
-    max_nodes: int,
-) -> tuple[list[auto.Control], bool]:
-    result: list[auto.Control] = []
-    stack: list[tuple[auto.Control, int]] = []
-
-    try:
-        children = message_list.GetChildren()
-    except Exception:
-        children = []
-
-    for child in reversed(children):
-        stack.append((child, 1))
-
-    visited = 0
-    while stack and visited < max_nodes:
-        control, depth = stack.pop()
-        visited += 1
-
-        if is_message_node(control):
-            result.append(control)
-            # A PNM node is the message boundary. Do not collect nested PNM nodes twice.
-            continue
-
-        if depth >= max_depth:
-            continue
-
-        try:
-            descendants = control.GetChildren()
-        except Exception:
-            descendants = []
-
-        for child in reversed(descendants):
-            stack.append((child, depth + 1))
-
-    if result:
-        return result, False
-
-    # Conservative fallback for UI variants: direct J_msg_list children only.
-    fallback = [child for child in children if safe_text(safe_attr(child, "Name", "")).strip()]
-    return fallback, True
-
-
-def collect_fragments(control: auto.Control) -> tuple[list[str], list[str]]:
-    root_name = safe_text(safe_attr(control, "Name", ""))
-    descendant_fragments: list[str] = []
-    control_types: list[str] = []
-
-    for descendant, depth in iter_tree(
-        control,
-        max_depth=12,
-        max_nodes=400,
-        include_root=True,
-    ):
-        control_type = safe_text(safe_attr(descendant, "ControlTypeName", "")).strip()
-        if control_type:
-            control_types.append(control_type)
-
-        if depth == 0:
-            continue
-        name = safe_text(safe_attr(descendant, "Name", ""))
-        descendant_fragments.extend(split_fragments(name))
-
-    fragments = unique_strings(descendant_fragments)
+def _is_timestamp_only(value: str) -> bool:
+    fragments = core.split_fragments(value)
     if not fragments:
-        fragments = unique_strings(split_fragments(root_name))
-
-    return fragments, unique_strings(control_types)
-
-
-def find_timestamp(fragments: list[str]) -> tuple[str, int]:
-    for index, fragment in enumerate(fragments):
-        for pattern in TIMESTAMP_RES:
-            match = pattern.search(fragment)
-            if match:
-                return match.group(0), index
-    return "", -1
+        return False
+    timestamp, _index = core.find_timestamp(fragments)
+    return bool(timestamp and len(fragments) == 1 and timestamp == fragments[0])
 
 
-def is_metadata_fragment(fragment: str, timestamp: str) -> bool:
-    value = fragment.strip()
-    if not value or value in GENERIC_LABELS:
-        return True
-    if timestamp and value == timestamp:
-        return True
-    if re.fullmatch(r"已读|未读|送达|发送中|发送失败", value):
-        return True
-    return False
+def _body_fragments(body: str) -> list[str]:
+    return [
+        fragment
+        for fragment in core.split_fragments(body)
+        if fragment and not core.is_metadata_fragment(fragment, "")
+    ]
 
 
-def choose_sender(fragments: list[str], timestamp: str, timestamp_index: int) -> str:
-    candidates = fragments[:timestamp_index] if timestamp_index > 0 else []
-    for fragment in reversed(candidates):
-        if is_metadata_fragment(fragment, timestamp):
+def _content_match_score(name: str, body: str, fragments: Iterable[str]) -> int:
+    value = " ".join(name.split()).strip()
+    if not value:
+        return 0
+
+    normalized_body = " ".join(body.split()).strip()
+    if normalized_body and value == normalized_body:
+        return 500
+
+    best = 0
+    for fragment in fragments:
+        normalized_fragment = " ".join(fragment.split()).strip()
+        if not normalized_fragment:
             continue
-        if URL_RE.search(fragment) or PRICE_RE.search(fragment):
-            continue
-        if len(fragment) > 80:
-            continue
-        return fragment
-    return ""
+        if value == normalized_fragment:
+            best = max(best, 400)
+        elif normalized_fragment in value:
+            best = max(best, 300)
+        elif value in normalized_fragment and len(value) >= 2:
+            best = max(best, 200)
+    return best
 
 
-def choose_body(
-    fragments: list[str],
-    sender: str,
-    timestamp: str,
-    timestamp_index: int,
-) -> str:
-    candidates = fragments[timestamp_index + 1 :] if timestamp_index >= 0 else list(fragments)
-    body: list[str] = []
+def _find_avatar_side(
+    node: auto.Control,
+    message_list: auto.Control,
+) -> str | None:
+    """Infer direction from a shallow square control touching a list edge."""
+    list_rect = core.rect_tuple(message_list)
+    node_rect = core.rect_tuple(node)
+    if not _valid_rect(list_rect) or not _valid_rect(node_rect):
+        return None
 
-    for fragment in candidates:
-        if fragment == sender or is_metadata_fragment(fragment, timestamp):
-            continue
-        body.append(fragment)
+    list_width = list_rect[2] - list_rect[0]
+    edge_tolerance = max(10.0, list_width * 0.035)
+    candidates: list[tuple[float, str]] = []
 
-    if not body:
-        for fragment in fragments:
-            if fragment == sender or is_metadata_fragment(fragment, timestamp):
-                continue
-            body.append(fragment)
-
-    return "\n".join(unique_strings(body)).strip()
-
-
-def classify_type(body: str, fragments: list[str], control_types: list[str]) -> str:
-    joined = "\n".join(fragments)
-    if any("Image" in control_type for control_type in control_types):
-        return "image"
-    if any(marker in joined for marker in IMAGE_MARKERS):
-        return "image"
-    if URL_RE.search(joined) or PRICE_RE.search(joined) or any(
-        marker in joined for marker in PRODUCT_MARKERS
+    for control, depth in core.iter_tree(
+        node,
+        max_depth=4,
+        max_nodes=120,
+        include_root=False,
     ):
-        return "product"
-    if any(marker in joined for marker in SYSTEM_MARKERS):
-        return "system"
-    if body:
-        return "text"
+        rect = core.rect_tuple(control)
+        if not _valid_rect(rect):
+            continue
+
+        width = rect[2] - rect[0]
+        height = rect[3] - rect[1]
+        if not (24 <= width <= 72 and 24 <= height <= 72):
+            continue
+
+        aspect = max(width / height, height / width)
+        if aspect > 1.75:
+            continue
+
+        if rect[3] < node_rect[1] - 4 or rect[1] > node_rect[3] + 4:
+            continue
+
+        left_gap = abs(rect[0] - list_rect[0])
+        right_gap = abs(list_rect[2] - rect[2])
+        nearest_gap = min(left_gap, right_gap)
+        if nearest_gap > edge_tolerance:
+            continue
+
+        side = "incoming" if left_gap < right_gap else "outgoing"
+        square_penalty = abs(width - height)
+        size_penalty = abs(((width + height) / 2.0) - 36.0)
+        depth_penalty = max(0, depth - 1) * 3.0
+        score = 1000.0 - nearest_gap * 20.0 - square_penalty * 2.0
+        score -= size_penalty + depth_penalty
+        candidates.append((score, side))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_side = candidates[0]
+    if len(candidates) > 1:
+        second_score, second_side = candidates[1]
+        if second_side != best_side and abs(best_score - second_score) < 25.0:
+            return None
+    return best_side
+
+
+def _find_body_anchor(
+    node: auto.Control,
+    message_list: auto.Control,
+    body: str,
+) -> tuple[int, int, int, int] | None:
+    list_rect = core.rect_tuple(message_list)
+    if not _valid_rect(list_rect):
+        return None
+
+    list_width = list_rect[2] - list_rect[0]
+    fragments = _body_fragments(body)
+    candidates: list[tuple[tuple[int, int, int, int], tuple[int, int, int, int]]] = []
+
+    for control, _depth in core.iter_tree(
+        node,
+        max_depth=12,
+        max_nodes=500,
+        include_root=False,
+    ):
+        rect = core.rect_tuple(control)
+        if not _valid_rect(rect):
+            continue
+
+        width = rect[2] - rect[0]
+        height = rect[3] - rect[1]
+        if width > list_width * 0.92:
+            continue
+
+        name = core.safe_text(core.safe_attr(control, "Name", "")).strip()
+        if not name or _is_timestamp_only(name):
+            continue
+
+        name_parts = core.split_fragments(name)
+        if name_parts and all(core.is_metadata_fragment(part, "") for part in name_parts):
+            continue
+
+        match_score = _content_match_score(name, body, fragments)
+        if match_score <= 0:
+            continue
+
+        node_rect = core.rect_tuple(node)
+        if _valid_rect(node_rect):
+            node_mid_y = (node_rect[1] + node_rect[3]) / 2.0
+            control_mid_y = (rect[1] + rect[3]) / 2.0
+            vertical_score = max(0, 1000 - int(abs(control_mid_y - node_mid_y) * 10))
+        else:
+            vertical_score = 0
+        rank = (match_score, vertical_score, min(width, 1200), min(height, 600))
+        candidates.append((rank, rect))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    return candidates[0][1]
+
+
+def _direction_from_rect(
+    anchor_rect: tuple[int, int, int, int] | None,
+    list_rect: tuple[int, int, int, int] | None,
+) -> str:
+    if not _valid_rect(anchor_rect) or not _valid_rect(list_rect):
+        return "unknown"
+
+    anchor_center = (anchor_rect[0] + anchor_rect[2]) / 2.0
+    list_center = (list_rect[0] + list_rect[2]) / 2.0
+    threshold = max(12.0, (list_rect[2] - list_rect[0]) * 0.05)
+
+    if anchor_center > list_center + threshold:
+        return "outgoing"
+    if anchor_center < list_center - threshold:
+        return "incoming"
     return "unknown"
 
 
@@ -362,188 +206,27 @@ def classify_direction(
     if message_type == "system":
         return "unknown"
 
-    node_rect = rect_tuple(node)
-    list_rect = rect_tuple(message_list)
-    if node_rect is None or list_rect is None:
-        return "unknown"
+    avatar_side = _find_avatar_side(node, message_list)
+    if avatar_side is not None:
+        return avatar_side
 
-    node_center = (node_rect[0] + node_rect[2]) / 2.0
-    list_center = (list_rect[0] + list_rect[2]) / 2.0
-    threshold = max(12.0, (list_rect[2] - list_rect[0]) * 0.07)
+    fragments, _control_types = core.collect_fragments(node)
+    timestamp, timestamp_index = core.find_timestamp(fragments)
+    sender = core.choose_sender(fragments, timestamp, timestamp_index)
+    body = core.choose_body(fragments, sender, timestamp, timestamp_index)
 
-    if node_center > list_center + threshold:
-        return "outgoing"
-    if node_center < list_center - threshold:
-        return "incoming"
-    return "unknown"
+    list_rect = core.rect_tuple(message_list)
+    body_rect = _find_body_anchor(node, message_list, body)
+    direction = _direction_from_rect(body_rect, list_rect)
+    if direction != "unknown":
+        return direction
 
-
-def redact(value: str, label: str) -> str:
-    if not value:
-        return ""
-    digest = hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()[:12]
-    return f"<redacted:{label}:sha256={digest}:chars={len(value)}>"
-
-
-def serialize_sensitive(value: str, label: str, include_sensitive: bool) -> str:
-    return value if include_sensitive else redact(value, label)
-
-
-def message_sort_key(control: auto.Control) -> tuple[int, int, str]:
-    rect = rect_tuple(control)
-    if rect is None:
-        return (sys.maxsize, sys.maxsize, control_automation_id(control))
-    return (rect[1], rect[0], control_automation_id(control))
-
-
-def extract_message(
-    node: auto.Control,
-    message_list: auto.Control,
-    *,
-    include_sensitive: bool,
-    expect_message: str,
-) -> tuple[dict[str, Any], bool]:
-    fragments, control_types = collect_fragments(node)
-    timestamp, timestamp_index = find_timestamp(fragments)
-    sender = choose_sender(fragments, timestamp, timestamp_index)
-    body = choose_body(fragments, sender, timestamp, timestamp_index)
-    message_type = classify_type(body, fragments, control_types)
-    direction = classify_direction(node, message_list, message_type)
-    node_id = control_automation_id(node)
-    matched = bool(expect_message) and any(expect_message in fragment for fragment in fragments)
-
-    is_offscreen = bool(safe_attr(node, "IsOffscreen", False))
-    return (
-        {
-            "node_id": serialize_sensitive(node_id, "node_id", include_sensitive),
-            "sender": serialize_sensitive(sender, "sender", include_sensitive),
-            "timestamp": timestamp,
-            "direction": direction,
-            "type": message_type,
-            "text": serialize_sensitive(body, "text", include_sensitive),
-            "visible": not is_offscreen,
-        },
-        matched,
-    )
-
-
-def write_json(payload: dict[str, Any], output: str) -> None:
-    rendered = json.dumps(payload, ensure_ascii=False, indent=2) + "\n"
-    if output == "-":
-        sys.stdout.write(rendered)
-        return
-
-    path = Path(output)
-    path.write_text(rendered, encoding="utf-8")
-    print(f"[WROTE] {path}", file=sys.stderr)
-    print("[PRIVATE] Do not commit real chat extraction output.", file=sys.stderr)
+    return _direction_from_rect(core.rect_tuple(node), list_rect)
 
 
 def main() -> int:
-    configure_console()
-    args = parse_args()
-
-    if args.max_messages <= 0:
-        fail("max-messages must be positive", 1)
-    if args.max_depth <= 0:
-        fail("max-depth must be positive", 1)
-    if args.max_nodes <= 0:
-        fail("max-nodes must be positive", 1)
-    if args.include_sensitive and args.confirm_private_output != PRIVATE_OUTPUT_TOKEN:
-        fail(
-            f"raw output requires --confirm-private-output {PRIVATE_OUTPUT_TOKEN}",
-            4,
-        )
-
-    auto.SetGlobalSearchTimeout(8)
-    window = require(
-        auto.WindowControl(
-            searchDepth=1,
-            Name=WINDOW_NAME,
-            ClassName=WINDOW_CLASS,
-        ),
-        "Qianniu reception window",
-    )
-    document = require(
-        window.DocumentControl(searchDepth=40, Name=DOC_NAME),
-        "chat document",
-    )
-    message_list = require(
-        auto.Control(
-            searchFromControl=document,
-            searchDepth=40,
-            AutomationId=MESSAGE_LIST_ID,
-        ),
-        "message list J_msg_list",
-    )
-
-    nodes, used_fallback = find_message_nodes(
-        message_list,
-        max_depth=args.max_depth,
-        max_nodes=args.max_nodes,
-    )
-    nodes.sort(key=message_sort_key)
-    if len(nodes) > args.max_messages:
-        nodes = nodes[-args.max_messages :]
-
-    messages: list[dict[str, Any]] = []
-    match_count = 0
-    for node in nodes:
-        message, matched = extract_message(
-            node,
-            message_list,
-            include_sensitive=args.include_sensitive,
-            expect_message=args.expect_message,
-        )
-        messages.append(message)
-        if matched:
-            match_count += 1
-
-    warnings: list[str] = []
-    if used_fallback:
-        warnings.append(
-            "No *.PNM message nodes were found; output uses direct J_msg_list children."
-        )
-    if not messages:
-        warnings.append("No loaded message nodes were found in J_msg_list.")
-    warnings.append(
-        "Current-conversation identity is intentionally not inferred in this P2 extractor."
-    )
-
-    payload: dict[str, Any] = {
-        "schema_version": SCHEMA_VERSION,
-        "redacted": not args.include_sensitive,
-        "conversation": {
-            "detected": False,
-            "display_name": "",
-            "conversation_id": "",
-            "source": "not_implemented_until_P4",
-        },
-        "messages": messages,
-        "meta": {
-            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-            "window": WINDOW_NAME,
-            "document": DOC_NAME,
-            "message_list_automation_id": MESSAGE_LIST_ID,
-            "message_count": len(messages),
-            "used_direct_child_fallback": used_fallback,
-            "read_only": True,
-            "warnings": warnings,
-        },
-    }
-
-    if args.expect_message:
-        payload["expectation"] = {
-            "provided": True,
-            "expected_sha256": hashlib.sha256(
-                args.expect_message.encode("utf-8", errors="replace")
-            ).hexdigest()[:12],
-            "matched": match_count > 0,
-            "match_count": match_count,
-        }
-
-    write_json(payload, args.output)
-    return 0 if messages else 5
+    core.classify_direction = classify_direction
+    return core.main()
 
 
 if __name__ == "__main__":
