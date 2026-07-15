@@ -8,6 +8,7 @@ using Bot.Automation.ChatDeskNs;
 using BotLib;
 using BotLib.Wpf.Extensions;
 using Bot.Options;
+using Bot.Knowledge;
 using Bot.AssistWindow.Widget.Robot;
 
 namespace Bot.AssistWindow.Widget
@@ -473,12 +474,13 @@ namespace Bot.AssistWindow.Widget
             {
                 page = (item.Tag ?? item.Header ?? page).ToString();
             }
-            FeatureSettingsWindow.MyShow(Wnd, page);
+            if (page == "知识库") KnowledgeCenterWindow.MyShow(Wnd);
+            else FeatureSettingsWindow.MyShow(Wnd, page);
         }
 
         private void menuKnowledge_Click(object sender, RoutedEventArgs e)
         {
-            FeatureSettingsWindow.MyShow(Wnd, "知识库");
+            KnowledgeCenterWindow.MyShow(Wnd);
         }
 
         private void menuRule_Click(object sender, RoutedEventArgs e)

@@ -252,6 +252,76 @@ namespace Bot.ChromeNs
             }
         }
 
+
+        public static StructuredChatResult CallStructuredChat(JArray messages, int maxTokens, double temperature)
+        {
+            var endpoints = AiEndpointStore.GetEnabledEndpoints();
+            if (endpoints.Count < 1)
+            {
+                return new StructuredChatResult { Success = false, Error = "请先在【设置 → API接口】中配置并启用至少一个可用的 AI 接口。" };
+            }
+            var errors = new List<string>();
+            foreach (var endpoint in endpoints)
+            {
+                var result = CallRawChatCompletions(endpoint, messages, maxTokens, temperature);
+                BotRuntimeStats.RecordAiCall(endpoint, result.InputTokens, result.OutputTokens, result.Success, result.LatencyMs, result.Success ? "成功" : result.Error);
+                endpoint.LastLatencyMs = result.LatencyMs;
+                endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
+                if (result.Success) return result;
+                var err = endpoint.Name + "：" + result.Error;
+                errors.Add(err);
+                Log.Error("AI结构化接口调用失败：" + err);
+            }
+            return new StructuredChatResult { Success = false, Error = string.Join("；", errors) };
+        }
+
+        private static StructuredChatResult CallRawChatCompletions(AiEndpointConfig endpoint, JArray messages, int maxTokens, double temperature)
+        {
+            var sw = Stopwatch.StartNew();
+            var url = NormalizeBaseUrl(endpoint.BaseUrl);
+            var payload = new JObject
+            {
+                ["model"] = endpoint.Model,
+                ["messages"] = messages,
+                ["temperature"] = temperature,
+                ["max_tokens"] = maxTokens <= 0 ? 2000 : maxTokens
+            };
+            var payloadText = payload.ToString(Formatting.None);
+            try
+            {
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(endpoint.TimeoutSeconds <= 0 ? 60 : Math.Max(endpoint.TimeoutSeconds, 60));
+                    http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
+                    using (var content = new StringContent(payloadText, Encoding.UTF8, "application/json"))
+                    {
+                        var response = http.PostAsync(url, content).GetAwaiter().GetResult();
+                        var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        sw.Stop();
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "HTTP " + (int)response.StatusCode + " " + response.ReasonPhrase + "，接口返回：" + SafeError(body), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText), Raw = body };
+                        }
+                        var answer = ExtractAnswer(body);
+                        if (string.IsNullOrWhiteSpace(answer))
+                        {
+                            return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = "HTTP 200，但未解析到 choices[0].message.content。原始返回：" + SafeError(body), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText), Raw = body };
+                        }
+                        var ok = new StructuredChatResult { Success = true, Answer = answer.Trim(), Raw = body, LatencyMs = sw.ElapsedMilliseconds };
+                        FillUsage(ok, payloadText, answer, body);
+                        return ok;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                return new StructuredChatResult { Success = false, LatencyMs = sw.ElapsedMilliseconds, Error = SafeError(ex.Message), InputTokens = EstimateTokens(payloadText), TotalTokens = EstimateTokens(payloadText) };
+            }
+        }
+
         public static string TestConnection(string baseUrl, string apiKey, string model, string prompt)
         {
             var endpoint = new AiEndpointConfig
@@ -392,7 +462,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private class ApiCallResult
+        public class ApiCallResult
         {
             public bool Success { get; set; }
             public string Answer { get; set; }
@@ -403,5 +473,9 @@ namespace Bot.ChromeNs
             public int TotalTokens { get; set; }
             public long LatencyMs { get; set; }
         }
+    }
+
+    public class StructuredChatResult : MyOpenAI.ApiCallResult
+    {
     }
 }
