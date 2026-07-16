@@ -1,7 +1,16 @@
-name: Build Windows Bot
+name: Windows CI
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches: [ master ]
+    paths:
+      - 'src/Bot/**'
+      - 'src/BotLib/**'
+      - 'src/DbEntity/**'
+      - 'src/*.sln'
+      - 'src/Directory.Build.*'
+      - '.github/workflows/build-windows.yml'
   push:
     branches: [ master ]
     paths:
@@ -9,25 +18,36 @@ on:
       - 'src/BotLib/**'
       - 'src/DbEntity/**'
       - 'src/*.sln'
-      - 'src/Directory.Build.props'
-      - 'tools/**'
+      - 'src/Directory.Build.*'
       - '.github/workflows/build-windows.yml'
 
+concurrency:
+  group: windows-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
-  contents: write
+  contents: read
 
 env:
+  SOLUTION: src\Bot.sln
   CONFIGURATION: Debug
   PLATFORM: x64
+  OUTPUT_DIR: src\Bin
 
 jobs:
   build:
+    name: Build Bot (${{ matrix.configuration }} / ${{ matrix.platform }})
     runs-on: windows-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [ Debug ]
+        platform: [ x64 ]
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Setup NuGet
         uses: NuGet/setup-nuget@v2
@@ -35,91 +55,93 @@ jobs:
       - name: Setup MSBuild
         uses: microsoft/setup-msbuild@v2
 
-      - name: Restore and build
+      - name: Prepare legacy project files
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Continue"
-          New-Item -ItemType Directory -Force -Path ci-last-build | Out-Null
-          $exitCode = 0
+          $projects = @(
+            'src\Bot\Bot.csproj',
+            'src\DbEntity\DbEntity.csproj'
+          )
 
-          dotnet --info | Out-File env.log -Encoding utf8
-          nuget help | Out-File nuget-version.log -Encoding utf8
-          msbuild -version | Out-File msbuild-version.log -Encoding utf8
-          Get-ChildItem src\Bin | Select-Object Name,Length,LastWriteTime | Format-Table | Out-File bin-before.log -Encoding utf8
-
-          foreach ($proj in @('src\Bot\Bot.csproj','src\DbEntity\DbEntity.csproj')) {
-            if (Test-Path $proj) {
-              $xml = Get-Content $proj -Raw
-              # 修复被压缩/改写时漏掉末尾 0B 的 WSH COM GUID，否则 MSBuild 会报 MSB3296 Guid invalid。
-              $xml = $xml -replace '\{F935DC20-1CF0-11D0-ADB9-00C04FD58A\}', '{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}'
-              $xml = [regex]::Replace($xml, '(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>', '')
-              if ($proj -like '*\Bot\Bot.csproj' -and $xml -notmatch 'ICSharpCode\.SharpZipLib') {
-                $sharpRef = '    <Reference Include="ICSharpCode.SharpZipLib"><HintPath>..\packages\SharpZipLib.1.4.2\lib\netstandard2.0\ICSharpCode.SharpZipLib.dll</HintPath><Private>True</Private></Reference>'
-                $xml = $xml -replace '(\s*<Reference Include="System" />)', "`r`n$sharpRef`$1"
-              }
-              Set-Content $proj -Value $xml -Encoding UTF8
+          foreach ($project in $projects) {
+            if (-not (Test-Path -LiteralPath $project)) {
+              continue
             }
+
+            $xml = Get-Content -LiteralPath $project -Raw
+
+            # Legacy project compatibility for the GitHub-hosted Windows runner.
+            $xml = $xml -replace '\{F935DC20-1CF0-11D0-ADB9-00C04FD58A\}', '{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}'
+            $xml = [regex]::Replace(
+              $xml,
+              '(?s)\s*<Reference Include="TopSdk[^>]*>.*?</Reference>',
+              ''
+            )
+
+            if ($project -like '*\Bot\Bot.csproj' -and $xml -notmatch 'ICSharpCode\.SharpZipLib') {
+              $sharpZipReference = '    <Reference Include="ICSharpCode.SharpZipLib"><HintPath>..\packages\SharpZipLib.1.4.2\lib\netstandard2.0\ICSharpCode.SharpZipLib.dll</HintPath><Private>True</Private></Reference>'
+              $xml = $xml -replace '(\s*<Reference Include="System" />)', "`r`n$sharpZipReference`$1"
+            }
+
+            Set-Content -LiteralPath $project -Value $xml -Encoding UTF8
           }
 
-          nuget restore src\Bot.sln -NonInteractive -Verbosity detailed *>&1 | Tee-Object -FilePath restore.log
-          if ($LASTEXITCODE -ne 0) { $exitCode = $LASTEXITCODE }
-
-          if ($exitCode -eq 0) {
-            msbuild src\Bot.sln /m /t:Rebuild /p:Configuration="${{ env.CONFIGURATION }}" /p:Platform="${{ env.PLATFORM }}" /v:minimal /fl /flp:logfile=build.log`;verbosity=diagnostic *>&1 | Tee-Object -FilePath build-console.log
-            if ($LASTEXITCODE -ne 0) { $exitCode = $LASTEXITCODE }
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          nuget restore $env:SOLUTION -NonInteractive -Verbosity normal
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
           }
 
-          if (Test-Path build.log) { Get-Content build.log -Tail 260 | Out-File ci-last-build\build-tail.txt -Encoding utf8 }
-          if (Test-Path build-console.log) { Get-Content build-console.log -Tail 260 | Out-File ci-last-build\build-console-tail.txt -Encoding utf8 }
-          if (Test-Path restore.log) { Get-Content restore.log -Tail 160 | Out-File ci-last-build\restore-tail.txt -Encoding utf8 }
-          Get-ChildItem src\Bin -ErrorAction SilentlyContinue | Select-Object Name,Length,LastWriteTime | Format-Table | Out-File ci-last-build\bin-after.txt -Encoding utf8
-          Set-Content ci-last-build\exit-code.txt -Value $exitCode -Encoding utf8
-          Write-Host "Build exit code: $exitCode"
+      - name: Build solution
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts\logs | Out-Null
 
-      - name: Upload logs
+          msbuild $env:SOLUTION `
+            /m `
+            /t:Rebuild `
+            /nologo `
+            /v:minimal `
+            /p:Configuration="${{ matrix.configuration }}" `
+            /p:Platform="${{ matrix.platform }}" `
+            /bl:artifacts\logs\msbuild.binlog `
+            '/flp:logfile=artifacts\logs\msbuild.log;verbosity=diagnostic'
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host '--- Recent MSBuild errors ---'
+            if (Test-Path artifacts\logs\msbuild.log) {
+              Select-String -Path artifacts\logs\msbuild.log -Pattern ': error ',' error CS',' error MSB' |
+                Select-Object -Last 120 |
+                ForEach-Object { Write-Host $_.Line }
+            }
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify build output
+        shell: pwsh
+        run: |
+          $exe = Join-Path $env:OUTPUT_DIR 'Bot.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Expected build output not found: $exe"
+          }
+
+          Get-Item -LiteralPath $exe | Format-List FullName,Length,LastWriteTime
+
+      - name: Upload Bot artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qianniu-bot-bin
+          path: src/Bin/**
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build diagnostics
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: qianniu-bot-build-logs
-          path: |
-            *.log
-            ci-last-build\**
-            src\**\*.log
-
-      - name: Upload Bin Artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: qianniu-bot-bin
-          path: src\Bin\**
-
-      - name: Commit CI logs and compiled Bin
-        if: always()
-        shell: pwsh
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -f ci-last-build
-          $exitCode = 1
-          if (Test-Path ci-last-build\exit-code.txt) { $exitCode = [int](Get-Content ci-last-build\exit-code.txt -Raw) }
-          if ($exitCode -eq 0) { git add -f src/Bin }
-          $changes = git status --porcelain ci-last-build src/Bin
-          if ($changes) {
-            if ($exitCode -eq 0) { git commit -m "build: update compiled Bot binaries [skip ci]" } else { git commit -m "ci: persist failed build logs [skip ci]" }
-            # The build step temporarily normalizes legacy project files and leaves those
-            # changes unstaged. Autostash them so the rebase is real instead of printing an
-            # error that PowerShell would otherwise ignore while the job still turns green.
-            git pull --rebase --autostash origin master
-            if ($LASTEXITCODE -ne 0) { throw "git pull --rebase failed with exit code $LASTEXITCODE" }
-            git push origin HEAD:master
-            if ($LASTEXITCODE -ne 0) { throw "git push failed with exit code $LASTEXITCODE" }
-          } else {
-            Write-Host "No CI log or binary changes."
-          }
-
-      - name: Fail job if needed
-        shell: pwsh
-        run: |
-          $exitCode = 1
-          if (Test-Path ci-last-build\exit-code.txt) { $exitCode = [int](Get-Content ci-last-build\exit-code.txt -Raw) }
-          exit $exitCode
+          path: artifacts/logs/**
+          if-no-files-found: warn
+          retention-days: 14
