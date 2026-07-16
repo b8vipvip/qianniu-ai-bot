@@ -1,0 +1,8 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <!-- Bot.csproj historically omitted the trailing 0B from this type-library GUID. -->
+    <COMReference Update="IWshRuntimeLibrary">
+      <Guid>{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}</Guid>
+    </COMReference>
+  </ItemGroup>
+</Project>
