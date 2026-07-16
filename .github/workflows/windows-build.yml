@@ -54,7 +54,35 @@ jobs:
 
       - name: Build Bot solution
         shell: pwsh
-        run: msbuild src/Bot.sln /t:Build /m /nologo /verbosity:minimal /p:Configuration=Release '/p:Platform=Any CPU'
+        run: |
+          msbuild src/Bot.sln `
+            /t:Build `
+            /m `
+            /nologo `
+            /verbosity:minimal `
+            /p:Configuration=Release `
+            '/p:Platform=Any CPU' `
+            /bl:msbuild.binlog `
+            '/flp:logfile=msbuild.log;verbosity=diagnostic'
+          $code = $LASTEXITCODE
+          if ($code -ne 0) {
+            Write-Host '--- MSBuild errors ---'
+            Select-String -Path msbuild.log -Pattern ': error ',' error CS',' error MSB' |
+              Select-Object -Last 120 |
+              ForEach-Object { Write-Host $_.Line }
+            exit $code
+          }
+
+      - name: Upload MSBuild diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: msbuild-diagnostics-${{ github.sha }}
+          path: |
+            msbuild.log
+            msbuild.binlog
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Verify Bot executable
         shell: pwsh
