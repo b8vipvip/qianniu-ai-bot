@@ -1,6 +1,19 @@
 # Qianniu Chat Automation Research Progress
 
-Last updated: 2026-07-15
+Last updated: 2026-07-16
+
+## 2026-07-16 message lifecycle v2 update
+
+A privacy-safe lifecycle layer now exists under `tools/qn_discovery_lab`:
+
+- extraction computes `content_hash`, `content_chars`, `node_identity_hash`, semantic rule IDs, safe control counts, and the pre-normalization direction guess before redaction;
+- fragmented withdrawal rows and withdrawal rows containing hyperlinks are evaluated from all text fragments, not only the selected body;
+- withdrawal output is normalized to `type=system` and `direction=unknown`, while retaining `observed_direction_guess`;
+- lifecycle comparison distinguishes added, updated, unchanged, not observed, reobserved, candidate events, and confirmed buyer/seller withdrawals;
+- visible/offscreen and bounds are excluded from message and observation identity;
+- state files fail closed and permit only privacy-safe fields.
+
+Real local evidence already confirms in-place buyer and seller withdrawals and the seller-direction misclassification risk. The prior snapshots are legacy evidence because they predate the new semantic metadata. A new idle three-snapshot validation observed 24 stable keys with no updates. ScrollPattern and refocus validation were safely skipped, so visibility/history validation remains partial. See `docs/QIANNIU_MESSAGE_LIFECYCLE_VALIDATION.md`.
 
 This document is the handoff source of truth for future AI/agent development. Read it before running new discovery experiments.
 
