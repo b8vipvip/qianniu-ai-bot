@@ -1,5 +1,6 @@
 name: Windows x64 release build
 
+# Builds the production-compatible 64-bit Bot package used on Windows hosts.
 on:
   workflow_dispatch:
   pull_request:
