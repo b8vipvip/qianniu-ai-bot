@@ -1,4 +1,4 @@
-name: Windows release build
+name: Windows x64 release build
 
 on:
   workflow_dispatch:
@@ -8,7 +8,6 @@ on:
   push:
     branches:
       - agent/uia-send-control-diagnostics
-      - agent/message-lifecycle-evidence-v2-local
 
 permissions:
   contents: read
@@ -52,7 +51,7 @@ jobs:
         shell: pwsh
         run: nuget restore src/Bot.sln -PackagesDirectory src/packages -NonInteractive
 
-      - name: Build Bot solution
+      - name: Build Bot solution x64
         shell: pwsh
         run: |
           msbuild src/Bot.sln `
@@ -61,7 +60,7 @@ jobs:
             /nologo `
             /verbosity:minimal `
             /p:Configuration=Release `
-            '/p:Platform=Any CPU' `
+            /p:Platform=x64 `
             /bl:msbuild.binlog `
             '/flp:logfile=msbuild.log;verbosity=diagnostic'
           $code = $LASTEXITCODE
@@ -77,7 +76,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: msbuild-diagnostics-${{ github.sha }}
+          name: msbuild-diagnostics-x64-${{ github.sha }}
           path: |
             msbuild.log
             msbuild.binlog
@@ -87,16 +86,16 @@ jobs:
       - name: Verify Bot executable
         shell: pwsh
         run: |
-          $exe = 'src/Bot/bin/Release/Bot.exe'
+          $exe = 'src/Bot/bin/x64/Release/Bot.exe'
           if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
-            throw "Expected build output not found: $exe"
+            throw "Expected x64 build output not found: $exe"
           }
           Get-Item -LiteralPath $exe | Format-List FullName,Length,LastWriteTime
 
-      - name: Upload Release artifact
+      - name: Upload x64 Release artifact
         uses: actions/upload-artifact@v4
         with:
-          name: qianniu-bot-release-${{ github.sha }}
-          path: src/Bot/bin/Release/**
+          name: qianniu-bot-x64-release-${{ github.sha }}
+          path: src/Bot/bin/x64/Release/**
           if-no-files-found: error
           retention-days: 14
