@@ -1,0 +1,74 @@
+name: Windows release build
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - agent/uia-send-control-diagnostics
+  push:
+    branches:
+      - agent/uia-send-control-diagnostics
+      - agent/message-lifecycle-evidence-v2-local
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: windows-2022
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Python UIA dependency
+        shell: pwsh
+        run: python -m pip install --disable-pip-version-check uiautomation
+
+      - name: Compile Python tools
+        shell: pwsh
+        run: |
+          python -m py_compile `
+            tools/qn_discovery_lab/qn_uia_extract_messages_core.py `
+            tools/qn_discovery_lab/qn_uia_extract_messages.py `
+            tools/qn_discovery_lab/qn_uia_message_lifecycle.py `
+            tools/qn_discovery_lab/qn_uia_lifecycle_probe.py `
+            tools/qn_discovery_lab/qn_uia_withdraw_exact_probe.py
+
+      - name: Run lifecycle tests
+        shell: pwsh
+        run: python -m unittest discover -s tools/qn_discovery_lab/tests
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: nuget restore src/Bot.sln -PackagesDirectory src/packages -NonInteractive
+
+      - name: Build Bot solution
+        shell: pwsh
+        run: msbuild src/Bot.sln /t:Build /m /nologo /verbosity:minimal /p:Configuration=Release '/p:Platform=Any CPU'
+
+      - name: Verify Bot executable
+        shell: pwsh
+        run: |
+          $exe = 'src/Bot/bin/Release/Bot.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) {
+            throw "Expected build output not found: $exe"
+          }
+          Get-Item -LiteralPath $exe | Format-List FullName,Length,LastWriteTime
+
+      - name: Upload Release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: qianniu-bot-release-${{ github.sha }}
+          path: src/Bot/bin/Release/**
+          if-no-files-found: error
+          retention-days: 14
