@@ -69,15 +69,15 @@ def _content_match_score(name: str, body: str, fragments: Iterable[str]) -> int:
     return best
 
 
-def _find_avatar_side(
+def _find_avatar_diagnostics(
     node: auto.Control,
     message_list: auto.Control,
-) -> str | None:
+) -> tuple[str | None, int]:
     """Infer direction from a shallow square control touching a list edge."""
     list_rect = core.rect_tuple(message_list)
     node_rect = core.rect_tuple(node)
     if not _valid_rect(list_rect) or not _valid_rect(node_rect):
-        return None
+        return None, 0
 
     list_width = list_rect[2] - list_rect[0]
     edge_tolerance = max(10.0, list_width * 0.035)
@@ -120,15 +120,22 @@ def _find_avatar_side(
         candidates.append((score, side))
 
     if not candidates:
-        return None
+        return None, 0
 
     candidates.sort(key=lambda item: item[0], reverse=True)
     best_score, best_side = candidates[0]
     if len(candidates) > 1:
         second_score, second_side = candidates[1]
         if second_side != best_side and abs(best_score - second_score) < 25.0:
-            return None
-    return best_side
+            return None, len(candidates)
+    return best_side, len(candidates)
+
+
+def _find_avatar_side(
+    node: auto.Control,
+    message_list: auto.Control,
+) -> str | None:
+    return _find_avatar_diagnostics(node, message_list)[0]
 
 
 def _find_body_anchor(
@@ -211,12 +218,30 @@ def classify_direction(
     message_list: auto.Control,
     message_type: str,
 ) -> str:
-    if message_type == "system":
-        return "unknown"
+    return classify_direction_details(node, message_list, message_type)[0]
 
-    avatar_side = _find_avatar_side(node, message_list)
+
+def classify_direction_details(
+    node: auto.Control,
+    message_list: auto.Control,
+    message_type: str,
+) -> tuple[str, dict[str, Any]]:
+    diagnostics: dict[str, Any] = {
+        "direction_source": "unknown",
+        "avatar_candidate_count": 0,
+        "avatar_side": "unknown",
+        "body_anchor_found": False,
+    }
+    if message_type == "system":
+        diagnostics["direction_source"] = "system"
+        return "unknown", diagnostics
+
+    avatar_side, avatar_candidate_count = _find_avatar_diagnostics(node, message_list)
+    diagnostics["avatar_candidate_count"] = avatar_candidate_count
+    diagnostics["avatar_side"] = avatar_side or "unknown"
     if avatar_side is not None:
-        return avatar_side
+        diagnostics["direction_source"] = "avatar_edge"
+        return avatar_side, diagnostics
 
     fragments, _control_types = core.collect_fragments(node)
     timestamp, timestamp_index = core.find_timestamp(fragments)
@@ -225,11 +250,15 @@ def classify_direction(
 
     list_rect = core.rect_tuple(message_list)
     body_rect = _find_body_anchor(node, message_list, body)
+    diagnostics["body_anchor_found"] = body_rect is not None
     direction = _direction_from_rect(body_rect, list_rect)
     if direction != "unknown":
-        return direction
+        diagnostics["direction_source"] = "body_geometry"
+        return direction, diagnostics
 
-    return _direction_from_rect(core.rect_tuple(node), list_rect)
+    direction = _direction_from_rect(core.rect_tuple(node), list_rect)
+    diagnostics["direction_source"] = "row_geometry" if direction != "unknown" else "unknown"
+    return direction, diagnostics
 
 
 def _digest(parts: Iterable[str]) -> str:
@@ -238,6 +267,9 @@ def _digest(parts: Iterable[str]) -> str:
 
 
 def _stable_message_key(message: dict[str, Any]) -> tuple[str, str]:
+    # Compatibility contract: qn_uia_messages.v2 historically derives the key
+    # from the serialized node_id (redacted by default). node_identity_hash is
+    # additional evidence and must never rewrite established snapshot keys.
     node_id = str(message.get("node_id", "")).strip()
     if node_id:
         return f"uia:{_digest([node_id])}", "automation_id"
@@ -252,6 +284,20 @@ def _stable_message_key(message: dict[str, Any]) -> tuple[str, str]:
     return f"fallback:{_digest(fallback_parts)}", "content_time_fallback"
 
 
+def _observation_key(message: dict[str, Any]) -> str:
+    digest = _digest([
+        str(message.get('message_key', '')),
+        str(message.get('content_hash', '')),
+        str(message.get('direction', '')),
+        str(message.get('original_type', message.get('type', ''))),
+        str(message.get('timestamp', '')),
+        '|'.join(sorted(str(item) for item in message.get('semantic_flags', []))),
+        str(message.get('lifecycle_kind', '')),
+        str(message.get('lifecycle_status', '')),
+    ])
+    return f"obs:{digest}"
+
+
 def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
     raw_messages = payload.get("messages", [])
     if not isinstance(raw_messages, list):
@@ -259,6 +305,8 @@ def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
 
     seen: set[str] = set()
     messages: list[dict[str, Any]] = []
+    expectation_matches: list[dict[str, Any]] = []
+    expectation_keys: set[str] = set()
     duplicate_count = 0
     fallback_key_count = 0
 
@@ -269,13 +317,22 @@ def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
         key, key_source = _stable_message_key(message)
         message["message_key"] = key
         message["key_source"] = key_source
+        message["observation_key"] = _observation_key(message)
+        expectation_match = bool(message.pop("_expectation_match", False))
         if key_source == "content_time_fallback":
             fallback_key_count += 1
         if key in seen:
             duplicate_count += 1
+            if expectation_match and key not in expectation_keys:
+                existing = next(item for item in messages if item["message_key"] == key)
+                expectation_matches.append(_safe_expectation_match(existing))
+                expectation_keys.add(key)
             continue
         seen.add(key)
         messages.append(message)
+        if expectation_match:
+            expectation_matches.append(_safe_expectation_match(message))
+            expectation_keys.add(key)
 
     payload["schema_version"] = SCHEMA_VERSION
     payload["messages"] = messages
@@ -292,8 +349,30 @@ def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
         "enabled": True,
         "primary": "message_node_automation_id",
         "fallback": "direction_type_sender_timestamp_text",
+        "excludes": ["visible", "bounds", "offscreen", "screen_coordinates"],
     }
+    expectation = payload.get("expectation")
+    if isinstance(expectation, dict) and expectation.get("provided"):
+        expectation["matches"] = expectation_matches
+        expectation["matched"] = bool(expectation_matches)
+        expectation["match_count"] = len(expectation_matches)
     return payload
+
+
+def _safe_expectation_match(message: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "message_key": message.get("message_key", ""),
+        "node_identity_hash": message.get("node_identity_hash", ""),
+        "content_hash": message.get("content_hash", ""),
+        "direction": message.get("direction", ""),
+        "observed_direction_guess": message.get("observed_direction_guess", ""),
+        "type": message.get("type", ""),
+        "original_type": message.get("original_type", ""),
+        "semantic_flags": list(message.get("semantic_flags", [])),
+        "control_flags": dict(message.get("control_flags", {})),
+        "direction_diagnostics": dict(message.get("direction_diagnostics", {})),
+        "visible": bool(message.get("visible", False)),
+    }
 
 
 def write_json(payload: dict[str, Any], output: str) -> None:
@@ -302,6 +381,7 @@ def write_json(payload: dict[str, Any], output: str) -> None:
 
 def main() -> int:
     core.classify_direction = classify_direction
+    core.classify_direction_details = classify_direction_details
     core.write_json = write_json
     return core.main()
 
