@@ -238,18 +238,32 @@ def _digest(parts: Iterable[str]) -> str:
 
 
 def _stable_message_key(message: dict[str, Any]) -> tuple[str, str]:
-    node_id = str(message.get("node_id", "")).strip()
-    if node_id:
-        return f"uia:{_digest([node_id])}", "automation_id"
+    node_identity_hash = str(message.get("node_identity_hash", "")).strip()
+    if node_identity_hash:
+        return f"uia:{node_identity_hash[:24]}", "node_identity_hash"
 
     fallback_parts = [
         str(message.get("direction", "")),
         str(message.get("type", "")),
         str(message.get("sender", "")),
         str(message.get("timestamp", "")),
-        str(message.get("text", "")),
+        str(message.get("content_hash", "")),
     ]
     return f"fallback:{_digest(fallback_parts)}", "content_time_fallback"
+
+
+def _observation_key(message: dict[str, Any]) -> str:
+    digest = _digest([
+        str(message.get('message_key', '')),
+        str(message.get('content_hash', '')),
+        str(message.get('direction', '')),
+        str(message.get('original_type', message.get('type', ''))),
+        str(message.get('timestamp', '')),
+        '|'.join(sorted(str(item) for item in message.get('semantic_flags', []))),
+        str(message.get('lifecycle_kind', '')),
+        str(message.get('lifecycle_status', '')),
+    ])
+    return f"obs:{digest}"
 
 
 def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
@@ -269,6 +283,7 @@ def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
         key, key_source = _stable_message_key(message)
         message["message_key"] = key
         message["key_source"] = key_source
+        message["observation_key"] = _observation_key(message)
         if key_source == "content_time_fallback":
             fallback_key_count += 1
         if key in seen:
@@ -290,8 +305,9 @@ def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
     meta["fallback_key_count"] = fallback_key_count
     meta["deduplication"] = {
         "enabled": True,
-        "primary": "message_node_automation_id",
-        "fallback": "direction_type_sender_timestamp_text",
+        "primary": "node_identity_hash",
+        "fallback": "direction_type_sender_timestamp_content_hash",
+        "excludes": ["visible", "bounds", "offscreen", "screen_coordinates"],
     }
     return payload
 

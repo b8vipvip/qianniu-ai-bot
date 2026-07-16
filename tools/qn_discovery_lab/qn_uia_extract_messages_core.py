@@ -33,7 +33,7 @@ from qn_uia_send_probe import (
 
 MESSAGE_LIST_ID = "J_msg_list"
 PRIVATE_OUTPUT_TOKEN = "SHOW_PRIVATE_CHAT_TEXT"
-SCHEMA_VERSION = "qn_uia_messages.v1"
+SCHEMA_VERSION = "qn_uia_messages.v2"
 
 MESSAGE_NODE_RE = re.compile(r"(?:^|[._-])[A-Za-z0-9_-]+\.PNM$|\.PNM(?:$|[._-])")
 URL_RE = re.compile(r"https?://\S+", re.IGNORECASE)
@@ -65,6 +65,15 @@ SYSTEM_MARKERS = (
 )
 PRODUCT_MARKERS = ("商品", "宝贝", "SKU", "价格", "立即购买", "查看详情")
 IMAGE_MARKERS = ("[图片]", "图片消息", "查看图片")
+
+SEMANTIC_RULES = {
+    "withdrawal.full_phrase": ("撤回了一条消息", "消息已撤回", "撤回一条消息"),
+    "risk.block": ("风险提示", "存在风险", "安全风险", "已被拦截"),
+    "send.failure": ("发送失败", "消息发送失败", "未发送成功"),
+    "history.marker": ("以上为历史消息", "以下为新消息", "历史消息"),
+    "order.notice": ("订单", "退款", "售后", "交易关闭"),
+    "system.tip": ("系统消息", "服务提醒", "系统提示"),
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -254,10 +263,12 @@ def find_message_nodes(
     return fallback, True
 
 
-def collect_fragments(control: auto.Control) -> tuple[list[str], list[str]]:
+def collect_fragment_details(control: auto.Control) -> tuple[list[str], list[str], dict[str, Any]]:
     root_name = safe_text(safe_attr(control, "Name", ""))
     descendant_fragments: list[str] = []
     control_types: list[str] = []
+    text_fragments: list[str] = []
+    hyperlink_count = 0
 
     for descendant, depth in iter_tree(
         control,
@@ -269,16 +280,79 @@ def collect_fragments(control: auto.Control) -> tuple[list[str], list[str]]:
         if control_type:
             control_types.append(control_type)
 
+        if "Hyperlink" in control_type:
+            hyperlink_count += 1
+
         if depth == 0:
             continue
         name = safe_text(safe_attr(descendant, "Name", ""))
-        descendant_fragments.extend(split_fragments(name))
+        parts = split_fragments(name)
+        descendant_fragments.extend(parts)
+        if "Text" in control_type:
+            text_fragments.extend(parts)
 
     fragments = unique_strings(descendant_fragments)
     if not fragments:
         fragments = unique_strings(split_fragments(root_name))
 
-    return fragments, unique_strings(control_types)
+    details = {
+        "text_fragments": text_fragments,
+        "text_control_count": sum(1 for item in control_types if "Text" in item),
+        "hyperlink_count": hyperlink_count,
+    }
+    return fragments, unique_strings(control_types), details
+
+
+def collect_fragments(control: auto.Control) -> tuple[list[str], list[str]]:
+    fragments, control_types, _details = collect_fragment_details(control)
+    return fragments, control_types
+
+
+def normalize_content(value: str) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def sha256_text(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8", errors="replace")).hexdigest()
+
+
+def semantic_metadata(
+    fragments: list[str],
+    *,
+    text_fragments: list[str],
+    hyperlink_count: int,
+) -> tuple[list[str], list[str]]:
+    candidates = [normalize_content(item) for item in fragments + text_fragments if item]
+    joined = normalize_content(" ".join(candidates))
+    compact = re.sub(r"\s+", "", joined)
+    matched: list[str] = []
+
+    for rule_id, phrases in SEMANTIC_RULES.items():
+        if any(normalize_content(phrase) in joined or phrase in compact for phrase in phrases):
+            matched.append(rule_id)
+
+    withdrawal_parts = any("撤回" in item for item in candidates) and any(
+        marker in joined or marker in compact for marker in ("消息", "一条", "重新编辑")
+    )
+    if withdrawal_parts and "withdrawal.full_phrase" not in matched:
+        matched.append("withdrawal.fragmented_row")
+    if withdrawal_parts and hyperlink_count:
+        matched.append("withdrawal.with_edit_link")
+
+    flags: list[str] = []
+    if any(item.startswith("withdrawal.") for item in matched):
+        flags.append("withdrawal_notice")
+    if "risk.block" in matched:
+        flags.append("risk_notice")
+    if "send.failure" in matched:
+        flags.append("send_failure_notice")
+    if "order.notice" in matched:
+        flags.append("order_notice")
+    if "history.marker" in matched:
+        flags.append("history_marker")
+    if "system.tip" in matched or flags:
+        flags.append("system_tip")
+    return unique_strings(flags), unique_strings(matched)
 
 
 def find_timestamp(fragments: list[str]) -> tuple[str, int]:
@@ -403,13 +477,21 @@ def extract_message(
     include_sensitive: bool,
     expect_message: str,
 ) -> tuple[dict[str, Any], bool]:
-    fragments, control_types = collect_fragments(node)
+    fragments, control_types, details = collect_fragment_details(node)
     timestamp, timestamp_index = find_timestamp(fragments)
     sender = choose_sender(fragments, timestamp, timestamp_index)
     body = choose_body(fragments, sender, timestamp, timestamp_index)
-    message_type = classify_type(body, fragments, control_types)
-    direction = classify_direction(node, message_list, message_type)
+    original_type = classify_type(body, fragments, control_types)
+    observed_direction = classify_direction(node, message_list, original_type)
     node_id = control_automation_id(node)
+    semantic_flags, matched_rule_ids = semantic_metadata(
+        fragments,
+        text_fragments=details["text_fragments"],
+        hyperlink_count=details["hyperlink_count"],
+    )
+    message_type = "system" if "withdrawal_notice" in semantic_flags else original_type
+    direction = "unknown" if "withdrawal_notice" in semantic_flags else observed_direction
+    normalized_body = normalize_content(body)
     matched = bool(expect_message) and any(expect_message in fragment for fragment in fragments)
 
     is_offscreen = bool(safe_attr(node, "IsOffscreen", False))
@@ -420,8 +502,21 @@ def extract_message(
             "timestamp": timestamp,
             "direction": direction,
             "type": message_type,
+            "original_type": original_type,
             "text": serialize_sensitive(body, "text", include_sensitive),
             "visible": not is_offscreen,
+            "content_hash": sha256_text(normalized_body),
+            "content_chars": len(normalized_body),
+            "node_identity_hash": sha256_text(node_id) if node_id else "",
+            "semantic_flags": semantic_flags,
+            "matched_rule_ids": matched_rule_ids,
+            "control_flags": {
+                "is_pnm_node": bool(node_id and MESSAGE_NODE_RE.search(node_id)),
+                "text_control_count": details["text_control_count"],
+                "hyperlink_count": details["hyperlink_count"],
+                "has_hyperlink": details["hyperlink_count"] > 0,
+            },
+            "observed_direction_guess": observed_direction,
         },
         matched,
     )
@@ -524,7 +619,7 @@ def main() -> int:
             "generated_at_utc": datetime.now(timezone.utc).isoformat(),
             "window": WINDOW_NAME,
             "document": DOC_NAME,
-            "message_list_automation_id": MESSAGE_LIST_ID,
+            "message_list_identity_hash": sha256_text(MESSAGE_LIST_ID),
             "message_count": len(messages),
             "used_direct_child_fallback": used_fallback,
             "read_only": True,
