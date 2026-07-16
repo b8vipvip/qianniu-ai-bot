@@ -16,6 +16,7 @@ sys.path.insert(0, str(LAB))
 import qn_uia_extract_messages as extractor
 import qn_uia_extract_messages_core as core
 import qn_uia_lifecycle_probe as probe
+import qn_uia_withdraw_exact_probe as withdraw_probe
 from qn_uia_message_lifecycle import compare_snapshots, load_state, observation_key
 
 
@@ -222,6 +223,131 @@ class LifecycleTests(unittest.TestCase):
         argv = ["probe", "compare", "A", "B", "--scenario", "invalid"]
         with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             probe.parse_args()
+
+    def _expectation_payload(self, items):
+        return {
+            "schema_version": "qn_uia_messages.v2",
+            "redacted": True,
+            "expectation": {"provided": True, "matched": True, "match_count": len(items)},
+            "messages": items,
+        }
+
+    def _raw_expectation_message(self, key, *, text="<redacted:text>", match=True):
+        return {
+            "node_id": core.redact(key + ".PNM", "node_id"),
+            "node_identity_hash": core.sha256_text(key + ".PNM"),
+            "content_hash": core.sha256_text(text),
+            "direction": "incoming", "observed_direction_guess": "incoming",
+            "type": "text", "original_type": "text", "semantic_flags": [],
+            "timestamp": "10:00", "text": core.redact(text, "text"),
+            "sender": core.redact("fixture", "sender"), "_expectation_match": match,
+            "visible": True,
+            "control_flags": {"is_pnm_node": True, "text_control_count": 1},
+            "direction_diagnostics": {
+                "direction_source": "body_geometry", "avatar_candidate_count": 0,
+                "avatar_side": "unknown", "body_anchor_found": True,
+            },
+        }
+
+    def test_29_expectation_matches_body_equal_to_token(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("A", text="fixture-token"),
+        ]))
+        self.assertEqual(1, result["expectation"]["match_count"])
+        self.assertEqual("uia:" + extractor._digest([result["messages"][0]["node_id"]]), result["expectation"]["matches"][0]["message_key"])
+
+    def test_30_expectation_fragment_match_does_not_require_body_hash(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("A", text="body with other content"),
+        ]))
+        self.assertEqual(result["messages"][0]["content_hash"], result["expectation"]["matches"][0]["content_hash"])
+
+    def test_31_single_match_is_reported(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("A", match=True), self._raw_expectation_message("B", match=False),
+        ]))
+        self.assertEqual(1, result["expectation"]["match_count"])
+
+    def test_32_two_substring_matches_are_counted(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("A"), self._raw_expectation_message("B"),
+        ]))
+        self.assertEqual(2, result["expectation"]["match_count"])
+
+    def test_33_wrapper_dedup_matches_final_messages(self):
+        duplicate = self._raw_expectation_message("A")
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([duplicate, dict(duplicate)]))
+        self.assertEqual(1, len(result["messages"]))
+        self.assertEqual(1, result["expectation"]["match_count"])
+        self.assertEqual(result["messages"][0]["message_key"], result["expectation"]["matches"][0]["message_key"])
+
+    def test_34_expectation_output_is_redacted(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("A", text="secret fixture token"),
+        ]))
+        rendered = json.dumps(result, ensure_ascii=False)
+        self.assertNotIn("secret fixture token", rendered)
+
+    def test_35_expectation_matches_has_no_raw_automation_id(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("A"),
+        ]))
+        self.assertNotIn("node_id", result["expectation"]["matches"][0])
+
+    def test_36_expectation_keeps_legacy_key_algorithm(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("fixture-message-42"),
+        ]))
+        message = result["messages"][0]
+        expected = "uia:" + extractor._digest([message["node_id"]])
+        self.assertEqual(expected, result["expectation"]["matches"][0]["message_key"])
+
+    def test_37_duplicate_late_match_is_preserved(self):
+        first = self._raw_expectation_message("A", match=False)
+        second = dict(first, _expectation_match=True)
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([first, second]))
+        self.assertEqual(1, result["expectation"]["match_count"])
+        self.assertEqual(result["messages"][0]["message_key"], result["expectation"]["matches"][0]["message_key"])
+
+    def test_38_direction_diagnostics_are_privacy_safe(self):
+        result = extractor._normalize_and_deduplicate(self._expectation_payload([
+            self._raw_expectation_message("A"),
+        ]))
+        match = result["expectation"]["matches"][0]
+        self.assertEqual("body_geometry", match["direction_diagnostics"]["direction_source"])
+        rendered = json.dumps(match, ensure_ascii=False)
+        for forbidden in ("rectangle", "bounds", "coordinate", '"node_id":', '"automation_id":'):
+            self.assertNotIn(forbidden, rendered.lower())
+
+    def test_39_exact_withdraw_identity_accepts_captured_target(self):
+        metadata = {
+            "message_key": "uia:key", "node_identity_hash": "node-hash",
+            "visible": True, "type": "text", "original_type": "text",
+            "semantic_flags": [],
+        }
+        withdraw_probe.validate_expected_identity(metadata, "uia:key", "node-hash")
+
+    def test_40_exact_withdraw_rejects_wrong_key_or_node(self):
+        metadata = {
+            "message_key": "uia:key", "node_identity_hash": "node-hash",
+            "visible": True, "type": "text", "original_type": "text",
+            "semantic_flags": [],
+        }
+        with self.assertRaises(ValueError):
+            withdraw_probe.validate_expected_identity(metadata, "uia:other", "node-hash")
+        with self.assertRaises(ValueError):
+            withdraw_probe.validate_expected_identity(metadata, "uia:key", "other-node")
+
+    def test_41_exact_withdraw_rejects_offscreen_or_non_text(self):
+        base = {
+            "message_key": "uia:key", "node_identity_hash": "node-hash",
+            "visible": True, "type": "text", "original_type": "text",
+            "semantic_flags": [],
+        }
+        with self.assertRaises(ValueError):
+            withdraw_probe.validate_expected_identity(dict(base, visible=False), "uia:key", "node-hash")
+        with self.assertRaises(ValueError):
+            withdraw_probe.validate_expected_identity(dict(base, type="system"), "uia:key", "node-hash")
 
 
 if __name__ == "__main__":

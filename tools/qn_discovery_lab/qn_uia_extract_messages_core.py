@@ -493,7 +493,19 @@ def extract_message(
     sender = choose_sender(fragments, timestamp, timestamp_index)
     body = choose_body(fragments, sender, timestamp, timestamp_index)
     original_type = classify_type(body, fragments, control_types)
-    observed_direction = classify_direction(node, message_list, original_type)
+    direction_details = globals().get("classify_direction_details")
+    if callable(direction_details):
+        observed_direction, direction_diagnostics = direction_details(
+            node, message_list, original_type
+        )
+    else:
+        observed_direction = classify_direction(node, message_list, original_type)
+        direction_diagnostics = {
+            "direction_source": "legacy_geometry" if observed_direction != "unknown" else "unknown",
+            "avatar_candidate_count": 0,
+            "avatar_side": "unknown",
+            "body_anchor_found": False,
+        }
     node_id = control_automation_id(node)
     semantic_flags, matched_rule_ids = semantic_metadata(
         fragments,
@@ -529,6 +541,10 @@ def extract_message(
                 "has_hyperlink": details["hyperlink_count"] > 0,
             },
             "observed_direction_guess": observed_direction,
+            "direction_diagnostics": direction_diagnostics,
+            # Internal-only marker. The wrapper converts this to privacy-safe
+            # expectation.matches after stable keys and deduplication exist.
+            "_expectation_match": matched,
         },
         matched,
     )
@@ -661,6 +677,7 @@ def main() -> int:
             ).hexdigest()[:12],
             "matched": match_count > 0,
             "match_count": match_count,
+            "matches": [],
         }
 
     write_json(payload, args.output)
