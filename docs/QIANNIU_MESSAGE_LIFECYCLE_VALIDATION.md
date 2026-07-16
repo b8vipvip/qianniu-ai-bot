@@ -35,6 +35,16 @@
 - 消失为 `not_observed`，再次出现为 `reobserved`；两者都不能推断撤回或新消息。
 - 单独出现的撤回提示只能是 candidate。只有同键、同节点、内容变化、旧消息为普通文本且新语义为撤回时，才能确认买家或卖家撤回。
 - 所有撤回、历史初始化和重新观察事件均 `actionable=false`。
+- `message_key` 保持既有 `qn_uia_messages.v2` 算法和 `key_source`；新增的 `node_identity_hash` 只作为附加关联证据，不重写历史键。
+- 未经真实验证的风险、发送失败、订单和一般系统提示只作为低置信度 semantic candidate；它们不会单独覆盖普通文本的方向、类型或 `user_text` 生命周期。
+
+推荐的证据比较命令使用显式路径参数：
+
+```text
+qn_uia_lifecycle_probe.py compare --before before.json --after after.json --scenario history_reload
+```
+
+仍兼容 `compare before.json after.json --scenario history_reload`。
 
 ## 尚未验证
 

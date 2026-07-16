@@ -71,7 +71,7 @@ SEMANTIC_RULES = {
     "risk.block": ("风险提示", "存在风险", "安全风险", "已被拦截"),
     "send.failure": ("发送失败", "消息发送失败", "未发送成功"),
     "history.marker": ("以上为历史消息", "以下为新消息", "历史消息"),
-    "order.notice": ("订单", "退款", "售后", "交易关闭"),
+    "order.notice": ("订单已关闭", "交易关闭", "退款成功", "退款申请已提交"),
     "system.tip": ("系统消息", "服务提醒", "系统提示"),
 }
 
@@ -355,6 +355,17 @@ def semantic_metadata(
     return unique_strings(flags), unique_strings(matched)
 
 
+def semantic_candidate_metadata(semantic_flags: list[str]) -> list[dict[str, Any]]:
+    return [
+        {
+            "flag": flag,
+            "confidence": "high" if flag == "withdrawal_notice" else "low",
+            "requires_local_validation": flag != "withdrawal_notice",
+        }
+        for flag in semantic_flags
+    ]
+
+
 def find_timestamp(fragments: list[str]) -> tuple[str, int]:
     for index, fragment in enumerate(fragments):
         for pattern in TIMESTAMP_RES:
@@ -509,6 +520,7 @@ def extract_message(
             "content_chars": len(normalized_body),
             "node_identity_hash": sha256_text(node_id) if node_id else "",
             "semantic_flags": semantic_flags,
+            "semantic_candidates": semantic_candidate_metadata(semantic_flags),
             "matched_rule_ids": matched_rule_ids,
             "control_flags": {
                 "is_pnm_node": bool(node_id and MESSAGE_NODE_RE.search(node_id)),
@@ -532,6 +544,25 @@ def write_json(payload: dict[str, Any], output: str) -> None:
     path.write_text(rendered, encoding="utf-8")
     print(f"[WROTE] {path}", file=sys.stderr)
     print("[PRIVATE] Do not commit real chat extraction output.", file=sys.stderr)
+
+
+def build_meta(
+    *,
+    message_count: int,
+    used_fallback: bool,
+    warnings: list[str],
+) -> dict[str, Any]:
+    return {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "window": WINDOW_NAME,
+        "document": DOC_NAME,
+        "message_list_automation_id": MESSAGE_LIST_ID,
+        "message_list_identity_hash": sha256_text(MESSAGE_LIST_ID),
+        "message_count": message_count,
+        "used_direct_child_fallback": used_fallback,
+        "read_only": True,
+        "warnings": warnings,
+    }
 
 
 def main() -> int:
@@ -615,16 +646,11 @@ def main() -> int:
             "source": "not_implemented_until_P4",
         },
         "messages": messages,
-        "meta": {
-            "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-            "window": WINDOW_NAME,
-            "document": DOC_NAME,
-            "message_list_identity_hash": sha256_text(MESSAGE_LIST_ID),
-            "message_count": len(messages),
-            "used_direct_child_fallback": used_fallback,
-            "read_only": True,
-            "warnings": warnings,
-        },
+        "meta": build_meta(
+            message_count=len(messages),
+            used_fallback=used_fallback,
+            warnings=warnings,
+        ),
     }
 
     if args.expect_message:

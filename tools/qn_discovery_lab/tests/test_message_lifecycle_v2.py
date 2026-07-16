@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 LAB = Path(__file__).resolve().parents[1]
@@ -30,6 +33,19 @@ def message(key="A", direction="incoming", content="x", *, flags=None, visible=T
 
 def snapshot(*items):
     return {"schema_version": "qn_uia_messages.v2", "messages": list(items)}
+
+
+def capture_args(**overrides):
+    values = {
+        "output": "C:/tmp/a.json",
+        "include_sensitive": False,
+        "confirm_local_sensitive": "",
+        "max_messages": 100,
+        "max_depth": 30,
+        "max_nodes": 8000,
+    }
+    values.update(overrides)
+    return argparse.Namespace(**values)
 
 
 class LifecycleTests(unittest.TestCase):
@@ -79,17 +95,19 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn("withdrawal.with_edit_link", rules)
 
     def test_08_default_capture_has_no_redact_argument(self):
-        args = argparse.Namespace(output="C:/tmp/a.json", include_sensitive=False, confirm_local_sensitive="")
+        args = capture_args()
         self.assertNotIn("--redact", probe.capture_command(args))
 
     def test_09_sensitive_capture_forwards_both_confirmations(self):
-        args = argparse.Namespace(output="C:/qianniu-evidence/private.json", include_sensitive=True, confirm_local_sensitive=probe.SENSITIVE_TOKEN)
+        args = capture_args(output="C:/qianniu-evidence/private.json", include_sensitive=True,
+                            confirm_local_sensitive=probe.SENSITIVE_TOKEN)
         command = probe.capture_command(args)
         self.assertIn("--include-sensitive", command)
         self.assertIn(probe.PRIVATE_TOKEN, command)
 
     def test_10_sensitive_repo_path_rejected(self):
-        args = argparse.Namespace(output=str(LAB / "private.json"), include_sensitive=True, confirm_local_sensitive=probe.SENSITIVE_TOKEN)
+        args = capture_args(output=str(LAB / "private.json"), include_sensitive=True,
+                            confirm_local_sensitive=probe.SENSITIVE_TOKEN)
         with self.assertRaises(ValueError):
             probe.capture_command(args)
 
@@ -138,6 +156,72 @@ class LifecycleTests(unittest.TestCase):
         outgoing = message("B", direction="outgoing", node="node-b")
         self.assertEqual("incoming", incoming["direction"])
         self.assertEqual("outgoing", outgoing["direction"])
+
+    def test_21_stable_key_remains_compatible_with_baseline(self):
+        raw_id = "fixture-message-42.PNM"
+        redacted_id = core.redact(raw_id, "node_id")
+        legacy_key = "uia:" + extractor._digest([redacted_id])
+        new_message = {
+            "node_id": redacted_id,
+            "node_identity_hash": core.sha256_text(raw_id),
+        }
+        key, source = extractor._stable_message_key(new_message)
+        self.assertEqual(legacy_key, key)
+        self.assertEqual("automation_id", source)
+
+    def test_22_new_identity_metadata_does_not_create_added(self):
+        raw_id = "fixture-message-42.PNM"
+        node_id = core.redact(raw_id, "node_id")
+        old = {"node_id": node_id, "direction": "incoming", "type": "text",
+               "sender": "sender", "timestamp": "10:00", "text": "text"}
+        new = dict(old, node_identity_hash=core.sha256_text(raw_id), content_hash="hash")
+        self.assertEqual(extractor._stable_message_key(old), extractor._stable_message_key(new))
+
+    def test_23_message_list_metadata_keeps_legacy_and_hash_fields(self):
+        meta = core.build_meta(message_count=0, used_fallback=False, warnings=[])
+        self.assertEqual("J_msg_list", meta["message_list_automation_id"])
+        self.assertEqual(core.sha256_text("J_msg_list"), meta["message_list_identity_hash"])
+
+    def test_24_order_refund_question_remains_user_text(self):
+        flags, _rules = core.semantic_metadata(
+            ["我的订单怎么申请退款"], text_fragments=["我的订单怎么申请退款"], hyperlink_count=0,
+        )
+        item = message(direction="incoming", flags=flags, message_type="text")
+        result = compare_snapshots(snapshot(), snapshot(item))
+        event = result["changes"]["added"][0]
+        self.assertEqual("user_text", event["lifecycle_kind"])
+        self.assertTrue(event["actionable_eligible"])
+        self.assertNotIn("order_notice", flags)
+        self.assertEqual([], result["confirmed_events"])
+
+    def test_25_capture_forwards_limits(self):
+        command = probe.capture_command(capture_args(max_messages=80, max_depth=20, max_nodes=4000))
+        self.assertEqual("80", command[command.index("--max-messages") + 1])
+        self.assertEqual("20", command[command.index("--max-depth") + 1])
+        self.assertEqual("4000", command[command.index("--max-nodes") + 1])
+        self.assertNotIn("--redact", command)
+
+    def test_26_compare_outputs_scenario_with_named_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            before = Path(directory) / "before.json"
+            after = Path(directory) / "after.json"
+            before.write_text(json.dumps(snapshot(message())), encoding="utf-8")
+            after.write_text(json.dumps(snapshot(message())), encoding="utf-8")
+            output = io.StringIO()
+            argv = ["probe", "compare", "--before", str(before), "--after", str(after),
+                    "--scenario", "history_reload"]
+            with mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(output):
+                self.assertEqual(0, probe.main())
+            self.assertEqual("history_reload", json.loads(output.getvalue())["scenario"])
+
+    def test_27_compare_accepts_positional_paths(self):
+        args = argparse.Namespace(before=None, after=None, before_pos="A", after_pos="B")
+        self.assertEqual(("A", "B"), probe.compare_paths(args))
+
+    def test_28_invalid_scenario_is_rejected(self):
+        argv = ["probe", "compare", "A", "B", "--scenario", "invalid"]
+        with mock.patch.object(sys, "argv", argv), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            probe.parse_args()
 
 
 if __name__ == "__main__":

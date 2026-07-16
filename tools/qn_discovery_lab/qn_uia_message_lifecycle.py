@@ -66,23 +66,23 @@ def kind_for(message: dict[str, Any]) -> LifecycleKind:
     flags = set(message.get("semantic_flags", []))
     if "withdrawal_notice" in flags:
         return LifecycleKind.WITHDRAWAL_CANDIDATE
+    message_type = message.get("type")
+    if message_type == "image":
+        return LifecycleKind.IMAGE
+    if message_type == "product":
+        return LifecycleKind.PRODUCT
+    if message_type == "text" and message.get("direction") == "incoming":
+        return LifecycleKind.USER_TEXT
+    if message_type == "text" and message.get("direction") == "outgoing":
+        return LifecycleKind.SELLER_TEXT
     if "risk_notice" in flags:
         return LifecycleKind.RISK_CANDIDATE
     if "send_failure_notice" in flags:
         return LifecycleKind.SEND_FAILURE_CANDIDATE
     if "order_notice" in flags:
         return LifecycleKind.ORDER_CANDIDATE
-    message_type = message.get("type")
-    if message_type == "image":
-        return LifecycleKind.IMAGE
-    if message_type == "product":
-        return LifecycleKind.PRODUCT
     if message_type == "system" or "system_tip" in flags:
         return LifecycleKind.SYSTEM_CANDIDATE
-    if message_type == "text" and message.get("direction") == "incoming":
-        return LifecycleKind.USER_TEXT
-    if message_type == "text" and message.get("direction") == "outgoing":
-        return LifecycleKind.SELLER_TEXT
     return LifecycleKind.UNKNOWN
 
 
@@ -91,7 +91,13 @@ def _event(message: dict[str, Any], *, status: LifecycleStatus, prior: dict[str,
            history_initial: bool = False, observation_count: int = 1) -> dict[str, Any]:
     direction = str(message.get("observed_direction_guess", message.get("direction", "unknown")))
     prior_direction = str((prior or {}).get("direction", ""))
+    lifecycle_kind = kind_for(message)
     actionable = False
+    actionable_eligible = (
+        lifecycle_kind == LifecycleKind.USER_TEXT
+        and not history_initial
+        and status in (LifecycleStatus.OBSERVED, LifecycleStatus.STABLE)
+    )
     return {
         "message_key": message.get("message_key", ""),
         "observation_key": observation_key(message),
@@ -99,9 +105,10 @@ def _event(message: dict[str, Any], *, status: LifecycleStatus, prior: dict[str,
         "observed_direction": direction,
         "prior_direction": prior_direction,
         "original_type": message.get("original_type", message.get("type", "unknown")),
-        "lifecycle_kind": kind_for(message).value,
+        "lifecycle_kind": lifecycle_kind.value,
         "lifecycle_status": status.value,
         "actionable": actionable,
+        "actionable_eligible": actionable_eligible,
         "ignore_reason": ignore_reason,
         "evidence": evidence or {},
         "confidence": confidence,
@@ -111,6 +118,7 @@ def _event(message: dict[str, Any], *, status: LifecycleStatus, prior: dict[str,
         "observation_count": observation_count,
         "content_hash": message.get("content_hash", ""),
         "semantic_flags": list(message.get("semantic_flags", [])),
+        "semantic_candidates": list(message.get("semantic_candidates", [])),
         "history_initial": history_initial,
     }
 

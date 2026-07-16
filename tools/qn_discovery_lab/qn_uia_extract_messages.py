@@ -238,16 +238,19 @@ def _digest(parts: Iterable[str]) -> str:
 
 
 def _stable_message_key(message: dict[str, Any]) -> tuple[str, str]:
-    node_identity_hash = str(message.get("node_identity_hash", "")).strip()
-    if node_identity_hash:
-        return f"uia:{node_identity_hash[:24]}", "node_identity_hash"
+    # Compatibility contract: qn_uia_messages.v2 historically derives the key
+    # from the serialized node_id (redacted by default). node_identity_hash is
+    # additional evidence and must never rewrite established snapshot keys.
+    node_id = str(message.get("node_id", "")).strip()
+    if node_id:
+        return f"uia:{_digest([node_id])}", "automation_id"
 
     fallback_parts = [
         str(message.get("direction", "")),
         str(message.get("type", "")),
         str(message.get("sender", "")),
         str(message.get("timestamp", "")),
-        str(message.get("content_hash", "")),
+        str(message.get("text", "")),
     ]
     return f"fallback:{_digest(fallback_parts)}", "content_time_fallback"
 
@@ -305,8 +308,8 @@ def _normalize_and_deduplicate(payload: dict[str, Any]) -> dict[str, Any]:
     meta["fallback_key_count"] = fallback_key_count
     meta["deduplication"] = {
         "enabled": True,
-        "primary": "node_identity_hash",
-        "fallback": "direction_type_sender_timestamp_content_hash",
+        "primary": "message_node_automation_id",
+        "fallback": "direction_type_sender_timestamp_text",
         "excludes": ["visible", "bounds", "offscreen", "screen_coordinates"],
     }
     return payload

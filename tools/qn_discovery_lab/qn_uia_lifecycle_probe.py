@@ -14,6 +14,15 @@ ROOT = Path(__file__).resolve().parent
 EXTRACTOR = ROOT / "qn_uia_extract_messages.py"
 SENSITIVE_TOKEN = "STORE_LOCAL_SENSITIVE"
 PRIVATE_TOKEN = "SHOW_PRIVATE_CHAT_TEXT"
+SCENARIOS = (
+    "buyer_withdrawal",
+    "seller_withdrawal",
+    "system_tip",
+    "risk_or_block",
+    "outgoing_send_failure",
+    "virtualized_list",
+    "history_reload",
+)
 
 
 def _inside_repo(path: Path) -> bool:
@@ -29,7 +38,18 @@ def _inside_repo(path: Path) -> bool:
 
 def capture_command(args: argparse.Namespace) -> list[str]:
     output = Path(args.output)
-    command = [sys.executable, str(EXTRACTOR), "--output", str(output)]
+    command = [
+        sys.executable,
+        str(EXTRACTOR),
+        "--max-messages",
+        str(args.max_messages),
+        "--max-depth",
+        str(args.max_depth),
+        "--max-nodes",
+        str(args.max_nodes),
+        "--output",
+        str(output),
+    ]
     if args.include_sensitive:
         if args.confirm_local_sensitive != SENSITIVE_TOKEN:
             raise ValueError(f"sensitive capture requires --confirm-local-sensitive {SENSITIVE_TOKEN}")
@@ -44,11 +64,17 @@ def parse_args() -> argparse.Namespace:
     sub = parser.add_subparsers(dest="command", required=True)
     capture = sub.add_parser("capture")
     capture.add_argument("--output", required=True)
+    capture.add_argument("--max-messages", type=int, default=100)
+    capture.add_argument("--max-depth", type=int, default=30)
+    capture.add_argument("--max-nodes", type=int, default=8000)
     capture.add_argument("--include-sensitive", action="store_true")
     capture.add_argument("--confirm-local-sensitive", default="")
     compare = sub.add_parser("compare")
-    compare.add_argument("before")
-    compare.add_argument("after")
+    compare.add_argument("before_pos", nargs="?")
+    compare.add_argument("after_pos", nargs="?")
+    compare.add_argument("--before")
+    compare.add_argument("--after")
+    compare.add_argument("--scenario", required=True, choices=SCENARIOS)
     compare.add_argument("--output", default="-")
     inspect = sub.add_parser("inspect-state")
     inspect.add_argument("state")
@@ -62,13 +88,29 @@ def _read(path: str) -> dict:
     return value
 
 
+def compare_paths(args: argparse.Namespace) -> tuple[str, str]:
+    before = args.before or args.before_pos
+    after = args.after or args.after_pos
+    if not before or not after:
+        raise ValueError("compare requires before and after snapshots")
+    if args.before and args.before_pos:
+        raise ValueError("use either --before/--after or positional paths, not both")
+    if args.after and args.after_pos:
+        raise ValueError("use either --before/--after or positional paths, not both")
+    return before, after
+
+
 def main() -> int:
     args = parse_args()
     try:
         if args.command == "capture":
+            if args.max_messages <= 0 or args.max_depth <= 0 or args.max_nodes <= 0:
+                raise ValueError("capture limits must be positive")
             return subprocess.run(capture_command(args), cwd=str(ROOT), check=False).returncode
         if args.command == "compare":
-            result = compare_snapshots(_read(args.before), _read(args.after))
+            before, after = compare_paths(args)
+            result = compare_snapshots(_read(before), _read(after))
+            result["scenario"] = args.scenario
             rendered = json.dumps(result, ensure_ascii=False, indent=2) + "\n"
             if args.output == "-":
                 sys.stdout.write(rendered)
