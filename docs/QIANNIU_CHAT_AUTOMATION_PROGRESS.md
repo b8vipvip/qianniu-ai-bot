@@ -342,8 +342,16 @@ Do not repeat these as the next default step:
 | Write and read back input text | Verified |
 | Restore original input | Verified |
 | Locate send button by AutomationId | Verified |
-| Invoke send exactly once | Pending next probe |
-| Verify sent message in UIA tree | Pending next probe |
+| UIA Enter single-send | Verified by local operator |
+| Verify sent message in UIA tree | Verified |
 | Background message stream | Not yet available |
 | Stable public/internal API | Not found |
-| Main bot integration | Intentionally deferred |
+| Main bot integration | Intentionally deferred; next production step is shadow mode after lifecycle evidence |
+
+## 13. Message lifecycle framework v1 (2026-07-15)
+
+Added a generic, UIA-decoupled lifecycle framework under `tools/qn_discovery_lab` for `qn_uia_messages.v2`-style snapshots. It preserves the verified UIA chain: local operator verification already covered Enter single-send, UIA message-tree send confirmation, structured redacted extraction, direction recognition, stable `message_key`/`key_source`, and two-snapshot stability. Buyer withdrawal now has controlled local Qianniu 9.97.56N evidence for one confirmed UIA shape: the same stable `message_key`/node identity changes in place from `incoming` text to an `unknown`/`system` withdrawal notice, the content fingerprint changes, the original body is gone, and no stable key is added or removed. This supports `confirmed_withdrawn` only for that same-key in-place update; standalone or historical off-screen withdrawal notices remain candidates.
+
+New local evidence work must stay read-only and redacted by default. Candidate text rules for seller withdrawals, system tips, risk/block notices, order/system-like messages, and send failures are local-validation candidates only; they must not produce confirmed statuses without stronger evidence.
+
+Next stage: collect local evidence bundles for the remaining scenario matrix, then complete evidence-driven rules. Only after that should the lifecycle layer run in production shadow mode; it is not currently connected to the main bot.

@@ -724,13 +724,21 @@ $py="$PWD\.venv-uia\Scripts\python.exe"
 | 恢复输入框原内容 | 已验证 |
 | 定位发送按钮 | 已验证 |
 | 安全发送探针已提交 | 已完成 |
-| 真正调用发送一次 | 待用户在测试会话验证 |
-| 从 UIA 树确认发送结果 | 待验证 |
-| 结构化消息 JSON 提取器 | 未完成 |
-| 新消息 watcher | 未完成 |
+| UIA Enter 单次发送 | 已由本地操作员验证 |
+| 从 UIA 树确认发送结果 | 已验证 |
+| 结构化消息 JSON 提取器 | 已验证（脱敏） |
+| 买家撤回同 message_key 原地更新 | 已在 Qianniu 9.97.56N 受控验证 |
+| 卖家撤回、风控屏蔽、发送失败等特殊生命周期规则 | 需要本地证据 |
 | 当前联系人/会话识别 | 未完成 |
 | 主 Bot UIA Adapter 集成 | 有意延后 |
 | 稳定公开或内部聊天 API | 未找到 |
 | MessageSDK 后台消息流 | 未完成 |
 
 本文件是项目级交接；千牛逆向的逐项证据和实验细节以 `docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md` 为准。
+## 15. Message lifecycle framework v1 handoff (2026-07-15)
+
+A new generic lifecycle layer was added under `tools/qn_discovery_lab`. It accepts `qn_uia_messages.v2`-style JSON/dicts and produces redacted lifecycle records, snapshot diffs, conservative candidate events, and an atomic state file that stores hashes/keys/status/timestamps/counts but no raw chat text.
+
+Confirmed baseline to preserve from the UIA validation chain: UIA Enter single-send was verified by the local operator, UIA message-tree send confirmation was verified, structured redacted extraction was verified, direction recognition was verified, `qn_uia_messages.v2` stable keys were verified, and dual-snapshot stability was verified. Buyer withdrawal has now been locally validated for Qianniu 9.97.56N when the same stable `message_key` changes in place from incoming text to a system withdrawal notice and no keys are added or removed. Seller withdrawal, risk/block notices, send failures, virtualized-list behavior, and broader system notices still require local validation.
+
+The next phase is local evidence-driven rule completion using `docs/QIANNIU_MESSAGE_LIFECYCLE_VALIDATION.md`. After evidence is collected and reviewed, the lifecycle layer may be introduced as production shadow mode. Do not modify production send behavior until current-conversation detection, structured extraction, deduplication, send-result verification, and failure handling are proven.
