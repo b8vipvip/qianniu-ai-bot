@@ -5,7 +5,7 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     MinWidth="650"
-    MinHeight="560">
+    MinHeight="660">
     <UserControl.Resources>
         <SolidColorBrush x:Key="PageBg" Color="#F7F9FC" />
         <SolidColorBrush x:Key="CardBg" Color="#FFFFFF" />
@@ -22,7 +22,7 @@
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="220" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
@@ -85,7 +85,8 @@
                       MouseDoubleClick="gridEndpoints_MouseDoubleClickAdvanced"
                       HeadersVisibility="Column"
                       RowHeight="30"
-                      MinHeight="220"
+                      Height="202"
+                      MinHeight="202"
                       FrozenColumnCount="3"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto">
