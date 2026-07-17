@@ -11,9 +11,9 @@
 	ew:Title="设置"
 	SizeToContent="Manual"
 	Width="860"
-	Height="720"
+	Height="820"
 	MinWidth="720"
-	MinHeight="520"
+	MinHeight="700"
 	ResizeMode="CanResizeWithGrip">
 	<FrameworkElement.Resources>
 		<ResourceDictionary>
