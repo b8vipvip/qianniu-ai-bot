@@ -5,4 +5,8 @@
       <Guid>{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}</Guid>
     </COMReference>
   </ItemGroup>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'Bot'">
+    <!-- Keep advanced API management isolated from the large legacy options file. -->
+    <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ApiManagement.cs" />
+  </ItemGroup>
 </Project>
