@@ -1183,6 +1183,7 @@ namespace Bot.ChromeNs
         private const string PolicyKey = "MessagePolicyJson";
         private const string LicenseKey = "LicenseJson";
         private const string ComplianceKey = "ComplianceChecklistJson";
+        private const string SmartImportTimeoutKey = "SmartImportTimeoutSeconds";
 
         private static string GetJson(string key)
         {
@@ -1212,6 +1213,19 @@ namespace Bot.ChromeNs
         public static void SaveKnowledgeBase(List<KnowledgeBaseEntry> list)
         {
             SaveJson(KnowledgeKey, JsonConvert.SerializeObject(list ?? new List<KnowledgeBaseEntry>(), Formatting.Indented));
+        }
+
+        public static int GetSmartImportTimeoutSeconds()
+        {
+            var raw = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(SmartImportTimeoutKey, Scope, "600");
+            int seconds;
+            if (!int.TryParse(raw, out seconds)) seconds = 600;
+            return Bot.Knowledge.KnowledgeAiService.ClampTimeout(seconds);
+        }
+
+        public static void SaveSmartImportTimeoutSeconds(int seconds)
+        {
+            BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(SmartImportTimeoutKey, Scope, Bot.Knowledge.KnowledgeAiService.ClampTimeout(seconds).ToString());
         }
 
         public static AutoReplyRuleConfig GetAutoReplyRules()

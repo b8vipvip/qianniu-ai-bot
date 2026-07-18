@@ -8,6 +8,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Threading;
 
 namespace Bot.ChromeNs
 {
@@ -234,6 +235,11 @@ namespace Bot.ChromeNs
 
         public static StructuredChatResult CallStructuredChat(JArray messages, int maxTokens, double temperature)
         {
+            return CallStructuredChat(messages, maxTokens, temperature, 0, CancellationToken.None);
+        }
+
+        public static StructuredChatResult CallStructuredChat(JArray messages, int maxTokens, double temperature, int timeoutSeconds, CancellationToken cancellationToken)
+        {
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             if (endpoints.Count < 1)
             {
@@ -242,7 +248,7 @@ namespace Bot.ChromeNs
             var errors = new List<string>();
             foreach (var endpoint in endpoints)
             {
-                var result = CallRawChatCompletions(endpoint, messages, maxTokens, temperature);
+                var result = CallRawChatCompletions(endpoint, messages, maxTokens, temperature, timeoutSeconds, cancellationToken);
                 BotRuntimeStats.RecordAiCall(endpoint, result.InputTokens, result.OutputTokens, result.Success, result.LatencyMs, result.Success ? "成功" : result.Error);
                 endpoint.LastLatencyMs = result.LatencyMs;
                 endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
@@ -255,6 +261,11 @@ namespace Bot.ChromeNs
         }
 
         private static StructuredChatResult CallRawChatCompletions(AiEndpointConfig endpoint, JArray messages, int maxTokens, double temperature)
+        {
+            return CallRawChatCompletions(endpoint, messages, maxTokens, temperature, 0, CancellationToken.None);
+        }
+
+        private static StructuredChatResult CallRawChatCompletions(AiEndpointConfig endpoint, JArray messages, int maxTokens, double temperature, int timeoutSeconds, CancellationToken cancellationToken)
         {
             var sw = Stopwatch.StartNew();
             var url = NormalizeBaseUrl(endpoint.BaseUrl);
@@ -270,13 +281,14 @@ namespace Bot.ChromeNs
             {
                 using (var http = new HttpClient())
                 {
-                    http.Timeout = TimeSpan.FromSeconds(endpoint.TimeoutSeconds <= 0 ? 60 : Math.Max(endpoint.TimeoutSeconds, 60));
+                    var effectiveTimeout = timeoutSeconds > 0 ? timeoutSeconds : (endpoint.TimeoutSeconds <= 0 ? 60 : Math.Max(endpoint.TimeoutSeconds, 60));
+                    http.Timeout = TimeSpan.FromSeconds(effectiveTimeout);
                     http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
                     http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
                     http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
                     using (var content = new StringContent(payloadText, Encoding.UTF8, "application/json"))
                     {
-                        var response = http.PostAsync(url, content).GetAwaiter().GetResult();
+                        var response = cancellationToken.CanBeCanceled ? http.PostAsync(url, content, cancellationToken).GetAwaiter().GetResult() : http.PostAsync(url, content).GetAwaiter().GetResult();
                         var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                         sw.Stop();
                         if (!response.IsSuccessStatusCode)
@@ -293,6 +305,11 @@ namespace Bot.ChromeNs
                         return ok;
                     }
                 }
+            }
+            catch (OperationCanceledException)
+            {
+                sw.Stop();
+                throw;
             }
             catch (Exception ex)
             {
