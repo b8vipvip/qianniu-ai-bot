@@ -78,6 +78,7 @@ namespace Bot.ChromeNs
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
         private readonly IncomingMessageDeduplicator _incomingMessageDeduplicator = new IncomingMessageDeduplicator(2000);
         private readonly DateTime _messageSafetyStartedAt = DateTime.Now;
+        private readonly VisionRequestService _visionRequestService = new VisionRequestService();
 
         public static QN CurQN = null;
 
@@ -334,10 +335,12 @@ namespace Bot.ChromeNs
             var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt);
             var displayQuestion = string.IsNullOrWhiteSpace(messageText) ? decision.MessageLabel : messageText;
 
-            if (!decision.ShouldCallAi)
+            var visionDecision = VisionMessageDecision.Decide(message, messageText, decision, AiEndpointStore.GetVisionEnabledEndpoints());
+
+            if (visionDecision.Kind == VisionDecisionKind.Skip)
             {
-                AddSkippedConversation(sellerNick, buyerNick, displayQuestion, decision.Note);
-                Log.Info("买家消息安全跳过: buyer=" + buyerNick + ", reason=" + decision.Note);
+                AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
+                Log.Info("买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
                 return;
             }
 
@@ -346,6 +349,12 @@ namespace Bot.ChromeNs
             if (!botEnabled)
             {
                 AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                return;
+            }
+
+            if (visionDecision.Kind == VisionDecisionKind.Vision)
+            {
+                await ProcessVisionMessageAsync(new VisionReplyTask { SellerNick = sellerNick, BuyerNick = buyerNick, MessageKey = messageKey, Message = message });
                 return;
             }
 
@@ -364,6 +373,24 @@ namespace Bot.ChromeNs
             {
                 conversationCtl.SetSendResult(sendOk, sendOk ? "已发送" : "发送失败：目标买家会话未确认或发送未完成");
             }
+        }
+
+        private async Task ProcessVisionMessageAsync(VisionReplyTask task)
+        {
+            var autoSend = Params.Robot.GetIsAutoReply();
+            var ctl = Desk.Inst == null ? null : Desk.Inst.AddConversation(task.SellerNick, task.BuyerNick, "[图片]", "正在识别图片...", autoSend);
+            var result = await _visionRequestService.ExecuteAsync(task, CancellationToken.None);
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))
+            {
+                var note = "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
+                if (ctl != null) { ctl.SetAnswer("未生成答案。"); ctl.SetSkipped(note); } else AddSkippedConversation(task.SellerNick, task.BuyerNick, "[图片]", note);
+                Log.Info("视觉消息跳过: seller=" + task.SellerNick + ", buyer=" + task.BuyerNick + ", messageId=" + task.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
+                return;
+            }
+            if (ctl != null) ctl.SetAnswer(result.Answer);
+            if (!autoSend) return;
+            var sendOk = await SendTextWithRetryAsync(task.BuyerNick, result.Answer, 1);
+            if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送" : "识别完成，但目标买家会话未确认，未发送。");
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)

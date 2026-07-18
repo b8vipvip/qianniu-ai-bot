@@ -67,11 +67,11 @@ namespace Bot.ChromeNs
                 var primary = endpoints.First();
                 systemPrompt = BuildSystemPrompt(string.IsNullOrWhiteSpace(primary.SystemPrompt) ? Params.Robot.GetSystemPrompt() : primary.SystemPrompt);
                 var featureFingerprint = BotFeatureStore.GetMessagePolicy().Tone + ":" + BotFeatureStore.GetKnowledgeBase().Count + ":" + BotFeatureStore.GetAutoReplyRules().Enabled;
-                var fingerprint = string.Join("|", endpoints.Select(e => string.Format("{0}:{1}:{2}:{3}", e.Name, e.BaseUrl, e.Model, e.Enabled))) + "|" + featureFingerprint;
+                var fingerprint = string.Join("|", endpoints.Select(e => string.Format("{0}:{1}:{2}:{3}", e.Name, e.BaseUrl, e.TextModel, e.Enabled))) + "|" + featureFingerprint;
                 if (fingerprint != lastConfigFingerprint)
                 {
                     lastConfigFingerprint = fingerprint;
-                    Log.Info("AI配置加载成功, endpointCount=" + endpoints.Count + ", primary=" + primary.Name + ", model=" + primary.Model + ", baseUrl=" + primary.BaseUrl);
+                    Log.Info("AI配置加载成功, endpointCount=" + endpoints.Count + ", primary=" + primary.Name + ", model=" + primary.TextModel + ", baseUrl=" + primary.BaseUrl);
                 }
                 return true;
             }
@@ -178,7 +178,7 @@ namespace Bot.ChromeNs
             var url = NormalizeBaseUrl(endpoint.BaseUrl);
             var payload = new JObject
             {
-                ["model"] = endpoint.Model,
+                ["model"] = endpoint.TextModel,
                 ["messages"] = messages,
                 ["temperature"] = 0.15,
                 ["max_tokens"] = 120
@@ -281,7 +281,7 @@ namespace Bot.ChromeNs
             var url = NormalizeBaseUrl(endpoint.BaseUrl);
             var payload = new JObject
             {
-                ["model"] = endpoint.Model,
+                ["model"] = endpoint.TextModel,
                 ["messages"] = messages,
                 ["temperature"] = temperature,
                 ["max_tokens"] = maxTokens <= 0 ? 2000 : maxTokens
@@ -331,6 +331,7 @@ namespace Bot.ChromeNs
                 BaseUrl = (baseUrl ?? string.Empty).Trim(),
                 ApiKey = (apiKey ?? string.Empty).Trim(),
                 Model = (model ?? string.Empty).Trim(),
+                TextModel = (model ?? string.Empty).Trim(),
                 SystemPrompt = prompt ?? string.Empty,
                 Enabled = true,
                 Priority = 1,
@@ -346,10 +347,11 @@ namespace Bot.ChromeNs
                 if (endpoint == null) return "失败：接口配置为空。";
                 endpoint.BaseUrl = (endpoint.BaseUrl ?? string.Empty).Trim();
                 endpoint.ApiKey = (endpoint.ApiKey ?? string.Empty).Trim();
-                endpoint.Model = (endpoint.Model ?? string.Empty).Trim();
+                endpoint.NormalizeVisionDefaults();
+                endpoint.TextModel = (endpoint.TextModel ?? string.Empty).Trim();
 
                 if (string.IsNullOrEmpty(endpoint.ApiKey)) return "失败：ApiKey 为空。";
-                if (string.IsNullOrEmpty(endpoint.Model)) return "失败：Model 为空。";
+                if (string.IsNullOrEmpty(endpoint.TextModel)) return "失败：Model 为空。";
                 if (!string.IsNullOrEmpty(endpoint.BaseUrl)
                     && !endpoint.BaseUrl.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
                     && !endpoint.BaseUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))

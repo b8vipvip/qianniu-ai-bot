@@ -58,6 +58,12 @@ namespace Bot.AssistWindow.Widget.Robot
             txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
         }
 
+        public void SetAnswer(string answer)
+        {
+            _answer = answer ?? string.Empty;
+            Ui(() => { txtAnswer.Text = _answer; txtTime.Text = DateTime.Now.ToString("HH:mm:ss"); });
+        }
+
         public void SetSkipped(string detail)
         {
             _canResend = false;

@@ -858,6 +858,11 @@ namespace Bot.ChromeNs
         public string BaseUrl { get; set; }
         public string ApiKey { get; set; }
         public string Model { get; set; }
+        public string TextModel { get; set; }
+        public string VisionModel { get; set; }
+        public bool SupportsVision { get; set; }
+        public int MaxImageSizeMb { get; set; }
+        public int VisionTimeoutSeconds { get; set; }
         public string SystemPrompt { get; set; }
         public bool Enabled { get; set; }
         public int Priority { get; set; }
@@ -876,6 +881,11 @@ namespace Bot.ChromeNs
             BaseUrl = string.Empty;
             ApiKey = string.Empty;
             Model = string.Empty;
+            TextModel = string.Empty;
+            VisionModel = string.Empty;
+            SupportsVision = false;
+            MaxImageSizeMb = 5;
+            VisionTimeoutSeconds = 45;
             SystemPrompt = string.Empty;
             Enabled = true;
             Priority = 1;
@@ -898,8 +908,30 @@ namespace Bot.ChromeNs
             }
         }
 
+        public void NormalizeVisionDefaults()
+        {
+            if (string.IsNullOrWhiteSpace(TextModel)) TextModel = Model ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(Model) && !string.IsNullOrWhiteSpace(TextModel)) Model = TextModel;
+            if (MaxImageSizeMb <= 0) MaxImageSizeMb = 5;
+            MaxImageSizeMb = Math.Max(1, Math.Min(20, MaxImageSizeMb));
+            if (VisionTimeoutSeconds <= 0) VisionTimeoutSeconds = 45;
+            VisionTimeoutSeconds = Math.Max(10, Math.Min(180, VisionTimeoutSeconds));
+            if (string.IsNullOrWhiteSpace(VisionModel)) VisionModel = string.Empty;
+        }
+
+        [JsonIgnore]
+        public string VisionStatus
+        {
+            get
+            {
+                if (!SupportsVision) return "未启用";
+                return string.IsNullOrWhiteSpace(VisionModel) ? "已启用但未配置模型" : "已启用";
+            }
+        }
+
         public AiEndpointConfig Clone()
         {
+            NormalizeVisionDefaults();
             return new AiEndpointConfig
             {
                 Id = string.IsNullOrEmpty(Id) ? Guid.NewGuid().ToString("N") : Id,
@@ -908,6 +940,11 @@ namespace Bot.ChromeNs
                 BaseUrl = BaseUrl,
                 ApiKey = ApiKey,
                 Model = Model,
+                TextModel = TextModel,
+                VisionModel = VisionModel,
+                SupportsVision = SupportsVision,
+                MaxImageSizeMb = MaxImageSizeMb,
+                VisionTimeoutSeconds = VisionTimeoutSeconds,
                 SystemPrompt = SystemPrompt,
                 Enabled = Enabled,
                 Priority = Priority,
@@ -961,10 +998,19 @@ namespace Bot.ChromeNs
             return list;
         }
 
+        public static List<AiEndpointConfig> GetVisionEnabledEndpoints()
+        {
+            return GetEndpoints()
+                .Where(e => e.Enabled && e.SupportsVision && !string.IsNullOrWhiteSpace(e.ApiKey) && !string.IsNullOrWhiteSpace(e.BaseUrl) && !string.IsNullOrWhiteSpace(e.VisionModel))
+                .OrderBy(e => e.Priority)
+                .ThenBy(e => e.Name)
+                .ToList();
+        }
+
         public static List<AiEndpointConfig> GetEnabledEndpoints()
         {
             return GetEndpoints()
-                .Where(e => e.Enabled && !string.IsNullOrWhiteSpace(e.ApiKey) && !string.IsNullOrWhiteSpace(e.Model))
+                .Where(e => e.Enabled && !string.IsNullOrWhiteSpace(e.ApiKey) && !string.IsNullOrWhiteSpace(e.TextModel))
                 .OrderBy(e => e.Priority)
                 .ThenBy(e => e.Name)
                 .ToList();
@@ -981,7 +1027,7 @@ namespace Bot.ChromeNs
             {
                 Params.Robot.SetBaseUrl(primary.BaseUrl ?? string.Empty);
                 Params.Robot.SetApiKey(primary.ApiKey ?? string.Empty);
-                Params.Robot.SetModelName(primary.Model ?? string.Empty);
+                Params.Robot.SetModelName(primary.TextModel ?? primary.Model ?? string.Empty);
                 Params.Robot.SetSystemPrompt(primary.SystemPrompt ?? string.Empty);
             }
         }
@@ -995,6 +1041,11 @@ namespace Bot.ChromeNs
                 BaseUrl = Params.Robot.GetBaseUrl() ?? string.Empty,
                 ApiKey = Params.Robot.GetApiKey() ?? string.Empty,
                 Model = Params.Robot.GetModelName() ?? string.Empty,
+                TextModel = Params.Robot.GetModelName() ?? string.Empty,
+                SupportsVision = false,
+                VisionModel = string.Empty,
+                MaxImageSizeMb = 5,
+                VisionTimeoutSeconds = 45,
                 SystemPrompt = Params.Robot.GetSystemPrompt() ?? string.Empty,
                 Enabled = true,
                 Priority = 1,
@@ -1016,6 +1067,7 @@ namespace Bot.ChromeNs
                 if (endpoint.Priority <= 0) endpoint.Priority = p;
                 if (endpoint.Weight <= 0) endpoint.Weight = 1;
                 if (endpoint.TimeoutSeconds <= 0) endpoint.TimeoutSeconds = 35;
+                endpoint.NormalizeVisionDefaults();
                 if (endpoint.RetryCount < 0) endpoint.RetryCount = 0;
                 p++;
             }

@@ -96,7 +96,8 @@
                     <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="120" />
                     <DataGridTextColumn Header="类型" Binding="{Binding Type}" Width="105" />
                     <DataGridTextColumn Header="BaseUrl" Binding="{Binding BaseUrl}" Width="240" />
-                    <DataGridTextColumn Header="Model" Binding="{Binding Model}" Width="135" />
+                    <DataGridTextColumn Header="文本模型" Binding="{Binding TextModel}" Width="135" />
+                    <DataGridTextColumn Header="视觉" Binding="{Binding VisionStatus}" Width="130" />
                     <DataGridTextColumn Header="ApiKey" Binding="{Binding ApiKeyMasked}" Width="125" />
                     <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds}" Width="65" />
                     <DataGridTextColumn Header="状态" Binding="{Binding LastStatus}" Width="280" />

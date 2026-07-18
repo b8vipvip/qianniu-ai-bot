@@ -1,4 +1,4 @@
-using Bot.ChromeNs;
+﻿using Bot.ChromeNs;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -63,7 +63,7 @@ namespace Bot.Options
                 return;
             }
 
-            var editor = new AiEndpointEditorWindow(selected.Clone(), new[] { selected.Model }, "编辑接口配置")
+            var editor = new AiEndpointEditorWindow(selected.Clone(), new[] { selected.TextModel, selected.VisionModel }, "编辑接口配置")
             {
                 Owner = Window.GetWindow(this)
             };
@@ -216,7 +216,12 @@ namespace Bot.Options
             target.Type = source.Type;
             target.BaseUrl = source.BaseUrl;
             target.ApiKey = source.ApiKey;
-            target.Model = source.Model;
+            target.Model = source.TextModel;
+            target.TextModel = source.TextModel;
+            target.VisionModel = source.VisionModel;
+            target.SupportsVision = source.SupportsVision;
+            target.MaxImageSizeMb = source.MaxImageSizeMb;
+            target.VisionTimeoutSeconds = source.VisionTimeoutSeconds;
             target.SystemPrompt = source.SystemPrompt;
             target.Enabled = source.Enabled;
             target.Priority = source.Priority;
@@ -235,6 +240,7 @@ namespace Bot.Options
         public string BaseUrl { get; set; }
         public string ApiKey { get; set; }
         public List<string> Models { get; set; }
+        public string VisionModel { get; set; }
         public string SuggestedName { get; set; }
         public List<string> Warnings { get; private set; }
 
@@ -244,6 +250,7 @@ namespace Bot.Options
             ApiKey = string.Empty;
             SuggestedName = string.Empty;
             Models = new List<string>();
+            VisionModel = string.Empty;
             Warnings = new List<string>();
         }
 
@@ -256,6 +263,11 @@ namespace Bot.Options
                 BaseUrl = BaseUrl ?? string.Empty,
                 ApiKey = ApiKey ?? string.Empty,
                 Model = Models.FirstOrDefault() ?? string.Empty,
+                TextModel = Models.FirstOrDefault() ?? string.Empty,
+                VisionModel = VisionModel ?? string.Empty,
+                SupportsVision = false,
+                MaxImageSizeMb = 5,
+                VisionTimeoutSeconds = 45,
                 Enabled = true,
                 Priority = priority <= 0 ? 1 : priority,
                 Weight = 1,
@@ -271,7 +283,7 @@ namespace Bot.Options
             var modelText = Models.Count < 1 ? "未识别" : string.Join("、", Models.Take(6));
             if (Models.Count > 6) modelText += " 等 " + Models.Count + " 个";
             var summary = "自动识别结果：BaseUrl=" + (string.IsNullOrWhiteSpace(BaseUrl) ? "未识别" : BaseUrl)
-                + "；ApiKey=" + keyStatus + "；Model=" + modelText + "。";
+                + "；ApiKey=" + keyStatus + "；Model=" + modelText + "；VisionModel=" + (string.IsNullOrWhiteSpace(VisionModel) ? "未识别/默认不启用" : VisionModel) + "。";
             if (Warnings.Count > 0) summary += " 提示：" + string.Join("；", Warnings);
             return summary;
         }
@@ -288,6 +300,7 @@ namespace Bot.Options
     {
         private static readonly string[] BaseUrlNames = { "baseurl", "base_url", "api_base", "apibase", "endpoint", "endpointurl" };
         private static readonly string[] ApiKeyNames = { "apikey", "api_key", "access_token", "accesstoken", "token" };
+        private static readonly string[] VisionModelNames = { "visionmodel", "vision_model", "imagemodel", "image_model", "multimodalmodel", "multimodal_model" };
 
         public static ApiConfigRecognitionResult Recognize(string raw)
         {
@@ -347,6 +360,10 @@ namespace Bot.Options
                     else if (ApiKeyNames.Contains(normalizedName) && string.IsNullOrWhiteSpace(result.ApiKey))
                     {
                         result.ApiKey = ScalarText(property.Value);
+                    }
+                    else if (VisionModelNames.Contains(normalizedName) && property.Value.Type == JTokenType.String)
+                    {
+                        result.VisionModel = ScalarText(property.Value);
                     }
                     else if ((normalizedName == "model" || normalizedName == "modelname") && property.Value.Type == JTokenType.String)
                     {
@@ -418,6 +435,11 @@ namespace Bot.Options
             {
                 var keyMatch = Regex.Match(text, @"(?i)\bsk-[a-z0-9_.\-]{12,}\b");
                 if (keyMatch.Success) result.ApiKey = keyMatch.Value;
+            }
+
+            foreach (Match match in Regex.Matches(text, @"(?ix)[""']?(?:visionModel|vision_model|imageModel|image_model|multimodalModel|multimodal_model)[""']?\s*[:=]\s*[""'](?<value>[a-z0-9][a-z0-9._:/\-]{1,100})[""']"))
+            {
+                if (string.IsNullOrWhiteSpace(result.VisionModel)) result.VisionModel = CleanValue(match.Groups["value"].Value);
             }
 
             foreach (Match match in Regex.Matches(text, @"(?ix)[""']?(?:model|modelname)[""']?\s*[:=]\s*[""'](?<value>[a-z0-9][a-z0-9._:/\-]{1,100})[""']"))
@@ -573,6 +595,10 @@ namespace Bot.Options
         private readonly TextBox _baseUrl;
         private readonly TextBox _apiKey;
         private readonly ComboBox _model;
+        private readonly CheckBox _supportsVision;
+        private readonly ComboBox _visionModel;
+        private readonly TextBox _maxImageSizeMb;
+        private readonly TextBox _visionTimeout;
         private readonly TextBox _priority;
         private readonly TextBox _timeout;
         private readonly TextBox _retry;
@@ -588,7 +614,7 @@ namespace Bot.Options
             _source = source == null ? new AiEndpointConfig() : source.Clone();
             Title = "确认 API 接口信息";
             Width = 700;
-            Height = 690;
+            Height = 790;
             MinWidth = 620;
             MinHeight = 560;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
@@ -641,19 +667,33 @@ namespace Bot.Options
             {
                 _model.Items.Add(modelName);
             }
-            _model.Text = _source.Model ?? string.Empty;
-            AddField(form, 3, "Model", _model, 0, 3);
+            _model.Text = _source.TextModel ?? _source.Model ?? string.Empty;
+            AddField(form, 3, "文本模型", _model, 0, 3);
+
+            _supportsVision = new CheckBox { Content = "启用图片视觉理解", IsChecked = _source.SupportsVision, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 8, 3) };
+            EnsureRows(form, 4); Grid.SetRow(_supportsVision, 4); Grid.SetColumn(_supportsVision, 1); Grid.SetColumnSpan(_supportsVision, 3); form.Children.Add(_supportsVision);
+            _visionModel = new ComboBox { IsEditable = true, Height = 28, Margin = new Thickness(0, 3, 8, 3) };
+            foreach (var modelName in (models ?? new string[0]).Where(m => !string.IsNullOrWhiteSpace(m)).Distinct(StringComparer.OrdinalIgnoreCase)) _visionModel.Items.Add(modelName);
+            _visionModel.Text = _source.VisionModel ?? string.Empty;
+            AddField(form, 5, "视觉模型", _visionModel, 0, 3);
+            _maxImageSizeMb = NewTextBox((_source.MaxImageSizeMb <= 0 ? 5 : _source.MaxImageSizeMb).ToString());
+            _visionTimeout = NewTextBox((_source.VisionTimeoutSeconds <= 0 ? 45 : _source.VisionTimeoutSeconds).ToString());
+            AddField(form, 6, "图片MB", _maxImageSizeMb, 0, 1);
+            AddField(form, 6, "视觉超时", _visionTimeout, 2, 1);
+            _supportsVision.Checked += delegate { SetVisionControlsEnabled(true); };
+            _supportsVision.Unchecked += delegate { SetVisionControlsEnabled(false); };
+            SetVisionControlsEnabled(_supportsVision.IsChecked == true);
 
             _priority = NewTextBox((_source.Priority <= 0 ? 1 : _source.Priority).ToString());
             _timeout = NewTextBox((_source.TimeoutSeconds <= 0 ? 60 : _source.TimeoutSeconds).ToString());
-            AddField(form, 4, "优先级", _priority, 0, 1);
-            AddField(form, 4, "超时秒", _timeout, 2, 1);
+            AddField(form, 7, "优先级", _priority, 0, 1);
+            AddField(form, 7, "超时秒", _timeout, 2, 1);
 
             _retry = NewTextBox(Math.Max(0, _source.RetryCount).ToString());
             _enabled = new CheckBox { Content = "启用此接口", IsChecked = _source.Enabled, VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 3, 8, 3) };
-            AddField(form, 5, "失败重试", _retry, 0, 1);
-            EnsureRows(form, 6);
-            Grid.SetRow(_enabled, 5);
+            AddField(form, 8, "失败重试", _retry, 0, 1);
+            EnsureRows(form, 9);
+            Grid.SetRow(_enabled, 8);
             Grid.SetColumn(_enabled, 2);
             Grid.SetColumnSpan(_enabled, 2);
             form.Children.Add(_enabled);
@@ -663,7 +703,7 @@ namespace Bot.Options
             _systemPrompt.TextWrapping = TextWrapping.Wrap;
             _systemPrompt.Height = 100;
             _systemPrompt.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
-            AddField(form, 6, "SystemPrompt", _systemPrompt, 0, 3);
+            AddField(form, 9, "SystemPrompt", _systemPrompt, 0, 3);
 
             _testResult = NewTextBox("可先点击下方【测试当前填写】。测试会真实发送一条随机回显消息，并验证模型响应。");
             _testResult.IsReadOnly = true;
@@ -671,14 +711,15 @@ namespace Bot.Options
             _testResult.Height = 90;
             _testResult.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
             _testResult.Background = new SolidColorBrush(Color.FromRgb(234, 245, 255));
-            AddField(form, 7, "测试结果", _testResult, 0, 3);
+            AddField(form, 10, "测试结果", _testResult, 0, 3);
 
             scroll.Content = form;
             Grid.SetRow(scroll, 1);
             outer.Children.Add(scroll);
 
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 10, 0, 0) };
-            var test = new Button { Content = "测试当前填写", MinWidth = 120, Margin = new Thickness(0, 0, 16, 0) };
+            var test = new Button { Content = "测试当前填写", MinWidth = 120, Margin = new Thickness(0, 0, 8, 0) };
+            var visionTest = new Button { Content = "测试视觉能力", MinWidth = 120, Margin = new Thickness(0, 0, 16, 0) };
             var cancel = new Button { Content = "取消", MinWidth = 90, Margin = new Thickness(0, 0, 8, 0), IsCancel = true };
             var ok = new Button { Content = "确认添加 / 保存", MinWidth = 130, IsDefault = true };
             test.Click += async delegate
@@ -714,7 +755,16 @@ namespace Bot.Options
                 Result = endpoint;
                 DialogResult = true;
             };
+            visionTest.Click += async delegate
+            {
+                AiEndpointConfig temp; string error;
+                if (!TryBuildResult(out temp, out error)) { _testResult.Text = error; return; }
+                visionTest.IsEnabled = false; _testResult.Text = "正在生成测试图片并执行完整视觉收发测试...";
+                try { var r = await Task.Run(() => VisionApiTester.Test(temp)); _testResult.Text = r.DisplayText; }
+                finally { visionTest.IsEnabled = true; }
+            };
             buttons.Children.Add(test);
+            buttons.Children.Add(visionTest);
             buttons.Children.Add(cancel);
             buttons.Children.Add(ok);
             Grid.SetRow(buttons, 2);
@@ -756,6 +806,13 @@ namespace Bot.Options
             grid.Children.Add(control);
         }
 
+        private void SetVisionControlsEnabled(bool enabled)
+        {
+            if (_visionModel != null) _visionModel.IsEnabled = enabled;
+            if (_maxImageSizeMb != null) _maxImageSizeMb.IsEnabled = enabled;
+            if (_visionTimeout != null) _visionTimeout.IsEnabled = enabled;
+        }
+
         private bool TryBuildResult(out AiEndpointConfig endpoint, out string error)
         {
             endpoint = null;
@@ -778,18 +835,29 @@ namespace Bot.Options
             }
             if (string.IsNullOrWhiteSpace(model))
             {
-                error = "Model 不能为空。";
+                error = "文本模型不能为空。";
                 return false;
             }
 
             int priority;
             int timeout;
             int retry;
+            int maxImageMb;
+            int visionTimeout;
             if (!int.TryParse(_priority.Text, out priority) || priority < 1) priority = 1;
             if (!int.TryParse(_timeout.Text, out timeout) || timeout < 5) timeout = 60;
             timeout = Math.Min(timeout, 300);
             if (!int.TryParse(_retry.Text, out retry) || retry < 0) retry = 0;
             retry = Math.Min(retry, 5);
+            if (!int.TryParse(_maxImageSizeMb.Text, out maxImageMb)) maxImageMb = 5;
+            maxImageMb = Math.Max(1, Math.Min(20, maxImageMb));
+            if (!int.TryParse(_visionTimeout.Text, out visionTimeout)) visionTimeout = 45;
+            visionTimeout = Math.Max(10, Math.Min(180, visionTimeout));
+            if (_supportsVision.IsChecked == true && string.IsNullOrWhiteSpace(_visionModel.Text))
+            {
+                error = "启用图片视觉理解后，视觉模型不能为空。";
+                return false;
+            }
 
             endpoint = _source.Clone();
             endpoint.Name = string.IsNullOrWhiteSpace(name) ? uri.Host : name;
@@ -797,6 +865,11 @@ namespace Bot.Options
             endpoint.BaseUrl = baseUrl;
             endpoint.ApiKey = apiKey;
             endpoint.Model = model;
+            endpoint.TextModel = model;
+            endpoint.SupportsVision = _supportsVision.IsChecked == true;
+            endpoint.VisionModel = (_visionModel.Text ?? string.Empty).Trim();
+            endpoint.MaxImageSizeMb = maxImageMb;
+            endpoint.VisionTimeoutSeconds = visionTimeout;
             endpoint.Priority = priority;
             endpoint.TimeoutSeconds = timeout;
             endpoint.RetryCount = retry;
@@ -842,17 +915,18 @@ namespace Bot.Options
                 result.DisplayText = "失败：ApiKey 为空。";
                 return result;
             }
-            if (string.IsNullOrWhiteSpace(endpoint.Model))
+            endpoint.NormalizeVisionDefaults();
+            if (string.IsNullOrWhiteSpace(endpoint.TextModel))
             {
                 result.ShortStatus = "Model为空";
-                result.DisplayText = "失败：Model 为空。";
+                result.DisplayText = "失败：文本模型为空。";
                 return result;
             }
 
             var marker = "QN_API_TEST_" + Guid.NewGuid().ToString("N").Substring(0, 8).ToUpperInvariant();
             var payload = new JObject
             {
-                ["model"] = endpoint.Model.Trim(),
+                ["model"] = endpoint.TextModel.Trim(),
                 ["messages"] = new JArray
                 {
                     new JObject { ["role"] = "system", ["content"] = "你正在执行API收发测试，只按用户要求原样回复测试标记。" },
@@ -902,7 +976,7 @@ namespace Bot.Options
                         result.RoundTripVerified = answer.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0;
                         result.ShortStatus = result.RoundTripVerified ? "通信、鉴权和模型收发均正常" : "通信和模型响应正常，回显未严格匹配";
                         result.DisplayText = result.RoundTripVerified
-                            ? "成功：HTTP 通信正常；ApiKey 鉴权通过；测试消息发送成功；模型响应解析成功；随机回显标记验证通过。模型=" + endpoint.Model + "，耗时 " + result.LatencyMs + "ms。"
+                            ? "成功：HTTP 通信正常；ApiKey 鉴权通过；测试消息发送成功；模型响应解析成功；随机回显标记验证通过。模型=" + endpoint.TextModel + "，耗时 " + result.LatencyMs + "ms。"
                             : "可用但需注意：HTTP 通信、鉴权、消息发送和模型响应均成功，但模型没有严格回显测试标记。实际回复：" + SafeText(answer) + "；耗时 " + result.LatencyMs + "ms。";
                         return result;
                     }
@@ -932,6 +1006,41 @@ namespace Bot.Options
                 result.DisplayText = "失败：测试异常：" + SafeText(ex.Message) + "；耗时 " + result.LatencyMs + "ms。";
                 return result;
             }
+        }
+
+
+        public static ApiEndpointTestResult TestVisionPayload(AiEndpointConfig endpoint, JObject payload, string expectedMarker)
+        {
+            var result = new ApiEndpointTestResult { Success = false, RoundTripVerified = false, ShortStatus = "未完成", DisplayText = "视觉测试未完成。" };
+            string validationError;
+            var url = BuildChatUrl(endpoint.BaseUrl, out validationError);
+            if (!string.IsNullOrWhiteSpace(validationError)) { result.ShortStatus = validationError; result.DisplayText = "失败：" + validationError; return result; }
+            var stopwatch = Stopwatch.StartNew();
+            try
+            {
+                using (var http = new HttpClient())
+                {
+                    http.Timeout = TimeSpan.FromSeconds(endpoint.VisionTimeoutSeconds <= 0 ? 45 : Math.Max(10, Math.Min(180, endpoint.VisionTimeoutSeconds)));
+                    http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey.Trim());
+                    http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+                    using (var content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json"))
+                    {
+                        var response = http.PostAsync(url, content).GetAwaiter().GetResult();
+                        var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                        stopwatch.Stop(); result.LatencyMs = stopwatch.ElapsedMilliseconds;
+                        if (!response.IsSuccessStatusCode) { result.ShortStatus = ClassifyHttpStatus(response.StatusCode); result.DisplayText = "失败：" + result.ShortStatus + "。HTTP " + (int)response.StatusCode + "；接口返回：" + SafeText(body) + "；耗时 " + result.LatencyMs + "ms。"; return result; }
+                        string answer, parseError;
+                        if (!TryExtractAnswer(body, out answer, out parseError)) { result.ShortStatus = "HTTP成功但响应格式不兼容"; result.DisplayText = "部分失败：" + parseError; return result; }
+                        result.Success = answer.IndexOf(expectedMarker, StringComparison.OrdinalIgnoreCase) >= 0;
+                        result.RoundTripVerified = result.Success;
+                        result.ShortStatus = result.Success ? "完整视觉收发测试成功" : "视觉识别结果不正确";
+                        result.DisplayText = result.Success ? "成功：通信、鉴权、VisionModel 调用、data URI 图片识别和随机字符串校验均通过。耗时 " + result.LatencyMs + "ms。" : "失败：HTTP成功但识别错误，实际回复：" + SafeText(answer) + "；耗时 " + result.LatencyMs + "ms。";
+                        return result;
+                    }
+                }
+            }
+            catch (TaskCanceledException) { stopwatch.Stop(); result.LatencyMs = stopwatch.ElapsedMilliseconds; result.ShortStatus = "视觉请求超时"; result.DisplayText = "失败：视觉请求超时；耗时 " + result.LatencyMs + "ms。"; return result; }
+            catch (Exception ex) { stopwatch.Stop(); result.LatencyMs = stopwatch.ElapsedMilliseconds; result.ShortStatus = "视觉测试异常"; result.DisplayText = "失败：视觉测试异常：" + SafeText(ex.Message); return result; }
         }
 
         private static string BuildChatUrl(string baseUrl, out string error)
