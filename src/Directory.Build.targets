@@ -12,4 +12,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs" />
+  </ItemGroup>
 </Project>
