@@ -7,10 +7,14 @@ on:
   pull_request:
     branches:
       - master
+      - integration/master-candidate
+      - vaxsh7-codex/api
       - agent/uia-send-control-diagnostics
   push:
     branches:
       - master
+      - integration/master-candidate
+      - vaxsh7-codex/api
       - agent/uia-send-control-diagnostics
 
 permissions:
@@ -30,9 +34,9 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install Python UIA dependency
+      - name: Install Python test dependencies
         shell: pwsh
-        run: python -m pip install --disable-pip-version-check uiautomation
+        run: python -m pip install --disable-pip-version-check uiautomation pytest
 
       - name: Compile Python tools
         shell: pwsh
@@ -47,6 +51,10 @@ jobs:
       - name: Run lifecycle tests
         shell: pwsh
         run: python -m unittest discover -s tools/qn_discovery_lab/tests
+
+      - name: Run repository static tests
+        shell: pwsh
+        run: python -m pytest -q tests
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
