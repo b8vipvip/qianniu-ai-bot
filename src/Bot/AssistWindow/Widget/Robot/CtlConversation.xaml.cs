@@ -29,6 +29,7 @@ namespace Bot.AssistWindow.Widget.Robot
         private string _seller = string.Empty;
         private string _buyer = string.Empty;
         private string _answer = string.Empty;
+        private bool _canResend = true;
 
         public event EventHandler<ConversationResendEventArgs> ResendRequested;
 
@@ -49,11 +50,25 @@ namespace Bot.AssistWindow.Widget.Robot
             _seller = seller ?? string.Empty;
             _buyer = buyer ?? string.Empty;
             _answer = answer ?? string.Empty;
+            _canResend = true;
             txtQuestion.Text = question ?? string.Empty;
             txtAnswer.Text = _answer;
             txtStatus.Text = isAutoReply ? "正在发送..." : "仅生成答案";
             txtStatus.Foreground = new SolidColorBrush(isAutoReply ? Color.FromRgb(47, 128, 237) : Color.FromRgb(107, 114, 128));
             txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
+        }
+
+        public void SetSkipped(string detail)
+        {
+            _canResend = false;
+            Ui(() =>
+            {
+                txtAnswer.Text = _answer;
+                txtStatus.Text = string.IsNullOrWhiteSpace(detail) ? "已跳过，未发送" : "已跳过，未发送";
+                txtStatus.ToolTip = detail ?? string.Empty;
+                txtStatus.Foreground = new SolidColorBrush(Color.FromRgb(242, 153, 74));
+                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
+            });
         }
 
         private void Ui(Action action)
@@ -101,6 +116,7 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void txtAnswer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
+            if (!_canResend) return;
             e.Handled = true;
             var menu = new ContextMenu();
             var item = new MenuItem { Header = "重发这条答案" };

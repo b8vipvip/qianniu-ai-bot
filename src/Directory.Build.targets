@@ -9,4 +9,7 @@
     <!-- WPF creates Bot_*_wpftmp projects; include the partial there as well. -->
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ApiManagement.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs" />
+  </ItemGroup>
 </Project>
