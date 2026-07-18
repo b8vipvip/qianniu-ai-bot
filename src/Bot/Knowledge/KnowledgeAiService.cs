@@ -525,7 +525,9 @@ namespace Bot.Knowledge
 
             try
             {
-                return new ParseResult { Items = { } }.WithItems(ParseAiKnowledgeResult(raw.Answer));
+                var result = new ParseResult();
+                result.Items.AddRange(ParseAiKnowledgeResult(raw.Answer));
+                return result;
             }
             catch (Exception ex)
             {
@@ -706,17 +708,6 @@ namespace Bot.Knowledge
                 || error.Contains("network")
                 || error.Contains("连接")
                 || error.Contains("断开");
-        }
-    }
-
-    internal static class ParseResultExtensions
-    {
-        public static T WithItems<T>(this T result, IEnumerable<KnowledgeBaseEntry> items)
-            where T : class
-        {
-            var parseResult = result as dynamic;
-            foreach (var item in items) parseResult.Items.Add(item);
-            return result;
         }
     }
 }
