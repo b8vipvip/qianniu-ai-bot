@@ -7,6 +7,12 @@ on:
     paths:
       - tools/apply_history_scan_patch.py
       - .github/workflows/apply-history-scan.yml
+  pull_request:
+    branches:
+      - master
+    paths:
+      - tools/apply_history_scan_patch.py
+      - .github/workflows/apply-history-scan.yml
 
 permissions:
   contents: write
