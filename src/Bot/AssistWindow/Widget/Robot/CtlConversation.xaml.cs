@@ -3,6 +3,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
+using Bot.ChromeNs;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
@@ -10,28 +11,45 @@ namespace Bot.AssistWindow.Widget.Robot
     {
         public string Seller { get; private set; }
         public string Buyer { get; private set; }
+        public string Question { get; private set; }
         public string Answer { get; private set; }
 
-        public ConversationResendEventArgs(string seller, string buyer, string answer)
+        public ConversationResendEventArgs(string seller, string buyer, string question, string answer)
         {
             Seller = seller ?? string.Empty;
             Buyer = buyer ?? string.Empty;
+            Question = question ?? string.Empty;
             Answer = answer ?? string.Empty;
         }
     }
 
-    /// <summary>
-    /// Interaction logic for CtlDialog.xaml
-    /// </summary>
+    public class ConversationEditEventArgs : EventArgs
+    {
+        public string Seller { get; private set; }
+        public string Buyer { get; private set; }
+        public string Question { get; private set; }
+        public string Answer { get; private set; }
+
+        public ConversationEditEventArgs(string seller, string buyer, string question, string answer)
+        {
+            Seller = seller ?? string.Empty;
+            Buyer = buyer ?? string.Empty;
+            Question = question ?? string.Empty;
+            Answer = answer ?? string.Empty;
+        }
+    }
+
     public partial class CtlConversation : UserControl
     {
         private readonly string sendedChar = "   √√";
         private string _seller = string.Empty;
         private string _buyer = string.Empty;
+        private string _question = string.Empty;
         private string _answer = string.Empty;
         private bool _canResend = true;
 
         public event EventHandler<ConversationResendEventArgs> ResendRequested;
+        public event EventHandler<ConversationEditEventArgs> EditRequested;
 
         public CtlConversation()
         {
@@ -49,10 +67,12 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             _seller = seller ?? string.Empty;
             _buyer = buyer ?? string.Empty;
+            _question = question ?? string.Empty;
             _answer = answer ?? string.Empty;
             _canResend = true;
-            txtQuestion.Text = question ?? string.Empty;
+            txtQuestion.Text = _question;
             txtAnswer.Text = _answer;
+            SetSource(KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer));
             txtStatus.Text = isAutoReply ? "正在发送..." : "仅生成答案";
             txtStatus.Foreground = new SolidColorBrush(isAutoReply ? Color.FromRgb(47, 128, 237) : Color.FromRgb(107, 114, 128));
             txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
@@ -61,7 +81,33 @@ namespace Bot.AssistWindow.Widget.Robot
         public void SetAnswer(string answer)
         {
             _answer = answer ?? string.Empty;
-            Ui(() => { txtAnswer.Text = _answer; txtTime.Text = DateTime.Now.ToString("HH:mm:ss"); });
+            Ui(() =>
+            {
+                txtAnswer.Text = _answer;
+                var source = KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer);
+                if (!string.IsNullOrWhiteSpace(source)) SetSource(source);
+                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
+            });
+        }
+
+        public void SetSource(string source)
+        {
+            Ui(() =>
+            {
+                txtSource.Text = source ?? string.Empty;
+                txtSource.Visibility = string.IsNullOrWhiteSpace(source) ? Visibility.Collapsed : Visibility.Visible;
+                txtSource.Foreground = new SolidColorBrush(source == "本地" ? Color.FromRgb(39, 174, 96) : source.StartsWith("人工") ? Color.FromRgb(155, 81, 224) : Color.FromRgb(47, 128, 237));
+            });
+        }
+
+        public void SetStatus(string text, bool success)
+        {
+            Ui(() =>
+            {
+                txtStatus.Text = text ?? string.Empty;
+                txtStatus.Foreground = new SolidColorBrush(success ? Color.FromRgb(39, 174, 96) : Color.FromRgb(235, 87, 87));
+                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
+            });
         }
 
         public void SetSkipped(string detail)
@@ -70,7 +116,7 @@ namespace Bot.AssistWindow.Widget.Robot
             Ui(() =>
             {
                 txtAnswer.Text = _answer;
-                txtStatus.Text = string.IsNullOrWhiteSpace(detail) ? "已跳过，未发送" : "已跳过，未发送";
+                txtStatus.Text = "已跳过，未发送";
                 txtStatus.ToolTip = detail ?? string.Empty;
                 txtStatus.Foreground = new SolidColorBrush(Color.FromRgb(242, 153, 74));
                 txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
@@ -79,14 +125,8 @@ namespace Bot.AssistWindow.Widget.Robot
 
         private void Ui(Action action)
         {
-            if (Dispatcher.CheckAccess())
-            {
-                action();
-            }
-            else
-            {
-                Dispatcher.BeginInvoke(action);
-            }
+            if (Dispatcher.CheckAccess()) action();
+            else Dispatcher.BeginInvoke(action);
         }
 
         public void SetSendPending(string text)
@@ -104,9 +144,21 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             Ui(() =>
             {
-                txtAnswer.Text = success ? _answer + sendedChar : _answer;
-                txtStatus.Text = success ? (string.IsNullOrWhiteSpace(detail) ? "已发送" : detail) : (string.IsNullOrWhiteSpace(detail) ? "发送失败" : detail);
-                txtStatus.Foreground = new SolidColorBrush(success ? Color.FromRgb(39, 174, 96) : Color.FromRgb(235, 87, 87));
+                string blockedReason;
+                string manualAnswer;
+                if (!success && KnowledgeLearningService.TryTakeSendBlock(_seller, _buyer, _answer, out blockedReason, out manualAnswer))
+                {
+                    txtAnswer.Text = _answer;
+                    txtStatus.Text = blockedReason;
+                    txtStatus.Foreground = new SolidColorBrush(Color.FromRgb(242, 153, 74));
+                    SetSource("人工回复");
+                }
+                else
+                {
+                    txtAnswer.Text = success ? _answer + sendedChar : _answer;
+                    txtStatus.Text = success ? (string.IsNullOrWhiteSpace(detail) ? "已发送" : detail) : (string.IsNullOrWhiteSpace(detail) ? "发送失败" : detail);
+                    txtStatus.Foreground = new SolidColorBrush(success ? Color.FromRgb(39, 174, 96) : Color.FromRgb(235, 87, 87));
+                }
                 txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
             });
         }
@@ -114,20 +166,28 @@ namespace Bot.AssistWindow.Widget.Robot
         private void RaiseResendRequested()
         {
             var handler = ResendRequested;
-            if (handler != null)
-            {
-                handler(this, new ConversationResendEventArgs(_seller, _buyer, _answer));
-            }
+            if (handler != null) handler(this, new ConversationResendEventArgs(_seller, _buyer, _question, _answer));
         }
 
-        private void txtAnswer_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        private void RaiseEditRequested()
         {
-            if (!_canResend) return;
+            var handler = EditRequested;
+            if (handler != null) handler(this, new ConversationEditEventArgs(_seller, _buyer, _question, _answer));
+        }
+
+        private void txtAnswer_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
             e.Handled = true;
             var menu = new ContextMenu();
-            var item = new MenuItem { Header = "重发这条答案" };
-            item.Click += (s, args) => RaiseResendRequested();
-            menu.Items.Add(item);
+            if (_canResend)
+            {
+                var resend = new MenuItem { Header = "重发" };
+                resend.Click += (s, args) => RaiseResendRequested();
+                menu.Items.Add(resend);
+            }
+            var edit = new MenuItem { Header = "修改" };
+            edit.Click += (s, args) => RaiseEditRequested();
+            menu.Items.Add(edit);
             menu.PlacementTarget = txtAnswer;
             menu.IsOpen = true;
         }

@@ -372,6 +372,10 @@ namespace Bot.ChromeNs
 
         public async Task<bool> SendTextAsync(string buyer, string text)
         {
+            await Task.Delay(180);
+            string manualQuestion;
+            string manualAnswer;
+            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer)) return false;
             return await OpenAndSendText(buyer, text);
         }
 

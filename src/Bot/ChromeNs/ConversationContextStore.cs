@@ -1,4 +1,4 @@
-using Bot.ChatRecord;
+﻿using Bot.ChatRecord;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -187,6 +187,26 @@ namespace Bot.ChromeNs
                 return eligible.Skip(Math.Max(0, eligible.Count - take))
                     .Select(CloneTurn)
                     .ToList();
+            }
+        }
+
+        public static bool TryGetLatestBuyerQuestion(string seller, string buyer, out string question, out DateTime timestamp)
+        {
+            question = string.Empty;
+            timestamp = DateTime.MinValue;
+            TimelineState state;
+            if (!States.TryGetValue(Key(seller, buyer), out state)) return false;
+            lock (state.Sync)
+            {
+                Cleanup(state, DateTime.Now);
+                var latest = state.Turns
+                    .Where(t => t != null && t.Role == "user" && !t.Withdrawn && !string.IsNullOrWhiteSpace(t.Text))
+                    .OrderByDescending(t => t.Timestamp)
+                    .FirstOrDefault();
+                if (latest == null) return false;
+                question = latest.Text;
+                timestamp = latest.Timestamp == DateTime.MinValue ? DateTime.Now.AddMinutes(-1) : latest.Timestamp;
+                return true;
             }
         }
 

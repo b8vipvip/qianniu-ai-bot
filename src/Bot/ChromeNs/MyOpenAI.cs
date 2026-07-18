@@ -1,4 +1,4 @@
-using BotLib;
+﻿using BotLib;
 using Newtonsoft.Json.Linq;
 using OpenAI.Chat;
 using System;
@@ -387,10 +387,20 @@ namespace Bot.ChromeNs
                         return "错误：该预设回复已被客服撤回，未再次发送。";
                     }
                     Log.Info("商品链接使用本地预设回复，未调用AI接口。buyer=" + buyer);
+                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, presetReply, "本地");
                     return presetReply;
                 }
 
                 if (string.IsNullOrWhiteSpace(question)) return "错误：买家消息为空，未调用AI。";
+
+                KnowledgeBaseEntry localKnowledge;
+                double localScore;
+                if (KnowledgeLearningService.TryFindLocalAnswer(seller, buyer, question, out localKnowledge, out localScore))
+                {
+                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, localKnowledge.Answer, "本地");
+                    Log.Info("命中本地知识库，未调用AI。buyer=" + buyer + ", knowledgeId=" + localKnowledge.Id + ", score=" + localScore.ToString("0.00"));
+                    return BotFeatureStore.ApplyOutputPolicy(localKnowledge.Answer);
+                }
 
                 string manualAnswer;
                 string manualReason;
@@ -435,6 +445,8 @@ namespace Bot.ChromeNs
                         {
                             return "错误：该回复已被客服撤回，已阻止再次发送。";
                         }
+                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, finalAnswer, "AI生成");
+                        KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
                         return finalAnswer;
                     }
 
