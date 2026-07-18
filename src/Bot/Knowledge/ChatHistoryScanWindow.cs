@@ -72,7 +72,7 @@ namespace Bot.Knowledge
             });
             body.Children.Add(new TextBlock
             {
-                Text = "系统会尝试自动打开千牛“消息管理器”，读取“最近联系”中的买家，并通过千牛历史消息接口分页获取聊天记录。只整理买家提问后客服已经回答的轮次，不向买家发送任何消息。",
+                Text = "系统会优先读取千牛聊天界面左侧“全部买家”列表；只有列表读取不到时才尝试独立“消息管理器”，并通过千牛历史消息接口分页获取聊天记录。只整理买家提问后客服已经回答的轮次，不向买家发送任何消息。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(75, 85, 99)),
                 Margin = new Thickness(0, 8, 0, 14)
@@ -139,7 +139,7 @@ namespace Bot.Knowledge
             });
             body.Children.Add(new TextBlock
             {
-                Text = "• 联系人优先从消息管理器可见列表和千牛联系人接口读取。\n" +
+                Text = "• 联系人优先从聊天界面左侧“全部买家”列表读取，消息管理器和千牛联系人接口作为补充。\n" +
                        "• 每个买家通过会话编号分页读取历史消息，扫描结束后恢复原聊天窗口。\n" +
                        "• 聊天记录先整理成问答轮次，再沿用“智能导入”的分段、超时、重试和去重逻辑。\n" +
                        "• 手机号、长订单号及 API Key 会先脱敏；系统提示、撤回提示和未回答问题不会进入知识库。\n" +
@@ -218,7 +218,7 @@ namespace Bot.Knowledge
                 var imported = result.ImportResult ?? new KnowledgeImportResult();
                 var sb = new StringBuilder();
                 sb.Append("扫描完成：联系人 ").Append(result.ScannedContacts).Append("/").Append(result.ContactCount);
-                sb.Append("，消息 ").Append(result.MessageCount);
+                sb.Append("，有效聊天消息 ").Append(result.MessageCount);
                 sb.Append("，有效问答轮次 ").Append(result.PairCount);
                 sb.Append("，新增知识 ").Append(imported.Added);
                 sb.Append("，跳过重复 ").Append(imported.DuplicateSkipped);
@@ -226,7 +226,15 @@ namespace Bot.Knowledge
                 _summary.Text = sb.ToString();
 
                 _progress.Text = sb + Environment.NewLine
-                    + "消息管理器：" + (result.MessageManagerOpened ? "已自动打开" : "未找到入口，已使用后台接口继续扫描")
+                    + "联系人来源：全部买家列表 " + result.ChatBuyerListContactCount
+                    + "，消息管理器 " + result.MessageManagerContactCount
+                    + "，接口 " + result.ApiContactCount
+                    + Environment.NewLine
+                    + "消息管理器：" + (result.MessageManagerOpened
+                        ? "已作为兜底自动打开"
+                        : (result.ChatBuyerListContactCount > 0
+                            ? "未打开（已从左侧全部买家列表读取）"
+                            : "未找到入口，已使用接口或当前会话兜底"))
                     + (string.IsNullOrWhiteSpace(result.Diagnostics)
                         ? string.Empty
                         : Environment.NewLine + Environment.NewLine + "诊断信息：" + Environment.NewLine + result.Diagnostics);

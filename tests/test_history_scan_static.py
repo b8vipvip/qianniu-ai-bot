@@ -20,6 +20,8 @@ def test_history_scan_opens_manager_and_reads_contacts():
     source = text("src/Bot/Knowledge/ChatHistoryScanService.cs")
     assert "TryOpenMessageManagerAsync" in source
     assert '"消息管理器"' in source
+    assert "ReadVisibleChatBuyerListContactsAsync" in source
+    assert "ChatBuyerListContactCount" in source
     assert "ReadVisibleMessageManagerContactsAsync" in source
     assert "mtop.taobao.wireless.amp2.im.relation.rebase" in source
 

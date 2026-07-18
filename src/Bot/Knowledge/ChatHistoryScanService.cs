@@ -48,7 +48,7 @@ namespace Bot.Knowledge
             {
                 sb.AppendLine("联系人：" + ContactIndex + "/" + ContactCount + "  " + (Buyer ?? string.Empty));
             }
-            sb.AppendLine("已读取消息：" + MessageCount);
+            sb.AppendLine("已保留有效消息：" + MessageCount);
             sb.AppendLine("已整理问答轮次：" + PairCount);
             sb.Append("已整理字符：" + TextChars.ToString("N0"));
             return sb.ToString();
@@ -58,6 +58,9 @@ namespace Bot.Knowledge
     public sealed class ChatHistoryScanResult
     {
         public bool MessageManagerOpened { get; set; }
+        public int ChatBuyerListContactCount { get; set; }
+        public int MessageManagerContactCount { get; set; }
+        public int ApiContactCount { get; set; }
         public int ContactCount { get; set; }
         public int ScannedContacts { get; set; }
         public int FailedContacts { get; set; }
@@ -106,20 +109,51 @@ namespace Bot.Knowledge
             }
 
             var diagnostics = new StringBuilder();
-            Report(progress, "正在打开千牛消息管理器...", 0, 0, string.Empty, 0, 0, 0);
-            var managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+            var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
 
-            Report(progress, "正在读取最近联系人...", 0, 0, string.Empty, 0, 0, 0);
+            Report(progress, "正在读取千牛左侧“全部买家”列表...", 0, 0, string.Empty, 0, 0, 0);
+            var chatBuyerListContacts = await ReadVisibleChatBuyerListContactsAsync(diagnostics, token);
+
             var contacts = new HashSet<string>(StringComparer.Ordinal);
-            AddContact(contacts, qn.Buyer == null ? string.Empty : qn.Buyer.Nick, qn.Seller.Nick);
-            foreach (var name in await ReadVisibleMessageManagerContactsAsync(diagnostics, token))
+            AddContact(contacts, originalBuyer, qn.Seller.Nick);
+            foreach (var name in chatBuyerListContacts)
             {
                 AddContact(contacts, name, qn.Seller.Nick);
             }
-            foreach (var name in await ReadContactsFromApisAsync(qn, diagnostics, token))
+
+            var managerOpened = false;
+            var messageManagerContacts = new List<string>();
+            if (contacts.Count <= 1)
+            {
+                Report(progress, "左侧买家列表未完整读取，正在尝试千牛消息管理器...", 0, 0, string.Empty, 0, 0, 0);
+                managerOpened = await TryOpenMessageManagerAsync(diagnostics, token);
+                if (managerOpened)
+                {
+                    messageManagerContacts = await ReadVisibleMessageManagerContactsAsync(diagnostics, token);
+                    foreach (var name in messageManagerContacts)
+                    {
+                        AddContact(contacts, name, qn.Seller.Nick);
+                    }
+                }
+            }
+            else
+            {
+                diagnostics.AppendLine("已从聊天界面左侧“全部买家”列表读取联系人，无需打开独立消息管理器。");
+            }
+
+            Report(progress, "正在通过千牛接口补充联系人...", 0, 0, string.Empty, 0, 0, 0);
+            var apiContacts = await ReadContactsFromApisAsync(qn, diagnostics, token);
+            foreach (var name in apiContacts)
             {
                 AddContact(contacts, name, qn.Seller.Nick);
             }
+
+            diagnostics.AppendLine(string.Format(
+                "联系人来源：全部买家列表 {0}，消息管理器 {1}，接口 {2}，合并去重后 {3}。",
+                chatBuyerListContacts.Count,
+                messageManagerContacts.Count,
+                apiContacts.Count,
+                contacts.Count));
 
             var orderedContacts = contacts
                 .Where(IsPlausibleBuyerNick)
@@ -131,7 +165,6 @@ namespace Bot.Knowledge
                 throw new Exception("没有读取到可扫描的最近联系人。消息管理器已尝试打开，请确认千牛已登录且“最近联系”中存在买家。");
             }
 
-            var originalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty);
             var histories = new List<ContactHistory>();
             var totalMessages = 0;
             var failedContacts = 0;
@@ -204,6 +237,9 @@ namespace Bot.Knowledge
             return new ChatHistoryScanResult
             {
                 MessageManagerOpened = managerOpened,
+                ChatBuyerListContactCount = chatBuyerListContacts.Count,
+                MessageManagerContactCount = messageManagerContacts.Count,
+                ApiContactCount = apiContacts.Count,
                 ContactCount = orderedContacts.Count,
                 ScannedContacts = histories.Count,
                 FailedContacts = failedContacts,
@@ -342,6 +378,186 @@ namespace Bot.Knowledge
             FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point(
                 (int)(rect.Left + rect.Width / 2),
                 (int)(rect.Top + rect.Height / 2)));
+        }
+
+        private static async Task<List<string>> ReadVisibleChatBuyerListContactsAsync(StringBuilder diagnostics, CancellationToken token)
+        {
+            return await Task.Run(() =>
+            {
+                var names = new HashSet<string>(StringComparer.Ordinal);
+                try
+                {
+                    if (Desk.Inst == null)
+                    {
+                        diagnostics.AppendLine("无法读取“全部买家”：未找到千牛主窗口进程。");
+                        return names.ToList();
+                    }
+
+                    var app = FlaUI.Core.Application.Attach(Desk.Inst.ProcessId);
+                    using (var automation = new UIA3Automation())
+                    {
+                        Window chatWindow = null;
+                        AutomationElement allBuyerHeader = null;
+                        foreach (var window in app.GetAllTopLevelWindows(automation))
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var header = window.FindAllDescendants()
+                                .FirstOrDefault(x => IsAllBuyerHeader(x.Name));
+                            if (header == null) continue;
+                            chatWindow = window;
+                            allBuyerHeader = header;
+                            break;
+                        }
+
+                        if (chatWindow == null || allBuyerHeader == null)
+                        {
+                            diagnostics.AppendLine("千牛聊天主窗口中未找到“全部买家”栏。");
+                            return names.ToList();
+                        }
+
+                        TryBringToFront(chatWindow);
+                        var windowBounds = chatWindow.BoundingRectangle;
+                        var headerBounds = allBuyerHeader.BoundingRectangle;
+                        var panelLeft = windowBounds.Left;
+                        var panelRight = Math.Min(
+                            windowBounds.Right,
+                            windowBounds.Left + Math.Max(260, Math.Min(340, windowBounds.Width * 0.27)));
+                        var panelTop = Math.Max(headerBounds.Bottom, windowBounds.Top + 250);
+                        var panelBottom = windowBounds.Bottom - 28;
+                        if (panelRight <= panelLeft || panelBottom <= panelTop)
+                        {
+                            diagnostics.AppendLine("“全部买家”列表区域尺寸无效。");
+                            return names.ToList();
+                        }
+
+                        var focusPoint = new System.Drawing.Point(
+                            (int)(panelLeft + Math.Min(150, (panelRight - panelLeft) * 0.55)),
+                            (int)(panelTop + (panelBottom - panelTop) * 0.55));
+                        var stableRounds = 0;
+
+                        for (var round = 0; round < 180 && stableRounds < 10; round++)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            var before = names.Count;
+                            var elements = chatWindow.FindAllDescendants()
+                                .Where(x => IsInsideBuyerPanel(x, panelLeft, panelRight, panelTop, panelBottom))
+                                .Where(x => !string.IsNullOrWhiteSpace(x.Name))
+                                .ToList();
+
+                            var timeElements = elements
+                                .Where(x => Regex.IsMatch((x.Name ?? string.Empty).Trim(), @"^\d{1,2}:\d{2}$"))
+                                .Where(x => x.BoundingRectangle.Left > panelLeft + (panelRight - panelLeft) * 0.62)
+                                .ToList();
+
+                            foreach (var timeElement in timeElements)
+                            {
+                                var timeBounds = timeElement.BoundingRectangle;
+                                var candidate = elements
+                                    .Where(x => !object.ReferenceEquals(x, timeElement))
+                                    .Where(x => x.BoundingRectangle.Left > panelLeft + 42)
+                                    .Where(x => x.BoundingRectangle.Right < timeBounds.Left - 2)
+                                    .Where(x => Math.Abs(x.BoundingRectangle.Top - timeBounds.Top) <= 11)
+                                    .OrderBy(x => x.BoundingRectangle.Left)
+                                    .FirstOrDefault();
+                                AddBuyerListCandidate(names, candidate == null ? string.Empty : candidate.Name);
+                            }
+
+                            if (timeElements.Count == 0)
+                            {
+                                foreach (var group in elements
+                                    .Where(x => x.BoundingRectangle.Left > panelLeft + 42)
+                                    .Where(x => x.BoundingRectangle.Right < panelRight - 18)
+                                    .Where(x => !Regex.IsMatch((x.Name ?? string.Empty).Trim(), @"^\d{1,2}:\d{2}$"))
+                                    .GroupBy(x => (int)Math.Floor((x.BoundingRectangle.Top - panelTop) / 48.0)))
+                                {
+                                    var candidate = group
+                                        .OrderBy(x => x.BoundingRectangle.Top)
+                                        .ThenBy(x => x.BoundingRectangle.Left)
+                                        .FirstOrDefault();
+                                    AddBuyerListCandidate(names, candidate == null ? string.Empty : candidate.Name);
+                                }
+                            }
+
+                            stableRounds = names.Count == before ? stableRounds + 1 : 0;
+                            ClickPoint(focusPoint);
+                            PressPageDown();
+                            Thread.Sleep(160);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    diagnostics.AppendLine("读取聊天界面“全部买家”列表失败：" + Safe(ex.Message));
+                }
+
+                diagnostics.AppendLine("聊天界面“全部买家”列表读取到 " + names.Count + " 个联系人。");
+                return names.ToList();
+            }, token);
+        }
+
+        private static bool IsAllBuyerHeader(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            return value.StartsWith("全部买家", StringComparison.Ordinal);
+        }
+
+        private static bool IsInsideBuyerPanel(
+            AutomationElement element,
+            double left,
+            double right,
+            double top,
+            double bottom)
+        {
+            if (element == null) return false;
+            var rect = element.BoundingRectangle;
+            if (rect.Width <= 0 || rect.Height <= 0) return false;
+            var centerX = rect.Left + rect.Width / 2;
+            var centerY = rect.Top + rect.Height / 2;
+            return centerX >= left && centerX <= right && centerY >= top && centerY <= bottom;
+        }
+
+        private static void AddBuyerListCandidate(HashSet<string> names, string value)
+        {
+            var nick = CleanBuyerListNick(value);
+            if (!IsPlausibleBuyerNick(nick) || IsBuyerListNoise(nick)) return;
+            names.Add(nick);
+        }
+
+        private static string CleanBuyerListNick(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            var lines = Regex.Split(value, @"[\r\n\t]+")
+                .Select(x => x.Trim())
+                .Where(x => x.Length > 0)
+                .ToList();
+            if (lines.Count > 0) value = lines[0];
+            value = Regex.Replace(value, @"\s+\d{1,2}:\d{2}$", string.Empty).Trim();
+            var columns = Regex.Split(value, @"\s{2,}")
+                .Select(x => x.Trim())
+                .Where(x => x.Length > 0)
+                .ToList();
+            if (columns.Count > 0) value = columns[0];
+            return CleanNick(value);
+        }
+
+        private static bool IsBuyerListNoise(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(value)) return true;
+            var exact = new[]
+            {
+                "全部买家", "最近联系", "最近星标", "咨询未下单", "咨询未付款",
+                "正在接待", "其他消息", "联系人", "搜索", "消息", "订单号", "聊天记录"
+            };
+            if (exact.Any(x => string.Equals(value, x, StringComparison.Ordinal))) return true;
+            if (value.StartsWith("全部买家", StringComparison.Ordinal)) return true;
+            if (value.StartsWith("最近星标", StringComparison.Ordinal)) return true;
+            if (value.StartsWith("咨询未下单", StringComparison.Ordinal)) return true;
+            if (value.StartsWith("咨询未付款", StringComparison.Ordinal)) return true;
+            if (Regex.IsMatch(value, @"^\d{1,2}:\d{2}$")) return true;
+            if (value.IndexOf("撤回了一条消息", StringComparison.Ordinal) >= 0) return true;
+            if (value.IndexOf("系统消息", StringComparison.Ordinal) >= 0) return true;
+            return false;
         }
 
         private static async Task<List<string>> ReadVisibleMessageManagerContactsAsync(StringBuilder diagnostics, CancellationToken token)
