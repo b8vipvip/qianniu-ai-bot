@@ -7,6 +7,12 @@ on:
     paths:
       - tools/apply_all_buyers_scan_patch.py
       - .github/workflows/apply-all-buyers-scan.yml
+  pull_request:
+    branches:
+      - master
+    paths:
+      - tools/apply_all_buyers_scan_patch.py
+      - .github/workflows/apply-all-buyers-scan.yml
 
 permissions:
   contents: write
