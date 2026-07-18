@@ -159,6 +159,7 @@
     <Compile Include="AssistWindow\Widget\Robot\CtlRobot.xaml.cs"><DependentUpon>CtlRobot.xaml</DependentUpon></Compile>
     <Compile Include="ChromeNs\MyOpenAI.cs" />
     <Compile Include="ChromeNs\KnowledgeLearningService.cs" />
+    <Compile Include="ChromeNs\HandoffNotificationService.cs" />
     <Compile Include="ChromeNs\QN.cs" />
     <Compile Include="ChromeNs\VisionApiTester.cs" />
     <Compile Include="ChromeNs\VisionImageResolver.cs" />

@@ -104,13 +104,13 @@ namespace Bot.AssistWindow.Widget.Robot
             }
         }
 
-        public CtlConversation AddConversation(string seller, string buyer, string question, string answer, bool isAutoReply = false)
+        public CtlConversation AddConversation(string seller, string buyer, string question, string answer, bool isAutoReply = false, string answerSource = "")
         {
             BotRuntimeStats.RecordDisplayedAnswer(isAutoReply);
             RefreshStats();
 
             var key = string.Format("{0}#{1}", seller, buyer);
-            var ctlConversation = CtlConversation.Create(seller, buyer, question, answer, isAutoReply);
+            var ctlConversation = CtlConversation.Create(seller, buyer, question, answer, isAutoReply, answerSource);
             ctlConversation.ResendRequested += CtlConversation_ResendRequested;
             ctlConversation.EditRequested += CtlConversation_EditRequested;
             var conversations = buyerConversations.xTryGetValue(key);

@@ -68,7 +68,6 @@ namespace Bot.Knowledge
             AddBtn(top, "新增问答", 86, (s, e) => AddNew());
             AddBtn(top, "导入JSON", 86, (s, e) => ImportJson());
             AddBtn(top, "导出JSON", 86, (s, e) => ExportJson());
-            AddBtn(top, "扫描历史聊天记录", 140, (s, e) => ScanHistory());
 
             _count = new TextBlock { Margin = new Thickness(0, 0, 0, 8) };
             DockPanel.SetDock(_count, Dock.Bottom);
@@ -221,16 +220,6 @@ namespace Bot.Knowledge
             BotFeatureStore.SaveKnowledgeBase(_all);
             RefreshCategories();
             ApplyFilter();
-        }
-
-        private void ScanHistory()
-        {
-            var window = new ChatHistoryScanWindow
-            {
-                Owner = Window.GetWindow(this)
-            };
-            window.ShowDialog();
-            RefreshData();
         }
 
         private void ImportJson()

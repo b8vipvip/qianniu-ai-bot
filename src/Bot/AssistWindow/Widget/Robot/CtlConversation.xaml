@@ -32,8 +32,10 @@
                 <StackPanel Grid.Column="1" Margin="4 7 8 7">
                     <TextBlock x:Name="txtAnswer" Foreground="{StaticResource PrimaryText}" TextWrapping="Wrap" MouseRightButtonDown="txtAnswer_MouseRightButtonDown" />
                     <StackPanel Orientation="Horizontal" Margin="0 5 0 0">
-                        <TextBlock x:Name="txtSource" FontSize="11" FontWeight="SemiBold" Visibility="Collapsed" />
-                        <TextBlock Text="  ·  " Foreground="{StaticResource MutedText}" FontSize="11" />
+                        <Border x:Name="bdSource" CornerRadius="4" Padding="5 1" Margin="0 0 5 0" Visibility="Collapsed">
+                            <TextBlock x:Name="txtSource" FontSize="11" FontWeight="SemiBold" />
+                        </Border>
+                        <TextBlock x:Name="txtSourceSeparator" Text="·  " Foreground="{StaticResource MutedText}" FontSize="11" Visibility="Collapsed" />
                         <TextBlock x:Name="txtStatus" Foreground="{StaticResource SuccessGreen}" FontSize="11" />
                         <TextBlock Text="  ·  " Foreground="{StaticResource MutedText}" FontSize="11" />
                         <TextBlock x:Name="txtTime" Foreground="{StaticResource MutedText}" FontSize="11" />

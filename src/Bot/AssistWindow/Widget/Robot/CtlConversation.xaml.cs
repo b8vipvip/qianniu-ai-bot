@@ -56,14 +56,14 @@ namespace Bot.AssistWindow.Widget.Robot
             InitializeComponent();
         }
 
-        public static CtlConversation Create(string seller, string buyer, string question, string answer, bool isAutoReply = false)
+        public static CtlConversation Create(string seller, string buyer, string question, string answer, bool isAutoReply = false, string answerSource = "")
         {
             var dlg = new CtlConversation();
-            dlg.Setup(seller, buyer, question, answer, isAutoReply);
+            dlg.Setup(seller, buyer, question, answer, isAutoReply, answerSource);
             return dlg;
         }
 
-        public void Setup(string seller, string buyer, string question, string answer, bool isAutoReply)
+        public void Setup(string seller, string buyer, string question, string answer, bool isAutoReply, string answerSource)
         {
             _seller = seller ?? string.Empty;
             _buyer = buyer ?? string.Empty;
@@ -72,19 +72,24 @@ namespace Bot.AssistWindow.Widget.Robot
             _canResend = true;
             txtQuestion.Text = _question;
             txtAnswer.Text = _answer;
-            SetSource(KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer));
+            var resolvedSource = string.IsNullOrWhiteSpace(answerSource)
+                ? KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer)
+                : answerSource;
+            SetSource(resolvedSource);
             txtStatus.Text = isAutoReply ? "正在发送..." : "仅生成答案";
             txtStatus.Foreground = new SolidColorBrush(isAutoReply ? Color.FromRgb(47, 128, 237) : Color.FromRgb(107, 114, 128));
             txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
         }
 
-        public void SetAnswer(string answer)
+        public void SetAnswer(string answer, string answerSource = "")
         {
             _answer = answer ?? string.Empty;
             Ui(() =>
             {
                 txtAnswer.Text = _answer;
-                var source = KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer);
+                var source = string.IsNullOrWhiteSpace(answerSource)
+                    ? KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer)
+                    : answerSource;
                 if (!string.IsNullOrWhiteSpace(source)) SetSource(source);
                 txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
             });
@@ -94,9 +99,19 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             Ui(() =>
             {
-                txtSource.Text = source ?? string.Empty;
-                txtSource.Visibility = string.IsNullOrWhiteSpace(source) ? Visibility.Collapsed : Visibility.Visible;
-                txtSource.Foreground = new SolidColorBrush(source == "本地" ? Color.FromRgb(39, 174, 96) : source.StartsWith("人工") ? Color.FromRgb(155, 81, 224) : Color.FromRgb(47, 128, 237));
+                source = (source ?? string.Empty).Trim();
+                var visible = !string.IsNullOrWhiteSpace(source);
+                txtSource.Text = source;
+                bdSource.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                txtSourceSeparator.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+                var local = source == "本地";
+                var manual = source.StartsWith("人工", StringComparison.Ordinal);
+                txtSource.Foreground = new SolidColorBrush(local
+                    ? Color.FromRgb(22, 101, 52)
+                    : manual ? Color.FromRgb(107, 33, 168) : Color.FromRgb(29, 78, 216));
+                bdSource.Background = new SolidColorBrush(local
+                    ? Color.FromRgb(220, 252, 231)
+                    : manual ? Color.FromRgb(243, 232, 255) : Color.FromRgb(219, 234, 254));
             });
         }
 

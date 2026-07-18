@@ -359,7 +359,8 @@ namespace Bot.ChromeNs
             }
 
             var answer = MyOpenAI.GetAnswer(sellerNick, buyerNick, messageText);
-            var conversationCtl = Desk.Inst == null ? null : Desk.Inst.AddConversation(sellerNick, buyerNick, messageText, answer, autoSend);
+            var answerSource = KnowledgeLearningService.ResolveAnswerSource(sellerNick, buyerNick, messageText, answer);
+            var conversationCtl = Desk.Inst == null ? null : Desk.Inst.AddConversation(sellerNick, buyerNick, messageText, answer, autoSend, answerSource);
             if (!autoSend) return;
 
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误："))
@@ -387,7 +388,7 @@ namespace Bot.ChromeNs
                 Log.Info("视觉消息跳过: seller=" + task.SellerNick + ", buyer=" + task.BuyerNick + ", messageId=" + task.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
                 return;
             }
-            if (ctl != null) ctl.SetAnswer(result.Answer);
+            if (ctl != null) ctl.SetAnswer(result.Answer, "AI生成");
             if (!autoSend) return;
             var sendOk = await SendTextWithRetryAsync(task.BuyerNick, result.Answer, 1);
             if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送" : "识别完成，但目标买家会话未确认，未发送。");
