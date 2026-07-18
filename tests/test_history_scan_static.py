@@ -16,14 +16,18 @@ def test_history_scan_button_and_options():
     assert "DatePicker" in window
 
 
-def test_history_scan_opens_manager_and_reads_contacts():
+def test_history_scan_prefers_all_buyers_and_keeps_manager_fallback():
     source = text("src/Bot/Knowledge/ChatHistoryScanService.cs")
-    assert "TryOpenMessageManagerAsync" in source
-    assert '"消息管理器"' in source
+    window = text("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
     assert "ReadVisibleChatBuyerListContactsAsync" in source
     assert "ChatBuyerListContactCount" in source
+    assert "正在读取千牛左侧“全部买家”列表" in source
+    assert "TryOpenMessageManagerAsync" in source
+    assert '"消息管理器"' in source
     assert "ReadVisibleMessageManagerContactsAsync" in source
     assert "mtop.taobao.wireless.amp2.im.relation.rebase" in source
+    assert "联系人来源：全部买家列表" in window
+    assert "有效聊天消息" in window
 
 
 def test_history_scan_pages_remote_history():
