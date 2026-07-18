@@ -1,4 +1,4 @@
-﻿using Bot.ChatRecord;
+using Bot.ChatRecord;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -51,10 +51,37 @@ namespace Bot.ChromeNs
 
         public static IncomingMessageDecision Evaluate(QNChatMessage message, string messageText, DateTime safetyStartedAt)
         {
+            // Refresh the same seller+buyer timeline before deciding how to answer. This loads
+            // recent manual-agent questions as well as buyer replies such as phone/model/account IDs.
+            ConversationContextStore.RefreshAndRecord(message, messageText);
+
             DateTime messageTime;
             if (TryGetMessageTime(message, out messageTime) && messageTime < safetyStartedAt.AddSeconds(-8))
             {
                 return Skip("历史消息", "已跳过：这是 Bot 启动前的历史或未读消息，未调用AI，也未发送给买家。");
+            }
+
+            if (ConversationContextStore.IsWithdrawalNotice(message, messageText))
+            {
+                return Skip("[撤回提示]", "已跳过：检测到消息撤回提示，未调用AI，也未发送给买家。");
+            }
+
+            if (ConversationContextStore.IsPlatformSystemTip(message, messageText))
+            {
+                return Skip("[淘宝系统提示]", "已跳过：这是淘宝/千牛自动生成的系统提示，未调用AI，也未发送给买家。");
+            }
+
+            // Product links and product cards use a local preset reply. ShouldCallAi remains true
+            // only so the existing UI/send pipeline is reused; MyOpenAI returns before any HTTP call.
+            if (ConversationContextStore.IsProductLink(message, messageText))
+            {
+                ConversationContextStore.RegisterProductLinkReply(message, messageText);
+                return new IncomingMessageDecision
+                {
+                    ShouldCallAi = true,
+                    MessageLabel = string.IsNullOrWhiteSpace(messageText) ? "[商品链接]" : messageText,
+                    Note = "商品链接使用本地预设随机回复，不调用AI接口。"
+                };
             }
 
             var unsupportedType = DetectUnsupportedType(message, messageText);
