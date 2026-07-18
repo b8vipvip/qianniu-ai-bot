@@ -208,6 +208,8 @@
     <Compile Include="Automation\WinEventHooker.cs" />
     <Compile Include="ChromeNs\MyWebSocketServer.cs" />
     <Compile Include="Knowledge\KnowledgeAiService.cs" />
+    <Compile Include="Knowledge\ChatHistoryScanService.cs" />
+    <Compile Include="Knowledge\ChatHistoryScanWindow.cs" />
     <Compile Include="Knowledge\KnowledgeCenterWindow.cs" />
     <Compile Include="Knowledge\KnowledgeClipboardParser.cs" />
     <Compile Include="Knowledge\KnowledgeEditWindow.cs" />
