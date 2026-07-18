@@ -9,8 +9,11 @@ def text(path):
 
 def test_history_scan_button_and_options():
     manager = text("src/Bot/Knowledge/KnowledgeManagerControl.cs")
+    importer = text("src/Bot/Knowledge/KnowledgeImportControl.cs")
     window = text("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
-    assert "扫描历史聊天记录" in manager
+    assert "扫描历史聊天记录" not in manager
+    assert "扫描历史聊天记录" in importer
+    assert "ChatHistoryScanWindow" in importer
     assert "全部扫描" in window
     assert "按时间段扫描" in window
     assert "DatePicker" in window
