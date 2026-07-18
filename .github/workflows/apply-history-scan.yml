@@ -1,24 +1,22 @@
-name: Apply history scan patch
+name: Cleanup history scan patch files
 
 on:
   push:
     branches:
       - feat/knowledge-learning-loop
     paths:
-      - tools/apply_history_scan_patch.py
       - .github/workflows/apply-history-scan.yml
   pull_request:
     branches:
       - master
     paths:
-      - tools/apply_history_scan_patch.py
       - .github/workflows/apply-history-scan.yml
 
 permissions:
   contents: write
 
 jobs:
-  apply:
+  cleanup:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout feature branch
@@ -27,21 +25,11 @@ jobs:
           ref: feat/knowledge-learning-loop
           fetch-depth: 0
 
-      - name: Apply history scan source patch
-        run: python tools/apply_history_scan_patch.py
-
-      - name: Validate source patch structure
-        run: git diff --check
-
-      - name: Static diagnostics
-        continue-on-error: true
-        run: python -m pytest -q tests/test_history_scan_static.py tests/test_knowledge_learning_static.py
-
-      - name: Commit history scan source
+      - name: Remove one-time patch payload
         shell: bash
         run: |
+          git rm -r tools/apply_history_scan_patch.py tools/history_scan_payload
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/Bot tests/test_history_scan_static.py
-          git commit -m "feat: scan historical chats into knowledge base"
+          git commit -m "chore: remove history scan patch payload"
           git push origin HEAD:feat/knowledge-learning-loop
