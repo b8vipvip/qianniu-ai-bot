@@ -1,12 +1,15 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
 using System.Threading.Tasks;
 using Bot.ChromeNs;
 using Bot.Options;
 using BotLib;
-using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace Bot.Knowledge
@@ -22,69 +25,455 @@ namespace Bot.Knowledge
         public int NewCategoryCount { get; set; }
         public int UnsupportedImageSkipped { get; set; }
         public List<KnowledgeBaseEntry> AddedItems { get; set; }
-        public KnowledgeImportResult() { AddedItems = new List<KnowledgeBaseEntry>(); }
+
+        public KnowledgeImportResult()
+        {
+            AddedItems = new List<KnowledgeBaseEntry>();
+        }
+    }
+
+    public enum SmartImportCancelSource
+    {
+        None,
+        UserCancel,
+        Timeout,
+        WindowClosed,
+        ReplacedByNewTask
+    }
+
+    public class SmartImportException : Exception
+    {
+        public new SmartImportCancelSource Source { get; private set; }
+        public int BatchIndex { get; private set; }
+
+        public SmartImportException(string message, SmartImportCancelSource source, int batchIndex)
+            : base(message)
+        {
+            Source = source;
+            BatchIndex = batchIndex;
+        }
+    }
+
+    public class SmartImportProgress
+    {
+        public int BatchIndex;
+        public int BatchCount;
+        public int BatchChars;
+        public int Added;
+        public int DuplicateSkipped;
+        public int TimeoutSeconds;
+        public long ElapsedMs;
+        public string EndpointName;
+
+        public override string ToString()
+        {
+            return string.Format(
+                "正在分析第 {0}/{1} 批\n当前批次字符数：{2:N0}\n已导入：{3}条\n已跳过重复：{4}条\n当前耗时：{5:mm\\:ss}\n当前接口：{6}",
+                BatchIndex,
+                BatchCount,
+                BatchChars,
+                Added,
+                DuplicateSkipped,
+                TimeSpan.FromMilliseconds(ElapsedMs),
+                string.IsNullOrWhiteSpace(EndpointName) ? "-" : EndpointName);
+        }
     }
 
     public class KnowledgeAiService
     {
-        private const int TextBatchChars = 12000;
+        private const int TargetMinChars = 3000;
+        private const int TargetMaxChars = 5000;
+        private const int MaxBatchChars = 6000;
         private const int ImagesPerBatch = 5;
-        public bool SupportsDirectVideo { get { return false; } }
 
-        private const string SystemPrompt = "你是电商客服知识库整理助手。你的任务是根据用户提供的店铺资料、商品资料、售后规则、产品介绍、聊天记录和图片内容，整理成可以供客服机器人直接使用的问答知识库。严格要求：1.只能根据输入资料生成答案；2.不允许编造资料中没有的信息；3.不知道的信息不要猜测；4.不要编造价格；5.不要编造库存；6.不要编造发货时间；7.不要编造物流时效；8.不要编造售后承诺；9.自动判断合理分类；10.自动生成客户真正可能询问的问题；11.一个知识点可以生成多个不同问法，但避免重复；12.答案要准确、清晰、适合客服直接使用；13.自动提取适合搜索匹配的关键词；14.只输出JSON，不要输出Markdown解释。输出结构必须是：{\"faqs\":[{\"category\":\"店铺规则\",\"question\":\"问题\",\"answer\":\"答案\",\"keywords\":[\"关键词\"]}]}。";
+        private const string SystemPrompt =
+            "你是电商客服知识库整理助手。只能根据输入资料生成答案，不允许编造价格、库存、发货时间、物流时效或售后承诺。" +
+            "每批最多生成20到40条问答。只输出严格JSON，不要输出解释、Markdown代码围栏或额外说明。" +
+            "输出结构必须是：{\"faqs\":[{\"category\":\"店铺规则\",\"question\":\"问题\",\"answer\":\"答案\",\"keywords\":[\"关键词\"]}]}。";
+
+        public bool SupportsDirectVideo
+        {
+            get { return false; }
+        }
 
         public async Task<KnowledgeImportResult> ImportAsync(ClipboardKnowledgeData data, Action<string> progress)
         {
-            if (data == null || !data.HasAnalyzableContent) throw new Exception("没有检测到可导入的文字、图片或媒体内容。");
-            if (AiEndpointStore.GetEnabledEndpoints().Count < 1) throw new Exception("请先在【设置 → API接口】中配置并启用至少一个可用的 AI 接口。");
-            if (progress != null) progress("正在整理资料批次...");
-            var batches = BuildBatches(data);
-            var all = new List<KnowledgeBaseEntry>();
-            var unsupportedImages = 0;
+            return await ImportAsync(
+                data,
+                BotFeatureStore.GetSmartImportTimeoutSeconds(),
+                CancellationToken.None,
+                () => SmartImportCancelSource.None,
+                progress);
+        }
+
+        public async Task<KnowledgeImportResult> ImportAsync(
+            ClipboardKnowledgeData data,
+            int timeoutSeconds,
+            CancellationToken userToken,
+            Func<SmartImportCancelSource> cancelSource,
+            Action<string> progress)
+        {
+            timeoutSeconds = ClampTimeout(timeoutSeconds);
+
+            if (data == null || !data.HasAnalyzableContent)
+            {
+                throw new Exception("没有检测到可导入的文字、图片或媒体内容。");
+            }
+
+            var endpoints = AiEndpointStore.GetEnabledEndpoints();
+            if (endpoints.Count < 1)
+            {
+                throw new Exception("请先在【设置 → API接口】中配置并启用至少一个可用的 AI 接口。");
+            }
+
+            var primary = endpoints.FirstOrDefault();
+            var batches = BuildBatches(data, primary);
+            var total = new KnowledgeImportResult
+            {
+                TextChars = (data.Text ?? string.Empty).Length,
+                ImageCount = data.Images.Count,
+                VideoSkipped = data.Videos.Count
+            };
+
+            var existingCategories = new HashSet<string>(
+                BotFeatureStore.GetKnowledgeBase()
+                    .Select(x => x.Category ?? string.Empty)
+                    .Where(x => x.Length > 0),
+                StringComparer.OrdinalIgnoreCase);
+            var importedCategories = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
             for (var i = 0; i < batches.Count; i++)
             {
-                if (progress != null) progress("正在分析第 " + (i + 1) + "/" + batches.Count + " 批资料...");
                 var batch = batches[i];
-                var parsed = await AnalyzeBatchAsync(batch.Text, batch.Images, progress);
-                unsupportedImages += parsed.UnsupportedImages;
-                all.AddRange(parsed.Items);
+                var batchHash = Hash((batch.Text ?? string.Empty) + "\n" + string.Join("\n", batch.Images.Select(x => x.AiUrl ?? string.Empty)));
+                var stopwatch = Stopwatch.StartNew();
+
+                ReportProgress(progress, batch, i + 1, batches.Count, total, timeoutSeconds, stopwatch.ElapsedMilliseconds);
+
+                ParseResult parsed = null;
+                Exception lastError = null;
+
+                for (var attempt = 0; attempt < 2; attempt++)
+                {
+                    using (var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
+                    using (var linked = CancellationTokenSource.CreateLinkedTokenSource(userToken, timeoutCts.Token))
+                    {
+                        try
+                        {
+                            parsed = await AnalyzeBatchAsync(batch.Text, batch.Images, timeoutSeconds, linked.Token);
+                            break;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            var source = timeoutCts.IsCancellationRequested && !userToken.IsCancellationRequested
+                                ? SmartImportCancelSource.Timeout
+                                : (cancelSource == null ? SmartImportCancelSource.UserCancel : cancelSource());
+                            var cancelError = BuildCancelException(source, i + 1, timeoutSeconds, batch.EndpointName);
+
+                            if (source == SmartImportCancelSource.Timeout && attempt == 0)
+                            {
+                                lastError = cancelError;
+                                if (progress != null)
+                                {
+                                    progress("第 " + (i + 1) + " 批请求超时，正在自动重试一次...");
+                                }
+                                continue;
+                            }
+
+                            throw cancelError;
+                        }
+                        catch (Exception ex)
+                        {
+                            lastError = ex;
+                            if (attempt == 0 && IsRetryable(ex.Message))
+                            {
+                                if (progress != null)
+                                {
+                                    progress("第 " + (i + 1) + " 批遇到临时错误，正在自动重试一次...");
+                                }
+                                continue;
+                            }
+                            throw;
+                        }
+                    }
+                }
+
+                if (parsed == null)
+                {
+                    if (lastError != null) throw lastError;
+                    throw new Exception("智能导入未返回有效结果，本批没有写入知识库。");
+                }
+
+                total.UnsupportedImageSkipped += parsed.UnsupportedImages;
+                total.AiGenerated += parsed.Items.Count;
+
+                var save = SaveDeduped(parsed.Items);
+                total.Added += save.Added;
+                total.DuplicateSkipped += save.DuplicateSkipped;
+                total.AddedItems.AddRange(save.AddedItems);
+
+                foreach (var category in save.AddedItems
+                    .Select(x => x.Category ?? string.Empty)
+                    .Where(x => x.Length > 0 && !existingCategories.Contains(x)))
+                {
+                    importedCategories.Add(category);
+                }
+                total.NewCategoryCount = importedCategories.Count;
+
+                Log.Info(string.Format(
+                    "SmartImport batch ok endpoint={0} model={1} batch={2}/{3} input_chars={4} batch_hash={5} elapsed_ms={6} timeout_seconds={7} parsed_items={8} added={9} dup={10}",
+                    batch.EndpointName,
+                    batch.Model,
+                    i + 1,
+                    batches.Count,
+                    (batch.Text ?? string.Empty).Length,
+                    batchHash,
+                    stopwatch.ElapsedMilliseconds,
+                    timeoutSeconds,
+                    parsed.Items.Count,
+                    save.Added,
+                    save.DuplicateSkipped));
+
+                ReportProgress(progress, batch, i + 1, batches.Count, total, timeoutSeconds, stopwatch.ElapsedMilliseconds);
             }
-            if (progress != null) progress("正在去除重复知识...");
-            var result = SaveDeduped(all, data);
-            result.UnsupportedImageSkipped = unsupportedImages;
-            return result;
+
+            return total;
         }
 
-        private class Batch { public string Text; public List<KnowledgeMediaItem> Images; }
-        private class ParseResult { public List<KnowledgeBaseEntry> Items = new List<KnowledgeBaseEntry>(); public int UnsupportedImages; }
-
-        private List<Batch> BuildBatches(ClipboardKnowledgeData data)
+        public static int ClampTimeout(int seconds)
         {
-            var text = data.Text ?? string.Empty;
-            var chunks = new List<string>();
-            if (text.Length == 0) chunks.Add(string.Empty);
-            for (var i = 0; i < text.Length; i += TextBatchChars) chunks.Add(text.Substring(i, Math.Min(TextBatchChars, text.Length - i)));
-            var images = data.Images.Where(x => x != null && !string.IsNullOrWhiteSpace(x.AiUrl)).ToList();
-            var count = Math.Max(chunks.Count, (int)Math.Ceiling(images.Count / (double)ImagesPerBatch));
-            if (count < 1) count = 1;
-            var batches = new List<Batch>();
-            for (var i = 0; i < count; i++)
+            return Math.Max(120, Math.Min(1800, seconds <= 0 ? 600 : seconds));
+        }
+
+        private static void ReportProgress(
+            Action<string> progress,
+            Batch batch,
+            int batchIndex,
+            int batchCount,
+            KnowledgeImportResult total,
+            int timeoutSeconds,
+            long elapsedMs)
+        {
+            if (progress == null) return;
+            progress(new SmartImportProgress
             {
-                batches.Add(new Batch { Text = i < chunks.Count ? chunks[i] : string.Empty, Images = images.Skip(i * ImagesPerBatch).Take(ImagesPerBatch).ToList() });
-            }
-            return batches;
+                BatchIndex = batchIndex,
+                BatchCount = batchCount,
+                BatchChars = (batch.Text ?? string.Empty).Length,
+                Added = total.Added,
+                DuplicateSkipped = total.DuplicateSkipped,
+                ElapsedMs = elapsedMs,
+                EndpointName = batch.EndpointName,
+                TimeoutSeconds = timeoutSeconds
+            }.ToString());
         }
 
-        private async Task<ParseResult> AnalyzeBatchAsync(string text, List<KnowledgeMediaItem> images, Action<string> progress)
+        private SmartImportException BuildCancelException(
+            SmartImportCancelSource source,
+            int batchIndex,
+            int timeoutSeconds,
+            string endpointName)
         {
-            var withImages = images != null && images.Count > 0;
-            try { return await AnalyzeBatchCoreAsync(text, images); }
+            if (source == SmartImportCancelSource.Timeout)
+            {
+                return new SmartImportException(
+                    string.Format(
+                        "智能导入超时：接口“{0}”等待超过{1}秒，未收到完整响应。本批内容尚未导入，可以重试本批。",
+                        string.IsNullOrWhiteSpace(endpointName) ? "当前接口" : endpointName,
+                        timeoutSeconds),
+                    source,
+                    batchIndex);
+            }
+            if (source == SmartImportCancelSource.WindowClosed)
+            {
+                return new SmartImportException("窗口已关闭，智能导入任务已停止。已完成批次会保留。", source, batchIndex);
+            }
+            if (source == SmartImportCancelSource.ReplacedByNewTask)
+            {
+                return new SmartImportException("新的智能导入任务已开始，旧任务已停止。已完成批次会保留。", source, batchIndex);
+            }
+            return new SmartImportException(
+                "用户已取消智能导入。已完成批次会保留。",
+                SmartImportCancelSource.UserCancel,
+                batchIndex);
+        }
+
+        private sealed class Batch
+        {
+            public string Text;
+            public List<KnowledgeMediaItem> Images;
+            public string EndpointName;
+            public string Model;
+        }
+
+        private sealed class ParseResult
+        {
+            public readonly List<KnowledgeBaseEntry> Items = new List<KnowledgeBaseEntry>();
+            public int UnsupportedImages;
+        }
+
+        public static List<string> SplitTextBatches(string text)
+        {
+            text = text ?? string.Empty;
+            var paragraphs = Regex.Split(text.Replace("\r\n", "\n"), "\n{2,}")
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .ToList();
+
+            if (paragraphs.Count == 0)
+            {
+                return new List<string> { string.Empty };
+            }
+
+            var result = new List<string>();
+            var current = new StringBuilder();
+
+            foreach (var paragraph in paragraphs)
+            {
+                foreach (var piece in SplitLongParagraph(paragraph))
+                {
+                    if (current.Length > 0 && current.Length + piece.Length + 2 > TargetMaxChars)
+                    {
+                        FlushBatch(result, current);
+                    }
+
+                    if (piece.Length > TargetMaxChars)
+                    {
+                        FlushBatch(result, current);
+                        result.Add(piece.Trim());
+                        continue;
+                    }
+
+                    if (current.Length > 0) current.Append("\n\n");
+                    current.Append(piece.Trim());
+
+                    if (current.Length >= TargetMinChars)
+                    {
+                        FlushBatch(result, current);
+                    }
+                }
+            }
+
+            FlushBatch(result, current);
+            return result.Count == 0 ? new List<string> { string.Empty } : result;
+        }
+
+        private static void FlushBatch(List<string> result, StringBuilder current)
+        {
+            if (current.Length == 0) return;
+            result.Add(current.ToString().Trim());
+            current.Length = 0;
+        }
+
+        private static IEnumerable<string> SplitLongParagraph(string paragraph)
+        {
+            paragraph = paragraph ?? string.Empty;
+            if (paragraph.Length <= MaxBatchChars)
+            {
+                yield return paragraph;
+                yield break;
+            }
+
+            var sentences = Regex.Split(paragraph, "(?<=[。！？?？!；;])")
+                .Where(x => !string.IsNullOrEmpty(x));
+            var current = new StringBuilder();
+
+            foreach (var sentence in sentences)
+            {
+                foreach (var piece in SplitOversizedSegment(sentence, MaxBatchChars))
+                {
+                    if (current.Length > 0 && current.Length + piece.Length > MaxBatchChars)
+                    {
+                        yield return current.ToString();
+                        current.Length = 0;
+                    }
+                    current.Append(piece);
+                }
+            }
+
+            if (current.Length > 0)
+            {
+                yield return current.ToString();
+            }
+        }
+
+        private static IEnumerable<string> SplitOversizedSegment(string value, int maxChars)
+        {
+            value = value ?? string.Empty;
+            var offset = 0;
+            while (offset < value.Length)
+            {
+                var remaining = value.Length - offset;
+                if (remaining <= maxChars)
+                {
+                    yield return value.Substring(offset);
+                    yield break;
+                }
+
+                var cut = FindPreferredSplit(value, offset, maxChars);
+                yield return value.Substring(offset, cut);
+                offset += cut;
+            }
+        }
+
+        private static int FindPreferredSplit(string value, int offset, int maxChars)
+        {
+            var minimum = Math.Max(1, maxChars / 2);
+            for (var length = maxChars; length >= minimum; length--)
+            {
+                var c = value[offset + length - 1];
+                if (char.IsWhiteSpace(c) || "，,、：:）)]}》>".IndexOf(c) >= 0)
+                {
+                    return length;
+                }
+            }
+            return maxChars;
+        }
+
+        private List<Batch> BuildBatches(ClipboardKnowledgeData data, AiEndpointConfig primary)
+        {
+            var chunks = SplitTextBatches(data.Text);
+            var images = data.Images
+                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.AiUrl))
+                .ToList();
+            var count = Math.Max(chunks.Count, (int)Math.Ceiling(images.Count / (double)ImagesPerBatch));
+            count = Math.Max(1, count);
+
+            return Enumerable.Range(0, count)
+                .Select(i => new Batch
+                {
+                    Text = i < chunks.Count ? chunks[i] : string.Empty,
+                    Images = images.Skip(i * ImagesPerBatch).Take(ImagesPerBatch).ToList(),
+                    EndpointName = primary == null ? string.Empty : primary.Name,
+                    Model = primary == null ? string.Empty : primary.TextModel
+                })
+                .ToList();
+        }
+
+        private async Task<ParseResult> AnalyzeBatchAsync(
+            string text,
+            List<KnowledgeMediaItem> images,
+            int timeoutSeconds,
+            CancellationToken token)
+        {
+            try
+            {
+                return await AnalyzeBatchCoreAsync(text, images, timeoutSeconds, token);
+            }
             catch (Exception ex)
             {
-                if (withImages && IsVisionUnsupported(ex.Message))
+                if (images != null && images.Count > 0 && IsVisionUnsupported(ex.Message))
                 {
-                    if (progress != null) progress("当前AI接口不支持图片理解，正在改用纯文本分析...");
-                    var fallback = await AnalyzeBatchCoreAsync(text, new List<KnowledgeMediaItem>());
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        return new ParseResult { UnsupportedImages = images.Count };
+                    }
+
+                    var fallback = await AnalyzeBatchCoreAsync(
+                        text,
+                        new List<KnowledgeMediaItem>(),
+                        timeoutSeconds,
+                        token);
                     fallback.UnsupportedImages = images.Count;
                     return fallback;
                 }
@@ -92,89 +481,233 @@ namespace Bot.Knowledge
             }
         }
 
-        private async Task<ParseResult> AnalyzeBatchCoreAsync(string text, List<KnowledgeMediaItem> images)
+        private async Task<ParseResult> AnalyzeBatchCoreAsync(
+            string text,
+            List<KnowledgeMediaItem> images,
+            int timeoutSeconds,
+            CancellationToken token)
         {
-            var userText = "请整理以下资料为客服问答知识库。资料文本：\n" + (text ?? string.Empty);
-            JToken content;
+            var userText = string.Format(
+                "请整理以下资料为客服问答知识库。每批最多20到40条问答，max_tokens受限时优先保证JSON完整。资料文本：\n{0}",
+                text ?? string.Empty);
+            JToken content = userText;
+
             if (images != null && images.Count > 0)
             {
-                var arr = new JArray { new JObject { ["type"] = "text", ["text"] = userText } };
-                foreach (var img in images) arr.Add(new JObject { ["type"] = "image_url", ["image_url"] = new JObject { ["url"] = img.AiUrl } });
-                content = arr;
+                var array = new JArray
+                {
+                    new JObject { ["type"] = "text", ["text"] = userText }
+                };
+                foreach (var image in images)
+                {
+                    array.Add(new JObject
+                    {
+                        ["type"] = "image_url",
+                        ["image_url"] = new JObject { ["url"] = image.AiUrl }
+                    });
+                }
+                content = array;
             }
-            else content = userText;
-            var messages = new JArray { Msg("system", SystemPrompt), new JObject { ["role"] = "user", ["content"] = content } };
-            var raw = await Task.Run(() => MyOpenAI.CallStructuredChat(messages, 2400, 0.1));
-            if (!raw.Success) throw new Exception(raw.Error);
-            var json = raw.Answer;
-            try { return new ParseResult { Items = ParseAiKnowledgeResult(json) }; }
-            catch
+
+            var messages = new JArray
             {
-                var fixMessages = new JArray { Msg("system", "请把用户提供的内容修复成规定JSON格式，只输出JSON。格式：{\"faqs\":[{\"category\":\"\",\"question\":\"\",\"answer\":\"\",\"keywords\":[\"\"]}]}"), Msg("user", json) };
-                var fixedRaw = await Task.Run(() => MyOpenAI.CallStructuredChat(fixMessages, 2400, 0));
-                if (!fixedRaw.Success) throw new Exception(fixedRaw.Error);
-                try { return new ParseResult { Items = ParseAiKnowledgeResult(fixedRaw.Answer) }; }
-                catch { throw new Exception("AI返回的数据格式异常，本次没有写入知识库，请重试。"); }
+                Message("system", SystemPrompt),
+                new JObject { ["role"] = "user", ["content"] = content }
+            };
+
+            var raw = await Task.Run(
+                () => MyOpenAI.CallStructuredChat(messages, 4000, 0.1, timeoutSeconds, token),
+                token);
+            if (!raw.Success)
+            {
+                throw new Exception(raw.Error);
+            }
+
+            try
+            {
+                var result = new ParseResult();
+                result.Items.AddRange(ParseAiKnowledgeResult(raw.Answer));
+                return result;
+            }
+            catch (Exception ex)
+            {
+                throw new Exception("JSON解析失败：AI返回的数据格式异常，本批没有写入知识库。" + ex.Message);
             }
         }
 
-        private JObject Msg(string role, string text) { return new JObject { ["role"] = role, ["content"] = text ?? string.Empty }; }
+        private static JObject Message(string role, string text)
+        {
+            return new JObject
+            {
+                ["role"] = role,
+                ["content"] = text ?? string.Empty
+            };
+        }
 
         public static List<KnowledgeBaseEntry> ParseAiKnowledgeResult(string text)
+        {
+            text = StripFence(text);
+            var start = text.IndexOf('{');
+            var end = text.LastIndexOf('}');
+            if (start < 0 || end <= start)
+            {
+                throw new Exception("未找到JSON对象，可能是响应被截断");
+            }
+
+            var obj = JObject.Parse(text.Substring(start, end - start + 1));
+            var faqs = obj["faqs"] as JArray;
+            if (faqs == null)
+            {
+                throw new Exception("缺少faqs数组");
+            }
+
+            var result = new List<KnowledgeBaseEntry>();
+            foreach (var faq in faqs.OfType<JObject>().Take(40))
+            {
+                var question = (faq["question"] ?? faq["title"] ?? string.Empty).ToString().Trim();
+                var answer = (faq["answer"] ?? string.Empty).ToString().Trim();
+                if (string.IsNullOrWhiteSpace(question) || string.IsNullOrWhiteSpace(answer)) continue;
+
+                var keywords = faq["keywords"] is JArray
+                    ? string.Join(",", ((JArray)faq["keywords"])
+                        .Select(x => x.ToString().Trim())
+                        .Where(x => x.Length > 0)
+                        .Distinct())
+                    : (faq["keywords"] ?? string.Empty).ToString();
+                var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+
+                result.Add(new KnowledgeBaseEntry
+                {
+                    Enabled = true,
+                    Category = string.IsNullOrWhiteSpace((faq["category"] ?? string.Empty).ToString())
+                        ? "通用"
+                        : faq["category"].ToString().Trim(),
+                    Title = NormalizeDisplay(question),
+                    Answer = NormalizeDisplay(answer),
+                    Keywords = NormalizeDisplay(keywords),
+                    UpdatedAt = now,
+                    Id = Guid.NewGuid().ToString("N"),
+                    CreatedAt = now,
+                    AiGenerated = true,
+                    SourceType = "智能导入"
+                });
+            }
+
+            if (result.Count < 1)
+            {
+                throw new Exception("没有有效问答");
+            }
+            return result;
+        }
+
+        public static string StripFence(string text)
         {
             text = (text ?? string.Empty).Trim();
             if (text.StartsWith("```"))
             {
-                text = text.Trim('`').Trim();
-                if (text.StartsWith("json", StringComparison.OrdinalIgnoreCase)) text = text.Substring(4).Trim();
+                text = Regex.Replace(text, "^```[a-zA-Z]*", string.Empty).Trim();
+                if (text.EndsWith("```"))
+                {
+                    text = text.Substring(0, text.Length - 3).Trim();
+                }
             }
-            var s = text.IndexOf('{'); var e = text.LastIndexOf('}');
-            if (s < 0 || e <= s) throw new Exception("未找到JSON对象");
-            var obj = JObject.Parse(text.Substring(s, e - s + 1));
-            var faqs = obj["faqs"] as JArray;
-            if (faqs == null) throw new Exception("缺少faqs数组");
-            var list = new List<KnowledgeBaseEntry>();
-            foreach (var f in faqs.OfType<JObject>())
-            {
-                var q = (f["question"] ?? f["title"] ?? string.Empty).ToString().Trim();
-                var a = (f["answer"] ?? string.Empty).ToString().Trim();
-                if (string.IsNullOrWhiteSpace(q) || string.IsNullOrWhiteSpace(a)) continue;
-                var kws = f["keywords"] is JArray ? string.Join(",", ((JArray)f["keywords"]).Select(x => x.ToString().Trim()).Where(x => x.Length > 0).Distinct()) : (f["keywords"] ?? string.Empty).ToString();
-                list.Add(new KnowledgeBaseEntry { Enabled = true, Category = string.IsNullOrWhiteSpace((f["category"] ?? string.Empty).ToString()) ? "通用" : f["category"].ToString().Trim(), Title = q, Answer = a, Keywords = kws, UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), Id = Guid.NewGuid().ToString("N"), CreatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), AiGenerated = true, SourceType = "智能导入" });
-            }
-            if (list.Count < 1) throw new Exception("没有有效问答");
-            return list;
+            return text;
         }
 
-        private KnowledgeImportResult SaveDeduped(List<KnowledgeBaseEntry> generated, ClipboardKnowledgeData data)
+        private KnowledgeImportResult SaveDeduped(List<KnowledgeBaseEntry> generated)
         {
+            generated = generated ?? new List<KnowledgeBaseEntry>();
             var existing = BotFeatureStore.GetKnowledgeBase();
-            var oldCats = existing.Select(x => x.Category ?? string.Empty).Where(x => x.Length > 0).Distinct().ToList();
-            var seen = new HashSet<string>(existing.Select(x => NormalizeQuestion(x.Title)));
-            var inner = new HashSet<string>();
-            var add = new List<KnowledgeBaseEntry>();
-            var dup = 0;
+            var oldCategories = new HashSet<string>(
+                existing.Select(x => x.Category ?? string.Empty).Where(x => x.Length > 0),
+                StringComparer.OrdinalIgnoreCase);
+            var seen = new HashSet<string>(existing.Select(x => ContentHash(x.Title, x.Answer)));
+            var added = new List<KnowledgeBaseEntry>();
+            var duplicateCount = 0;
+
             foreach (var item in generated)
             {
-                var key = NormalizeQuestion(item.Title);
-                if (string.IsNullOrWhiteSpace(key) || seen.Contains(key) || inner.Contains(key)) { dup++; continue; }
-                inner.Add(key); add.Add(item);
+                var key = ContentHash(item.Title, item.Answer);
+                if (string.IsNullOrWhiteSpace(NormalizeQuestion(item.Title)) || seen.Contains(key))
+                {
+                    duplicateCount++;
+                    continue;
+                }
+                seen.Add(key);
+                added.Add(item);
             }
-            existing.AddRange(add);
+
+            existing.AddRange(added);
             BotFeatureStore.SaveKnowledgeBase(existing);
-            return new KnowledgeImportResult { TextChars = (data.Text ?? string.Empty).Length, ImageCount = data.Images.Count, VideoSkipped = data.Videos.Count, AiGenerated = generated.Count, Added = add.Count, DuplicateSkipped = dup, NewCategoryCount = add.Select(x => x.Category ?? string.Empty).Where(x => x.Length > 0 && !oldCats.Contains(x)).Distinct().Count(), AddedItems = add };
+
+            return new KnowledgeImportResult
+            {
+                AiGenerated = generated.Count,
+                Added = added.Count,
+                DuplicateSkipped = duplicateCount,
+                NewCategoryCount = added
+                    .Select(x => x.Category ?? string.Empty)
+                    .Where(x => x.Length > 0 && !oldCategories.Contains(x))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .Count(),
+                AddedItems = added
+            };
         }
 
         public static string NormalizeQuestion(string question)
         {
-            var chars = (question ?? string.Empty).Trim().ToLowerInvariant().Where(c => !char.IsWhiteSpace(c) && ",，.。?？!！;；:：、'\"“”‘’()（）[]【】{}《》<>-—_~`".IndexOf(c) < 0);
+            var chars = (question ?? string.Empty)
+                .Trim()
+                .ToLowerInvariant()
+                .Where(c => !char.IsWhiteSpace(c) && ",，.。?？!！;；:：、'\"“”‘’()（）[]【】{}《》<>-—_~`".IndexOf(c) < 0);
             return new string(chars.ToArray());
         }
 
-        private bool IsVisionUnsupported(string error)
+        private static string NormalizeDisplay(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim(), "\\s+", " ");
+        }
+
+        public static string ContentHash(string question, string answer)
+        {
+            return Hash(NormalizeQuestion(question) + "\n" + NormalizeDisplay(answer).ToLowerInvariant());
+        }
+
+        private static string Hash(string value)
+        {
+            using (var sha = SHA256.Create())
+            {
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty)))
+                    .Replace("-", string.Empty)
+                    .ToLowerInvariant();
+            }
+        }
+
+        private static bool IsVisionUnsupported(string error)
         {
             error = (error ?? string.Empty).ToLowerInvariant();
-            return error.Contains("unsupported image") || error.Contains("vision not supported") || error.Contains("invalid content type") || error.Contains("image_url") || error.Contains("multimodal") || error.Contains("http 400");
+            return error.Contains("unsupported image")
+                || error.Contains("vision not supported")
+                || error.Contains("invalid content type")
+                || error.Contains("image_url")
+                || error.Contains("multimodal")
+                || error.Contains("http 400");
+        }
+
+        private static bool IsRetryable(string error)
+        {
+            error = (error ?? string.Empty).ToLowerInvariant();
+            return error.Contains("超时")
+                || error.Contains("timeout")
+                || error.Contains("http 429")
+                || error.Contains("http 500")
+                || error.Contains("http 501")
+                || error.Contains("http 502")
+                || error.Contains("http 503")
+                || error.Contains("http 504")
+                || error.Contains("network")
+                || error.Contains("连接")
+                || error.Contains("断开");
         }
     }
 }

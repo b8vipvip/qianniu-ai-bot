@@ -18,6 +18,11 @@ namespace Bot.Knowledge
             _tabs.Items.Add(new TabItem { Header = "问答管理", Content = _manager });
         }
         public void ShowManager() { _manager.RefreshData(); _tabs.SelectedIndex = 1; }
+        protected override void OnClosed(System.EventArgs e)
+        {
+            if (_import != null) _import.CancelForWindowClose();
+            base.OnClosed(e);
+        }
         public static void MyShow(Window owner)
         {
             var wnd = new KnowledgeCenterWindow(); if (owner != null) wnd.Owner = owner; wnd.Show();

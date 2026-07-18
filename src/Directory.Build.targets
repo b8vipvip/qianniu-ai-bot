@@ -1,0 +1,18 @@
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <!-- Bot.csproj historically omitted the trailing 0B from this type-library GUID. -->
+    <COMReference Update="IWshRuntimeLibrary">
+      <Guid>{F935DC20-1CF0-11D0-ADB9-00C04FD58A0B}</Guid>
+    </COMReference>
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ApiManagement.cs')">
+    <!-- WPF creates Bot_*_wpftmp projects; include the partial there as well. -->
+    <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ApiManagement.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs" />
+  </ItemGroup>
+</Project>

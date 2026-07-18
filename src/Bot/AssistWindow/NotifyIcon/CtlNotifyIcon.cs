@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Drawing;
@@ -172,13 +172,30 @@ namespace Bot.AssistWindow.NotifyIcon
 
         public void InsertItem(int idx, ToolStripItem toolStripItem)
         {
-            NotifyIconInner.ContextMenuStrip.Items.Insert(idx, toolStripItem);
+            if (toolStripItem == null
+                || NotifyIconInner == null
+                || NotifyIconInner.ContextMenuStrip == null)
+            {
+                return;
+            }
+
+            var tagText = toolStripItem.Tag as string;
+            if (!string.IsNullOrWhiteSpace(tagText)
+                && GetFirstLevelItemIndexByTagText(tagText) >= 0)
+            {
+                return;
+            }
+
+            var items = NotifyIconInner.ContextMenuStrip.Items;
+            idx = Math.Max(0, Math.Min(idx, items.Count));
+            items.Insert(idx, toolStripItem);
         }
 
         public ToolStripMenuItem GetRootMenu(int idx)
         {
             return NotifyIconInner.ContextMenuStrip.Items[idx] as ToolStripMenuItem;
         }
+
 
         public ToolStripSeparator CreateSeparator()
         {

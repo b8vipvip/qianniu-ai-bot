@@ -9,9 +9,12 @@
     xmlns:sb="clr-namespace:Delay;assembly=SplitButtonWpf"
 	ew:Closed="EtWindow_Closed"
 	ew:Title="设置"
-	SizeToContent="Height"
-	Width="600"
-	MinHeight="400">
+	SizeToContent="Manual"
+	Width="860"
+	Height="820"
+	MinWidth="720"
+	MinHeight="700"
+	ResizeMode="CanResizeWithGrip">
 	<FrameworkElement.Resources>
 		<ResourceDictionary>
 			<Style

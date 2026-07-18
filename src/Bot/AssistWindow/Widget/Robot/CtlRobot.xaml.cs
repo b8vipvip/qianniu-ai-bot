@@ -200,6 +200,15 @@ namespace Bot.AssistWindow.Widget.Robot
             }
         }
 
+        private static string BuildGoodsIdentity(ZnkfItem item)
+        {
+            if (item == null) return string.Empty;
+            var itemId = Convert.ToString(item.itemId);
+            if (!string.IsNullOrWhiteSpace(itemId)) return "id:" + itemId.Trim();
+            if (!string.IsNullOrWhiteSpace(item.itemUrl)) return "url:" + item.itemUrl.Trim();
+            return "fallback:" + (item.title ?? string.Empty).Trim() + "|" + (item.price ?? string.Empty).Trim();
+        }
+
         private async void RefreshItems()
         {
             try
@@ -207,25 +216,25 @@ namespace Bot.AssistWindow.Widget.Robot
                 if (_preQN == null || _preQN.Buyer == null) return;
                 pgDownGoods.Visibility = Visibility.Visible;
                 RemoveCtlGoods();
-                //咨询的商品
                 var itemRecord = await _preQN.GetItemRecords(_preQN.Buyer.TargetId);
                 if (itemRecord == null || itemRecord.data == null || itemRecord.data.underInquiryItemList == null)
                 {
                     pgDownGoods.Visibility = Visibility.Collapsed;
+                    return;
                 }
-                else
+
+                var distinctItems = itemRecord.data.underInquiryItemList
+                    .Where(item => item != null)
+                    .GroupBy(BuildGoodsIdentity, StringComparer.OrdinalIgnoreCase)
+                    .Select(group => group.First())
+                    .Take(8)
+                    .ToList();
+
+                foreach (var item in distinctItems)
                 {
-                    var inquiryItems = itemRecord.data.underInquiryItemList;
-                    if (inquiryItems != null && inquiryItems.Count > 0)
-                    {
-                        foreach (var item in inquiryItems)
-                        {
-                            var ctlGoods = new CtlOneGoods(item);
-                            panelGoods.Children.Add(ctlGoods);
-                        }
-                    }
-                    pgDownGoods.Visibility = Visibility.Collapsed;
+                    panelGoods.Children.Add(new CtlOneGoods(item));
                 }
+                pgDownGoods.Visibility = Visibility.Collapsed;
             }
             catch (Exception ex)
             {

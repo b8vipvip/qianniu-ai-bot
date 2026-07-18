@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Drawing;
 using System.Text;
@@ -25,6 +25,11 @@ namespace Bot.AssistWindow.NotifyIcon.MenuCreator
 
         public static void Create(CtlNotifyIcon ctlNotifyIcon, string nick)
         {
+            if (ctlNotifyIcon == null || string.IsNullOrWhiteSpace(nick))
+            {
+                return;
+            }
+
             var it = ctlNotifyIcon.CreateItem(nick, null, null, true, nick);
             ctlNotifyIcon.InsertItem(2, it);
         }

@@ -4,6 +4,7 @@ using DbEntity;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
@@ -73,6 +74,11 @@ namespace Bot.ChromeNs
         private string _lastSellerEchoBuyer = string.Empty;
         private string _lastSellerEchoText = string.Empty;
         private DateTime _lastSellerEchoTime = DateTime.MinValue;
+        private readonly SemaphoreSlim _incomingMessageGate = new SemaphoreSlim(1, 1);
+        private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
+        private readonly IncomingMessageDeduplicator _incomingMessageDeduplicator = new IncomingMessageDeduplicator(2000);
+        private readonly DateTime _messageSafetyStartedAt = DateTime.Now;
+        private readonly VisionRequestService _visionRequestService = new VisionRequestService();
 
         public static QN CurQN = null;
 
@@ -104,15 +110,64 @@ namespace Bot.ChromeNs
 
         public async Task<bool> SendTextWithRetryAsync(string buyer, string text, int retryCount = 1)
         {
-            var ok = await SendTextAsync(buyer, text);
-            var retry = Math.Max(0, retryCount);
-            for (var i = 0; !ok && i < retry; i++)
+            await _sendGate.WaitAsync();
+            try
             {
-                Log.Info("自动发送失败，准备重试第" + (i + 1) + "次。buyer=" + buyer + ", text=" + text);
-                await Task.Delay(1800);
-                ok = await SendTextAsync(buyer, text);
+                if (!await EnsureActiveBuyerForSendAsync(buyer))
+                {
+                    BotConnectionDiagnostics.RecordSendAttempt(false, "无法确认目标买家会话");
+                    return false;
+                }
+
+                var ok = await SendTextAsync(buyer, text);
+                var retry = Math.Max(0, retryCount);
+                for (var i = 0; !ok && i < retry; i++)
+                {
+                    Log.Info("自动发送失败，准备重试第" + (i + 1) + "次。buyer=" + buyer + ", text=" + text);
+                    await Task.Delay(1800);
+                    if (!await EnsureActiveBuyerForSendAsync(buyer)) return false;
+                    ok = await SendTextAsync(buyer, text);
+                }
+                return ok;
             }
-            return ok;
+            finally
+            {
+                _sendGate.Release();
+            }
+        }
+
+        private async Task<bool> EnsureActiveBuyerForSendAsync(string buyer)
+        {
+            buyer = (buyer ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(buyer) || cdp == null) return false;
+
+            for (var attempt = 0; attempt < 22; attempt++)
+            {
+                try
+                {
+                    var current = await GetCurrentConversationID();
+                    var currentNick = current == null || current.Result == null ? string.Empty : (current.Result.Nick ?? string.Empty).Trim();
+                    if (currentNick == buyer)
+                    {
+                        SetActiveConversationByNick(Seller == null ? string.Empty : Seller.Nick, buyer, "sendVerified");
+                        return true;
+                    }
+                    if (attempt == 0)
+                    {
+                        Log.Info("发送前切换目标买家: target=" + buyer + ", current=" + currentNick);
+                        OpenChat(buyer);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("发送前确认买家会话失败: " + ex.Message);
+                    if (attempt == 0) OpenChat(buyer);
+                }
+                await Task.Delay(250);
+            }
+
+            Log.Error("发送已阻止：无法确认当前会话为目标买家。target=" + buyer);
+            return false;
         }
 
         public async void SendImageAsync(string buyer, string imagePath)
@@ -231,13 +286,11 @@ namespace Bot.ChromeNs
 
         private void Cdp_EvShopRobotReceriveNewMessage(object sender, ShopRobotReceriveNewMessageEventArgs e)
         {
+            // 这是后台新消息通知，不等于千牛当前可见聊天已经切换。
+            // 绝不能在这里修改 QN.Buyer 或提前打开聊天，否则后台买家的答案可能发到当前可见买家。
             if (e != null && e.Seller != null && e.Buyer != null)
             {
-                SetActiveConversationByNick(e.Seller.Nick, e.Buyer.Nick, "shopRobotNewMsg");
-            }
-            if (Params.Robot.CanUseRobotReal && Params.Robot.GetIsAutoReply() && e != null && e.Buyer != null)
-            {
-                OpenChat(e.Buyer.Nick);
+                Log.Info("收到后台买家消息通知: seller=" + e.Seller.Nick + ", buyer=" + e.Buyer.Nick);
             }
             if (EvShopRobotReceriveNewMessage != null)
             {
@@ -259,8 +312,98 @@ namespace Bot.ChromeNs
             }
         }
 
-        private void Cdp_EvRecieveNewMessage(object sender, RecieveNewMessageEventArgs e)
+        private async Task ProcessIncomingMessageAsync(QNChatMessage message)
         {
+            if (message == null) return;
+            var messageText = GetMessageText(message);
+            var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
+            if (!_incomingMessageDeduplicator.TryAccept(messageKey))
+            {
+                Log.Info("重复消息已跳过: key=" + messageKey);
+                return;
+            }
+
+            if (IsSellerMessage(message))
+            {
+                RecordSellerEcho(message.toid.nick, messageText);
+                return;
+            }
+            if (!IsBuyerMessage(message)) return;
+
+            var sellerNick = message.toid.nick;
+            var buyerNick = message.fromid.nick;
+            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt);
+            var displayQuestion = string.IsNullOrWhiteSpace(messageText) ? decision.MessageLabel : messageText;
+
+            var visionDecision = VisionMessageDecision.Decide(message, messageText, decision, AiEndpointStore.GetVisionEnabledEndpoints());
+
+            if (visionDecision.Kind == VisionDecisionKind.Skip)
+            {
+                AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
+                Log.Info("买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
+                return;
+            }
+
+            var botEnabled = Params.Robot.CanUseRobotReal;
+            var autoSend = Params.Robot.GetIsAutoReply();
+            if (!botEnabled)
+            {
+                AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                return;
+            }
+
+            if (visionDecision.Kind == VisionDecisionKind.Vision)
+            {
+                await ProcessVisionMessageAsync(new VisionReplyTask { SellerNick = sellerNick, BuyerNick = buyerNick, MessageKey = messageKey, Message = message });
+                return;
+            }
+
+            var answer = MyOpenAI.GetAnswer(sellerNick, buyerNick, messageText);
+            var conversationCtl = Desk.Inst == null ? null : Desk.Inst.AddConversation(sellerNick, buyerNick, messageText, answer, autoSend);
+            if (!autoSend) return;
+
+            if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误："))
+            {
+                if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：AI错误");
+                return;
+            }
+
+            var sendOk = await SendTextWithRetryAsync(buyerNick, answer, 1);
+            if (conversationCtl != null)
+            {
+                conversationCtl.SetSendResult(sendOk, sendOk ? "已发送" : "发送失败：目标买家会话未确认或发送未完成");
+            }
+        }
+
+        private async Task ProcessVisionMessageAsync(VisionReplyTask task)
+        {
+            var autoSend = Params.Robot.GetIsAutoReply();
+            var ctl = Desk.Inst == null ? null : Desk.Inst.AddConversation(task.SellerNick, task.BuyerNick, "[图片]", "正在识别图片...", autoSend);
+            var result = await _visionRequestService.ExecuteAsync(task, CancellationToken.None);
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))
+            {
+                var note = "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
+                if (ctl != null) { ctl.SetAnswer("未生成答案。"); ctl.SetSkipped(note); } else AddSkippedConversation(task.SellerNick, task.BuyerNick, "[图片]", note);
+                Log.Info("视觉消息跳过: seller=" + task.SellerNick + ", buyer=" + task.BuyerNick + ", messageId=" + task.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
+                return;
+            }
+            if (ctl != null) ctl.SetAnswer(result.Answer);
+            if (!autoSend) return;
+            var sendOk = await SendTextWithRetryAsync(task.BuyerNick, result.Answer, 1);
+            if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送" : "识别完成，但目标买家会话未确认，未发送。");
+        }
+
+        private void AddSkippedConversation(string seller, string buyer, string question, string note)
+        {
+            if (Desk.Inst == null) return;
+            var ctl = Desk.Inst.AddConversation(seller, buyer, question, note, false);
+            if (ctl != null) ctl.SetSkipped(note);
+        }
+
+        private async void Cdp_EvRecieveNewMessage(object sender, RecieveNewMessageEventArgs e)
+        {
+            if (e == null || string.IsNullOrWhiteSpace(e.Message)) return;
+            await _incomingMessageGate.WaitAsync();
             try
             {
                 if (EvRecieveNewMessage != null)
@@ -269,7 +412,6 @@ namespace Bot.ChromeNs
                 }
 
                 Log.Info("收到千牛新消息事件: " + e.Message);
-
                 var chatRes = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
                 if (chatRes == null || chatRes.result == null)
                 {
@@ -277,68 +419,43 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                var messages = chatRes.result;
-                messages.ForEach(async m =>
+                var messages = chatRes.result
+                    .Where(m => m != null)
+                    .OrderBy(IncomingMessageSafety.GetSortValue)
+                    .ToList();
+
+                // GetNewMsg 有时一次返回同一买家的多条未读消息。只处理该批次最新一条，避免启动或网络恢复时连续轰炸买家。
+                var latestBuyerMessages = messages
+                    .Where(IsBuyerMessage)
+                    .GroupBy(m => (m.toid == null ? string.Empty : m.toid.nick) + "#" + (m.fromid == null ? string.Empty : m.fromid.nick))
+                    .ToDictionary(g => g.Key, g => g.Last());
+
+                foreach (var message in messages)
                 {
-                    try
+                    if (IsBuyerMessage(message))
                     {
-                        var msgText = GetMessageText(m);
-
-                        // 卖家消息只记录为聊天流的一部分，不再自动触发“人工接管”。
-                        if (IsSellerMessage(m))
+                        var buyerKey = message.toid.nick + "#" + message.fromid.nick;
+                        QNChatMessage latest;
+                        if (latestBuyerMessages.TryGetValue(buyerKey, out latest) && !object.ReferenceEquals(message, latest))
                         {
-                            SetActiveConversationByNick(m.fromid.nick, m.toid.nick, "sellerMessage");
-                            RecordSellerEcho(m.toid.nick, msgText);
-                            return;
-                        }
-
-                        if (IsBuyerMessage(m))
-                        {
-                            SetActiveConversationByNick(m.toid.nick, m.fromid.nick, "buyerMessage");
-
-                            var botEnabled = Params.Robot.CanUseRobotReal;
-                            var autoSend = Params.Robot.GetIsAutoReply();
-                            var answer = string.Empty;
-
-                            if (!botEnabled)
-                            {
-                                answer = "Bot已停用，未调用AI。";
-                                Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, msgText, answer, false);
-                                Log.Info("Bot已停用，跳过买家消息: buyer=" + m.fromid.nick + ", msg=" + msgText);
-                                return;
-                            }
-
-                            // 启用Bot后，所有买家消息都交给AI；自动回复只决定是否直接发送。
-                            answer = MyOpenAI.GetAnswer(m.toid.nick, m.fromid.nick, msgText);
-                            var conversationCtl = Desk.Inst.AddConversation(m.toid.nick, m.fromid.nick, msgText, answer, autoSend);
-
-                            if (autoSend)
-                            {
-                                if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误："))
-                                {
-                                    if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：AI错误");
-                                }
-                                else
-                                {
-                                    var sendOk = await SendTextWithRetryAsync(m.fromid.nick, answer, 1);
-                                    if (conversationCtl != null)
-                                    {
-                                        conversationCtl.SetSendResult(sendOk, sendOk ? "已发送" : "发送失败，已重试1次");
-                                    }
-                                }
-                            }
+                            var oldKey = IncomingMessageSafety.BuildMessageKey(message, GetMessageText(message));
+                            _incomingMessageDeduplicator.TryAccept(oldKey);
+                            Log.Info("同批次较早买家消息已合并跳过: buyer=" + message.fromid.nick + ", key=" + oldKey);
+                            continue;
                         }
                     }
-                    catch (Exception ex)
-                    {
-                        Log.Exception(ex);
-                    }
-                    await Task.Delay(2000);
-                });
+
+                    await ProcessIncomingMessageAsync(message);
+                    await Task.Delay(250);
+                }
             }
             catch (Exception ex)
             {
                 Log.Exception(ex);
+            }
+            finally
+            {
+                _incomingMessageGate.Release();
             }
         }
 
