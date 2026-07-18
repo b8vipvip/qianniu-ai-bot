@@ -34,18 +34,19 @@ jobs:
         shell: bash
         run: python tools/apply_rules_notifications_patch.py > patch.log 2>&1
 
-      - name: Persist failure diagnostics
+      - name: Upload patch diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rules-notifications-patch-log-${{ github.sha }}
+          path: patch.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stop after patch failure
         if: steps.patch.outcome == 'failure'
-        shell: bash
         run: |
-          cp patch.log /tmp/patch.log
-          git reset --hard HEAD
-          cp /tmp/patch.log tools/rules-notifications-patch-error.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tools/rules-notifications-patch-error.txt
-          git commit -m "chore: record rules patch failure"
-          git push origin HEAD:feat/knowledge-learning-loop
+          cat patch.log
           exit 1
 
       - name: Validate source structure
