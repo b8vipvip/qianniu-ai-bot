@@ -1,20 +1,22 @@
 import pathlib
-import re
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
+
 
 def read(path):
     return (ROOT / path).read_text(encoding='utf-8-sig')
 
+
 def test_endpoint_fields_and_defaults():
     text = read('src/Bot/Options/CtlRobotOptions.xaml.cs')
     for field in ['TextModel', 'VisionModel', 'SupportsVision', 'MaxImageSizeMb', 'VisionTimeoutSeconds']:
-        assert f'public ' in text and field in text
+        assert 'public ' in text and field in text
     assert 'SupportsVision = false' in text
     assert 'MaxImageSizeMb = 5' in text
     assert 'VisionTimeoutSeconds = 45' in text
     assert 'Math.Max(1, Math.Min(20, MaxImageSizeMb))' in text
     assert 'Math.Max(10, Math.Min(180, VisionTimeoutSeconds))' in text
+
 
 def test_visual_config_ui_and_paste_recognition():
     ui = read('src/Bot/Options/CtlRobotOptions.ApiManagement.cs')
@@ -27,13 +29,17 @@ def test_visual_config_ui_and_paste_recognition():
     assert 'Binding="{Binding VisionStatus}"' in grid
     assert 'ApiKeyMasked' in grid
 
-def test_multimodal_payload_uses_vision_model_and_image_array():
+
+def test_multimodal_payload_uses_vision_model_image_array_and_timeline():
     service = read('src/Bot/ChromeNs/VisionRequestService.cs')
     assert '["model"] = endpoint.VisionModel' in service
     assert '["type"] = "text"' in service
     assert '["type"] = "image_url"' in service
     assert 'endpoint.VisionTimeoutSeconds' in service
     assert 'GetVisionEnabledEndpoints' in service
+    assert 'ConversationContextStore.BuildTimelineText' in service
+    assert '不得混入其他买家信息' in service
+
 
 def test_message_safety_and_cross_buyer_guard_remain_in_path():
     qn = read('src/Bot/ChromeNs/QN.cs')
@@ -44,17 +50,24 @@ def test_message_safety_and_cross_buyer_guard_remain_in_path():
     assert 'EnsureActiveBuyerForSendAsync' in qn and 'GetCurrentConversationID' in qn
     assert '识别完成，但目标买家会话未确认，未发送。' in qn
 
-def test_image_resolver_rejects_unsafe_inputs_and_no_base64_logging():
+
+def test_image_resolver_downloads_and_validates_every_image():
     resolver = read('src/Bot/ChromeNs/VisionImageResolver.cs')
     for mime in ['image/jpeg', 'image/png', 'image/webp', 'image/gif']:
         assert mime in resolver
     assert 'image/svg' not in resolver
     assert '图片超过大小限制' in resolver
     assert 'MIME 类型不支持' in resolver
-    assert '图片数据损坏' in resolver
-    assert 'data:" + mime + ";base64,"' in resolver
+    assert '图片数据损坏或格式不支持' in resolver
+    assert 'data:" + detectedMime + ";base64,"' in resolver
+    assert 'message.originalData.url.Trim()' in resolver
+    assert 'message.originalData.fileId.Trim()' in resolver
+    assert 'GetAsync(uri, HttpCompletionOption.ResponseHeadersRead' in resolver
+    assert 'HasSensitiveQuery' not in resolver
     all_changed = '\n'.join(read(p) for p in [
-        'src/Bot/ChromeNs/QN.cs', 'src/Bot/ChromeNs/VisionRequestService.cs', 'src/Bot/ChromeNs/VisionImageResolver.cs'
+        'src/Bot/ChromeNs/QN.cs',
+        'src/Bot/ChromeNs/VisionRequestService.cs',
+        'src/Bot/ChromeNs/VisionImageResolver.cs'
     ])
     assert 'Log.Info(dataUri' not in all_changed
     assert 'Log.Info(image.ImageUrl' not in all_changed
