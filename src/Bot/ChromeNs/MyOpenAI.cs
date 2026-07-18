@@ -1,10 +1,7 @@
-﻿using BotLib;
-using BotLib.Extensions;
-using Newtonsoft.Json;
+using BotLib;
 using Newtonsoft.Json.Linq;
 using OpenAI.Chat;
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
@@ -20,13 +17,6 @@ namespace Bot.ChromeNs
 
         private static string systemPrompt;
         private static string lastConfigFingerprint;
-        private static ConcurrentDictionary<string, List<JObject>> buyerChatMessages;
-
-        static MyOpenAI()
-        {
-            buyerChatMessages = new ConcurrentDictionary<string, List<JObject>>();
-            EnsureConfig();
-        }
 
         private static string DefaultSystemPrompt
         {
@@ -40,18 +30,23 @@ namespace Bot.ChromeNs
         {
             get
             {
-                return "\n\n固定回复规则：每次最多1句话，优先20到35个字，最多不超过60个字；不要连续说多个解决方案；不要反复感谢、不要过度客套、不要像机器人话术；不要重复称呼“亲”；买家只发数字、表情、嗯/好/好的/是的/谢谢这类无明确问题时，不要主动扩展营销。";
+                return "\n\n固定回复规则：每次最多1句话，优先20到35个字，最多不超过60个字；不要连续说多个解决方案；不要反复感谢、不要过度客套、不要像机器人话术；不要重复称呼“亲”；买家只发数字、手机号、账号、型号、表情、嗯/好/好的/是的/谢谢时，必须先结合最近一轮客服提问理解其含义，不要脱离上下文扩展营销。";
+            }
+        }
+
+        private static string TimelineGuard
+        {
+            get
+            {
+                return "\n\n会话时间线规则：后续 messages 中包含同一客服与同一买家的最近聊天记录，并带有本地时间。必须严格按时间顺序理解；买家仅回复一串数字、手机号、账号、验证码、型号或短字符时，优先关联时间上最近且尚待回答的客服问题。较长时间间隔后不要强行延续旧话题；不得引用其他买家的内容；被客服撤回的回复不属于有效上下文，也不得再次发送。";
             }
         }
 
         private static string BuildSystemPrompt(string prompt)
         {
             var basePrompt = string.IsNullOrWhiteSpace(prompt) ? DefaultSystemPrompt : prompt.Trim();
-            if (basePrompt.Contains("固定回复规则"))
-            {
-                return basePrompt;
-            }
-            return basePrompt + ReplyStyleGuard;
+            if (basePrompt.Contains("固定回复规则")) return basePrompt + TimelineGuard;
+            return basePrompt + ReplyStyleGuard + TimelineGuard;
         }
 
         private static bool EnsureConfig()
@@ -59,10 +54,7 @@ namespace Bot.ChromeNs
             try
             {
                 var endpoints = AiEndpointStore.GetEnabledEndpoints();
-                if (endpoints.Count < 1)
-                {
-                    return false;
-                }
+                if (endpoints.Count < 1) return false;
 
                 var primary = endpoints.First();
                 systemPrompt = BuildSystemPrompt(string.IsNullOrWhiteSpace(primary.SystemPrompt) ? Params.Robot.GetSystemPrompt() : primary.SystemPrompt);
@@ -85,15 +77,9 @@ namespace Bot.ChromeNs
         private static string NormalizeBaseUrl(string baseUrl)
         {
             baseUrl = (baseUrl ?? string.Empty).Trim();
-            if (string.IsNullOrEmpty(baseUrl))
-            {
-                baseUrl = "https://api.openai.com/v1";
-            }
+            if (string.IsNullOrEmpty(baseUrl)) baseUrl = "https://api.openai.com/v1";
             baseUrl = baseUrl.TrimEnd('/');
-            if (baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase))
-            {
-                return baseUrl;
-            }
+            if (baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase)) return baseUrl;
             return baseUrl + "/chat/completions";
         }
 
@@ -118,15 +104,9 @@ namespace Bot.ChromeNs
         {
             var json = JObject.Parse(responseBody);
             var content = json["choices"]?[0]?["message"]?["content"];
-            if (content == null)
-            {
-                return string.Empty;
-            }
-            if (content.Type == JTokenType.String)
-            {
-                return content.ToString();
-            }
-            return content.ToString(Formatting.None);
+            if (content == null) return string.Empty;
+            if (content.Type == JTokenType.String) return content.ToString();
+            return content.ToString(Newtonsoft.Json.Formatting.None);
         }
 
         private static int GetIntToken(JToken token)
@@ -183,7 +163,7 @@ namespace Bot.ChromeNs
                 ["temperature"] = 0.15,
                 ["max_tokens"] = 120
             };
-            var payloadText = payload.ToString(Formatting.None);
+            var payloadText = payload.ToString(Newtonsoft.Json.Formatting.None);
 
             try
             {
@@ -252,7 +232,6 @@ namespace Bot.ChromeNs
             }
         }
 
-
         public static StructuredChatResult CallStructuredChat(JArray messages, int maxTokens, double temperature)
         {
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
@@ -286,7 +265,7 @@ namespace Bot.ChromeNs
                 ["temperature"] = temperature,
                 ["max_tokens"] = maxTokens <= 0 ? 2000 : maxTokens
             };
-            var payloadText = payload.ToString(Formatting.None);
+            var payloadText = payload.ToString(Newtonsoft.Json.Formatting.None);
             try
             {
                 using (var http = new HttpClient())
@@ -369,10 +348,7 @@ namespace Bot.ChromeNs
                 endpoint.LastLatencyMs = result.LatencyMs;
                 endpoint.LastTestTime = DateTime.Now;
                 endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
-                if (!result.Success)
-                {
-                    return "失败：" + result.Error;
-                }
+                if (!result.Success) return "失败：" + result.Error;
                 return "成功：API 连接正常。模型回复：" + SafeError(result.Answer) + "，耗时 " + result.LatencyMs + "ms";
             }
             catch (Exception ex)
@@ -386,10 +362,18 @@ namespace Bot.ChromeNs
         {
             try
             {
-                if (string.IsNullOrWhiteSpace(question))
+                string presetReply;
+                if (ConversationContextStore.TryTakeProductLinkReply(seller, buyer, question, out presetReply))
                 {
-                    return "错误：买家消息为空，未调用AI。";
+                    if (ConversationContextStore.IsWithdrawnAnswer(seller, buyer, presetReply))
+                    {
+                        return "错误：该预设回复已被客服撤回，未再次发送。";
+                    }
+                    Log.Info("商品链接使用本地预设回复，未调用AI接口。buyer=" + buyer);
+                    return presetReply;
                 }
+
+                if (string.IsNullOrWhiteSpace(question)) return "错误：买家消息为空，未调用AI。";
 
                 string manualAnswer;
                 string manualReason;
@@ -398,43 +382,28 @@ namespace Bot.ChromeNs
                     return "错误：命中人工确认规则，未自动回复。" + manualAnswer + " 原因：" + manualReason;
                 }
 
-                if (!EnsureConfig())
-                {
-                    return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
-                }
-
+                if (!EnsureConfig()) return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
                 var endpoints = AiEndpointStore.GetEnabledEndpoints();
-                if (endpoints.Count < 1)
-                {
-                    return "错误：没有可用的AI接口，请在设置-API接口中启用至少一个接口。";
-                }
+                if (endpoints.Count < 1) return "错误：没有可用的AI接口，请在设置-API接口中启用至少一个接口。";
 
-                var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(question);
-                var key = string.Format("{0}#{1}", seller, buyer);
-                var history = buyerChatMessages.xTryGetValue(key);
-                if (history == null || history.Count < 1)
+                var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 18);
+                var contextForKnowledge = new StringBuilder(question);
+                foreach (var turn in turns)
                 {
-                    history = new List<JObject>
-                    {
-                        CreateMessage("system", dynamicSystemPrompt)
-                    };
+                    if (contextForKnowledge.Length > 3500) break;
+                    contextForKnowledge.Append(' ').Append(turn.Text);
                 }
-                else
+                var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(contextForKnowledge.ToString());
+                var messages = new JArray { CreateMessage("system", dynamicSystemPrompt) };
+
+                foreach (var turn in turns)
                 {
-                    history[0] = CreateMessage("system", dynamicSystemPrompt);
+                    var time = turn.Timestamp == DateTime.MinValue ? "时间未知" : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
+                    var speaker = turn.Role == "assistant" ? "客服" : "买家";
+                    messages.Add(CreateMessage(turn.Role, "[" + time + " " + speaker + "] " + turn.Text));
                 }
+                messages.Add(CreateMessage("user", "[当前消息 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 买家] " + question));
 
-                history.Add(CreateMessage("user", question));
-
-                if (history.Count > 20)
-                {
-                    var trimmed = new List<JObject>();
-                    trimmed.Add(history[0]);
-                    trimmed.AddRange(history.Skip(Math.Max(1, history.Count - 18)));
-                    history = trimmed;
-                }
-
-                var messages = new JArray(history.Select(m => (JObject)m.DeepClone()));
                 var errors = new List<string>();
                 foreach (var endpoint in endpoints)
                 {
@@ -445,8 +414,10 @@ namespace Bot.ChromeNs
                     if (result.Success)
                     {
                         var finalAnswer = BotFeatureStore.ApplyOutputPolicy(result.Answer);
-                        history.Add(CreateMessage("assistant", finalAnswer));
-                        buyerChatMessages.AddOrUpdate(key, id => history, (k, v) => history);
+                        if (ConversationContextStore.IsWithdrawnAnswer(seller, buyer, finalAnswer))
+                        {
+                            return "错误：该回复已被客服撤回，已阻止再次发送。";
+                        }
                         return finalAnswer;
                     }
 
