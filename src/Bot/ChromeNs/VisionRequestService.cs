@@ -32,6 +32,14 @@ namespace Bot.ChromeNs
         {
             var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
             if (endpoints.Count < 1) return Fail("未配置可用的视觉模型");
+
+            var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, "[图片]", 16);
+            var prompt = UserPrompt;
+            if (!string.IsNullOrWhiteSpace(timeline))
+            {
+                prompt += "\n\n以下是同一客服与同一买家按时间排序的最近对话。买家发送的图片可能是在回答最近一条客服问题，请结合时间线理解；不得混入其他买家信息：\n" + timeline;
+            }
+
             VisionRequestResult last = null;
             foreach (var endpoint in endpoints)
             {
@@ -42,19 +50,54 @@ namespace Bot.ChromeNs
                     {
                         cts.CancelAfter(TimeSpan.FromSeconds(endpoint.VisionTimeoutSeconds));
                         var image = await _resolver.ResolveAsync(task.Message, endpoint, cts.Token);
-                        if (!image.Success) return Fail(image.Error);
-                        var result = await CallVisionAsync(endpoint, image.ImageUrl, cts.Token);
+                        if (!image.Success)
+                        {
+                            last = Fail(image.Error);
+                            last.EndpointName = endpoint.Name;
+                            last.VisionModel = endpoint.VisionModel;
+                            if (!IsRetryable(image.Error)) break;
+                            continue;
+                        }
+
+                        var result = await CallVisionAsync(endpoint, image.ImageUrl, prompt, cts.Token);
                         result.LatencyMs = sw.ElapsedMilliseconds;
                         result.EndpointName = endpoint.Name;
                         result.VisionModel = endpoint.VisionModel;
-                        if (result.Success) return result;
+                        if (result.Success)
+                        {
+                            if (ConversationContextStore.IsWithdrawnAnswer(task.SellerNick, task.BuyerNick, result.Answer))
+                            {
+                                return new VisionRequestResult
+                                {
+                                    Success = false,
+                                    Error = "该回复已被客服撤回，已阻止再次发送",
+                                    EndpointName = endpoint.Name,
+                                    VisionModel = endpoint.VisionModel,
+                                    LatencyMs = result.LatencyMs
+                                };
+                            }
+                            return result;
+                        }
                         last = result;
                         if (!IsRetryable(result.Error)) break;
                     }
                 }
-                catch (TaskCanceledException) { last = Fail("视觉 API 超时"); last.EndpointName = endpoint.Name; }
-                catch (Exception ex) { last = Fail("视觉 API 异常：" + SafeText(ex.Message)); last.EndpointName = endpoint.Name; }
-                finally { sw.Stop(); }
+                catch (TaskCanceledException)
+                {
+                    last = Fail("视觉 API 超时");
+                    last.EndpointName = endpoint.Name;
+                    last.VisionModel = endpoint.VisionModel;
+                }
+                catch (Exception ex)
+                {
+                    last = Fail("视觉 API 异常：" + SafeText(ex.Message));
+                    last.EndpointName = endpoint.Name;
+                    last.VisionModel = endpoint.VisionModel;
+                }
+                finally
+                {
+                    sw.Stop();
+                }
             }
             return last ?? Fail("所有视觉接口失败");
         }
@@ -67,7 +110,15 @@ namespace Bot.ChromeNs
                 ["messages"] = new JArray
                 {
                     new JObject { ["role"] = "system", ["content"] = string.IsNullOrWhiteSpace(endpoint.SystemPrompt) ? "你是淘宝店铺客服助手。" : endpoint.SystemPrompt },
-                    new JObject { ["role"] = "user", ["content"] = new JArray { new JObject { ["type"] = "text", ["text"] = prompt }, new JObject { ["type"] = "image_url", ["image_url"] = new JObject { ["url"] = imageUrl } } } }
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = new JArray
+                        {
+                            new JObject { ["type"] = "text", ["text"] = prompt },
+                            new JObject { ["type"] = "image_url", ["image_url"] = new JObject { ["url"] = imageUrl } }
+                        }
+                    }
                 },
                 ["temperature"] = 0.1,
                 ["max_tokens"] = 180,
@@ -75,9 +126,9 @@ namespace Bot.ChromeNs
             };
         }
 
-        private async Task<VisionRequestResult> CallVisionAsync(AiEndpointConfig endpoint, string imageUrl, CancellationToken token)
+        private async Task<VisionRequestResult> CallVisionAsync(AiEndpointConfig endpoint, string imageUrl, string prompt, CancellationToken token)
         {
-            var payload = BuildVisionPayload(endpoint, imageUrl, UserPrompt).ToString(Formatting.None);
+            var payload = BuildVisionPayload(endpoint, imageUrl, prompt).ToString(Formatting.None);
             using (var http = new HttpClient())
             {
                 http.Timeout = TimeSpan.FromSeconds(endpoint.VisionTimeoutSeconds);
@@ -95,11 +146,45 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string BuildChatUrl(string baseUrl) { baseUrl = (baseUrl ?? string.Empty).Trim().TrimEnd('/'); return baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ? baseUrl : baseUrl + "/chat/completions"; }
-        private static string ExtractAnswer(string body) { var json = JObject.Parse(body); return json["choices"]?[0]?["message"]?["content"] == null ? string.Empty : json["choices"][0]["message"]["content"].ToString(); }
-        private static bool IsRetryable(string e) { return (e ?? string.Empty).Contains("429") || (e ?? string.Empty).Contains("500") || (e ?? string.Empty).Contains("502") || (e ?? string.Empty).Contains("503") || (e ?? string.Empty).Contains("504") || (e ?? string.Empty).Contains("超时"); }
-        private static string Classify(HttpStatusCode c) { var code=(int)c; if(code==401)return "鉴权失败"; if(code==404)return "模型或路径不存在"; if(code==400)return "请求格式错误或模型不支持图片"; if(code==413)return "请求过大"; if(code==429)return "限流"; if(code>=500&&code<=504)return "上游服务异常"; return "视觉请求失败"; }
-        private static string SafeText(string t) { t=(t??string.Empty).Replace("\r"," ").Replace("\n"," "); return t.Length>300?t.Substring(0,300)+"...":t; }
-        private static VisionRequestResult Fail(string error) { return new VisionRequestResult { Success = false, Error = error }; }
+        private static string BuildChatUrl(string baseUrl)
+        {
+            baseUrl = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
+            return baseUrl.EndsWith("/chat/completions", StringComparison.OrdinalIgnoreCase) ? baseUrl : baseUrl + "/chat/completions";
+        }
+
+        private static string ExtractAnswer(string body)
+        {
+            var json = JObject.Parse(body);
+            return json["choices"]?[0]?["message"]?["content"] == null ? string.Empty : json["choices"][0]["message"]["content"].ToString();
+        }
+
+        private static bool IsRetryable(string error)
+        {
+            error = error ?? string.Empty;
+            return error.Contains("429") || error.Contains("500") || error.Contains("502") || error.Contains("503") || error.Contains("504") || error.Contains("超时") || error.Contains("下载失败");
+        }
+
+        private static string Classify(HttpStatusCode code)
+        {
+            var value = (int)code;
+            if (value == 401) return "鉴权失败";
+            if (value == 404) return "模型或路径不存在";
+            if (value == 400) return "请求格式错误或模型不支持图片";
+            if (value == 413) return "请求过大";
+            if (value == 429) return "限流";
+            if (value >= 500 && value <= 504) return "上游服务异常";
+            return "视觉请求失败";
+        }
+
+        private static string SafeText(string text)
+        {
+            text = (text ?? string.Empty).Replace("\r", " ").Replace("\n", " ");
+            return text.Length > 300 ? text.Substring(0, 300) + "..." : text;
+        }
+
+        private static VisionRequestResult Fail(string error)
+        {
+            return new VisionRequestResult { Success = false, Error = error };
+        }
     }
 }
