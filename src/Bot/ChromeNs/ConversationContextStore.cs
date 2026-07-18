@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
