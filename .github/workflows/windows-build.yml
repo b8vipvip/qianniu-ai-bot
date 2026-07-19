@@ -54,7 +54,18 @@ jobs:
 
       - name: Run repository static tests
         shell: pwsh
-        run: python -m pytest -q tests
+        run: |
+          python -m pytest -q tests 2>&1 | Tee-Object -FilePath pytest.log
+          exit $LASTEXITCODE
+
+      - name: Upload static test diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-diagnostics-${{ github.sha }}
+          path: pytest.log
+          if-no-files-found: warn
+          retention-days: 3
 
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
