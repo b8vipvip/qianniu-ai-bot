@@ -429,14 +429,28 @@ namespace Bot.ChromeNs
 
                 if (string.IsNullOrWhiteSpace(question)) return "错误：买家消息为空，未调用AI。";
 
+                KnowledgeBaseEntry contextualKnowledge = null;
+                ContextualKnowledgeDecision contextualDecision = null;
+                double contextualKnowledgeScore = 0;
                 KnowledgeBaseEntry localKnowledge;
                 double localScore;
                 if (KnowledgeLearningService.TryFindLocalAnswer(seller, buyer, question, out localKnowledge, out localScore))
                 {
                     var localAnswer = BotFeatureStore.ApplyOutputPolicy(localKnowledge.Answer);
-                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, localAnswer, "本地");
-                    Log.Info("命中本地知识库，未调用AI。buyer=" + buyer + ", knowledgeId=" + localKnowledge.Id + ", score=" + localScore.ToString("0.00"));
-                    return localAnswer;
+                    var contextDecision = KnowledgeContextualReplyService.Analyze(seller, buyer, question, localKnowledge);
+                    if (!contextDecision.IsFollowUp)
+                    {
+                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, localAnswer, "本地");
+                        Log.Info("命中本地知识库，未调用AI。buyer=" + buyer + ", knowledgeId=" + localKnowledge.Id + ", score=" + localScore.ToString("0.00"));
+                        return localAnswer;
+                    }
+
+                    contextualKnowledge = localKnowledge;
+                    contextualDecision = contextDecision;
+                    contextualKnowledgeScore = localScore;
+                    Log.Info("命中本地知识库，但当前消息属于上下文续答，将基于知识库事实进行衔接改写。buyer="
+                        + buyer + ", knowledgeId=" + localKnowledge.Id + ", score=" + localScore.ToString("0.00")
+                        + ", reason=" + contextDecision.Reason);
                 }
 
                 var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
@@ -456,7 +470,21 @@ namespace Bot.ChromeNs
                     return offHoursAnswer;
                 }
 
-                if (!EnsureConfig()) return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
+                if (!EnsureConfig())
+                {
+                    if (contextualKnowledge != null)
+                    {
+                        var fallback = KnowledgeContextualReplyService.BuildOfflineFallback(contextualDecision, contextualKnowledge);
+                        if (!string.IsNullOrWhiteSpace(fallback))
+                        {
+                            fallback = BotFeatureStore.ApplyOutputPolicy(fallback);
+                            KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fallback, "本地知识库上下文");
+                            Log.Info("上下文知识回复使用本地安全兜底。buyer=" + buyer + ", answer=" + fallback);
+                            return fallback;
+                        }
+                    }
+                    return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
+                }
                 var endpoints = AiEndpointStore.GetEnabledEndpoints();
                 if (endpoints.Count < 1) return "错误：没有可用的AI接口，请在设置-API接口中启用至少一个接口。";
 
@@ -468,6 +496,10 @@ namespace Bot.ChromeNs
                     contextForKnowledge.Append(' ').Append(turn.Text);
                 }
                 var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(contextForKnowledge.ToString());
+                if (contextualKnowledge != null)
+                {
+                    dynamicSystemPrompt += KnowledgeContextualReplyService.BuildPromptAddon(contextualDecision, contextualKnowledge);
+                }
                 var messages = new JArray { CreateMessage("system", dynamicSystemPrompt) };
 
                 foreach (var turn in turns)
@@ -492,8 +524,19 @@ namespace Bot.ChromeNs
                         {
                             return "错误：该回复已被客服撤回，已阻止再次发送。";
                         }
-                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, finalAnswer, "AI生成");
-                        KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                        var answerSource = contextualKnowledge == null ? "AI生成" : "本地知识库上下文";
+                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, finalAnswer, answerSource);
+                        if (contextualKnowledge == null)
+                        {
+                            KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                        }
+                        else
+                        {
+                            Log.Info("上下文知识回复生成成功。buyer=" + buyer
+                                + ", knowledgeId=" + contextualKnowledge.Id
+                                + ", score=" + contextualKnowledgeScore.ToString("0.00")
+                                + ", answer=" + finalAnswer);
+                        }
                         return finalAnswer;
                     }
 

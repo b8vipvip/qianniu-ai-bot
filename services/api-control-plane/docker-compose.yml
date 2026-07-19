@@ -1,0 +1,39 @@
+services:
+  control-plane:
+    build: .
+    container_name: qianniu-api-control-plane
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    expose:
+      - "8080"
+    networks:
+      - control-plane
+
+  caddy:
+    image: caddy:2.9-alpine
+    container_name: qianniu-api-caddy
+    restart: unless-stopped
+    depends_on:
+      control-plane:
+        condition: service_healthy
+    environment:
+      CONTROL_PLANE_DOMAIN: ${CONTROL_PLANE_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - control-plane
+
+networks:
+  control-plane:
+
+volumes:
+  caddy_data:
+  caddy_config:
