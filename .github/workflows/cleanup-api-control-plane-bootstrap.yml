@@ -1,0 +1,38 @@
+name: Cleanup API control plane bootstrap files
+
+on:
+  push:
+    branches:
+      - feat/api-control-plane
+    paths:
+      - .github/workflows/cleanup-api-control-plane-bootstrap.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/api-control-plane
+          fetch-depth: 0
+      - name: Remove temporary assembly and diagnostics files
+        shell: bash
+        run: |
+          git rm -r --ignore-unmatch \
+            tools/api_control_plane_app_parts \
+            tools/api_control_plane_test_parts \
+            tools/api_control_plane_bundle_parts \
+            .github/workflows/assemble-api-control-plane-app.yml \
+            .github/workflows/api-control-plane-static-diagnostics.yml \
+            .github/workflows/cleanup-api-control-plane-bootstrap.yml
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "chore: remove API control plane bootstrap files"
+          git push origin HEAD:feat/api-control-plane
