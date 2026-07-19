@@ -2,7 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-
+# Keep knowledge retrieval first, but require conversational realization for follow-up turns.
 def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
