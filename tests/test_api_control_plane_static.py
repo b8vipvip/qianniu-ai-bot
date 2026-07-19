@@ -2,7 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# These assertions keep the Windows UI thin and the Ubuntu service authoritative.
+# Keep the cleaned Windows client thin and the Ubuntu service authoritative.
 def text(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
