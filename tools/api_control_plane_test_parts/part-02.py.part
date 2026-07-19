@@ -1,0 +1,45 @@
+        {"selected_models": ["gpt-5.6-sol"], "auto_apply_results": True},
+    )
+    provider = control_plane.get_provider(provider_id)
+    assert provider["main_text_model"] == "gpt-5.5"
+    assert provider["backup_text_models"] == ["gpt-5.4"]
+
+
+def test_runtime_url_fallback_prefers_deep_test_success(control_plane, monkeypatch):
+    provider = {
+        "id": 1,
+        "name": "测试站",
+        "base_url": "https://example.com/v1",
+        "api_key": "test-key",
+        "model_capabilities": {
+            "gpt-5.5": {
+                "text_urls": {"responses": ["https://example.com/responses"]}
+            }
+        },
+    }
+    calls = []
+
+    class Response:
+        status_code = 200
+        text = '{"output_text":"OK"}'
+        headers = {"content-type": "application/json"}
+
+        def json(self):
+            return {"output_text": "OK"}
+
+    def fake_request(method, url, api_key, payload=None, timeout=45):
+        calls.append(url)
+        return {"network_success": True, "response": Response(), "elapsed": 0.1}
+
+    monkeypatch.setattr(control_plane, "do_request", fake_request)
+    result = control_plane.upstream_call(
+        provider,
+        "gpt-5.5",
+        "responses",
+        [{"role": "user", "content": "测试"}],
+        32,
+        0,
+        45,
+    )
+    assert result["success"] is True
+    assert calls[0] == "https://example.com/responses"
