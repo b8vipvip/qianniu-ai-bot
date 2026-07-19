@@ -51,13 +51,14 @@ namespace Bot.ChromeNs
             };
 
             var compact = Compact(currentQuestion);
-            if (compact.Length < 1 || compact.Length > 28 || LooksLikeStandaloneQuestion(compact))
+            if (compact.Length < 1 || compact.Length > 28)
             {
                 return decision;
             }
 
             var turns = ConversationContextStore.GetRecentTurns(seller, buyer, currentQuestion, 10);
             var assistantIndex = -1;
+            ConversationContextTurn previousAssistant = null;
             for (var i = turns.Count - 1; i >= 0; i--)
             {
                 if (turns[i] != null
@@ -65,12 +66,34 @@ namespace Bot.ChromeNs
                     && !string.IsNullOrWhiteSpace(turns[i].Text))
                 {
                     assistantIndex = i;
+                    previousAssistant = turns[i];
                     break;
                 }
             }
-            if (assistantIndex < 0) return decision;
 
-            var previousAssistant = turns[assistantIndex];
+            string deliveredAnswer;
+            DateTime deliveredAt;
+            if (ReplyDeduplicationService.TryGetLastDelivered(
+                seller,
+                buyer,
+                out deliveredAnswer,
+                out deliveredAt)
+                && (previousAssistant == null
+                    || previousAssistant.Timestamp == DateTime.MinValue
+                    || deliveredAt >= previousAssistant.Timestamp))
+            {
+                previousAssistant = new ConversationContextTurn
+                {
+                    Role = "assistant",
+                    Text = deliveredAnswer,
+                    Timestamp = deliveredAt,
+                    MessageKey = "local-delivered-answer",
+                    Withdrawn = false
+                };
+                assistantIndex = turns.Count;
+            }
+
+            if (previousAssistant == null) return decision;
             if (previousAssistant.Timestamp != DateTime.MinValue
                 && previousAssistant.Timestamp < DateTime.Now.AddMinutes(-20))
             {
@@ -78,7 +101,7 @@ namespace Bot.ChromeNs
             }
 
             var previousBuyer = turns
-                .Take(assistantIndex)
+                .Take(Math.Max(0, assistantIndex))
                 .LastOrDefault(x => x != null
                     && x.Role == "user"
                     && !string.IsNullOrWhiteSpace(x.Text));
@@ -91,6 +114,14 @@ namespace Bot.ChromeNs
             var negative = ContainsCue(compact, NegativeCues);
             var sharedTopic = SharedBigramCount(compact, Compact(assistantText)) >= 1;
             var veryShortReply = compact.Length <= 8;
+            var standaloneQuestion = LooksLikeStandaloneQuestion(compact);
+
+            if (standaloneQuestion
+                && !previousWasKnowledgeAnswer
+                && !previousHasOpenCondition)
+            {
+                return decision;
+            }
 
             if ((previousHasOpenCondition || previousWasKnowledgeAnswer)
                 && (affirmative || negative || sharedTopic || veryShortReply))
