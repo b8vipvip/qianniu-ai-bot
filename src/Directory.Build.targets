@@ -9,6 +9,10 @@
     <!-- WPF creates Bot_*_wpftmp projects; include the partial there as well. -->
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ApiManagement.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.cs')">
+    <!-- Keep the service-connection partial in both Bot and generated WPF temporary projects. -->
+    <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\IncomingMessageSafety.cs" />
   </ItemGroup>
