@@ -323,6 +323,8 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            ConversationContextStore.RefreshAndRecord(message, messageText);
+
             if (IsSellerMessage(message))
             {
                 RecordSellerEcho(message.toid.nick, messageText);
@@ -359,6 +361,12 @@ namespace Bot.ChromeNs
             }
 
             var answer = MyOpenAI.GetAnswer(sellerNick, buyerNick, messageText);
+            var deduplication = ReplyDeduplicationService.EnsureDistinct(
+                sellerNick,
+                buyerNick,
+                messageText,
+                answer);
+            answer = deduplication.Answer;
             var answerSource = KnowledgeLearningService.ResolveAnswerSource(sellerNick, buyerNick, messageText, answer);
             var conversationCtl = Desk.Inst == null ? null : Desk.Inst.AddConversation(sellerNick, buyerNick, messageText, answer, autoSend, answerSource);
             if (!autoSend) return;
@@ -370,6 +378,10 @@ namespace Bot.ChromeNs
             }
 
             var sendOk = await SendTextWithRetryAsync(buyerNick, answer, 1);
+            if (sendOk)
+            {
+                ReplyDeduplicationService.RememberDelivered(sellerNick, buyerNick, answer);
+            }
             if (conversationCtl != null)
             {
                 conversationCtl.SetSendResult(sendOk, sendOk ? "已发送" : "发送失败：目标买家会话未确认或发送未完成");
@@ -388,9 +400,23 @@ namespace Bot.ChromeNs
                 Log.Info("视觉消息跳过: seller=" + task.SellerNick + ", buyer=" + task.BuyerNick + ", messageId=" + task.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
                 return;
             }
-            if (ctl != null) ctl.SetAnswer(result.Answer, "AI生成");
+
+            var deduplication = ReplyDeduplicationService.EnsureDistinct(
+                task.SellerNick,
+                task.BuyerNick,
+                "[图片]",
+                result.Answer);
+            var answer = deduplication.Answer;
+            var source = deduplication.Regenerated && !string.IsNullOrWhiteSpace(deduplication.Source)
+                ? deduplication.Source
+                : "AI生成";
+            if (ctl != null) ctl.SetAnswer(answer, source);
             if (!autoSend) return;
-            var sendOk = await SendTextWithRetryAsync(task.BuyerNick, result.Answer, 1);
+            var sendOk = await SendTextWithRetryAsync(task.BuyerNick, answer, 1);
+            if (sendOk)
+            {
+                ReplyDeduplicationService.RememberDelivered(task.SellerNick, task.BuyerNick, answer);
+            }
             if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送" : "识别完成，但目标买家会话未确认，未发送。");
         }
 
