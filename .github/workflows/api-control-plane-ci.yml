@@ -52,6 +52,13 @@ jobs:
           cp .env.example .env
           docker compose config >/dev/null
 
+      - name: Clean generated caches
+        run: |
+          rm -f .env
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type d -name .pytest_cache -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
       - name: Upload Ubuntu deployment package
         uses: actions/upload-artifact@v4
         with:
@@ -65,6 +72,8 @@ jobs:
             services/api-control-plane/docker-compose.yml
             services/api-control-plane/Caddyfile
             services/api-control-plane/.env.example
+            services/api-control-plane/.dockerignore
             services/api-control-plane/README.md
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
