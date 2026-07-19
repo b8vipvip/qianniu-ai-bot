@@ -6,16 +6,50 @@ on:
       - feat/api-control-plane
     paths:
       - services/api-control-plane/**
+      - src/Bot/ChromeNs/KnowledgeContextualReplyService.cs
+      - src/Directory.Build.targets
+      - tools/patch_contextual_knowledge_routing.py
       - .github/workflows/api-control-plane-ci.yml
   pull_request:
     paths:
       - services/api-control-plane/**
+      - src/Bot/ChromeNs/KnowledgeContextualReplyService.cs
+      - src/Directory.Build.targets
       - .github/workflows/api-control-plane-ci.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-contextual-knowledge-patch:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/api-control-plane
+          fetch-depth: 0
+
+      - name: Apply deterministic source patch
+        run: python tools/patch_contextual_knowledge_routing.py
+
+      - name: Validate and commit source patch
+        shell: bash
+        run: |
+          grep -q 'KnowledgeContextualReplyService.Analyze' src/Bot/ChromeNs/MyOpenAI.cs
+          grep -q '本地知识库上下文' src/Bot/ChromeNs/MyOpenAI.cs
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/Bot/ChromeNs/MyOpenAI.cs
+          if git diff --cached --quiet; then
+            echo "MyOpenAI.cs is already patched"
+            exit 0
+          fi
+          git commit -m "fix: contextualize knowledge-backed follow-up replies"
+          git push origin HEAD:feat/api-control-plane
+
   test-build-package:
     runs-on: ubuntu-latest
     defaults:
