@@ -1,0 +1,46 @@
+name: Assemble API control plane app
+
+on:
+  push:
+    branches:
+      - feat/api-control-plane
+    paths:
+      - tools/api_control_plane_app_parts/**
+      - .github/workflows/assemble-api-control-plane-app.yml
+
+permissions:
+  contents: write
+
+jobs:
+  assemble:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/api-control-plane
+          fetch-depth: 0
+
+      - name: Assemble and validate app.py
+        shell: bash
+        run: |
+          mkdir -p services/api-control-plane
+          find tools/api_control_plane_app_parts -type f -name '*.part' -print0 \
+            | sort -z \
+            | xargs -0 cat > services/api-control-plane/app.py
+          python -m py_compile services/api-control-plane/app.py
+          test "$(grep -c '^from __future__ import annotations' services/api-control-plane/app.py)" -eq 1
+          test "$(grep -c '^if __name__ == "__main__":' services/api-control-plane/app.py)" -eq 1
+
+      - name: Commit assembled source
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add services/api-control-plane/app.py
+          if git diff --cached --quiet; then
+            echo "app.py is already assembled"
+            exit 0
+          fi
+          git commit -m "feat: assemble API control plane service"
+          git push origin HEAD:feat/api-control-plane
