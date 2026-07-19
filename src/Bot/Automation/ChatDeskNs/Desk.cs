@@ -388,7 +388,13 @@ namespace Bot.Automation.ChatDeskNs
             }));
         }
 
-        public CtlConversation AddConversation(string seller, string buyer, string question, string answer, bool isAutoReply)
+        public CtlConversation AddConversation(
+            string seller,
+            string buyer,
+            string question,
+            string answer,
+            bool isAutoReply,
+            string answerSource = "")
         {
             CtlConversation ctlConversation = null;
             DispatcherEx.xInvoke(new Action(() =>
@@ -397,7 +403,7 @@ namespace Bot.Automation.ChatDeskNs
                 {
                     CtlRobot = inst.AssistWindow.ctlRightPanel.GetTabItem(Bot.AssistWindow.Widget.RightPanel.TabTypeEnum.Robot).Content as CtlRobot;
                 }
-                ctlConversation = CtlRobot.AddConversation(seller, buyer, question, answer, isAutoReply);
+                ctlConversation = CtlRobot.AddConversation(seller, buyer, question, answer, isAutoReply, answerSource);
             }));
             return ctlConversation;
         }

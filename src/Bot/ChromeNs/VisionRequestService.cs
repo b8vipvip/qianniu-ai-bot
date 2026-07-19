@@ -1,4 +1,4 @@
-using BotLib;
+﻿using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -76,6 +76,8 @@ namespace Bot.ChromeNs
                                     LatencyMs = result.LatencyMs
                                 };
                             }
+                            KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, "[图片]", result.Answer, "AI生成");
+                            KnowledgeLearningService.QueueLearn("买家发送图片。" + (string.IsNullOrWhiteSpace(timeline) ? string.Empty : "\n" + timeline), result.Answer, "视觉AI", task.SellerNick, task.BuyerNick);
                             return result;
                         }
                         last = result;

@@ -104,14 +104,15 @@ namespace Bot.AssistWindow.Widget.Robot
             }
         }
 
-        public CtlConversation AddConversation(string seller, string buyer, string question, string answer, bool isAutoReply = false)
+        public CtlConversation AddConversation(string seller, string buyer, string question, string answer, bool isAutoReply = false, string answerSource = "")
         {
             BotRuntimeStats.RecordDisplayedAnswer(isAutoReply);
             RefreshStats();
 
             var key = string.Format("{0}#{1}", seller, buyer);
-            var ctlConversation = CtlConversation.Create(seller, buyer, question, answer, isAutoReply);
+            var ctlConversation = CtlConversation.Create(seller, buyer, question, answer, isAutoReply, answerSource);
             ctlConversation.ResendRequested += CtlConversation_ResendRequested;
+            ctlConversation.EditRequested += CtlConversation_EditRequested;
             var conversations = buyerConversations.xTryGetValue(key);
             if (conversations == null || conversations.Count < 1)
             {
@@ -153,13 +154,34 @@ namespace Bot.AssistWindow.Widget.Robot
                     ctl.SetSendResult(false, "重发失败：未识别千牛会话");
                     return;
                 }
-
+                KnowledgeLearningService.AllowNextManualSend(e.Seller, e.Buyer, e.Answer);
                 var ok = await qn.SendTextWithRetryAsync(e.Buyer, e.Answer, 1);
                 ctl.SetSendResult(ok, ok ? "重发成功" : "重发失败，已重试1次");
             }
             catch (Exception ex)
             {
                 ctl.SetSendResult(false, "重发异常");
+                Log.Exception(ex);
+            }
+        }
+
+        private async void CtlConversation_EditRequested(object sender, ConversationEditEventArgs e)
+        {
+            var ctl = sender as CtlConversation;
+            if (ctl == null) return;
+            var wnd = new ConversationEditWindow(e.Question, e.Answer) { Owner = Window.GetWindow(this) };
+            if (wnd.ShowDialog() != true) return;
+            ctl.SetAnswer(wnd.EditedAnswer);
+            ctl.SetSource("人工修改");
+            ctl.SetSendPending("正在整理并写入知识库...");
+            try
+            {
+                var result = await KnowledgeLearningService.LearnAsync(e.Question, wnd.EditedAnswer, "人工修改", e.Seller, e.Buyer);
+                ctl.SetStatus(result.Success ? result.Message : "答案已修改，但知识库整理失败：" + result.Message, result.Success);
+            }
+            catch (Exception ex)
+            {
+                ctl.SetStatus("答案已修改，但知识库整理异常", false);
                 Log.Exception(ex);
             }
         }

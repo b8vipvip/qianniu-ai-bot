@@ -1,4 +1,4 @@
-using BotLib;
+﻿using BotLib;
 using Newtonsoft.Json.Linq;
 using OpenAI.Chat;
 using System;
@@ -375,6 +375,42 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static string BuildOffHoursHandoffReply(
+            string seller,
+            string buyer,
+            string question,
+            AutoReplyRuleDecision decision)
+        {
+            var fallback = BotFeatureStore.ApplyOutputPolicy(decision.ReplyText);
+            try
+            {
+                if (!EnsureConfig()) return fallback;
+                var messages = new JArray
+                {
+                    CreateMessage("system",
+                        "你是电商店铺的下班转人工助手。当前人工客服已下班。你只能礼貌告知人工客服不在线、工作时间，以及问题已记录或建议买家在上班时间联系；不得回答退款、投诉、赔偿、隐私、订单核验等具体高风险结论。回复一句到两句，禁止编造。"),
+                    CreateMessage("user",
+                        "人工客服工作时间：" + decision.WorkHoursText
+                        + "\n触发原因：" + decision.Reason
+                        + "\n买家问题：" + question)
+                };
+                foreach (var endpoint in AiEndpointStore.GetEnabledEndpoints())
+                {
+                    var result = CallChatCompletions(endpoint, messages);
+                    BotRuntimeStats.RecordAiCall(endpoint, result.InputTokens, result.OutputTokens, result.Success, result.LatencyMs, result.Success ? "下班转人工回复成功" : result.Error);
+                    if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                    {
+                        return BotFeatureStore.ApplyOutputPolicy(result.Answer);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("生成下班转人工回复失败，使用固定兜底话术：" + ex.Message);
+            }
+            return fallback;
+        }
+
         public static string GetAnswer(string seller, string buyer, string question)
         {
             try
@@ -387,16 +423,37 @@ namespace Bot.ChromeNs
                         return "错误：该预设回复已被客服撤回，未再次发送。";
                     }
                     Log.Info("商品链接使用本地预设回复，未调用AI接口。buyer=" + buyer);
+                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, presetReply, "本地");
                     return presetReply;
                 }
 
                 if (string.IsNullOrWhiteSpace(question)) return "错误：买家消息为空，未调用AI。";
 
-                string manualAnswer;
-                string manualReason;
-                if (BotFeatureStore.TryMatchManualRule(question, out manualAnswer, out manualReason))
+                KnowledgeBaseEntry localKnowledge;
+                double localScore;
+                if (KnowledgeLearningService.TryFindLocalAnswer(seller, buyer, question, out localKnowledge, out localScore))
                 {
-                    return "错误：命中人工确认规则，未自动回复。" + manualAnswer + " 原因：" + manualReason;
+                    var localAnswer = BotFeatureStore.ApplyOutputPolicy(localKnowledge.Answer);
+                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, localAnswer, "本地");
+                    Log.Info("命中本地知识库，未调用AI。buyer=" + buyer + ", knowledgeId=" + localKnowledge.Id + ", score=" + localScore.ToString("0.00"));
+                    return localAnswer;
+                }
+
+                var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
+                if (manualDecision.Matched)
+                {
+                    HandoffNotificationService.QueueNotify(seller, buyer, question, manualDecision);
+                    if (!manualDecision.AllowAutoReply)
+                    {
+                        return "错误：命中人工确认规则，未自动回复。" + manualDecision.ReplyText + " 原因：" + manualDecision.Reason;
+                    }
+
+                    var offHoursAnswer = manualDecision.UseAiReply
+                        ? BuildOffHoursHandoffReply(seller, buyer, question, manualDecision)
+                        : BotFeatureStore.ApplyOutputPolicy(manualDecision.ReplyText);
+                    var offHoursSource = manualDecision.UseAiReply ? "AI生成" : "本地";
+                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, offHoursAnswer, offHoursSource);
+                    return offHoursAnswer;
                 }
 
                 if (!EnsureConfig()) return "错误：AI配置不完整，请检查 API接口 列表中的 BaseUrl / ApiKey / Model。";
@@ -435,6 +492,8 @@ namespace Bot.ChromeNs
                         {
                             return "错误：该回复已被客服撤回，已阻止再次发送。";
                         }
+                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, finalAnswer, "AI生成");
+                        KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
                         return finalAnswer;
                     }
 

@@ -388,6 +388,28 @@ namespace Bot.Options
         private TextBox _noAutoKeywords;
         private TextBox _handoffText;
         private CheckBox _rulesEnabled;
+        private CheckBox _workHoursEnabled;
+        private TextBox _workStartTime;
+        private TextBox _workEndTime;
+        private ComboBox _offHoursMode;
+        private TextBox _offHoursFixedText;
+        private CheckBox _notificationEnabled;
+        private TextBox _notificationCooldown;
+        private CheckBox _notifyWeChat;
+        private TextBox _weChatWebhook;
+        private CheckBox _notifyQQ;
+        private TextBox _qqWebhook;
+        private CheckBox _notifyEmail;
+        private TextBox _smtpHost;
+        private TextBox _smtpPort;
+        private CheckBox _smtpSsl;
+        private TextBox _smtpUser;
+        private PasswordBox _smtpPassword;
+        private TextBox _emailTo;
+        private CheckBox _notifyFeishu;
+        private TextBox _feishuWebhook;
+        private CheckBox _notifyDingTalk;
+        private TextBox _dingTalkWebhook;
         private ComboBox _tone;
         private TextBox _maxLength;
         private TextBox _bannedWords;
@@ -502,12 +524,153 @@ namespace Bot.Options
         {
             var cfg = BotFeatureStore.GetAutoReplyRules();
             var sp = new StackPanel { Margin = new Thickness(8) };
-            _rulesEnabled = new CheckBox { Content = "启用规则：命中后不自动发送，转为人工确认", IsChecked = cfg.Enabled, Margin = new Thickness(0, 0, 0, 8) };
+            _rulesEnabled = new CheckBox { Content = "启用转人工规则", IsChecked = cfg.Enabled, Margin = new Thickness(0, 0, 0, 8), FontWeight = FontWeights.SemiBold };
             sp.Children.Add(_rulesEnabled);
-            _manualKeywords = AddLabeledText(sp, "强制转人工关键词", cfg.ManualKeywords, 90, "例：退款,投诉,差评,赔偿,发票,订单隐私。命中后右侧显示建议回复，但不会自动发出。", true);
-            _noAutoKeywords = AddLabeledText(sp, "仅人工确认关键词", cfg.NoAutoReplyKeywords, 90, "例：银行卡,身份证,手机号,地址,法律,维权。", true);
-            _handoffText = AddLabeledText(sp, "转人工话术", cfg.HandoffText, 70, "命中规则时显示给客服看的建议话术。", true);
+            _manualKeywords = AddLabeledText(sp, "强制转人工关键词", cfg.ManualKeywords, 78, "例：退款、投诉、差评、赔偿、发票、订单隐私。", true);
+            _noAutoKeywords = AddLabeledText(sp, "仅人工确认关键词", cfg.NoAutoReplyKeywords, 68, "例：银行卡、身份证、手机号、地址、法律、维权。", true);
+            _handoffText = AddLabeledText(sp, "工作时间转人工话术", cfg.HandoffText, 62, "人工在线时命中规则：Bot 不自动发送，只在面板提示并通知人工。", true);
+
+            sp.Children.Add(SectionTitle("人工客服工作时间与下班回复"));
+            _workHoursEnabled = new CheckBox { Content = "启用人工客服上下班时间判断", IsChecked = cfg.EnableWorkHours, Margin = new Thickness(0, 0, 0, 8) };
+            sp.Children.Add(_workHoursEnabled);
+            var workRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            workRow.Children.Add(new TextBlock { Text = "上班时间", Width = 90, VerticalAlignment = VerticalAlignment.Center });
+            _workStartTime = new TextBox { Text = cfg.WorkStartTime, Width = 80, Height = 26 };
+            workRow.Children.Add(_workStartTime);
+            workRow.Children.Add(new TextBlock { Text = "下班时间", Width = 85, Margin = new Thickness(20, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+            _workEndTime = new TextBox { Text = cfg.WorkEndTime, Width = 80, Height = 26 };
+            workRow.Children.Add(_workEndTime);
+            workRow.Children.Add(new TextBlock { Text = "格式 HH:mm；支持跨夜，例如 18:00–09:00。", Margin = new Thickness(12, 4, 0, 0), Foreground = Brushes.Gray });
+            sp.Children.Add(workRow);
+
+            var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            modeRow.Children.Add(new TextBlock { Text = "下班回复方式", Width = 90, VerticalAlignment = VerticalAlignment.Center });
+            _offHoursMode = new ComboBox { Width = 190, Height = 26 };
+            _offHoursMode.Items.Add("AI告知下班时间");
+            _offHoursMode.Items.Add("固定预设答案");
+            _offHoursMode.SelectedItem = string.IsNullOrWhiteSpace(cfg.OffHoursReplyMode) ? "AI告知下班时间" : cfg.OffHoursReplyMode;
+            modeRow.Children.Add(_offHoursMode);
+            sp.Children.Add(modeRow);
+            _offHoursFixedText = AddLabeledText(sp, "下班固定话术", cfg.OffHoursFixedText, 68, "可使用 {工作时间} 占位符。AI模式调用失败时也使用这段话兜底。", true);
+
+            sp.Children.Add(SectionTitle("转人工通知"));
+            _notificationEnabled = new CheckBox { Content = "命中转人工规则时发送通知", IsChecked = cfg.EnableHandoffNotification, Margin = new Thickness(0, 0, 0, 8), FontWeight = FontWeights.SemiBold };
+            sp.Children.Add(_notificationEnabled);
+            _notificationCooldown = AddLabeledText(sp, "通知去重分钟", cfg.NotificationCooldownMinutes.ToString(), 28, "同一客服、买家和问题在此时间内只通知一次。", false);
+            _notifyWeChat = AddChannel(sp, "微信", cfg.NotifyWeChat, "企业微信群机器人 Webhook", cfg.WeChatWebhook, out _weChatWebhook);
+            _notifyQQ = AddChannel(sp, "QQ", cfg.NotifyQQ, "QQ机器人 Webhook（需兼容 JSON message/content 字段）", cfg.QQWebhook, out _qqWebhook);
+            _notifyFeishu = AddChannel(sp, "飞书", cfg.NotifyFeishu, "飞书群机器人 Webhook", cfg.FeishuWebhook, out _feishuWebhook);
+            _notifyDingTalk = AddChannel(sp, "钉钉", cfg.NotifyDingTalk, "钉钉群机器人 Webhook", cfg.DingTalkWebhook, out _dingTalkWebhook);
+
+            var emailHeader = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 4, 0, 6) };
+            _notifyEmail = new CheckBox { Content = "邮箱", IsChecked = cfg.NotifyEmail, Width = 90, VerticalAlignment = VerticalAlignment.Center };
+            emailHeader.Children.Add(_notifyEmail);
+            emailHeader.Children.Add(new TextBlock { Text = "SMTP 通知", Foreground = Brushes.Gray, VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(emailHeader);
+            _smtpHost = AddLabeledText(sp, "SMTP服务器", cfg.SmtpHost, 28, string.Empty, false);
+            var smtpRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            smtpRow.Children.Add(new TextBlock { Text = "SMTP端口", Width = 90, VerticalAlignment = VerticalAlignment.Center });
+            _smtpPort = new TextBox { Text = cfg.SmtpPort.ToString(), Width = 70, Height = 26 };
+            smtpRow.Children.Add(_smtpPort);
+            _smtpSsl = new CheckBox { Content = "SSL", IsChecked = cfg.SmtpEnableSsl, Margin = new Thickness(16, 3, 0, 0) };
+            smtpRow.Children.Add(_smtpSsl);
+            sp.Children.Add(smtpRow);
+            _smtpUser = AddLabeledText(sp, "SMTP账号", cfg.SmtpUser, 28, string.Empty, false);
+            var passwordRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            passwordRow.Children.Add(new TextBlock { Text = "SMTP密码", Width = 90, VerticalAlignment = VerticalAlignment.Center });
+            _smtpPassword = new PasswordBox { Password = cfg.SmtpPassword ?? string.Empty, Height = 26 };
+            passwordRow.Children.Add(_smtpPassword);
+            sp.Children.Add(passwordRow);
+            _emailTo = AddLabeledText(sp, "收件邮箱", cfg.EmailTo, 28, "多个收件人用逗号分隔。", false);
+
+            var test = MakeButton("测试已选通知", 120);
+            test.Click += async (s, e) =>
+            {
+                test.IsEnabled = false;
+                _status.Text = "正在发送测试通知...";
+                try
+                {
+                    _status.Text = await HandoffNotificationService.TestAsync(BuildRuleConfigFromUi());
+                }
+                catch (Exception ex)
+                {
+                    _status.Text = "测试通知失败：" + ex.Message;
+                }
+                finally
+                {
+                    test.IsEnabled = true;
+                }
+            };
+            sp.Children.Add(test);
+            sp.Children.Add(new TextBlock
+            {
+                Text = "微信使用企业微信群机器人；QQ使用兼容Webhook；飞书、钉钉使用群机器人；邮箱使用SMTP。密钥和密码仅保存在本机 params.db。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.Gray,
+                FontSize = 11,
+                Margin = new Thickness(0, 5, 0, 0)
+            });
             return new ScrollViewer { Content = Card(sp), VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        }
+
+        private TextBlock SectionTitle(string text)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                FontWeight = FontWeights.Bold,
+                FontSize = 15,
+                Margin = new Thickness(0, 14, 0, 9),
+                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55))
+            };
+        }
+
+        private CheckBox AddChannel(StackPanel sp, string name, bool enabled, string label, string value, out TextBox box)
+        {
+            var row = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var check = new CheckBox { Content = name, IsChecked = enabled, Width = 90, VerticalAlignment = VerticalAlignment.Center };
+            row.Children.Add(check);
+            box = new TextBox { Text = value ?? string.Empty, Height = 26, ToolTip = label };
+            row.Children.Add(box);
+            sp.Children.Add(row);
+            return check;
+        }
+
+        private AutoReplyRuleConfig BuildRuleConfigFromUi()
+        {
+            int cooldown;
+            if (!int.TryParse(_notificationCooldown == null ? "10" : _notificationCooldown.Text, out cooldown)) cooldown = 10;
+            int smtpPort;
+            if (!int.TryParse(_smtpPort == null ? "465" : _smtpPort.Text, out smtpPort)) smtpPort = 465;
+            return new AutoReplyRuleConfig
+            {
+                Enabled = _rulesEnabled == null || (_rulesEnabled.IsChecked ?? true),
+                ManualKeywords = _manualKeywords == null ? string.Empty : _manualKeywords.Text,
+                NoAutoReplyKeywords = _noAutoKeywords == null ? string.Empty : _noAutoKeywords.Text,
+                HandoffText = _handoffText == null ? string.Empty : _handoffText.Text,
+                EnableWorkHours = _workHoursEnabled != null && (_workHoursEnabled.IsChecked ?? false),
+                WorkStartTime = _workStartTime == null ? "09:00" : _workStartTime.Text,
+                WorkEndTime = _workEndTime == null ? "18:00" : _workEndTime.Text,
+                OffHoursReplyMode = _offHoursMode == null || _offHoursMode.SelectedItem == null ? "AI告知下班时间" : _offHoursMode.SelectedItem.ToString(),
+                OffHoursFixedText = _offHoursFixedText == null ? string.Empty : _offHoursFixedText.Text,
+                EnableHandoffNotification = _notificationEnabled != null && (_notificationEnabled.IsChecked ?? false),
+                NotificationCooldownMinutes = Math.Max(1, Math.Min(1440, cooldown)),
+                NotifyWeChat = _notifyWeChat != null && (_notifyWeChat.IsChecked ?? false),
+                WeChatWebhook = _weChatWebhook == null ? string.Empty : _weChatWebhook.Text,
+                NotifyQQ = _notifyQQ != null && (_notifyQQ.IsChecked ?? false),
+                QQWebhook = _qqWebhook == null ? string.Empty : _qqWebhook.Text,
+                NotifyEmail = _notifyEmail != null && (_notifyEmail.IsChecked ?? false),
+                SmtpHost = _smtpHost == null ? string.Empty : _smtpHost.Text,
+                SmtpPort = smtpPort,
+                SmtpEnableSsl = _smtpSsl != null && (_smtpSsl.IsChecked ?? true),
+                SmtpUser = _smtpUser == null ? string.Empty : _smtpUser.Text,
+                SmtpPassword = _smtpPassword == null ? string.Empty : _smtpPassword.Password,
+                EmailTo = _emailTo == null ? string.Empty : _emailTo.Text,
+                NotifyFeishu = _notifyFeishu != null && (_notifyFeishu.IsChecked ?? false),
+                FeishuWebhook = _feishuWebhook == null ? string.Empty : _feishuWebhook.Text,
+                NotifyDingTalk = _notifyDingTalk != null && (_notifyDingTalk.IsChecked ?? false),
+                DingTalkWebhook = _dingTalkWebhook == null ? string.Empty : _dingTalkWebhook.Text
+            };
         }
 
         private UIElement BuildPolicyTab()
@@ -636,13 +799,7 @@ namespace Bot.Options
                 if (_kbItems != null) BotFeatureStore.SaveKnowledgeBase(_kbItems.ToList());
                 if (_rulesEnabled != null)
                 {
-                    BotFeatureStore.SaveAutoReplyRules(new AutoReplyRuleConfig
-                    {
-                        Enabled = _rulesEnabled.IsChecked ?? true,
-                        ManualKeywords = _manualKeywords == null ? string.Empty : _manualKeywords.Text,
-                        NoAutoReplyKeywords = _noAutoKeywords == null ? string.Empty : _noAutoKeywords.Text,
-                        HandoffText = _handoffText == null ? string.Empty : _handoffText.Text
-                    });
+                    BotFeatureStore.SaveAutoReplyRules(BuildRuleConfigFromUi());
                 }
                 if (_tone != null)
                 {
@@ -1108,6 +1265,28 @@ namespace Bot.ChromeNs
         public string ManualKeywords { get; set; }
         public string NoAutoReplyKeywords { get; set; }
         public string HandoffText { get; set; }
+        public bool EnableWorkHours { get; set; }
+        public string WorkStartTime { get; set; }
+        public string WorkEndTime { get; set; }
+        public string OffHoursReplyMode { get; set; }
+        public string OffHoursFixedText { get; set; }
+        public bool EnableHandoffNotification { get; set; }
+        public int NotificationCooldownMinutes { get; set; }
+        public bool NotifyWeChat { get; set; }
+        public string WeChatWebhook { get; set; }
+        public bool NotifyQQ { get; set; }
+        public string QQWebhook { get; set; }
+        public bool NotifyEmail { get; set; }
+        public string SmtpHost { get; set; }
+        public int SmtpPort { get; set; }
+        public bool SmtpEnableSsl { get; set; }
+        public string SmtpUser { get; set; }
+        public string SmtpPassword { get; set; }
+        public string EmailTo { get; set; }
+        public bool NotifyFeishu { get; set; }
+        public string FeishuWebhook { get; set; }
+        public bool NotifyDingTalk { get; set; }
+        public string DingTalkWebhook { get; set; }
 
         public static AutoReplyRuleConfig Default()
         {
@@ -1116,9 +1295,30 @@ namespace Bot.ChromeNs
                 Enabled = true,
                 ManualKeywords = "退款,退货,投诉,差评,赔偿,发票,税票,订单隐私,身份证,银行卡,法律,维权,平台介入",
                 NoAutoReplyKeywords = "手机号,地址,隐私,密码,账号,验证码,转账,补偿,客服主管",
-                HandoffText = "这个问题建议转人工确认后再回复，避免承诺错误。参考话术：亲，这个问题我帮您转人工客服确认一下。"
+                HandoffText = "亲，这个问题需要人工客服核实，我已为您转人工处理。",
+                EnableWorkHours = true,
+                WorkStartTime = "09:00",
+                WorkEndTime = "18:00",
+                OffHoursReplyMode = "AI告知下班时间",
+                OffHoursFixedText = "亲，人工客服当前已下班，工作时间为每天 {工作时间}。您的问题已记录，请在上班时间联系或等待人工处理。",
+                EnableHandoffNotification = false,
+                NotificationCooldownMinutes = 10,
+                SmtpPort = 465,
+                SmtpEnableSsl = true
             };
         }
+    }
+
+    public class AutoReplyRuleDecision
+    {
+        public bool Matched { get; set; }
+        public bool AllowAutoReply { get; set; }
+        public bool UseAiReply { get; set; }
+        public bool IsOffHours { get; set; }
+        public string HitKeyword { get; set; }
+        public string Reason { get; set; }
+        public string ReplyText { get; set; }
+        public string WorkHoursText { get; set; }
     }
 
     public class MessagePolicyConfig
@@ -1230,7 +1430,18 @@ namespace Bot.ChromeNs
 
         public static AutoReplyRuleConfig GetAutoReplyRules()
         {
-            return Read(RuleKey, AutoReplyRuleConfig.Default()) ?? AutoReplyRuleConfig.Default();
+            var cfg = Read(RuleKey, AutoReplyRuleConfig.Default()) ?? AutoReplyRuleConfig.Default();
+            if (string.IsNullOrWhiteSpace(cfg.WorkStartTime) && string.IsNullOrWhiteSpace(cfg.WorkEndTime))
+            {
+                cfg.EnableWorkHours = true;
+            }
+            if (string.IsNullOrWhiteSpace(cfg.WorkStartTime)) cfg.WorkStartTime = "09:00";
+            if (string.IsNullOrWhiteSpace(cfg.WorkEndTime)) cfg.WorkEndTime = "18:00";
+            if (string.IsNullOrWhiteSpace(cfg.OffHoursReplyMode)) cfg.OffHoursReplyMode = "AI告知下班时间";
+            if (string.IsNullOrWhiteSpace(cfg.OffHoursFixedText)) cfg.OffHoursFixedText = AutoReplyRuleConfig.Default().OffHoursFixedText;
+            if (cfg.NotificationCooldownMinutes <= 0) cfg.NotificationCooldownMinutes = 10;
+            if (cfg.SmtpPort <= 0) cfg.SmtpPort = 465;
+            return cfg;
         }
 
         public static void SaveAutoReplyRules(AutoReplyRuleConfig cfg)
@@ -1323,26 +1534,78 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        public static bool TryMatchManualRule(string question, out string answer, out string reason)
+        public static AutoReplyRuleDecision EvaluateAutoReplyRule(string question)
         {
+            var decision = new AutoReplyRuleDecision();
             var cfg = GetAutoReplyRules();
-            answer = string.Empty;
-            reason = string.Empty;
-            if (cfg == null || !cfg.Enabled) return false;
+            if (cfg == null || !cfg.Enabled) return decision;
+
             string hit;
             if (ContainsAny(question, cfg.ManualKeywords, out hit))
             {
-                reason = "命中强制转人工关键词：" + hit;
-                answer = string.IsNullOrWhiteSpace(cfg.HandoffText) ? AutoReplyRuleConfig.Default().HandoffText : cfg.HandoffText;
-                return true;
+                decision.Matched = true;
+                decision.HitKeyword = hit;
+                decision.Reason = "命中强制转人工关键词：" + hit;
             }
-            if (ContainsAny(question, cfg.NoAutoReplyKeywords, out hit))
+            else if (ContainsAny(question, cfg.NoAutoReplyKeywords, out hit))
             {
-                reason = "命中仅人工确认关键词：" + hit;
-                answer = string.IsNullOrWhiteSpace(cfg.HandoffText) ? AutoReplyRuleConfig.Default().HandoffText : cfg.HandoffText;
-                return true;
+                decision.Matched = true;
+                decision.HitKeyword = hit;
+                decision.Reason = "命中仅人工确认关键词：" + hit;
             }
-            return false;
+            if (!decision.Matched) return decision;
+
+            decision.WorkHoursText = GetWorkHoursText(cfg);
+            decision.IsOffHours = cfg.EnableWorkHours && !IsHumanServiceOnline(cfg, DateTime.Now);
+            if (!decision.IsOffHours)
+            {
+                decision.AllowAutoReply = false;
+                decision.ReplyText = string.IsNullOrWhiteSpace(cfg.HandoffText)
+                    ? AutoReplyRuleConfig.Default().HandoffText
+                    : cfg.HandoffText.Trim();
+                return decision;
+            }
+
+            decision.AllowAutoReply = true;
+            decision.UseAiReply = string.Equals(
+                cfg.OffHoursReplyMode,
+                "AI告知下班时间",
+                StringComparison.Ordinal);
+            var fixedText = string.IsNullOrWhiteSpace(cfg.OffHoursFixedText)
+                ? AutoReplyRuleConfig.Default().OffHoursFixedText
+                : cfg.OffHoursFixedText.Trim();
+            decision.ReplyText = fixedText.Replace("{工作时间}", decision.WorkHoursText);
+            decision.Reason += "；当前为人工客服下班时间";
+            return decision;
+        }
+
+        public static bool TryMatchManualRule(string question, out string answer, out string reason)
+        {
+            var decision = EvaluateAutoReplyRule(question);
+            answer = decision.ReplyText ?? string.Empty;
+            reason = decision.Reason ?? string.Empty;
+            return decision.Matched;
+        }
+
+        public static bool IsHumanServiceOnline(AutoReplyRuleConfig cfg, DateTime now)
+        {
+            if (cfg == null || !cfg.EnableWorkHours) return true;
+            TimeSpan start;
+            TimeSpan end;
+            if (!TimeSpan.TryParse(cfg.WorkStartTime, out start)) start = new TimeSpan(9, 0, 0);
+            if (!TimeSpan.TryParse(cfg.WorkEndTime, out end)) end = new TimeSpan(18, 0, 0);
+            var current = now.TimeOfDay;
+            if (start == end) return true;
+            if (start < end) return current >= start && current < end;
+            return current >= start || current < end;
+        }
+
+        public static string GetWorkHoursText(AutoReplyRuleConfig cfg)
+        {
+            cfg = cfg ?? AutoReplyRuleConfig.Default();
+            var start = string.IsNullOrWhiteSpace(cfg.WorkStartTime) ? "09:00" : cfg.WorkStartTime.Trim();
+            var end = string.IsNullOrWhiteSpace(cfg.WorkEndTime) ? "18:00" : cfg.WorkEndTime.Trim();
+            return "每天 " + start + "–" + end;
         }
 
         private static List<KnowledgeBaseEntry> MatchKnowledge(string question)
