@@ -1,0 +1,130 @@
+import importlib
+import os
+import sys
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture()
+def control_plane(tmp_path, monkeypatch):
+    monkeypatch.setenv("DATABASE_PATH", str(tmp_path / "test.db"))
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("APP_SECRET", "test-secret")
+    monkeypatch.setenv("API_KEY_ENCRYPTION_KEY", "iV7XoPa3z4i44n5gP5gsLt5mFMQbdbGICxVMJ4K7VQk=")
+    monkeypatch.setenv("COOKIE_SECURE", "false")
+    monkeypatch.setenv("DISABLE_SCHEDULER", "true")
+    service_dir = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(service_dir))
+    sys.modules.pop("app", None)
+    module = importlib.import_module("app")
+    module.init_db()
+    yield module
+    sys.modules.pop("app", None)
+    if str(service_dir) in sys.path:
+        sys.path.remove(str(service_dir))
+
+
+def test_latest_model_ranking(control_plane):
+    items = [
+        {"model": "gpt-5.4"},
+        {"model": "gpt-5.5"},
+        {"model": "gpt-5.6-luna"},
+        {"model": "gpt-5.6-sol"},
+    ]
+    assert control_plane.sort_model_results_newest(items)[0]["model"] == "gpt-5.6-sol"
+
+
+def test_protocol_fallback_uses_discovered_methods_first(control_plane):
+    provider = {
+        "protocol_order": ["chat", "responses", "legacy"],
+        "model_capabilities": {
+            "gpt-5.5": {
+                "text_protocols": ["responses", "chat"],
+                "vision_protocols": ["responses"],
+            }
+        },
+    }
+    assert control_plane.protocol_candidates(provider, "gpt-5.5", False)[:2] == ["responses", "chat"]
+    assert control_plane.protocol_candidates(provider, "gpt-5.5", True) == ["responses", "chat"]
+
+
+def test_chat_responses_multimodal_conversion(control_plane):
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "识别图片"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}},
+            ],
+        }
+    ]
+    responses_input = control_plane.convert_chat_to_responses_input(messages)
+    assert responses_input[0]["content"][0]["type"] == "input_text"
+    assert responses_input[0]["content"][1]["type"] == "input_image"
+    round_trip = control_plane.convert_responses_input_to_chat(responses_input)
+    assert round_trip[0]["content"][1]["type"] == "image_url"
+
+
+def test_deep_test_promotes_latest_available_and_builds_backups(control_plane):
+    now = control_plane.iso_now()
+    with control_plane.db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO providers(
+                name,base_url,api_key_cipher,enabled,priority,main_text_model,
+                backup_text_models_json,main_vision_model,backup_vision_models_json,
+                protocol_order_json,model_capabilities_json,auto_test_enabled,
+                auto_test_interval_hours,auto_test_options_json,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "测试站",
+                "https://example.com/v1",
+                control_plane.encrypt_secret("test-key"),
+                1,
+                1,
+                "gpt-5.5",
+                "[]",
+                "gpt-5.5",
+                "[]",
+                '["chat"]',
+                "{}",
+                1,
+                12,
+                "{}",
+                now,
+                now,
+            ),
+        )
+        provider_id = cursor.lastrowid
+    provider = control_plane.get_provider(provider_id)
+    result = {
+        "finished_at": now,
+        "model_results": [
+            {
+                "model": "gpt-5.5",
+                "text_available": False,
+                "vision_available": False,
+                "successful_text_methods": [],
+                "successful_vision_methods": [],
+            },
+            {
+                "model": "gpt-5.6-luna",
+                "text_available": True,
+                "vision_available": False,
+                "successful_text_methods": [{"kind": "responses", "elapsed": 1.2}],
+                "successful_vision_methods": [],
+            },
+            {
+                "model": "gpt-5.6-sol",
+                "text_available": True,
+                "vision_available": True,
+                "successful_text_methods": [{"kind": "responses", "elapsed": 1.0}, {"kind": "chat", "elapsed": 1.1}],
+                "successful_vision_methods": [{"kind": "responses", "elapsed": 1.5}],
+            },
+        ],
+    }
+    applied = control_plane.apply_deep_test_result(
+        provider_id,
+        provider,
