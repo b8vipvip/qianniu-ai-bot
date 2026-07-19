@@ -15,7 +15,10 @@ def test_answer_source_badges_are_explicit():
     assert "txtSourceSeparator" in xaml
     assert "answerSource" in code
     assert "ResolveAnswerSource" in qn
-    assert 'SetAnswer(result.Answer, "AI生成")' in qn
+    assert "ReplyDeduplicationService.EnsureDistinct" in qn
+    assert 'var source = deduplication.Regenerated' in qn
+    assert ': "AI生成";' in qn
+    assert "ctl.SetAnswer(answer, source)" in qn
 
 
 def test_history_scan_button_is_in_smart_import_only():
