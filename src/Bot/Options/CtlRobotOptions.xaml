@@ -124,7 +124,11 @@
                         <ComboBoxItem Content="加权轮询（预留）" />
                         <ComboBoxItem Content="场景路由（预留）" />
                     </ComboBox>
-                    <DataGrid x:Name="gridEndpoints" SelectionChanged="gridEndpoints_SelectionChanged" MouseDoubleClick="gridEndpoints_MouseDoubleClickAdvanced" />
+                    <DataGrid x:Name="gridEndpoints" SelectionChanged="gridEndpoints_SelectionChanged" MouseDoubleClick="gridEndpoints_MouseDoubleClickAdvanced">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="视觉" Binding="{Binding VisionStatus}" />
+                    </DataGrid.Columns>
+                </DataGrid>
                     <TextBox x:Name="txtSystemPrompt" TextChanged="txtSystemPrompt_TextChanged" />
                     <TextBox x:Name="txtApiTestResult" />
                     <Button x:Name="btnAddEndpoint" Click="btnAddEndpointAdvanced_Click" />
