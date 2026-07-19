@@ -4,122 +4,141 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+    mc:Ignorable="d"
     MinWidth="650"
-    MinHeight="660">
+    MinHeight="610"
+    Loaded="ControlPlane_Loaded">
     <UserControl.Resources>
-        <SolidColorBrush x:Key="PageBg" Color="#F7F9FC" />
+        <SolidColorBrush x:Key="PageBg" Color="#F5F7FB" />
         <SolidColorBrush x:Key="CardBg" Color="#FFFFFF" />
-        <SolidColorBrush x:Key="Border" Color="#E6ECF2" />
+        <SolidColorBrush x:Key="Border" Color="#E3E8F0" />
+        <SolidColorBrush x:Key="Muted" Color="#667085" />
         <Style TargetType="Button">
-            <Setter Property="Margin" Value="0 3 7 3" />
-            <Setter Property="Padding" Value="11 5" />
-            <Setter Property="MinHeight" Value="29" />
+            <Setter Property="Padding" Value="13 6" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Margin" Value="0 3 8 3" />
+        </Style>
+        <Style TargetType="TextBox">
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Padding" Value="7 3" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
         </Style>
     </UserControl.Resources>
 
-    <Grid Background="{StaticResource PageBg}" Margin="0">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="220" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-        </Grid.RowDefinitions>
+    <Grid Background="{StaticResource PageBg}">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="14">
+                <Border Background="#172033" CornerRadius="11" Padding="18" Margin="0 0 0 12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel>
+                            <TextBlock Text="统一 API 服务" FontSize="21" FontWeight="Bold" Foreground="White" />
+                            <TextBlock Text="上游密钥、模型池、协议轮换和定时深度检测由 Ubuntu 服务端统一管理。Bot 只连接服务端网关。"
+                                       Foreground="#CBD5E1" TextWrapping="Wrap" Margin="0 7 14 0" />
+                        </StackPanel>
+                        <Border Grid.Column="1" Background="#23304A" CornerRadius="8" Padding="12 7" VerticalAlignment="Center">
+                            <TextBlock Text="控制面 + AI 网关" Foreground="#93C5FD" FontWeight="SemiBold" />
+                        </Border>
+                    </Grid>
+                </Border>
 
-        <Border Grid.Row="0" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="14" Margin="10 10 10 8">
-            <StackPanel>
-                <TextBlock Text="API 接口管理" FontSize="19" FontWeight="Bold" Foreground="#1F2937" />
-                <TextBlock Text="支持官方或中转站 OpenAI 兼容接口。优先级靠前的接口失败时，Bot 会自动切换到下一接口。" Foreground="#6B7280" Margin="0 6 0 0" TextWrapping="Wrap" />
-                <TextBlock Text="新增和编辑使用独立确认窗口；列表中的 ApiKey 只显示脱敏值。" Foreground="#2563EB" Margin="0 4 0 0" TextWrapping="Wrap" />
+                <Border Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="10" Padding="16" Margin="0 0 0 12">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="132" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Bot 连接配置" FontSize="16" FontWeight="Bold" Foreground="#1F2937" Margin="0 0 0 12" />
+
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="服务端地址" VerticalAlignment="Center" Foreground="#344054" />
+                        <TextBox Grid.Row="1" Grid.Column="1" x:Name="txtControlPlaneUrl" Margin="0 4" FontFamily="Consolas"
+                                 ToolTip="例如 https://ai-api.example.com；不要填写 /v1/chat/completions" />
+
+                        <TextBlock Grid.Row="2" Grid.Column="0" Text="客户端令牌" VerticalAlignment="Center" Foreground="#344054" />
+                        <PasswordBox Grid.Row="2" Grid.Column="1" x:Name="pwdControlPlaneToken" Height="30" Padding="7 3" Margin="0 4"
+                                     ToolTip="在服务端后台的 Bot 客户端页面生成；令牌仅保存在本机 params.db" />
+
+                        <TextBlock Grid.Row="3" Grid.Column="0" Text="文本路由" VerticalAlignment="Center" Foreground="#344054" />
+                        <TextBox Grid.Row="3" Grid.Column="1" x:Name="txtControlPlaneTextRoute" Margin="0 4" FontFamily="Consolas" Text="text-default"
+                                 ToolTip="通常保持 text-default，由服务端决定主模型、备用模型和请求协议" />
+
+                        <TextBlock Grid.Row="4" Grid.Column="0" Text="视觉路由" VerticalAlignment="Center" Foreground="#344054" />
+                        <Grid Grid.Row="4" Grid.Column="1" Margin="0 4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox x:Name="txtControlPlaneVisionRoute" FontFamily="Consolas" Text="vision-default" />
+                            <CheckBox Grid.Column="1" x:Name="chkControlPlaneVision" Content="启用图片理解" Margin="14 0 0 0" VerticalAlignment="Center" />
+                        </Grid>
+
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="管理后台地址" VerticalAlignment="Center" Foreground="#344054" />
+                        <TextBox Grid.Row="5" Grid.Column="1" x:Name="txtControlPlaneAdminUrl" Margin="0 4" FontFamily="Consolas"
+                                 ToolTip="可与服务端地址相同，也可填写独立后台域名" />
+
+                        <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Margin="0 10 0 0">
+                            <Button x:Name="btnSaveControlPlane" Content="保存服务端连接" Click="btnSaveControlPlane_Click" Background="#2563EB" Foreground="White" BorderBrush="#2563EB" />
+                            <Button x:Name="btnTestControlPlane" Content="测试连接与文本调用" Click="btnTestControlPlane_Click" />
+                            <Button x:Name="btnOpenControlPlaneAdmin" Content="打开 API 管理后台" Click="btnOpenControlPlaneAdmin_Click" />
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <Border Background="#EFF6FF" BorderBrush="#BFDBFE" BorderThickness="1" CornerRadius="10" Padding="14" Margin="0 0 0 12">
+                    <StackPanel>
+                        <TextBlock Text="连接状态" FontWeight="Bold" Foreground="#1E3A8A" />
+                        <TextBox x:Name="txtControlPlaneStatus" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+                                 Background="Transparent" BorderThickness="0" Foreground="#1D4ED8" Height="92" Padding="0" Margin="0 7 0 0"
+                                 VerticalScrollBarVisibility="Auto"
+                                 Text="尚未检测。先在服务端后台创建供应商和 Bot 客户端令牌，再填写连接信息。" />
+                    </StackPanel>
+                </Border>
+
+                <Border Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="10" Padding="14">
+                    <StackPanel>
+                        <TextBlock Text="工作方式" FontSize="15" FontWeight="Bold" Foreground="#1F2937" />
+                        <TextBlock Margin="0 8 0 0" Foreground="{StaticResource Muted}" TextWrapping="Wrap"
+                                   Text="• Bot 不再保存中转站 ApiKey，也不直接访问中转站。&#x0a;• 服务端按供应商 → 模型 → 请求协议顺序自动容错。&#x0a;• 普通测试只验证指定主模型；深度测试可发现全部模型并验证 Responses、Chat、Legacy 与视觉协议。&#x0a;• 定时深测会在主模型不可用时提升最新可用模型，并更新备用模型池。" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 兼容旧代码隐藏区。保留名称和事件，运行界面不再暴露上游密钥管理。 -->
+                <Grid Visibility="Collapsed" Height="0">
+                    <ComboBox x:Name="cmbStrategy">
+                        <ComboBoxItem Content="按优先级顺序调用" />
+                        <ComboBoxItem Content="主备模式" />
+                        <ComboBoxItem Content="低成本优先" />
+                        <ComboBoxItem Content="加权轮询（预留）" />
+                        <ComboBoxItem Content="场景路由（预留）" />
+                    </ComboBox>
+                    <DataGrid x:Name="gridEndpoints" SelectionChanged="gridEndpoints_SelectionChanged" MouseDoubleClick="gridEndpoints_MouseDoubleClickAdvanced" />
+                    <TextBox x:Name="txtSystemPrompt" TextChanged="txtSystemPrompt_TextChanged" />
+                    <TextBox x:Name="txtApiTestResult" />
+                    <Button x:Name="btnAddEndpoint" Click="btnAddEndpointAdvanced_Click" />
+                    <Button x:Name="btnEditEndpoint" Click="btnEditEndpointAdvanced_Click" />
+                    <Button x:Name="btnPasteRecognize" Click="btnPasteRecognize_Click" />
+                    <Button x:Name="btnDeleteEndpoint" Click="btnDeleteEndpoint_Click" />
+                    <Button x:Name="btnMoveUp" Click="btnMoveUp_Click" />
+                    <Button x:Name="btnMoveDown" Click="btnMoveDown_Click" />
+                    <Button x:Name="btnTestSelected" Click="btnTestSelectedAdvanced_Click" />
+                    <Button x:Name="btnTestAll" Click="btnTestAllAdvanced_Click" />
+                    <Button x:Name="btnImportConfig" Click="btnImportConfig_Click" />
+                    <Button x:Name="btnExportConfig" Click="btnExportConfig_Click" />
+                </Grid>
             </StackPanel>
-        </Border>
-
-        <Border Grid.Row="1" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="10 7" Margin="10 0 10 8">
-            <WrapPanel>
-                <Button x:Name="btnAddEndpoint" Click="btnAddEndpointAdvanced_Click" ToolTip="打开表单新增接口">新增接口</Button>
-                <Button x:Name="btnEditEndpoint" Click="btnEditEndpointAdvanced_Click" ToolTip="编辑当前选中的接口">编辑选中</Button>
-                <Button x:Name="btnPasteRecognize" Click="btnPasteRecognize_Click" ToolTip="粘贴 JSON、残缺 JSON 或配置片段并自动识别">粘贴识别</Button>
-                <Border Width="1" Height="28" Background="#D1D5DB" Margin="2 3 9 3" />
-                <Button x:Name="btnDeleteEndpoint" Click="btnDeleteEndpoint_Click">删除</Button>
-                <Button x:Name="btnMoveUp" Click="btnMoveUp_Click">上移</Button>
-                <Button x:Name="btnMoveDown" Click="btnMoveDown_Click">下移</Button>
-                <Border Width="1" Height="28" Background="#D1D5DB" Margin="2 3 9 3" />
-                <Button x:Name="btnTestSelected" Click="btnTestSelectedAdvanced_Click" ToolTip="真实发送随机测试消息并验证模型回复">完整测试选中</Button>
-                <Button x:Name="btnTestAll" Click="btnTestAllAdvanced_Click" ToolTip="依次测试全部接口的通信、鉴权和模型收发">完整测试全部</Button>
-                <Border Width="1" Height="28" Background="#D1D5DB" Margin="2 3 9 3" />
-                <Button x:Name="btnImportConfig" Click="btnImportConfig_Click">导入文件</Button>
-                <Button x:Name="btnExportConfig" Click="btnExportConfig_Click">导出配置</Button>
-            </WrapPanel>
-        </Border>
-
-        <Border Grid.Row="2" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="10" Margin="10 0 10 8">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto" />
-                    <ColumnDefinition Width="200" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-                <TextBlock Grid.Column="0" Text="调度策略：" VerticalAlignment="Center" Foreground="#374151" Margin="0 0 8 0" />
-                <ComboBox Grid.Column="1" x:Name="cmbStrategy" Height="28" Margin="0 0 12 0">
-                    <ComboBoxItem Content="按优先级顺序调用" />
-                    <ComboBoxItem Content="主备模式" />
-                    <ComboBoxItem Content="低成本优先" />
-                    <ComboBoxItem Content="加权轮询（预留）" />
-                    <ComboBoxItem Content="场景路由（预留）" />
-                </ComboBox>
-                <TextBlock Grid.Column="2" Text="当前稳定策略：按优先级失败切换。其它策略保留配置入口。" VerticalAlignment="Center" Foreground="#6B7280" TextWrapping="Wrap" />
-            </Grid>
-        </Border>
-
-        <Border Grid.Row="3" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}" BorderThickness="1" CornerRadius="8" Padding="8" Margin="10 0 10 8">
-            <DataGrid x:Name="gridEndpoints"
-                      AutoGenerateColumns="False"
-                      CanUserAddRows="False"
-                      CanUserDeleteRows="False"
-                      CanUserResizeColumns="True"
-                      CanUserSortColumns="True"
-                      IsReadOnly="True"
-                      SelectionMode="Single"
-                      SelectionChanged="gridEndpoints_SelectionChanged"
-                      MouseDoubleClick="gridEndpoints_MouseDoubleClickAdvanced"
-                      HeadersVisibility="Column"
-                      RowHeight="30"
-                      Height="202"
-                      MinHeight="202"
-                      FrozenColumnCount="3"
-                      HorizontalScrollBarVisibility="Auto"
-                      VerticalScrollBarVisibility="Auto">
-                <DataGrid.Columns>
-                    <DataGridCheckBoxColumn Header="启用" Binding="{Binding Enabled}" Width="50" />
-                    <DataGridTextColumn Header="优先级" Binding="{Binding Priority}" Width="60" />
-                    <DataGridTextColumn Header="名称" Binding="{Binding Name}" Width="120" />
-                    <DataGridTextColumn Header="类型" Binding="{Binding Type}" Width="105" />
-                    <DataGridTextColumn Header="BaseUrl" Binding="{Binding BaseUrl}" Width="240" />
-                    <DataGridTextColumn Header="文本模型" Binding="{Binding TextModel}" Width="135" />
-                    <DataGridTextColumn Header="视觉" Binding="{Binding VisionStatus}" Width="130" />
-                    <DataGridTextColumn Header="ApiKey" Binding="{Binding ApiKeyMasked}" Width="125" />
-                    <DataGridTextColumn Header="超时秒" Binding="{Binding TimeoutSeconds}" Width="65" />
-                    <DataGridTextColumn Header="状态" Binding="{Binding LastStatus}" Width="280" />
-                </DataGrid.Columns>
-            </DataGrid>
-        </Border>
-
-        <GroupBox Grid.Row="4" Header="选中接口的 SystemPrompt（可留空，留空使用默认客服提示词）" Margin="10 0 10 8" Padding="8" Background="{StaticResource CardBg}" BorderBrush="{StaticResource Border}">
-            <TextBox x:Name="txtSystemPrompt" AcceptsReturn="True" TextWrapping="Wrap" Height="90" VerticalScrollBarVisibility="Auto" TextChanged="txtSystemPrompt_TextChanged" />
-        </GroupBox>
-
-        <Border Grid.Row="5" Background="#EAF5FF" BorderBrush="#BBD7FF" BorderThickness="1" CornerRadius="8" Padding="8" Margin="10 0 10 10">
-            <TextBox x:Name="txtApiTestResult"
-                     Text="提示：双击列表可编辑；新增、识别、导入和测试后请点击窗口右下角【保存】。"
-                     Foreground="#1C5DB6"
-                     Background="Transparent"
-                     BorderThickness="0"
-                     IsReadOnly="True"
-                     TextWrapping="Wrap"
-                     AcceptsReturn="True"
-                     Height="78"
-                     VerticalScrollBarVisibility="Auto" />
-        </Border>
+        </ScrollViewer>
     </Grid>
 </UserControl>
