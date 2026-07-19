@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>千牛 AI API 控制台</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+<div id="loginView" class="login-shell hidden">
+  <form id="loginForm" class="login-card">
+    <div class="brand-mark">Q</div>
+    <h1>千牛 AI API 控制台</h1>
+    <p>统一管理供应商、模型池、协议回退、定时深测和 Bot 客户端。</p>
+    <label>管理员账号<input id="loginUser" autocomplete="username" value="admin"></label>
+    <label>管理员密码<input id="loginPassword" type="password" autocomplete="current-password"></label>
+    <button class="primary wide" type="submit">登录</button>
+    <div id="loginError" class="error-text"></div>
+  </form>
+</div>
+
+<div id="appView" class="app-shell hidden">
+  <aside class="sidebar">
+    <div class="logo-row"><div class="brand-mark small">Q</div><div><strong>千牛 AI</strong><span>API 控制台</span></div></div>
+    <nav>
+      <button class="nav active" data-page="dashboard">总览</button>
+      <button class="nav" data-page="providers">供应商与模型</button>
+      <button class="nav" data-page="tests">测试中心</button>
+      <button class="nav" data-page="clients">Bot 客户端</button>
+      <button class="nav" data-page="deploy">部署与安全</button>
+    </nav>
+    <div class="sidebar-foot">
+      <span id="adminName"></span>
+      <button id="logoutBtn" class="ghost">退出</button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div>
+        <h1 id="pageTitle">运行总览</h1>
+        <p id="pageSubtitle">查看上游状态、模型池和最近调用情况。</p>
+      </div>
+      <div class="status-pill"><span class="dot"></span>控制面在线</div>
+    </header>
+
+    <section id="page-dashboard" class="page active">
+      <div id="metricCards" class="metric-grid"></div>
+      <div class="two-col">
+        <section class="panel">
+          <div class="panel-head"><div><h2>供应商状态</h2><p>主模型、协议和自动检测状态</p></div><button class="secondary" onclick="openProviderDialog()">新增供应商</button></div>
+          <div id="dashboardProviders"></div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><div><h2>最近深测</h2><p>普通测试、手动深测和定时深测</p></div></div>
+          <div id="dashboardTests"></div>
+        </section>
+      </div>
+      <section class="panel">
+        <div class="panel-head"><div><h2>最近路由</h2><p>实际使用的供应商、模型、协议与回退次数</p></div></div>
+        <div id="requestLogs"></div>
+      </section>
+    </section>
+
+    <section id="page-providers" class="page">
+      <section class="panel">
+        <div class="panel-head">
+          <div><h2>供应商与模型池</h2><p>上游 ApiKey 加密保存在服务端；Bot 不会收到上游密钥。</p></div>
+          <button class="primary" onclick="openProviderDialog()">新增供应商</button>
+        </div>
+        <div id="providersTable"></div>
+      </section>
+    </section>
+
+    <section id="page-tests" class="page">
+      <section class="panel">
+        <div class="panel-head"><div><h2>测试记录</h2><p>普通测试只调用设定模型；深度测试可发现模型并验证多种协议和视觉能力。</p></div></div>
+        <div id="testsTable"></div>
+      </section>
+      <section id="testDetail" class="panel hidden"></section>
+    </section>
+
+    <section id="page-clients" class="page">
+      <section class="panel">
+        <div class="panel-head">
+          <div><h2>Bot 客户端令牌</h2><p>每台电脑使用独立令牌。令牌只在创建时完整显示一次。</p></div>
+          <button class="primary" onclick="createClient()">新建客户端</button>
+        </div>
+        <div id="clientsTable"></div>
+      </section>
+    </section>
+
+    <section id="page-deploy" class="page">
+      <div class="two-col">
+        <section class="panel">
+          <h2>Bot 连接参数</h2>
+          <p class="muted">在 Bot 的“API 服务连接”中填写本控制台地址和客户端令牌。</p>
+          <div class="code-card"><code id="runtimeUrl"></code></div>
+          <p class="hint">文本路由：<code>text-default</code>　视觉路由：<code>vision-default</code></p>
+        </section>
+        <section class="panel">
+          <h2>安全建议</h2>
+          <ul class="clean-list">
+            <li>使用 Caddy/Nginx 和 HTTPS，对外只开放 80/443。</li>
+            <li>修改默认管理员密码和 APP_SECRET。</li>
+            <li>固定 API_KEY_ENCRYPTION_KEY，迁移服务器时一并备份。</li>
+            <li>为每台 Bot 创建独立令牌，停用丢失设备的令牌。</li>
+            <li>定期备份 <code>/data/api-control-plane.db</code>。</li>
+          </ul>
+        </section>
+      </div>
+    </section>
+  </main>
+</div>
+
+<dialog id="providerDialog" class="modal">
+  <form id="providerForm" method="dialog">
+    <div class="modal-head"><div><h2 id="providerDialogTitle">新增供应商</h2><p>配置上游地址、模型池和自动深测策略。</p></div><button class="icon-btn" value="cancel">×</button></div>
+    <input id="providerId" type="hidden">
+    <div class="form-grid">
+      <label>供应商名称<input id="providerName" required placeholder="主中转站"></label>
+      <label>优先级<input id="providerPriority" type="number" min="1" value="100"></label>
+      <label class="span-2">BaseUrl<input id="providerBaseUrl" required placeholder="https://example.com/v1"></label>
+      <label class="span-2">ApiKey<input id="providerApiKey" type="password" placeholder="编辑时留空表示不修改"></label>
+      <label>主文本模型<input id="providerMainText" placeholder="gpt-5.5"></label>
+      <label>文本备用模型<input id="providerBackupText" placeholder="多个模型用逗号分隔"></label>
+      <label>主视觉模型<input id="providerMainVision" placeholder="gpt-5.5"></label>
+      <label>视觉备用模型<input id="providerBackupVision" placeholder="多个模型用逗号分隔"></label>
+      <fieldset class="span-2">
+        <legend>请求协议顺序</legend>
+        <label class="check"><input type="checkbox" name="protocol" value="responses" checked>Responses API</label>
+        <label class="check"><input type="checkbox" name="protocol" value="chat" checked>Chat Completions</label>
+        <label class="check"><input type="checkbox" name="protocol" value="legacy" checked>Legacy Completions</label>
+      </fieldset>
+      <label class="check"><input id="providerEnabled" type="checkbox" checked>启用供应商</label>
+      <label class="check"><input id="providerAutoTest" type="checkbox">启用定时深度测试</label>
+      <label>每隔多少小时<input id="providerInterval" type="number" min="1" max="720" value="12"></label>
+    </div>
+    <div class="modal-actions">
+      <button value="cancel" class="secondary">取消</button>
+      <button type="button" class="primary" onclick="saveProvider()">保存供应商</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="testDialog" class="modal">
+  <form method="dialog">
+    <div class="modal-head"><div><h2 id="testDialogTitle">接口测试</h2><p>普通测试只测设定模型；深度测试按勾选项完整扫描。</p></div><button class="icon-btn" value="cancel">×</button></div>
+    <input id="testProviderId" type="hidden">
+    <div class="test-mode-tabs">
+      <label><input type="radio" name="testMode" value="ordinary" checked>普通测试</label>
+      <label><input type="radio" name="testMode" value="deep">深度测试</label>
+    </div>
+    <div class="form-grid">
+      <label class="span-2">指定模型（普通测试可留空使用主模型；多个用逗号分隔）<input id="testModels"></label>
+      <fieldset class="span-2">
+        <legend>模型与地址发现</legend>
+        <label class="check"><input id="testDiscover" type="checkbox" checked>调用 /models 自动发现模型</label>
+        <label class="check"><input id="testAllModels" type="checkbox" checked>测试全部发现模型</label>
+        <label class="check"><input id="testV1Root" type="checkbox" checked>测试 /v1 根地址</label>
+        <label class="check"><input id="testPlainRoot" type="checkbox" checked>同时测试无 /v1 根地址</label>
+      </fieldset>
+      <fieldset class="span-2">
+        <legend>文本请求方式</legend>
+        <label class="check"><input id="testResponses" type="checkbox" checked>OpenAI Responses API</label>
+        <label class="check"><input id="testChat" type="checkbox" checked>OpenAI Chat Completions</label>
+        <label class="check"><input id="testLegacy" type="checkbox" checked>Legacy Completions</label>
+      </fieldset>
+      <fieldset class="span-2">
+        <legend>视觉理解</legend>
+        <label class="check"><input id="testResponsesVision" type="checkbox" checked>Responses Vision</label>
+        <label class="check"><input id="testChatVision" type="checkbox" checked>Chat Vision</label>
+        <label class="check"><input id="testRequireVision" type="checkbox">只有文本和视觉都通过才算完全可用</label>
+      </fieldset>
+      <label>单请求超时秒<input id="testTimeout" type="number" min="5" max="300" value="45"></label>
+      <label class="check"><input id="testAutoApply" type="checkbox" checked>深测后自动更新主模型、备用模型和协议能力</label>
+    </div>
+    <div class="modal-actions">
+      <button value="cancel" class="secondary">取消</button>
+      <button type="button" class="primary" onclick="startTest()">开始测试</button>
+    </div>
+  </form>
+</dialog>
+
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+</body>
+</html>
