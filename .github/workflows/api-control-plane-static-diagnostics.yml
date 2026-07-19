@@ -9,6 +9,14 @@ on:
       - src/Bot/Options/**
       - services/api-control-plane/**
       - .github/workflows/api-control-plane-static-diagnostics.yml
+  pull_request:
+    branches:
+      - master
+    paths:
+      - tests/**
+      - src/Bot/Options/**
+      - services/api-control-plane/**
+      - .github/workflows/api-control-plane-static-diagnostics.yml
 
 permissions:
   contents: read
