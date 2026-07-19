@@ -1,0 +1,239 @@
+        payload = {
+            "model": model,
+            "input": convert_chat_to_responses_input(messages),
+            "max_output_tokens": max_tokens,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+    elif protocol == "legacy":
+        payload = {
+            "model": model,
+            "prompt": flatten_prompt(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+    else:
+        payload = {
+            "model": model,
+            "messages": list(messages),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": False,
+        }
+
+    url_attempts: List[Dict[str, Any]] = []
+    final_attempt: Optional[Dict[str, Any]] = None
+    for url in upstream_url_candidates(provider, model, protocol, messages_have_image(messages)):
+        result = do_request("POST", url, provider["api_key"], payload, timeout=timeout)
+        attempt: Dict[str, Any] = {
+            "provider_id": provider["id"],
+            "provider_name": provider["name"],
+            "model": model,
+            "protocol": protocol,
+            "url": url,
+            "latency_ms": int(result["elapsed"] * 1000),
+            "success": False,
+        }
+        if not result["network_success"]:
+            attempt["error"] = result["error"]
+            url_attempts.append({k: v for k, v in attempt.items() if k != "raw"})
+            final_attempt = attempt
+            continue
+        response = result["response"]
+        attempt["status_code"] = response.status_code
+        if not (200 <= response.status_code < 300):
+            attempt["error"] = response_error(response)
+            url_attempts.append({k: v for k, v in attempt.items() if k != "raw"})
+            final_attempt = attempt
+            continue
+        data = safe_json(response)
+        if data is None:
+            attempt["error"] = "HTTP成功但返回内容不是JSON"
+            attempt["response_preview"] = body_preview(response)
+            url_attempts.append({k: v for k, v in attempt.items() if k != "raw"})
+            final_attempt = attempt
+            continue
+        text = extract_responses_text(data) if protocol == "responses" else extract_chat_text(data)
+        if not text and protocol == "legacy":
+            try:
+                text = str(data["choices"][0]["text"]).strip()
+            except Exception:
+                text = ""
+        if not text:
+            attempt["error"] = "未解析到模型回复文本"
+            attempt["response_preview"] = safe_text(json_text(data), 500)
+            url_attempts.append({k: v for k, v in attempt.items() if k != "raw"})
+            final_attempt = attempt
+            continue
+        attempt["success"] = True
+        attempt["answer"] = text
+        attempt["raw"] = data
+        attempt["url_attempts"] = url_attempts + [{k: v for k, v in attempt.items() if k not in {"raw", "answer", "url_attempts"}}]
+        return attempt
+
+    if final_attempt is None:
+        final_attempt = {
+            "provider_id": provider["id"],
+            "provider_name": provider["name"],
+            "model": model,
+            "protocol": protocol,
+            "url": "",
+            "latency_ms": 0,
+            "success": False,
+            "error": "没有可用的请求地址",
+        }
+    final_attempt["url_attempts"] = url_attempts
+    return final_attempt
+
+
+def log_request(
+    client_name: str,
+    kind: str,
+    requested_model: str,
+    attempt: Dict[str, Any],
+) -> None:
+    with db() as conn:
+        conn.execute(
+            """
+            INSERT INTO request_logs(
+                client_name, request_kind, requested_model, provider_id, provider_name,
+                resolved_model, protocol, success, latency_ms, error, created_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                client_name,
+                kind,
+                requested_model,
+                attempt.get("provider_id"),
+                attempt.get("provider_name"),
+                attempt.get("model"),
+                attempt.get("protocol"),
+                1 if attempt.get("success") else 0,
+                int(attempt.get("latency_ms") or 0),
+                safe_text(attempt.get("error"), 1000),
+                iso_now(),
+            ),
+        )
+
+
+def dispatch_chat(
+    client_name: str,
+    requested_model: str,
+    messages: Sequence[Dict[str, Any]],
+    max_tokens: int,
+    temperature: float,
+    timeout: int,
+) -> Dict[str, Any]:
+    vision = messages_have_image(messages)
+    attempts: List[Dict[str, Any]] = []
+    for provider in list_providers(include_secret=True, enabled_only=True):
+        for model in model_candidates(provider, requested_model, vision):
+            for protocol in protocol_candidates(provider, model, vision):
+                attempt = upstream_call(provider, model, protocol, messages, max_tokens, temperature, timeout)
+                attempts.append({k: v for k, v in attempt.items() if k != "raw"})
+                log_request(client_name, "vision" if vision else "text", requested_model, attempt)
+                if attempt.get("success"):
+                    return {"success": True, "attempt": attempt, "attempts": attempts, "vision": vision}
+    return {"success": False, "attempts": attempts, "vision": vision}
+
+
+def dashboard_data() -> Dict[str, Any]:
+    providers = list_providers()
+    with db() as conn:
+        test_rows = conn.execute(
+            """
+            SELECT t.*, p.name provider_name
+            FROM test_runs t JOIN providers p ON p.id=t.provider_id
+            ORDER BY t.id DESC LIMIT 12
+            """
+        ).fetchall()
+        log_rows = conn.execute("SELECT * FROM request_logs ORDER BY id DESC LIMIT 20").fetchall()
+        client_count = conn.execute("SELECT COUNT(*) c FROM client_tokens WHERE enabled=1").fetchone()["c"]
+    return {
+        "providers": providers,
+        "recent_tests": [dict(row) for row in test_rows],
+        "recent_requests": [dict(row) for row in log_rows],
+        "enabled_provider_count": sum(1 for p in providers if p["enabled"]),
+        "healthy_provider_count": sum(1 for p in providers if p["last_status"].startswith("可用")),
+        "client_count": client_count,
+    }
+
+
+def scheduler_loop() -> None:
+    while not SCHEDULER_STOP.wait(max(10, SCHEDULER_POLL_SECONDS)):
+        try:
+            now = utcnow()
+            for provider in list_providers():
+                if not provider.get("enabled") or not provider.get("auto_test_enabled"):
+                    continue
+                next_at = provider.get("next_test_at")
+                due = not next_at
+                if next_at:
+                    try:
+                        due = datetime.fromisoformat(next_at.replace("Z", "+00:00")) <= now
+                    except Exception:
+                        due = True
+                if not due:
+                    continue
+                lock = provider_test_lock(provider["id"])
+                if lock.locked():
+                    continue
+                options = default_deep_test_options()
+                options.update(provider.get("auto_test_options") or {})
+                options["auto_apply_results"] = True
+                run_id = create_test_run(provider["id"], "scheduled", options)
+                thread = threading.Thread(
+                    target=test_worker,
+                    args=(provider["id"], "deep", options, run_id),
+                    daemon=True,
+                    name=f"provider-test-{provider['id']}",
+                )
+                thread.start()
+                with db() as conn:
+                    conn.execute(
+                        "UPDATE providers SET next_test_at=?, updated_at=? WHERE id=?",
+                        (next_test_time(provider), iso_now(), provider["id"]),
+                    )
+        except Exception:
+            traceback.print_exc()
+
+
+class LoginInput(BaseModel):
+    username: str
+    password: str
+
+
+class ProviderInput(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    base_url: str = Field(min_length=1, max_length=500)
+    api_key: Optional[str] = ""
+    enabled: bool = True
+    priority: int = 100
+    main_text_model: str = ""
+    backup_text_models: List[str] = Field(default_factory=list)
+    main_vision_model: str = ""
+    backup_vision_models: List[str] = Field(default_factory=list)
+    protocol_order: List[str] = Field(default_factory=lambda: ["responses", "chat", "legacy"])
+    auto_test_enabled: bool = False
+    auto_test_interval_hours: int = 12
+    auto_test_options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class TestInput(BaseModel):
+    mode: str = "ordinary"
+    options: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ClientInput(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+
+
+app = FastAPI(title="Qianniu AI API Control Plane", version="1.0.0")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=APP_SECRET,
+    same_site="lax",
+    https_only=os.getenv("COOKIE_SECURE", "true").lower() in {"1", "true", "yes", "on"},
+    max_age=60 * 60 * 12,
+)
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
