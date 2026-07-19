@@ -127,6 +127,7 @@
                     <DataGrid x:Name="gridEndpoints" SelectionChanged="gridEndpoints_SelectionChanged" MouseDoubleClick="gridEndpoints_MouseDoubleClickAdvanced">
                     <DataGrid.Columns>
                         <DataGridTextColumn Header="视觉" Binding="{Binding VisionStatus}" />
+                            <DataGridTextColumn Header="密钥" Binding="{Binding ApiKeyMasked}" />
                     </DataGrid.Columns>
                 </DataGrid>
                     <TextBox x:Name="txtSystemPrompt" TextChanged="txtSystemPrompt_TextChanged" />
