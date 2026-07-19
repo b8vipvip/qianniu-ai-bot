@@ -1,0 +1,130 @@
+        result,
+        {**control_plane.default_deep_test_options(), "require_vision_for_full": False},
+    )
+    assert applied["main_text_model"] == "gpt-5.6-sol"
+    assert applied["backup_text_models"] == ["gpt-5.6-luna"]
+    assert applied["main_vision_model"] == "gpt-5.6-sol"
+    assert applied["protocol_order"][:2] == ["responses", "chat"]
+
+
+def test_api_roots_prefer_v1_and_keep_plain_fallback(control_plane):
+    assert control_plane.get_api_roots("https://example.com/v1") == [
+        "https://example.com/v1",
+        "https://example.com",
+    ]
+    assert control_plane.get_api_roots("https://example.com") == [
+        "https://example.com/v1",
+        "https://example.com",
+    ]
+
+
+def test_admin_and_runtime_gateway_flow(control_plane, monkeypatch):
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(control_plane, "ADMIN_USERNAME", "admin")
+    monkeypatch.setattr(control_plane, "ADMIN_PASSWORD", "secret")
+    with TestClient(control_plane.app) as client:
+        login = client.post("/api/admin/login", json={"username": "admin", "password": "secret"})
+        assert login.status_code == 200
+
+        provider = client.post(
+            "/api/admin/providers",
+            json={
+                "name": "测试供应商",
+                "base_url": "https://relay.example/v1",
+                "api_key": "test-key",
+                "main_text_model": "gpt-5.5",
+                "main_vision_model": "gpt-5.5",
+                "protocol_order": ["responses", "chat"],
+            },
+        )
+        assert provider.status_code == 200
+
+        token_response = client.post("/api/admin/clients", json={"name": "测试Bot"})
+        assert token_response.status_code == 200
+        token = token_response.json()["token"]
+
+        runtime_config = client.get(
+            "/api/runtime/v1/config",
+            headers={"Authorization": "Bearer " + token},
+        )
+        assert runtime_config.status_code == 200
+        assert runtime_config.json()["providers"][0]["main_text_model"] == "gpt-5.5"
+
+        monkeypatch.setattr(
+            control_plane,
+            "dispatch_chat",
+            lambda *args, **kwargs: {
+                "success": True,
+                "attempt": {
+                    "answer": "网关正常",
+                    "model": "gpt-5.5",
+                    "provider_name": "测试供应商",
+                    "protocol": "responses",
+                    "latency_ms": 123,
+                },
+                "attempts": [{}],
+            },
+        )
+        chat = client.post(
+            "/v1/chat/completions",
+            headers={"Authorization": "Bearer " + token},
+            json={
+                "model": "text-default",
+                "messages": [{"role": "user", "content": "测试"}],
+            },
+        )
+        assert chat.status_code == 200
+        assert chat.json()["choices"][0]["message"]["content"] == "网关正常"
+        assert chat.json()["qianniu_routing"]["protocol"] == "responses"
+
+
+def test_ordinary_test_never_changes_model_pool(control_plane, monkeypatch):
+    now = control_plane.iso_now()
+    with control_plane.db() as conn:
+        cursor = conn.execute(
+            """
+            INSERT INTO providers(
+                name,base_url,api_key_cipher,enabled,priority,main_text_model,
+                backup_text_models_json,main_vision_model,backup_vision_models_json,
+                protocol_order_json,model_capabilities_json,auto_test_enabled,
+                auto_test_interval_hours,auto_test_options_json,created_at,updated_at
+            ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                "普通测试站",
+                "https://example.com/v1",
+                control_plane.encrypt_secret("test-key"),
+                1,
+                1,
+                "gpt-5.5",
+                '["gpt-5.4"]',
+                "",
+                "[]",
+                '["chat"]',
+                "{}",
+                0,
+                12,
+                "{}",
+                now,
+                now,
+            ),
+        )
+        provider_id = cursor.lastrowid
+
+    monkeypatch.setattr(
+        control_plane,
+        "test_model",
+        lambda provider, model, options, image: {
+            "model": model,
+            "text_available": True,
+            "vision_available": False,
+            "successful_text_methods": [{"kind": "chat", "elapsed": 0.1}],
+            "successful_vision_methods": [],
+            "all_text_tests": [],
+            "all_vision_tests": [],
+        },
+    )
+    control_plane.run_provider_test(
+        provider_id,
+        "ordinary",
