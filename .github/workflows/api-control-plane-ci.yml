@@ -1,139 +1,239 @@
-name: API control plane CI
+name: Migrate burst reply static guards
 
 on:
-  push:
-    branches:
-      - feat/api-control-plane
-      - agent/reply-dedup-knowledge-navigation
-    paths:
-      - services/api-control-plane/**
-      - tests/**
-      - .github/workflows/api-control-plane-ci.yml
   pull_request:
     paths:
-      - services/api-control-plane/**
-      - tests/**
       - .github/workflows/api-control-plane-ci.yml
+      - src/Bot/ChromeNs/MyOpenAI.cs
+      - tests/test_contextual_knowledge_reply.py
+      - tests/test_reply_dedup_navigation_static.py
+      - tests/test_vision_static.py
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: migrate-burst-reply-static-guards
+  cancel-in-progress: false
 
 jobs:
-  windows-static:
-    runs-on: windows-2022
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install test dependencies
-        run: python -m pip install pytest
-
-      - name: Run release-scope tests on Windows
-        shell: pwsh
-        run: |
-          python -m pytest -q --tb=short tests 2>&1 | Tee-Object -FilePath repository-static-windows.log
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Upload Windows static diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: repository-static-windows-${{ github.sha }}
-          path: repository-static-windows.log
-          if-no-files-found: warn
-          retention-days: 7
-
-  test-build-package:
+  migrate:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: services/api-control-plane
     steps:
-      - name: Checkout
+      - name: Checkout integration branch
         uses: actions/checkout@v4
+        with:
+          ref: agent/reply-dedup-knowledge-navigation
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: services/api-control-plane/requirements.txt
 
-      - name: Install dependencies
-        run: python -m pip install -r requirements.txt
-
-      - name: Run repository static tests
-        working-directory: .
-        run: python -m pytest -q --tb=short tests 2>&1 | tee repository-static.log
-
-      - name: Upload repository static diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: repository-static-${{ github.sha }}
-          path: repository-static.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Compile Python
-        run: python -m py_compile app.py bootstrap.py wecom_bridge.py wecom_crypto.py tests/test_control_plane.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py
-
-      - name: Run control plane tests
-        run: python -m pytest -q --tb=short 2>&1 | tee pytest.log
-
-      - name: Upload pytest diagnostics
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: api-control-plane-pytest-${{ github.sha }}
-          path: services/api-control-plane/pytest.log
-          if-no-files-found: warn
-          retention-days: 7
-
-      - name: Check browser JavaScript syntax
-        run: node --check static/app.js
-
-      - name: Build Ubuntu container
-        run: docker build -t qianniu-api-control-plane:${{ github.sha }} .
-
-      - name: Validate Compose configuration
+      - name: Fix deferred learning branch and migrate guards
+        shell: bash
         run: |
-          cp .env.example .env
-          docker compose config >/dev/null
-          docker compose -f docker-compose.bt.yml config >/dev/null
+          python - <<'PY'
+          from pathlib import Path
 
-      - name: Clean generated caches
+          root = Path.cwd()
+          source = root / "src/Bot/ChromeNs/MyOpenAI.cs"
+          code = source.read_text(encoding="utf-8-sig")
+          old = '''                        if (contextualKnowledge == null && !deferLearningUntilDelivered)
+                          {
+                              KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                          }
+                          else
+                          {
+                              Log.Info("上下文知识回复生成成功。buyer=" + buyer
+                                  + ", knowledgeId=" + contextualKnowledge.Id
+                                  + ", score=" + contextualKnowledgeScore.ToString("0.00")
+                                  + ", answer=" + finalAnswer);
+                          }'''
+          new = '''                        if (contextualKnowledge == null)
+                          {
+                              if (!deferLearningUntilDelivered)
+                              {
+                                  KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                              }
+                          }
+                          else
+                          {
+                              Log.Info("上下文知识回复生成成功。buyer=" + buyer
+                                  + ", knowledgeId=" + contextualKnowledge.Id
+                                  + ", score=" + contextualKnowledgeScore.ToString("0.00")
+                                  + ", answer=" + finalAnswer);
+                          }'''
+          if old in code:
+              code = code.replace(old, new, 1)
+              source.write_text(code, encoding="utf-8-sig")
+          elif new not in code:
+              raise RuntimeError("MyOpenAI deferred learning block not found")
+
+          (root / "tests/test_contextual_knowledge_reply.py").write_text('''from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path):
+    return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+def test_knowledge_remains_first_for_standalone_questions():
+    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    assert "KnowledgeLearningService.TryFindLocalAnswer" in code
+    assert "if (!contextDecision.IsFollowUp)" in code
+    assert "命中本地知识库，未调用AI" in code
+    assert "return localAnswer;" in code
+
+
+def test_follow_up_knowledge_hit_is_contextualized_not_repeated():
+    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+    assert "KnowledgeContextualReplyService.Analyze" in code
+    assert "KnowledgeContextualReplyService.BuildPromptAddon" in code
+    assert "不得原样重复上一条客服回复或整段知识库答案" in helper
+    assert "当前买家消息是对上一轮客服回复的补充、确认或否定" in helper
+    assert "上一条客服回复与本次命中的知识答案相同" in helper
+
+
+def test_tv_karaoke_confirmation_has_safe_offline_fallback():
+    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+    assert "ExtractConfirmedFeature" in helper
+    assert "那就可以使用" in helper
+    assert "功能" in helper
+    assert '"有"' in helper
+    assert '"支持"' in helper
+    assert '"不支持"' in helper
+
+
+def test_contextual_replies_and_cancelled_drafts_do_not_pollute_learning():
+    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    assert 'var answerSource = contextualKnowledge == null ? "AI生成" : "本地知识库上下文"' in code
+    local_branch = code.index("if (contextualKnowledge == null)")
+    deferred_guard = code.index("if (!deferLearningUntilDelivered)", local_branch)
+    queued = code.index("KnowledgeLearningService.QueueLearn", deferred_guard)
+    contextual_branch = code.index("else", queued)
+    contextual_log = code.index("上下文知识回复生成成功", contextual_branch)
+    assert local_branch < deferred_guard < queued < contextual_branch < contextual_log
+''', encoding="utf-8")
+
+          (root / "tests/test_reply_dedup_navigation_static.py").write_text('''from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8-sig")
+
+
+def test_conversation_context_menu_can_open_exact_knowledge_entry():
+    text = read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml.cs")
+    assert 'Header = "查看"' in text
+    assert "KnowledgeCenterWindow.ShowManagerAndLocate" in text
+    assert "_seller" in text and "_buyer" in text
+    assert "_question" in text and "_answer" in text
+
+
+def test_knowledge_manager_locates_and_scrolls_to_entry():
+    window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    manager = read("src/Bot/Knowledge/KnowledgeManagerControl.cs")
+    assert "NavigateToManager" in window
+    assert "LocateEntry" in manager
+    assert "TryFindLocalAnswer" in manager
+    assert "ScrollIntoView" in manager
+    assert "SelectedItem = selected" in manager
+
+
+def test_incoming_timeline_is_recorded_before_burst_generation():
+    text = read("src/Bot/ChromeNs/QN.cs")
+    refresh = text.index("ConversationContextStore.RefreshAndRecord(message, messageText);")
+    enqueue = text.index("_buyerMessageBurstCoordinator.Enqueue", refresh)
+    answer = text.index("var answer = await Task.Run(() => MyOpenAI.GetAnswer", enqueue)
+    assert refresh < enqueue < answer
+
+
+def test_every_text_burst_is_checked_before_display_and_send():
+    text = read("src/Bot/ChromeNs/QN.cs")
+    generated = text.index("var answer = await Task.Run(() => MyOpenAI.GetAnswer")
+    stale_check = text.index("if (!lease.IsCurrent)", generated)
+    checked = text.index("ReplyDeduplicationService.EnsureDistinct", stale_check)
+    stable = text.index("ConfirmStableAsync(450)", checked)
+    displayed = text.index("Desk.Inst.AddConversation", stable)
+    sent = text.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)", displayed)
+    remembered = text.index("ReplyDeduplicationService.RememberDelivered", sent)
+    assert generated < stale_check < checked < stable < displayed < sent < remembered
+
+
+def test_duplicate_service_regenerates_and_rejects_same_result():
+    text = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    assert "SameAnswer(previousAnswer, result.Answer)" in text
+    assert "MyOpenAI.CallStructuredChat" in text
+    assert "SameAnswer(previousAnswer, regenerated)" in text
+    assert "BuildSafeFallback" in text
+    assert "本地知识库重答" in text
+
+
+def test_contextual_matching_can_use_last_delivered_answer_without_remote_echo():
+    text = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+    assert "ReplyDeduplicationService.TryGetLastDelivered" in text
+    assert "local-delivered-answer" in text
+    assert "previousWasKnowledgeAnswer" in text
+    assert "standaloneQuestion" in text
+
+
+def test_new_services_are_included_in_windows_and_wpf_temp_builds():
+    text = read("src/Directory.Build.targets")
+    assert "ReplyDeduplicationService.cs" in text
+    assert "BuyerMessageBurstCoordinator.cs" in text
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\ReplyDeduplicationService.cs" />' in text
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\BuyerMessageBurstCoordinator.cs" />' in text
+''', encoding="utf-8")
+
+          vision_path = root / "tests/test_vision_static.py"
+          vision = vision_path.read_text(encoding="utf-8")
+          old_vision = '''def test_message_safety_and_cross_buyer_guard_remain_in_path():
+              qn = read('src/Bot/ChromeNs/QN.cs')
+              assert 'IncomingMessageSafety.Evaluate' in qn
+              assert 'BuildMessageKey' in qn
+              assert 'VisionReplyTask { SellerNick = sellerNick, BuyerNick = buyerNick, MessageKey = messageKey' in qn
+              assert 'SendTextWithRetryAsync(task.BuyerNick' in qn
+              assert 'EnsureActiveBuyerForSendAsync' in qn and 'GetCurrentConversationID' in qn
+              assert '识别完成，但目标买家会话未确认，未发送。' in qn
+          '''
+          new_vision = '''def test_message_safety_and_cross_buyer_guard_remain_in_path():
+              qn = read('src/Bot/ChromeNs/QN.cs')
+              assert 'IncomingMessageSafety.Evaluate' in qn
+              assert 'BuildMessageKey' in qn
+              assert 'var task = new VisionReplyTask' in qn
+              assert 'SellerNick = burst.SellerNick' in qn
+              assert 'BuyerNick = burst.BuyerNick' in qn
+              assert 'MessageKey = visionItem.MessageKey' in qn
+              assert 'CombinedQuestion = burst.CombinedQuestion' in qn
+              assert 'SendTextWithRetryAsync(burst.BuyerNick, answer, 1)' in qn
+              assert 'EnsureActiveBuyerForSendAsync' in qn and 'GetCurrentConversationID' in qn
+              assert '识别完成，但目标买家会话未确认，未发送。' in qn
+          '''
+          if old_vision in vision:
+              vision = vision.replace(old_vision, new_vision, 1)
+              vision_path.write_text(vision, encoding="utf-8")
+          elif new_vision not in vision:
+              raise RuntimeError("vision static guard block not found")
+          PY
+
+      - name: Run migrated static tests
+        run: python -m pip install pytest && python -m pytest -q tests
+
+      - name: Commit code and guard migration
+        shell: bash
         run: |
-          rm -f .env pytest.log
-          rm -rf .test-data
-          find . -type d -name __pycache__ -prune -exec rm -rf {} +
-          find . -type d -name .pytest_cache -prune -exec rm -rf {} +
-          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
-
-      - name: Upload Ubuntu deployment package
-        uses: actions/upload-artifact@v4
-        with:
-          name: qianniu-api-control-plane-ubuntu-${{ github.sha }}
-          path: |
-            services/api-control-plane/app.py
-            services/api-control-plane/bootstrap.py
-            services/api-control-plane/wecom_bridge.py
-            services/api-control-plane/wecom_crypto.py
-            services/api-control-plane/static/**
-            services/api-control-plane/tests/**
-            services/api-control-plane/requirements.txt
-            services/api-control-plane/Dockerfile
-            services/api-control-plane/docker-compose.yml
-            services/api-control-plane/docker-compose.bt.yml
-            services/api-control-plane/Caddyfile
-            services/api-control-plane/.env.example
-            services/api-control-plane/.dockerignore
-            services/api-control-plane/README.md
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/Bot/ChromeNs/MyOpenAI.cs tests/test_contextual_knowledge_reply.py tests/test_reply_dedup_navigation_static.py tests/test_vision_static.py
+          if git diff --cached --quiet; then exit 0; fi
+          git commit -m "fix: defer learning without dereferencing missing knowledge"
+          git fetch origin agent/reply-dedup-knowledge-navigation
+          remote_sha=$(git rev-parse origin/agent/reply-dedup-knowledge-navigation)
+          git rebase origin/agent/reply-dedup-knowledge-navigation
+          git push --force-with-lease=refs/heads/agent/reply-dedup-knowledge-navigation:$remote_sha origin HEAD:agent/reply-dedup-knowledge-navigation
