@@ -88,6 +88,7 @@ jobs:
         if: steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0'
         shell: bash
         run: |
+          python -m pip install pytest
           set +e
           python -m pytest -q --tb=short tests/test_humanlike_burst_static.py tests/test_wecom_app_bridge_static.py tests/test_rules_notifications_static.py 2>&1 | tee humanlike-static.log
           status=${PIPESTATUS[0]}
