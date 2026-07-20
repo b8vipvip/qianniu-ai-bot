@@ -289,20 +289,20 @@ namespace Bot.ChromeNs
             DateTime startedAt)
         {
             var list = (items ?? new BuyerMessageBurstItem[0]).Where(x => x != null).ToList();
-            if (list.Count == 0) return 700;
-            if (startedAt != DateTime.MinValue && DateTime.Now - startedAt >= TimeSpan.FromSeconds(6))
+            if (list.Count == 0) return 350;
+            if (startedAt != DateTime.MinValue && DateTime.Now - startedAt >= TimeSpan.FromSeconds(4))
             {
-                return 100;
+                return 80;
             }
 
             var latest = (list.Last().DisplayText ?? string.Empty).Trim();
             var compact = Regex.Replace(latest, @"\s+", string.Empty);
-            if (list.Count >= 6) return 650;
-            if (IncomingMessageSafety.IsMediaPlaceholder(latest)) return 1200;
-            if (IsGreetingOnly(compact)) return 1800;
-            if (IsOpenShortFragment(compact)) return 2200;
-            if (!EndsLikeCompleteSentence(compact) && compact.Length <= 24) return 1500;
-            return 850;
+            if (list.Count >= 6) return 420;
+            if (IncomingMessageSafety.IsMediaPlaceholder(latest)) return 700;
+            if (IsGreetingOnly(compact)) return 950;
+            if (IsOpenShortFragment(compact)) return 1200;
+            if (!EndsLikeCompleteSentence(compact) && compact.Length <= 24) return 800;
+            return 350;
         }
 
         private static bool IsGreetingOnly(string text)

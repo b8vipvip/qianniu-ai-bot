@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -57,12 +58,12 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
 
             var state = GetState(seller, buyer);
+            RecordMessage(state, seller, buyer, message, messageText);
             var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
             if (!string.IsNullOrWhiteSpace(ccode))
             {
-                RefreshRemoteHistory(state, seller, buyer, ccode);
+                Task.Run(() => RefreshRemoteHistory(state, seller, buyer, ccode));
             }
-            RecordMessage(state, seller, buyer, message, messageText);
         }
 
         public static bool IsPlatformSystemTip(QNChatMessage message, string messageText)

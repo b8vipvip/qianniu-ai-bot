@@ -797,6 +797,25 @@ namespace Bot.Options
             var copy = MakeButton("复制日志", 90);
             copy.Click += (s, e) => Clipboard.SetText(_logText == null ? string.Empty : _logText.Text);
             buttons.Children.Add(copy);
+            var test = MakeButton("写入测试日志", 105);
+            test.Click += (s, e) =>
+            {
+                Log.Info("日志与调试页面测试写入：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff"));
+                Log.Flush();
+                RefreshLogs();
+            };
+            buttons.Children.Add(test);
+            var clear = MakeButton("清空日志", 90);
+            clear.Click += (s, e) =>
+            {
+                if (MessageBox.Show("确认清空当前运行日志？", "清空日志", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+                Log.Flush();
+                Log.Clear();
+                Log.Info("日志已由设置页面清空并重新开始记录。");
+                Log.Flush();
+                RefreshLogs();
+            };
+            buttons.Children.Add(clear);
             _logText = new TextBox { AcceptsReturn = true, TextWrapping = TextWrapping.NoWrap, VerticalScrollBarVisibility = ScrollBarVisibility.Auto, HorizontalScrollBarVisibility = ScrollBarVisibility.Auto, IsReadOnly = true, FontFamily = new FontFamily("Consolas") };
             panel.Children.Add(_logText);
             RefreshLogs();
@@ -992,27 +1011,38 @@ namespace Bot.Options
         {
             try
             {
+                Log.Flush();
                 var files = new List<string>();
+                var currentLog = Log.CurrentFileName;
+                if (!string.IsNullOrWhiteSpace(currentLog) && File.Exists(currentLog)) files.Add(currentLog);
                 foreach (var root in LogSearchRoots().Distinct())
                 {
-                    if (Directory.Exists(root))
-                    {
-                        files.AddRange(Directory.GetFiles(root, "*.log", SearchOption.TopDirectoryOnly));
-                        files.AddRange(Directory.GetFiles(root, "*.txt", SearchOption.TopDirectoryOnly).Where(f => Path.GetFileName(f).IndexOf("log", StringComparison.OrdinalIgnoreCase) >= 0));
-                    }
+                    if (!Directory.Exists(root)) continue;
+                    files.AddRange(Directory.GetFiles(root, "*.log", SearchOption.TopDirectoryOnly));
+                    files.AddRange(Directory.GetFiles(root, "*.txt", SearchOption.TopDirectoryOnly)
+                        .Where(f =>
+                        {
+                            var name = Path.GetFileName(f) ?? string.Empty;
+                            return name.IndexOf("log", StringComparison.OrdinalIgnoreCase) >= 0
+                                || name.IndexOf("日志", StringComparison.OrdinalIgnoreCase) >= 0
+                                || string.Equals(f, currentLog, StringComparison.OrdinalIgnoreCase);
+                        }));
                 }
-                files = files.Distinct().OrderByDescending(File.GetLastWriteTime).Take(5).ToList();
+                files = files.Where(File.Exists).Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderByDescending(File.GetLastWriteTime).Take(8).ToList();
                 if (files.Count < 1)
                 {
-                    _logText.Text = "未在程序目录找到日志文件。当前目录：" + AppDomain.CurrentDomain.BaseDirectory;
+                    _logText.Text = "尚未找到日志文件。预期运行日志：" + (string.IsNullOrWhiteSpace(currentLog) ? "未初始化" : currentLog)
+                        + Environment.NewLine + "程序目录：" + AppDomain.CurrentDomain.BaseDirectory;
                     return;
                 }
                 var sb = new StringBuilder();
                 foreach (var file in files)
                 {
+                    var info = new FileInfo(file);
                     sb.AppendLine("===== " + file + " =====");
-                    var text = SafeReadTail(file, 12000);
-                    sb.AppendLine(text);
+                    sb.AppendLine("大小 " + info.Length + " bytes｜更新时间 " + info.LastWriteTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                    sb.AppendLine(SafeReadTail(file, 30000));
                     sb.AppendLine();
                 }
                 _logText.Text = sb.ToString();
@@ -1025,32 +1055,29 @@ namespace Bot.Options
 
         private string SafeReadTail(string file, int maxChars)
         {
-            try
-            {
-                var text = File.ReadAllText(file, Encoding.UTF8);
-                if (text.Length > maxChars) text = text.Substring(text.Length - maxChars);
-                return text;
-            }
-            catch
+            foreach (var encoding in new[] { Encoding.GetEncoding(936), Encoding.UTF8, Encoding.Default })
             {
                 try
                 {
-                    var text = File.ReadAllText(file, Encoding.Default);
-                    if (text.Length > maxChars) text = text.Substring(text.Length - maxChars);
-                    return text;
+                    var value = File.ReadAllText(file, encoding);
+                    if (value.Length > maxChars) value = value.Substring(value.Length - maxChars);
+                    return value;
                 }
-                catch (Exception ex)
+                catch
                 {
-                    return "读取失败：" + ex.Message;
                 }
             }
+            return "读取失败：无法用 GBK、UTF-8 或系统默认编码读取该文件。";
         }
 
         private void OpenLogFolder()
         {
             try
             {
-                var dir = AppDomain.CurrentDomain.BaseDirectory;
+                Log.Flush();
+                var file = Log.CurrentFileName;
+                var dir = string.IsNullOrWhiteSpace(file) ? AppDomain.CurrentDomain.BaseDirectory : Path.GetDirectoryName(file);
+                if (string.IsNullOrWhiteSpace(dir)) dir = AppDomain.CurrentDomain.BaseDirectory;
                 Process.Start("explorer.exe", dir);
             }
             catch (Exception ex)

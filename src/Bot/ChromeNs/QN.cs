@@ -337,10 +337,9 @@ namespace Bot.ChromeNs
                 return Task.CompletedTask;
             }
 
-            ConversationContextStore.RefreshAndRecord(message, messageText);
-
             if (IsSellerMessage(message))
             {
+                ConversationContextStore.RefreshAndRecord(message, messageText);
                 RecordSellerEcho(message.toid.nick, messageText);
                 return Task.CompletedTask;
             }
@@ -348,6 +347,7 @@ namespace Bot.ChromeNs
 
             var sellerNick = message.toid.nick;
             var buyerNick = message.fromid.nick;
+            var detectedAt = DateTime.Now;
             MarkBuyerMessageObserved(sellerNick, buyerNick);
 
             OrderPlacedReplyPlan orderPlan;
@@ -386,6 +386,14 @@ namespace Bot.ChromeNs
                 return Task.CompletedTask;
             }
 
+            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt);
+            if (visionDecision.Kind == VisionDecisionKind.Text)
+            {
+                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
+            }
+            Log.Info("买家消息已识别并展示: seller=" + sellerNick + ", buyer=" + buyerNick
+                + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion);
+
             _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
             {
                 SellerNick = sellerNick,
@@ -396,7 +404,7 @@ namespace Bot.ChromeNs
                 SafetyDecision = decision,
                 VisionDecision = visionDecision,
                 SortValue = IncomingMessageSafety.GetSortValue(message),
-                ReceivedAt = DateTime.Now
+                ReceivedAt = detectedAt
             });
             return Task.CompletedTask;
         }
@@ -427,7 +435,16 @@ namespace Bot.ChromeNs
         private async Task ProcessTextBurstAsync(BuyerMessageBurstLease lease)
         {
             var burst = lease.Burst;
+            var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var autoSend = Params.Robot.GetIsAutoReply();
+            var conversationCtl = ResponseProgressTracker.BeginAnswer(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
+                detectedAt);
+            var aiStartedAt = DateTime.Now;
+            Log.Info("文本回复开始: buyer=" + burst.BuyerNick + ", queueMs="
+                + Math.Max(0, (long)(aiStartedAt - detectedAt).TotalMilliseconds));
             var answer = await Task.Run(() => MyOpenAI.GetAnswer(
                 burst.SellerNick,
                 burst.BuyerNick,
@@ -447,31 +464,42 @@ namespace Bot.ChromeNs
                 answer);
             answer = deduplication.Answer;
 
-            if (!await lease.ConfirmStableAsync(450))
+            if (!await lease.ConfirmStableAsync(220))
             {
                 Log.Info("发送前发现买家补充了新消息，旧文本答案未展示也未发送。buyer=" + burst.BuyerNick);
                 return;
             }
 
+            var answerReadyAt = DateTime.Now;
             var answerSource = KnowledgeLearningService.ResolveAnswerSource(
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
                 answer);
-            var conversationCtl = Desk.Inst == null
-                ? null
-                : Desk.Inst.AddConversation(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    burst.CombinedQuestion,
-                    answer,
-                    autoSend,
-                    answerSource);
-            if (!autoSend) return;
+            conversationCtl = ResponseProgressTracker.SetAnswerReady(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
+                answer,
+                answerSource,
+                detectedAt,
+                answerReadyAt);
+            BotRuntimeStats.RecordDisplayedAnswer(autoSend);
+            Log.Info("文本答案已生成: buyer=" + burst.BuyerNick
+                + ", aiMs=" + Math.Max(0, (long)(answerReadyAt - aiStartedAt).TotalMilliseconds)
+                + ", totalToAnswerMs=" + Math.Max(0, (long)(answerReadyAt - detectedAt).TotalMilliseconds));
+
+            if (!autoSend)
+            {
+                if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                return;
+            }
 
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误："))
             {
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：AI错误");
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
             }
 
@@ -499,6 +527,9 @@ namespace Bot.ChromeNs
             {
                 conversationCtl.SetSendResult(sendOk, sendOk ? "已发送（合并本轮买家消息）" : "发送失败：" + rpa.GetSendFailureReason());
             }
+            Log.Info("文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
+                + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
         }
 
         private async Task ProcessVisionBurstAsync(
@@ -506,7 +537,13 @@ namespace Bot.ChromeNs
             BuyerMessageBurstItem visionItem)
         {
             var burst = lease.Burst;
+            var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var autoSend = Params.Robot.GetIsAutoReply();
+            var ctl = ResponseProgressTracker.BeginAnswer(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
+                detectedAt);
             var task = new VisionReplyTask
             {
                 SellerNick = burst.SellerNick,
@@ -526,7 +563,7 @@ namespace Bot.ChromeNs
             if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))
             {
                 var note = "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
-                AddSkippedConversation(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, note);
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, note);
                 Log.Info("视觉消息跳过: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", messageId=" + visionItem.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
                 return;
             }
@@ -537,7 +574,7 @@ namespace Bot.ChromeNs
                 burst.CombinedQuestion,
                 result.Answer);
             var answer = deduplication.Answer;
-            if (!await lease.ConfirmStableAsync(450))
+            if (!await lease.ConfirmStableAsync(220))
             {
                 Log.Info("发送前发现买家补充了新消息，旧视觉答案未展示也未发送。buyer=" + burst.BuyerNick);
                 return;
@@ -546,16 +583,25 @@ namespace Bot.ChromeNs
             var source = deduplication.Regenerated && !string.IsNullOrWhiteSpace(deduplication.Source)
                 ? deduplication.Source
                 : "AI生成";
-            var ctl = Desk.Inst == null
-                ? null
-                : Desk.Inst.AddConversation(
-                    burst.SellerNick,
-                    burst.BuyerNick,
-                    burst.CombinedQuestion,
-                    "正在组织合并回复...",
-                    autoSend);
-            if (ctl != null) ctl.SetAnswer(answer, source);
-            if (!autoSend) return;
+            var answerReadyAt = DateTime.Now;
+            ctl = ResponseProgressTracker.SetAnswerReady(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
+                answer,
+                source,
+                detectedAt,
+                answerReadyAt);
+            BotRuntimeStats.RecordDisplayedAnswer(autoSend);
+            Log.Info("视觉答案已生成: buyer=" + burst.BuyerNick
+                + ", totalToAnswerMs=" + Math.Max(0, (long)(answerReadyAt - detectedAt).TotalMilliseconds)
+                + ", visionApiMs=" + result.LatencyMs);
+            if (!autoSend)
+            {
+                if (ctl != null) ctl.SetStatus("仅生成答案", true);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+                return;
+            }
             if (!lease.IsCurrent)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：买家刚刚补充了新消息，正在重新组织回复");
@@ -574,6 +620,9 @@ namespace Bot.ChromeNs
                     burst.BuyerNick);
             }
             if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());
+            Log.Info("视觉真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
+                + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
+            ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)

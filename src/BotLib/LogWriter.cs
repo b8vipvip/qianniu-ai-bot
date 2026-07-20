@@ -20,6 +20,16 @@ namespace BotLib
             WriteLine(string.Format("\r\n============  日志启动({0})  ============", DateTime.Now.ToString()));
         }
 
+        public string FileName
+        {
+            get { return _file == null ? string.Empty : _file.FileName; }
+        }
+
+        public void Flush()
+        {
+            if (_file != null) _file.Flush();
+        }
+
         public void WriteEnvironmentString(string env)
         {
             _environmentStr = env;
@@ -313,9 +323,14 @@ namespace BotLib
                 _cache.Enqueue(text);
             }
 
-            public void Close()
+            public void Flush()
             {
                 WriteLoop();
+            }
+
+            public void Close()
+            {
+                Flush();
             }
 
         }

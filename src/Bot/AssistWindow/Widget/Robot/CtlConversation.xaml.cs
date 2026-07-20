@@ -48,6 +48,8 @@ namespace Bot.AssistWindow.Widget.Robot
         private string _question = string.Empty;
         private string _answer = string.Empty;
         private bool _canResend = true;
+        private DateTime _questionDetectedAt = DateTime.MinValue;
+        private DateTime _answerReadyAt = DateTime.MinValue;
 
         public event EventHandler<ConversationResendEventArgs> ResendRequested;
         public event EventHandler<ConversationEditEventArgs> EditRequested;
@@ -71,6 +73,8 @@ namespace Bot.AssistWindow.Widget.Robot
             _question = question ?? string.Empty;
             _answer = answer ?? string.Empty;
             _canResend = true;
+            _questionDetectedAt = DateTime.Now;
+            _answerReadyAt = DateTime.Now;
             txtQuestion.Text = _question;
             txtAnswer.Text = _answer;
             var resolvedSource = string.IsNullOrWhiteSpace(answerSource)
@@ -79,12 +83,41 @@ namespace Bot.AssistWindow.Widget.Robot
             SetSource(resolvedSource);
             txtStatus.Text = isAutoReply ? "正在发送..." : "仅生成答案";
             txtStatus.Foreground = new SolidColorBrush(isAutoReply ? Color.FromRgb(47, 128, 237) : Color.FromRgb(107, 114, 128));
-            txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
+            UpdateTimingText();
+        }
+
+        public void SetQuestion(string question, DateTime detectedAt)
+        {
+            _question = question ?? string.Empty;
+            _questionDetectedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
+            Ui(() =>
+            {
+                txtQuestion.Text = _question;
+                UpdateTimingText();
+            });
+        }
+
+        public void SetProcessing(string text)
+        {
+            _answerReadyAt = DateTime.MinValue;
+            Ui(() =>
+            {
+                txtAnswer.Text = string.IsNullOrWhiteSpace(text) ? "正在识别并获取答案..." : text;
+                txtStatus.Text = "处理中";
+                txtStatus.Foreground = new SolidColorBrush(Color.FromRgb(47, 128, 237));
+                UpdateTimingText();
+            });
         }
 
         public void SetAnswer(string answer, string answerSource = "")
         {
+            SetAnswer(answer, answerSource, DateTime.Now);
+        }
+
+        public void SetAnswer(string answer, string answerSource, DateTime answerReadyAt)
+        {
             _answer = answer ?? string.Empty;
+            _answerReadyAt = answerReadyAt == DateTime.MinValue ? DateTime.Now : answerReadyAt;
             Ui(() =>
             {
                 txtAnswer.Text = _answer;
@@ -92,8 +125,21 @@ namespace Bot.AssistWindow.Widget.Robot
                     ? KnowledgeLearningService.ResolveAnswerSource(_seller, _buyer, _question, _answer)
                     : answerSource;
                 if (!string.IsNullOrWhiteSpace(source)) SetSource(source);
-                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
+                UpdateTimingText();
             });
+        }
+
+        private void UpdateTimingText()
+        {
+            txtQuestionTime.Text = _questionDetectedAt == DateTime.MinValue
+                ? string.Empty
+                : "识别 " + _questionDetectedAt.ToString("HH:mm:ss.fff");
+            txtAnswerTime.Text = _answerReadyAt == DateTime.MinValue
+                ? "答案等待中"
+                : "答案 " + _answerReadyAt.ToString("HH:mm:ss.fff");
+            txtLatency.Text = _questionDetectedAt == DateTime.MinValue || _answerReadyAt == DateTime.MinValue
+                ? string.Empty
+                : "响应 " + Math.Max(0, (long)(_answerReadyAt - _questionDetectedAt).TotalMilliseconds) + "ms";
         }
 
         public void SetSource(string source)
@@ -122,7 +168,6 @@ namespace Bot.AssistWindow.Widget.Robot
             {
                 txtStatus.Text = text ?? string.Empty;
                 txtStatus.Foreground = new SolidColorBrush(success ? Color.FromRgb(39, 174, 96) : Color.FromRgb(235, 87, 87));
-                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
             });
         }
 
@@ -135,7 +180,6 @@ namespace Bot.AssistWindow.Widget.Robot
                 txtStatus.Text = "已跳过，未发送";
                 txtStatus.ToolTip = detail ?? string.Empty;
                 txtStatus.Foreground = new SolidColorBrush(Color.FromRgb(242, 153, 74));
-                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
             });
         }
 
@@ -152,7 +196,6 @@ namespace Bot.AssistWindow.Widget.Robot
                 txtAnswer.Text = _answer;
                 txtStatus.Text = string.IsNullOrWhiteSpace(text) ? "正在发送..." : text;
                 txtStatus.Foreground = new SolidColorBrush(Color.FromRgb(47, 128, 237));
-                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
             });
         }
 
@@ -175,7 +218,6 @@ namespace Bot.AssistWindow.Widget.Robot
                     txtStatus.Text = success ? (string.IsNullOrWhiteSpace(detail) ? "已发送" : detail) : (string.IsNullOrWhiteSpace(detail) ? "发送失败" : detail);
                     txtStatus.Foreground = new SolidColorBrush(success ? Color.FromRgb(39, 174, 96) : Color.FromRgb(235, 87, 87));
                 }
-                txtTime.Text = DateTime.Now.ToString("HH:mm:ss");
             });
         }
 

@@ -40,4 +40,13 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderPlacedAutoReplyService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderPlacedAutoReplyService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ResponseProgressTracker.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ResponseProgressTracker.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs" />
+  </ItemGroup>
 </Project>
