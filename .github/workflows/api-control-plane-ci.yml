@@ -40,7 +40,7 @@ jobs:
 
       - name: Run repository static tests
         working-directory: .
-        run: python -m pytest -q --tb=short tests 2>&1 | tee repository-static.log
+        run: python -m pytest -q --tb=short 2>&1 | tee repository-static.log
 
       - name: Upload repository static diagnostics
         if: always()
