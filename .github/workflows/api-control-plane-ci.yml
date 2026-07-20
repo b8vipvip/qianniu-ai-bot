@@ -39,7 +39,16 @@ jobs:
         run: python -m py_compile app.py bootstrap.py wecom_bridge.py wecom_crypto.py tests/test_control_plane.py tests/test_wecom_bridge.py
 
       - name: Run control plane tests
-        run: python -m pytest -q
+        run: python -m pytest -q --tb=short 2>&1 | tee pytest.log
+
+      - name: Upload pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-control-plane-pytest-${{ github.sha }}
+          path: services/api-control-plane/pytest.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Check browser JavaScript syntax
         run: node --check static/app.js
