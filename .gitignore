@@ -183,3 +183,8 @@ src/.vs/
 
 # Log file
 *.txt
+
+# Python generated caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
