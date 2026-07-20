@@ -383,8 +383,7 @@ namespace Bot.ChromeNs
                 if (!lease.IsCurrent) return;
                 var note = "已合并收到买家的媒体消息，但当前未配置对应内容理解能力，未自动回复。";
                 AddSkippedConversation(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, note);
-                Log.Info("买家媒体消息合并跳过: buyer=" + burst.BuyerNick + ", messages=" + burst.CombinedQuestion.Replace("
-", " | "));
+                Log.Info("买家媒体消息合并跳过: buyer=" + burst.BuyerNick + ", messages=" + burst.CombinedQuestion.Replace("\n", " | "));
                 return;
             }
 
