@@ -28,13 +28,11 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Fix QN source and restore normal workflow
+      - name: Fix QN source
         run: python tools/fix_humanlike_qn_newline.py
 
       - name: Verify exact corrected expression
-        run: |
-          grep -F 'burst.CombinedQuestion.Replace("\n", " | ")' src/Bot/ChromeNs/QN.cs
-          ! grep -n 'tools/fix_humanlike_qn_newline.py' .github/workflows/api-control-plane-ci.yml
+        run: grep -F 'burst.CombinedQuestion.Replace("\n", " | ")' src/Bot/ChromeNs/QN.cs
 
       - name: Commit and push corrected source
         id: push
@@ -45,14 +43,12 @@ jobs:
             rm -f tools/fix_humanlike_qn_newline.py
             git config user.name github-actions[bot]
             git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git status --short
-            git add -A
+            git add src/Bot/ChromeNs/QN.cs tools/fix_humanlike_qn_newline.py
             git commit -m "fix: correct burst log newline expression"
             git fetch origin agent/reply-dedup-knowledge-navigation
             remote_sha=$(git rev-parse origin/agent/reply-dedup-knowledge-navigation)
             echo "remote_sha=$remote_sha"
             git rebase origin/agent/reply-dedup-knowledge-navigation
-            git log -3 --oneline
             git push --force-with-lease=refs/heads/agent/reply-dedup-knowledge-navigation:$remote_sha origin HEAD:agent/reply-dedup-knowledge-navigation
           } 2>&1 | tee final-qn-push.log
           status=${PIPESTATUS[0]}
