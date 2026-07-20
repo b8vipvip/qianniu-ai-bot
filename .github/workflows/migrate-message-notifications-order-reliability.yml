@@ -7,6 +7,12 @@ on:
     paths:
       - tools/migrate_message_notification_order_reliability.py
       - .github/workflows/migrate-message-notifications-order-reliability.yml
+  pull_request:
+    branches:
+      - master
+    paths:
+      - tools/migrate_message_notification_order_reliability.py
+      - .github/workflows/migrate-message-notifications-order-reliability.yml
 
 permissions:
   contents: write
@@ -17,6 +23,7 @@ concurrency:
 
 jobs:
   migrate:
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
       - name: Checkout integration branch
