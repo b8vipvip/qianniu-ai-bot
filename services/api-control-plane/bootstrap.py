@@ -5,15 +5,17 @@ import os
 import uvicorn
 
 import app as control_plane
-from wecom_bridge import init_wecom_db, router as wecom_router
+import wecom_bridge
+from wecom_crypto import install_on_bridge
 
 
-control_plane.app.include_router(wecom_router)
+install_on_bridge(wecom_bridge)
+control_plane.app.include_router(wecom_bridge.router)
 
 
 @control_plane.app.on_event("startup")
 def initialize_wecom_bridge() -> None:
-    init_wecom_db()
+    wecom_bridge.init_wecom_db()
 
 
 if __name__ == "__main__":
