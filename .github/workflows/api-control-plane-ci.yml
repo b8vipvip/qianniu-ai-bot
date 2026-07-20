@@ -84,18 +84,40 @@ jobs:
           exit 1
 
       - name: Run focused static tests
+        id: static_tests
         if: steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0'
-        run: python -m pytest -q tests/test_humanlike_burst_static.py tests/test_wecom_app_bridge_static.py tests/test_rules_notifications_static.py
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q --tb=short tests/test_humanlike_burst_static.py tests/test_wecom_app_bridge_static.py tests/test_rules_notifications_static.py 2>&1 | tee humanlike-static.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload static test diagnostics
+        if: always() && steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0'
+        uses: actions/upload-artifact@v4
+        with:
+          name: humanlike-static-${{ github.sha }}
+          path: humanlike-static.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stop on static test failure
+        if: steps.static_tests.outputs.status != '0'
+        run: |
+          cat humanlike-static.log
+          exit 1
 
       - name: Run control plane tests
-        if: steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0'
+        if: steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0' && steps.static_tests.outputs.status == '0'
         working-directory: services/api-control-plane
         run: |
           python -m pip install -r requirements.txt
           python -m pytest -q
 
       - name: Commit integrated implementation
-        if: steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0'
+        if: steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0' && steps.static_tests.outputs.status == '0'
         run: |
           rm -f tools/apply_humanlike_reply_v2.py
           rm -f tools/repair_humanlike_patcher.py
