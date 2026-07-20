@@ -36,13 +36,40 @@ jobs:
           grep -F 'burst.CombinedQuestion.Replace("\n", " | ")' src/Bot/ChromeNs/QN.cs
           ! grep -n 'tools/fix_humanlike_qn_newline.py' .github/workflows/api-control-plane-ci.yml
 
-      - name: Commit corrected source
+      - name: Commit and push corrected source
+        id: push
+        shell: bash
         run: |
-          rm -f tools/fix_humanlike_qn_newline.py
-          git config user.name github-actions[bot]
-          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add -A
-          git commit -m "fix: correct burst log newline expression"
-          git fetch origin agent/reply-dedup-knowledge-navigation
-          git rebase origin/agent/reply-dedup-knowledge-navigation
-          git push origin HEAD:agent/reply-dedup-knowledge-navigation
+          set +e
+          {
+            rm -f tools/fix_humanlike_qn_newline.py
+            git config user.name github-actions[bot]
+            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+            git status --short
+            git add -A
+            git commit -m "fix: correct burst log newline expression"
+            git fetch origin agent/reply-dedup-knowledge-navigation
+            remote_sha=$(git rev-parse origin/agent/reply-dedup-knowledge-navigation)
+            echo "remote_sha=$remote_sha"
+            git rebase origin/agent/reply-dedup-knowledge-navigation
+            git log -3 --oneline
+            git push --force-with-lease=refs/heads/agent/reply-dedup-knowledge-navigation:$remote_sha origin HEAD:agent/reply-dedup-knowledge-navigation
+          } 2>&1 | tee final-qn-push.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload push diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: final-qn-push-${{ github.sha }}
+          path: final-qn-push.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stop on push failure
+        if: steps.push.outputs.status != '0'
+        run: |
+          cat final-qn-push.log
+          exit 1
