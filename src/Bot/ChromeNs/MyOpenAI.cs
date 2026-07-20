@@ -543,9 +543,12 @@ namespace Bot.ChromeNs
                         }
                         var answerSource = contextualKnowledge == null ? "AI生成" : "本地知识库上下文";
                         KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, finalAnswer, answerSource);
-                        if (contextualKnowledge == null && !deferLearningUntilDelivered)
+                        if (contextualKnowledge == null)
                         {
-                            KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                            if (!deferLearningUntilDelivered)
+                            {
+                                KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                            }
                         }
                         else
                         {
