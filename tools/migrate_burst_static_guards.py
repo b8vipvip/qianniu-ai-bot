@@ -1,0 +1,202 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def update_deferred_learning_branch() -> None:
+    path = ROOT / "src/Bot/ChromeNs/MyOpenAI.cs"
+    code = path.read_text(encoding="utf-8-sig")
+    old = '''                        if (contextualKnowledge == null && !deferLearningUntilDelivered)
+                        {
+                            KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                        }
+                        else
+                        {
+                            Log.Info("上下文知识回复生成成功。buyer=" + buyer
+                                + ", knowledgeId=" + contextualKnowledge.Id
+                                + ", score=" + contextualKnowledgeScore.ToString("0.00")
+                                + ", answer=" + finalAnswer);
+                        }'''
+    new = '''                        if (contextualKnowledge == null)
+                        {
+                            if (!deferLearningUntilDelivered)
+                            {
+                                KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
+                            }
+                        }
+                        else
+                        {
+                            Log.Info("上下文知识回复生成成功。buyer=" + buyer
+                                + ", knowledgeId=" + contextualKnowledge.Id
+                                + ", score=" + contextualKnowledgeScore.ToString("0.00")
+                                + ", answer=" + finalAnswer);
+                        }'''
+    if old in code:
+        path.write_text(code.replace(old, new, 1), encoding="utf-8-sig")
+    elif new not in code:
+        raise RuntimeError("MyOpenAI deferred learning block not found")
+
+
+def write_contextual_test() -> None:
+    path = ROOT / "tests/test_contextual_knowledge_reply.py"
+    path.write_text('''from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path):
+    return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+def test_knowledge_remains_first_for_standalone_questions():
+    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    assert "KnowledgeLearningService.TryFindLocalAnswer" in code
+    assert "if (!contextDecision.IsFollowUp)" in code
+    assert "命中本地知识库，未调用AI" in code
+    assert "return localAnswer;" in code
+
+
+def test_follow_up_knowledge_hit_is_contextualized_not_repeated():
+    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+    assert "KnowledgeContextualReplyService.Analyze" in code
+    assert "KnowledgeContextualReplyService.BuildPromptAddon" in code
+    assert "不得原样重复上一条客服回复或整段知识库答案" in helper
+    assert "当前买家消息是对上一轮客服回复的补充、确认或否定" in helper
+    assert "上一条客服回复与本次命中的知识答案相同" in helper
+
+
+def test_tv_karaoke_confirmation_has_safe_offline_fallback():
+    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+    assert "ExtractConfirmedFeature" in helper
+    assert "那就可以使用" in helper
+    assert "功能" in helper
+    assert '"有"' in helper
+    assert '"支持"' in helper
+    assert '"不支持"' in helper
+
+
+def test_contextual_replies_and_cancelled_drafts_do_not_pollute_learning():
+    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
+    assert 'var answerSource = contextualKnowledge == null ? "AI生成" : "本地知识库上下文"' in code
+    local_branch = code.index("if (contextualKnowledge == null)")
+    deferred_guard = code.index("if (!deferLearningUntilDelivered)", local_branch)
+    queued = code.index("KnowledgeLearningService.QueueLearn", deferred_guard)
+    contextual_branch = code.index("else", queued)
+    contextual_log = code.index("上下文知识回复生成成功", contextual_branch)
+    assert local_branch < deferred_guard < queued < contextual_branch < contextual_log
+''', encoding="utf-8")
+
+
+def write_reply_pipeline_test() -> None:
+    path = ROOT / "tests/test_reply_dedup_navigation_static.py"
+    path.write_text('''from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(relative: str) -> str:
+    return (ROOT / relative).read_text(encoding="utf-8-sig")
+
+
+def test_conversation_context_menu_can_open_exact_knowledge_entry():
+    text = read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml.cs")
+    assert 'Header = "查看"' in text
+    assert "KnowledgeCenterWindow.ShowManagerAndLocate" in text
+    assert "_seller" in text and "_buyer" in text
+    assert "_question" in text and "_answer" in text
+
+
+def test_knowledge_manager_locates_and_scrolls_to_entry():
+    window = read("src/Bot/Knowledge/KnowledgeCenterWindow.cs")
+    manager = read("src/Bot/Knowledge/KnowledgeManagerControl.cs")
+    assert "NavigateToManager" in window
+    assert "LocateEntry" in manager
+    assert "TryFindLocalAnswer" in manager
+    assert "ScrollIntoView" in manager
+    assert "SelectedItem = selected" in manager
+
+
+def test_incoming_timeline_is_recorded_before_burst_generation():
+    text = read("src/Bot/ChromeNs/QN.cs")
+    refresh = text.index("ConversationContextStore.RefreshAndRecord(message, messageText);")
+    enqueue = text.index("_buyerMessageBurstCoordinator.Enqueue", refresh)
+    answer = text.index("var answer = await Task.Run(() => MyOpenAI.GetAnswer", enqueue)
+    assert refresh < enqueue < answer
+
+
+def test_every_text_burst_is_checked_before_display_and_send():
+    text = read("src/Bot/ChromeNs/QN.cs")
+    generated = text.index("var answer = await Task.Run(() => MyOpenAI.GetAnswer")
+    stale_check = text.index("if (!lease.IsCurrent)", generated)
+    checked = text.index("ReplyDeduplicationService.EnsureDistinct", stale_check)
+    stable = text.index("ConfirmStableAsync(450)", checked)
+    displayed = text.index("Desk.Inst.AddConversation", stable)
+    sent = text.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)", displayed)
+    remembered = text.index("ReplyDeduplicationService.RememberDelivered", sent)
+    assert generated < stale_check < checked < stable < displayed < sent < remembered
+
+
+def test_duplicate_service_regenerates_and_rejects_same_result():
+    text = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    assert "SameAnswer(previousAnswer, result.Answer)" in text
+    assert "MyOpenAI.CallStructuredChat" in text
+    assert "SameAnswer(previousAnswer, regenerated)" in text
+    assert "BuildSafeFallback" in text
+    assert "本地知识库重答" in text
+
+
+def test_contextual_matching_can_use_last_delivered_answer_without_remote_echo():
+    text = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+    assert "ReplyDeduplicationService.TryGetLastDelivered" in text
+    assert "local-delivered-answer" in text
+    assert "previousWasKnowledgeAnswer" in text
+    assert "standaloneQuestion" in text
+
+
+def test_new_services_are_included_in_windows_and_wpf_temp_builds():
+    text = read("src/Directory.Build.targets")
+    assert "ReplyDeduplicationService.cs" in text
+    assert "BuyerMessageBurstCoordinator.cs" in text
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\ReplyDeduplicationService.cs" />' in text
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\BuyerMessageBurstCoordinator.cs" />' in text
+''', encoding="utf-8")
+
+
+def update_vision_test() -> None:
+    path = ROOT / "tests/test_vision_static.py"
+    text = path.read_text(encoding="utf-8")
+    old = '''def test_message_safety_and_cross_buyer_guard_remain_in_path():
+    qn = read('src/Bot/ChromeNs/QN.cs')
+    assert 'IncomingMessageSafety.Evaluate' in qn
+    assert 'BuildMessageKey' in qn
+    assert 'VisionReplyTask { SellerNick = sellerNick, BuyerNick = buyerNick, MessageKey = messageKey' in qn
+    assert 'SendTextWithRetryAsync(task.BuyerNick' in qn
+    assert 'EnsureActiveBuyerForSendAsync' in qn and 'GetCurrentConversationID' in qn
+    assert '识别完成，但目标买家会话未确认，未发送。' in qn
+'''
+    new = '''def test_message_safety_and_cross_buyer_guard_remain_in_path():
+    qn = read('src/Bot/ChromeNs/QN.cs')
+    assert 'IncomingMessageSafety.Evaluate' in qn
+    assert 'BuildMessageKey' in qn
+    assert 'var task = new VisionReplyTask' in qn
+    assert 'SellerNick = burst.SellerNick' in qn
+    assert 'BuyerNick = burst.BuyerNick' in qn
+    assert 'MessageKey = visionItem.MessageKey' in qn
+    assert 'CombinedQuestion = burst.CombinedQuestion' in qn
+    assert 'SendTextWithRetryAsync(burst.BuyerNick, answer, 1)' in qn
+    assert 'EnsureActiveBuyerForSendAsync' in qn and 'GetCurrentConversationID' in qn
+    assert '识别完成，但目标买家会话未确认，未发送。' in qn
+'''
+    if old in text:
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+    elif new not in text:
+        raise RuntimeError("vision static guard block not found")
+
+
+if __name__ == "__main__":
+    update_deferred_learning_branch()
+    write_contextual_test()
+    write_reply_pipeline_test()
+    update_vision_test()
+    print("burst reply code and static guards migrated")
