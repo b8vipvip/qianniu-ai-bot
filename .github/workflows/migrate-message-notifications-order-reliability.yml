@@ -1,0 +1,66 @@
+name: Migrate message reliability and settings
+
+on:
+  push:
+    branches:
+      - agent/message-notifications-order-auto-reply
+    paths:
+      - tools/migrate_message_notification_order_reliability.py
+      - .github/workflows/migrate-message-notifications-order-reliability.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: migrate-message-notifications-order-reliability
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/message-notifications-order-auto-reply
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply one-shot migration
+        run: |
+          python -m py_compile tools/migrate_message_notification_order_reliability.py
+          python tools/migrate_message_notification_order_reliability.py
+
+      - name: Run repository static tests
+        run: |
+          python -m pip install pytest
+          python -m pytest -q --tb=short tests
+
+      - name: Verify expected source changes
+        run: |
+          grep -F 'public partial class QN' src/Bot/ChromeNs/QN.cs
+          grep -F 'public partial class QNRpa' src/Bot/ChromeNs/QNRpa.cs
+          grep -F 'Header = "消息通知"' src/Bot/Options/CtlRobotOptions.xaml.cs
+          grep -F 'OrderPlacedAutoReplyService.TryCreatePlan' src/Bot/ChromeNs/QN.cs
+          grep -F 'QNRpa.ReliableSend.cs' src/Directory.Build.targets
+
+      - name: Commit migrated source
+        shell: bash
+        run: |
+          rm -f tools/migrate_message_notification_order_reliability.py
+          rm -f .github/workflows/migrate-message-notifications-order-reliability.yml
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type d -name .pytest_cache -prune -exec rm -rf {} +
+          find . -type f -name '*.pyc' -delete
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat: improve message recovery notifications and order replies"
+          git fetch origin agent/message-notifications-order-auto-reply
+          remote_sha=$(git rev-parse origin/agent/message-notifications-order-auto-reply)
+          git rebase origin/agent/message-notifications-order-auto-reply
+          git push --force-with-lease=refs/heads/agent/message-notifications-order-auto-reply:$remote_sha origin HEAD:agent/message-notifications-order-auto-reply
