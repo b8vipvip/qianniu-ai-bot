@@ -4,18 +4,69 @@ on:
   push:
     branches:
       - feat/api-control-plane
+      - agent/reply-dedup-knowledge-navigation
     paths:
       - services/api-control-plane/**
+      - tools/apply_humanlike_reply_v2.py
+      - src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs
       - .github/workflows/api-control-plane-ci.yml
+      - .github/workflows/apply-humanlike-reply-v2.yml
   pull_request:
     paths:
       - services/api-control-plane/**
       - .github/workflows/api-control-plane-ci.yml
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  apply-humanlike-patch:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout integration branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/reply-dedup-knowledge-navigation
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Apply staged patch when present
+        id: patch
+        run: |
+          if [ ! -f tools/apply_humanlike_reply_v2.py ]; then
+            echo "applied=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          python tools/apply_humanlike_reply_v2.py
+          echo "applied=true" >> "$GITHUB_OUTPUT"
+
+      - name: Run focused static tests
+        if: steps.patch.outputs.applied == 'true'
+        run: python -m pytest -q tests/test_humanlike_burst_static.py tests/test_wecom_app_bridge_static.py tests/test_rules_notifications_static.py
+
+      - name: Run control plane tests
+        if: steps.patch.outputs.applied == 'true'
+        working-directory: services/api-control-plane
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pytest -q
+
+      - name: Commit integrated implementation
+        if: steps.patch.outputs.applied == 'true'
+        run: |
+          rm -f tools/apply_humanlike_reply_v2.py
+          rm -f .github/workflows/apply-humanlike-reply-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat: batch fragmented buyer messages before replying"
+          git push origin HEAD:agent/reply-dedup-knowledge-navigation
+
   test-build-package:
     runs-on: ubuntu-latest
     defaults:
