@@ -1,0 +1,50 @@
+name: Apply human-like reply v2
+
+on:
+  push:
+    branches:
+      - agent/reply-dedup-knowledge-navigation
+    paths:
+      - tools/apply_humanlike_reply_v2.py
+      - .github/workflows/apply-humanlike-reply-v2.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/reply-dedup-knowledge-navigation
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply patch
+        run: python tools/apply_humanlike_reply_v2.py
+
+      - name: Run repository static tests
+        run: python -m pytest -q tests/test_humanlike_burst_static.py tests/test_wecom_app_bridge_static.py tests/test_rules_notifications_static.py
+
+      - name: Run control plane tests
+        working-directory: services/api-control-plane
+        run: |
+          python -m pip install -r requirements.txt
+          python -m pytest -q
+
+      - name: Commit integrated implementation
+        run: |
+          rm -f tools/apply_humanlike_reply_v2.py
+          rm -f .github/workflows/apply-humanlike-reply-v2.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "feat: batch fragmented buyer messages before replying"
+          git push origin HEAD:agent/reply-dedup-knowledge-navigation
