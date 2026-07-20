@@ -41,6 +41,19 @@ jobs:
         run: |
           python -m py_compile tools/migrate_message_notification_order_reliability.py
           python tools/migrate_message_notification_order_reliability.py
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('src/Bot/ChromeNs/QN.cs')
+          raw = path.read_bytes()
+          bom = raw.startswith(b'\xef\xbb\xbf')
+          text = raw.decode('utf-8-sig')
+          old = 'if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "发送失败：" + rpa.GetSendFailureReason());'
+          new = 'if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());'
+          if text.count(old) != 1:
+              raise SystemExit('vision guard patch match count=' + str(text.count(old)))
+          text = text.replace(old, new, 1)
+          path.write_bytes(text.encode('utf-8-sig' if bom else 'utf-8'))
+          PY
           git diff --binary > migration-source.diff
 
       - name: Run repository static tests
