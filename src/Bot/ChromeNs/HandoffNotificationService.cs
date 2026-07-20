@@ -79,7 +79,7 @@ namespace Bot.ChromeNs
                 + "\n买家：" + Safe(buyer, 80)
                 + "\n状态：" + (decision.IsOffHours ? "人工客服下班" : "人工客服工作时间")
                 + "\n原因：" + Safe(decision.Reason, 200)
-                + "\n问题：" + Safe(question, 500);
+                + "\n买家消息：\n" + SafeBuyerMessage(question, 1200);
         }
 
         private static async Task<string> SendAsync(
@@ -199,6 +199,19 @@ namespace Bot.ChromeNs
         private static string Normalize(string value)
         {
             return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty);
+        }
+
+        private static string SafeBuyerMessage(string value, int max)
+        {
+            var lines = (value ?? string.Empty)
+                .Replace("\r", string.Empty)
+                .Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => Safe(x, 300))
+                .Where(x => x.Length > 0)
+                .Take(10)
+                .ToList();
+            var text = lines.Count == 0 ? "[空白或未知消息]" : string.Join("\n", lines);
+            return text.Length <= max ? text : text.Substring(0, max) + "...";
         }
 
         private static string Safe(string value, int max)

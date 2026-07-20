@@ -103,6 +103,29 @@ namespace Bot.ChromeNs
             };
         }
 
+        public static string GetDisplayText(QNChatMessage message, string messageText)
+        {
+            if (ConversationContextStore.IsProductLink(message, messageText))
+            {
+                return string.IsNullOrWhiteSpace(messageText) ? "[商品链接]" : messageText.Trim();
+            }
+            var unsupportedType = DetectUnsupportedType(message, messageText);
+            if (!string.IsNullOrWhiteSpace(unsupportedType)) return "[" + unsupportedType + "]";
+            var text = (messageText ?? string.Empty).Trim();
+            return string.IsNullOrWhiteSpace(text) ? "[空白或未知消息]" : text;
+        }
+
+        public static bool IsMediaPlaceholder(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            return value == "[图片]"
+                || value == "[视频]"
+                || value == "[语音]"
+                || value == "[表情]"
+                || value == "[文件]"
+                || value == "[位置]";
+        }
+
         public static string BuildMessageKey(QNChatMessage message, string messageText)
         {
             if (message == null) return string.Empty;
@@ -153,6 +176,9 @@ namespace Bot.ChromeNs
             if (HasExtension(fileId, ImageExtensions) || HasExtension(url, ImageExtensions) || ContainsMarker(combined, "图片", "image", "photo")) return "图片";
             if (HasExtension(fileId, VideoExtensions) || HasExtension(url, VideoExtensions) || ContainsMarker(combined, "视频", "video")) return "视频";
             if (HasExtension(fileId, AudioExtensions) || HasExtension(url, AudioExtensions) || ContainsMarker(combined, "语音", "音频", "voice", "audio")) return "语音";
+            if (ContainsMarker(combined, "表情", "emoji", "emotion", "face")
+                || combined.Contains("发送了一个表情")
+                || combined.Contains("动态表情")) return "表情";
             if (ContainsMarker(combined, "位置", "定位", "location")) return "位置";
             if (ContainsMarker(combined, "文件", "附件", "file")) return "文件";
             if (!string.IsNullOrWhiteSpace(fileId)) return "文件";

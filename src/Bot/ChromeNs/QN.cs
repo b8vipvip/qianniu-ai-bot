@@ -79,6 +79,7 @@ namespace Bot.ChromeNs
         private readonly IncomingMessageDeduplicator _incomingMessageDeduplicator = new IncomingMessageDeduplicator(2000);
         private readonly DateTime _messageSafetyStartedAt = DateTime.Now;
         private readonly VisionRequestService _visionRequestService = new VisionRequestService();
+        private readonly BuyerMessageBurstCoordinator _buyerMessageBurstCoordinator;
 
         public static QN CurQN = null;
 
@@ -91,6 +92,7 @@ namespace Bot.ChromeNs
         {
             this._seller = seller;
             this.rpa = new QNRpa(this);
+            this._buyerMessageBurstCoordinator = new BuyerMessageBurstCoordinator(ProcessBuyerBurstAsync);
         }
 
         public async Task<bool> SendTextAsync(string buyer, string text)
@@ -312,15 +314,15 @@ namespace Bot.ChromeNs
             }
         }
 
-        private async Task ProcessIncomingMessageAsync(QNChatMessage message)
+        private Task ProcessIncomingMessageAsync(QNChatMessage message)
         {
-            if (message == null) return;
+            if (message == null) return Task.CompletedTask;
             var messageText = GetMessageText(message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
             if (!_incomingMessageDeduplicator.TryAccept(messageKey))
             {
                 Log.Info("重复消息已跳过: key=" + messageKey);
-                return;
+                return Task.CompletedTask;
             }
 
             ConversationContextStore.RefreshAndRecord(message, messageText);
@@ -328,47 +330,116 @@ namespace Bot.ChromeNs
             if (IsSellerMessage(message))
             {
                 RecordSellerEcho(message.toid.nick, messageText);
-                return;
+                return Task.CompletedTask;
             }
-            if (!IsBuyerMessage(message)) return;
+            if (!IsBuyerMessage(message)) return Task.CompletedTask;
 
             var sellerNick = message.toid.nick;
             var buyerNick = message.fromid.nick;
             var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt);
-            var displayQuestion = string.IsNullOrWhiteSpace(messageText) ? decision.MessageLabel : messageText;
+            var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
+            var visionDecision = VisionMessageDecision.Decide(
+                message,
+                messageText,
+                decision,
+                AiEndpointStore.GetVisionEnabledEndpoints());
 
-            var visionDecision = VisionMessageDecision.Decide(message, messageText, decision, AiEndpointStore.GetVisionEnabledEndpoints());
+            if (!Params.Robot.CanUseRobotReal)
+            {
+                AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                return Task.CompletedTask;
+            }
 
-            if (visionDecision.Kind == VisionDecisionKind.Skip)
+            if (visionDecision.Kind == VisionDecisionKind.Skip
+                && !IncomingMessageSafety.IsMediaPlaceholder(displayQuestion))
             {
                 AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
                 Log.Info("买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
+                return Task.CompletedTask;
+            }
+
+            _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
+            {
+                SellerNick = sellerNick,
+                BuyerNick = buyerNick,
+                MessageKey = messageKey,
+                DisplayText = displayQuestion,
+                Message = message,
+                SafetyDecision = decision,
+                VisionDecision = visionDecision,
+                SortValue = IncomingMessageSafety.GetSortValue(message),
+                ReceivedAt = DateTime.Now
+            });
+            return Task.CompletedTask;
+        }
+
+        private async Task ProcessBuyerBurstAsync(BuyerMessageBurstLease lease)
+        {
+            var burst = lease == null ? null : lease.Burst;
+            if (burst == null || burst.Items.Count < 1 || string.IsNullOrWhiteSpace(burst.CombinedQuestion)) return;
+
+            if (!burst.HasReplyableItem)
+            {
+                if (!lease.IsCurrent) return;
+                var note = "已合并收到买家的媒体消息，但当前未配置对应内容理解能力，未自动回复。";
+                AddSkippedConversation(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, note);
+                Log.Info("买家媒体消息合并跳过: buyer=" + burst.BuyerNick + ", messages=" + burst.CombinedQuestion.Replace("
+", " | "));
                 return;
             }
 
-            var botEnabled = Params.Robot.CanUseRobotReal;
+            var visionItem = burst.LatestVisionItem;
+            if (visionItem != null)
+            {
+                await ProcessVisionBurstAsync(lease, visionItem);
+                return;
+            }
+            await ProcessTextBurstAsync(lease);
+        }
+
+        private async Task ProcessTextBurstAsync(BuyerMessageBurstLease lease)
+        {
+            var burst = lease.Burst;
             var autoSend = Params.Robot.GetIsAutoReply();
-            if (!botEnabled)
+            var answer = await Task.Run(() => MyOpenAI.GetAnswer(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
+                true));
+
+            if (!lease.IsCurrent)
             {
-                AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                Log.Info("买家在AI生成期间发送了新消息，旧文本草稿已作废。buyer=" + burst.BuyerNick);
                 return;
             }
 
-            if (visionDecision.Kind == VisionDecisionKind.Vision)
-            {
-                await ProcessVisionMessageAsync(new VisionReplyTask { SellerNick = sellerNick, BuyerNick = buyerNick, MessageKey = messageKey, Message = message });
-                return;
-            }
-
-            var answer = MyOpenAI.GetAnswer(sellerNick, buyerNick, messageText);
             var deduplication = ReplyDeduplicationService.EnsureDistinct(
-                sellerNick,
-                buyerNick,
-                messageText,
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
                 answer);
             answer = deduplication.Answer;
-            var answerSource = KnowledgeLearningService.ResolveAnswerSource(sellerNick, buyerNick, messageText, answer);
-            var conversationCtl = Desk.Inst == null ? null : Desk.Inst.AddConversation(sellerNick, buyerNick, messageText, answer, autoSend, answerSource);
+
+            if (!await lease.ConfirmStableAsync(450))
+            {
+                Log.Info("发送前发现买家补充了新消息，旧文本答案未展示也未发送。buyer=" + burst.BuyerNick);
+                return;
+            }
+
+            var answerSource = KnowledgeLearningService.ResolveAnswerSource(
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
+                answer);
+            var conversationCtl = Desk.Inst == null
+                ? null
+                : Desk.Inst.AddConversation(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    answer,
+                    autoSend,
+                    answerSource);
             if (!autoSend) return;
 
             if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误："))
@@ -377,47 +448,105 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var sendOk = await SendTextWithRetryAsync(buyerNick, answer, 1);
+            if (!lease.IsCurrent)
+            {
+                if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：买家刚刚补充了新消息，正在重新组织回复");
+                return;
+            }
+
+            var sendOk = await SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(sellerNick, buyerNick, answer);
+                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))
+                {
+                    KnowledgeLearningService.QueueLearn(
+                        burst.CombinedQuestion,
+                        answer,
+                        "AI生成",
+                        burst.SellerNick,
+                        burst.BuyerNick);
+                }
             }
             if (conversationCtl != null)
             {
-                conversationCtl.SetSendResult(sendOk, sendOk ? "已发送" : "发送失败：目标买家会话未确认或发送未完成");
+                conversationCtl.SetSendResult(sendOk, sendOk ? "已发送（合并本轮买家消息）" : "发送失败：目标买家会话未确认或发送未完成");
             }
         }
 
-        private async Task ProcessVisionMessageAsync(VisionReplyTask task)
+        private async Task ProcessVisionBurstAsync(
+            BuyerMessageBurstLease lease,
+            BuyerMessageBurstItem visionItem)
         {
+            var burst = lease.Burst;
             var autoSend = Params.Robot.GetIsAutoReply();
-            var ctl = Desk.Inst == null ? null : Desk.Inst.AddConversation(task.SellerNick, task.BuyerNick, "[图片]", "正在识别图片...", autoSend);
+            var task = new VisionReplyTask
+            {
+                SellerNick = burst.SellerNick,
+                BuyerNick = burst.BuyerNick,
+                MessageKey = visionItem.MessageKey,
+                Message = visionItem.Message,
+                CombinedQuestion = burst.CombinedQuestion,
+                DeferLearningUntilDelivered = true
+            };
             var result = await _visionRequestService.ExecuteAsync(task, CancellationToken.None);
+            if (!lease.IsCurrent)
+            {
+                Log.Info("买家在视觉AI生成期间发送了新消息，旧视觉草稿已作废。buyer=" + burst.BuyerNick);
+                return;
+            }
+
             if (!result.Success || string.IsNullOrWhiteSpace(result.Answer))
             {
                 var note = "已跳过：" + (string.IsNullOrWhiteSpace(result.Error) ? "视觉识别失败" : result.Error) + "，未向买家发送消息。";
-                if (ctl != null) { ctl.SetAnswer("未生成答案。"); ctl.SetSkipped(note); } else AddSkippedConversation(task.SellerNick, task.BuyerNick, "[图片]", note);
-                Log.Info("视觉消息跳过: seller=" + task.SellerNick + ", buyer=" + task.BuyerNick + ", messageId=" + task.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
+                AddSkippedConversation(burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, note);
+                Log.Info("视觉消息跳过: seller=" + burst.SellerNick + ", buyer=" + burst.BuyerNick + ", messageId=" + visionItem.MessageKey + ", endpoint=" + result.EndpointName + ", model=" + result.VisionModel + ", latencyMs=" + result.LatencyMs + ", reason=" + result.Error);
                 return;
             }
 
             var deduplication = ReplyDeduplicationService.EnsureDistinct(
-                task.SellerNick,
-                task.BuyerNick,
-                "[图片]",
+                burst.SellerNick,
+                burst.BuyerNick,
+                burst.CombinedQuestion,
                 result.Answer);
             var answer = deduplication.Answer;
+            if (!await lease.ConfirmStableAsync(450))
+            {
+                Log.Info("发送前发现买家补充了新消息，旧视觉答案未展示也未发送。buyer=" + burst.BuyerNick);
+                return;
+            }
+
             var source = deduplication.Regenerated && !string.IsNullOrWhiteSpace(deduplication.Source)
                 ? deduplication.Source
                 : "AI生成";
+            var ctl = Desk.Inst == null
+                ? null
+                : Desk.Inst.AddConversation(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    "正在组织合并回复...",
+                    autoSend);
             if (ctl != null) ctl.SetAnswer(answer, source);
             if (!autoSend) return;
-            var sendOk = await SendTextWithRetryAsync(task.BuyerNick, answer, 1);
+            if (!lease.IsCurrent)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：买家刚刚补充了新消息，正在重新组织回复");
+                return;
+            }
+
+            var sendOk = await SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
             if (sendOk)
             {
-                ReplyDeduplicationService.RememberDelivered(task.SellerNick, task.BuyerNick, answer);
+                ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+                KnowledgeLearningService.QueueLearn(
+                    burst.CombinedQuestion,
+                    answer,
+                    "视觉AI",
+                    burst.SellerNick,
+                    burst.BuyerNick);
             }
-            if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送" : "识别完成，但目标买家会话未确认，未发送。");
+            if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。");
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)
@@ -451,29 +580,12 @@ namespace Bot.ChromeNs
                     .OrderBy(IncomingMessageSafety.GetSortValue)
                     .ToList();
 
-                // GetNewMsg 有时一次返回同一买家的多条未读消息。只处理该批次最新一条，避免启动或网络恢复时连续轰炸买家。
-                var latestBuyerMessages = messages
-                    .Where(IsBuyerMessage)
-                    .GroupBy(m => (m.toid == null ? string.Empty : m.toid.nick) + "#" + (m.fromid == null ? string.Empty : m.fromid.nick))
-                    .ToDictionary(g => g.Key, g => g.Last());
-
+                // 同一批次和随后几秒到达的消息全部进入按买家隔离的聚合器。
+                // 聚合器只在买家停止输入后生成一次答案，不再丢弃较早的短片段。
                 foreach (var message in messages)
                 {
-                    if (IsBuyerMessage(message))
-                    {
-                        var buyerKey = message.toid.nick + "#" + message.fromid.nick;
-                        QNChatMessage latest;
-                        if (latestBuyerMessages.TryGetValue(buyerKey, out latest) && !object.ReferenceEquals(message, latest))
-                        {
-                            var oldKey = IncomingMessageSafety.BuildMessageKey(message, GetMessageText(message));
-                            _incomingMessageDeduplicator.TryAccept(oldKey);
-                            Log.Info("同批次较早买家消息已合并跳过: buyer=" + message.fromid.nick + ", key=" + oldKey);
-                            continue;
-                        }
-                    }
-
                     await ProcessIncomingMessageAsync(message);
-                    await Task.Delay(250);
+                    await Task.Delay(30);
                 }
             }
             catch (Exception ex)

@@ -43,11 +43,19 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static string HumanConversationGuard
+        {
+            get
+            {
+                return "\n\n真人客服式会话规则：买家可能把一句话拆成多条发送，换行表示同一轮消息的先后顺序。先判断这些消息是同一句拆分、补充信息、纠正前文、连续追问、重复催促、寒暄后提问、只回复数字/型号，还是多个相关问题；不要按每一行逐条作答，只发送一条合并后的自然回复。后一条明确纠正前文时，以后一条为准；同义重复和连续问号只回应一次；寒暄与实际问题同时出现时直接处理实际问题；买家说“好的、嗯、知道了、谢谢、解决了”时简短收尾，不重新讲方案；信息不足时只追问一个最关键的信息；多个相关问题可在一句到两句内合并处理，多个无关问题优先处理最新或最影响交易的一项，再自然询问另一项。生成答案后如果买家又发来新消息，旧答案应作废，结合新消息重新生成。看到[图片]、[视频]、[语音]、[表情]等占位符时，不得假装看懂未解析的内容。";
+            }
+        }
+
         private static string BuildSystemPrompt(string prompt)
         {
             var basePrompt = string.IsNullOrWhiteSpace(prompt) ? DefaultSystemPrompt : prompt.Trim();
-            if (basePrompt.Contains("固定回复规则")) return basePrompt + TimelineGuard;
-            return basePrompt + ReplyStyleGuard + TimelineGuard;
+            if (basePrompt.Contains("固定回复规则")) return basePrompt + TimelineGuard + HumanConversationGuard;
+            return basePrompt + ReplyStyleGuard + TimelineGuard + HumanConversationGuard;
         }
 
         private static bool EnsureConfig()
@@ -413,6 +421,15 @@ namespace Bot.ChromeNs
 
         public static string GetAnswer(string seller, string buyer, string question)
         {
+            return GetAnswer(seller, buyer, question, false);
+        }
+
+        internal static string GetAnswer(
+            string seller,
+            string buyer,
+            string question,
+            bool deferLearningUntilDelivered)
+        {
             try
             {
                 string presetReply;
@@ -465,7 +482,7 @@ namespace Bot.ChromeNs
                     var offHoursAnswer = manualDecision.UseAiReply
                         ? BuildOffHoursHandoffReply(seller, buyer, question, manualDecision)
                         : BotFeatureStore.ApplyOutputPolicy(manualDecision.ReplyText);
-                    var offHoursSource = manualDecision.UseAiReply ? "AI生成" : "本地";
+                    var offHoursSource = "转人工回复";
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, offHoursAnswer, offHoursSource);
                     return offHoursAnswer;
                 }
@@ -526,7 +543,7 @@ namespace Bot.ChromeNs
                         }
                         var answerSource = contextualKnowledge == null ? "AI生成" : "本地知识库上下文";
                         KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, finalAnswer, answerSource);
-                        if (contextualKnowledge == null)
+                        if (contextualKnowledge == null && !deferLearningUntilDelivered)
                         {
                             KnowledgeLearningService.QueueLearn(question, finalAnswer, "AI生成", seller, buyer);
                         }

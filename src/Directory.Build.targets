@@ -28,4 +28,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerMessageBurstCoordinator.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerMessageBurstCoordinator.cs" />
+  </ItemGroup>
 </Project>

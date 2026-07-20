@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import sqlite3
 import struct
@@ -56,6 +57,21 @@ def safe_text(value: Any, limit: int = 500) -> str:
     while "  " in text:
         text = text.replace("  ", " ")
     return text if len(text) <= limit else text[:limit] + "..."
+
+
+def safe_buyer_message(value: Any, limit: int = 2000) -> str:
+    text = str(value or "").replace("\r", "")
+    text = re.sub(r"(?<!\d)1\d{10}(?!\d)", "[手机号]", text)
+    text = re.sub(r"(?i)sk-[a-z0-9_-]{12,}", "[API_KEY]", text)
+    lines = []
+    for raw in text.split("\n"):
+        line = re.sub(r"[ \t]+", " ", raw).strip()
+        if line and line not in lines:
+            lines.append(line[:500])
+        if len(lines) >= 10:
+            break
+    result = "\n".join(lines) if lines else "[空白或未知消息]"
+    return result if len(result) <= limit else result[:limit] + "..."
 
 
 def split_users(value: str) -> Tuple[str, ...]:
@@ -349,7 +365,7 @@ def create_ticket(client: Dict[str, Any], data: HandoffNotifyInput) -> str:
                 str(client["name"]),
                 safe_text(data.seller, 100),
                 safe_text(data.buyer, 100),
-                safe_text(data.question, 2000),
+                safe_buyer_message(data.question, 2000),
                 safe_text(data.reason, 500),
                 "|".join(recipients),
                 "created",
@@ -371,7 +387,7 @@ def build_handoff_message(ticket_id: str, data: HandoffNotifyInput) -> str:
         + "\n买家：" + safe_text(data.buyer or "测试买家", 80)
         + "\n状态：" + ("人工客服下班" if data.is_off_hours else "等待人工处理")
         + "\n原因：" + safe_text(data.reason or "测试企业微信应用消息双向链路", 200)
-        + "\n问题：" + safe_text(data.question or "这是一条测试通知", 500)
+        + "\n买家消息：\n" + safe_buyer_message(data.question or "这是一条测试通知", 1600)
         + "\n\n回复格式：" + ticket_id + " 这里填写给买家的回复"
         + "\n为防止多买家串单，回复时必须保留工单号。"
     )

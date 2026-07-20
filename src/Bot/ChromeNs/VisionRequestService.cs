@@ -33,8 +33,15 @@ namespace Bot.ChromeNs
             var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
             if (endpoints.Count < 1) return Fail("未配置可用的视觉模型");
 
-            var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, "[图片]", 16);
+            var currentQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion)
+                ? "[图片]"
+                : task.CombinedQuestion.Trim();
+            var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, currentQuestion, 16);
             var prompt = UserPrompt;
+            if (!string.Equals(currentQuestion, "[图片]", StringComparison.Ordinal))
+            {
+                prompt += "\n\n买家本轮连续发送的消息如下，换行代表先后顺序。图片和这些文字属于同一轮，请合并理解后只回复一次：\n" + currentQuestion;
+            }
             if (!string.IsNullOrWhiteSpace(timeline))
             {
                 prompt += "\n\n以下是同一客服与同一买家按时间排序的最近对话。买家发送的图片可能是在回答最近一条客服问题，请结合时间线理解；不得混入其他买家信息：\n" + timeline;
@@ -76,8 +83,16 @@ namespace Bot.ChromeNs
                                     LatencyMs = result.LatencyMs
                                 };
                             }
-                            KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, "[图片]", result.Answer, "AI生成");
-                            KnowledgeLearningService.QueueLearn("买家发送图片。" + (string.IsNullOrWhiteSpace(timeline) ? string.Empty : "\n" + timeline), result.Answer, "视觉AI", task.SellerNick, task.BuyerNick);
+                            KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, "AI生成");
+                            if (!task.DeferLearningUntilDelivered)
+                            {
+                                KnowledgeLearningService.QueueLearn(
+                                    "买家本轮消息：" + currentQuestion + (string.IsNullOrWhiteSpace(timeline) ? string.Empty : "\n" + timeline),
+                                    result.Answer,
+                                    "视觉AI",
+                                    task.SellerNick,
+                                    task.BuyerNick);
+                            }
                             return result;
                         }
                         last = result;
