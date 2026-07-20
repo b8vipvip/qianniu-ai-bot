@@ -64,9 +64,9 @@ def test_media_placeholders_and_human_conversation_rules():
 def test_wecom_notification_contains_buyer_message_text_only():
     bridge = text("services/api-control-plane/wecom_bridge.py")
     handoff = text("src/Bot/ChromeNs/HandoffNotificationService.cs")
-    assert "买家消息：\n" in bridge
+    assert "买家消息：\\n" in bridge
     assert "safe_buyer_message" in bridge
-    assert "买家消息：\n" in handoff
+    assert "买家消息：\\n" in handoff
     assert "SafeBuyerMessage" in handoff
     assert "[手机号]" in bridge
     assert "[API_KEY]" in bridge
