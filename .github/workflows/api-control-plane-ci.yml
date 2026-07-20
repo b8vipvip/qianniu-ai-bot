@@ -7,10 +7,12 @@ on:
       - agent/reply-dedup-knowledge-navigation
     paths:
       - services/api-control-plane/**
+      - tests/test_humanlike_burst_static.py
       - .github/workflows/api-control-plane-ci.yml
   pull_request:
     paths:
       - services/api-control-plane/**
+      - tests/test_humanlike_burst_static.py
       - .github/workflows/api-control-plane-ci.yml
 
 permissions:
@@ -35,6 +37,19 @@ jobs:
 
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
+
+      - name: Run human-like reply static guards
+        working-directory: .
+        run: python -m pytest -q --tb=short tests/test_humanlike_burst_static.py 2>&1 | tee humanlike-static.log
+
+      - name: Upload human-like guard diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: humanlike-static-${{ github.sha }}
+          path: humanlike-static.log
+          if-no-files-found: warn
+          retention-days: 7
 
       - name: Compile Python
         run: python -m py_compile app.py bootstrap.py wecom_bridge.py wecom_crypto.py tests/test_control_plane.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py
