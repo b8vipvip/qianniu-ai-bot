@@ -410,6 +410,13 @@ namespace Bot.Options
         private TextBox _feishuWebhook;
         private CheckBox _notifyDingTalk;
         private TextBox _dingTalkWebhook;
+        private CheckBox _orderPlacedReplyEnabled;
+        private ComboBox _orderPlacedReplyMode;
+        private TextBox _orderPlacedReplyText;
+        private TextBox _orderPlacedApiUrl;
+        private PasswordBox _orderPlacedApiToken;
+        private TextBox _orderPlacedApiTimeout;
+        private TextBox _orderPlacedDedupHours;
         private ComboBox _tone;
         private TextBox _maxLength;
         private TextBox _bannedWords;
@@ -454,6 +461,7 @@ namespace Bot.Options
             root.Children.Add(_tabs);
             _tabs.Items.Add(new TabItem { Header = "知识库", Content = BuildKnowledgeTab() });
             _tabs.Items.Add(new TabItem { Header = "自动回复规则", Content = BuildRulesTab() });
+            _tabs.Items.Add(new TabItem { Header = "消息通知", Content = BuildNotificationTab() });
             _tabs.Items.Add(new TabItem { Header = "消息策略", Content = BuildPolicyTab() });
             _tabs.Items.Add(new TabItem { Header = "日志与调试", Content = BuildLogsTab() });
             _tabs.Items.Add(new TabItem { Header = "账号与授权", Content = BuildLicenseTab() });
@@ -530,6 +538,73 @@ namespace Bot.Options
             _noAutoKeywords = AddLabeledText(sp, "仅人工确认关键词", cfg.NoAutoReplyKeywords, 68, "例：银行卡、身份证、手机号、地址、法律、维权。", true);
             _handoffText = AddLabeledText(sp, "工作时间转人工话术", cfg.HandoffText, 62, "人工在线时命中规则：Bot 不自动发送，只在面板提示并通知人工。", true);
 
+            sp.Children.Add(SectionTitle("买家下单后自动发送"));
+            _orderPlacedReplyEnabled = new CheckBox
+            {
+                Content = "识别到买家新下单后自动发送消息",
+                IsChecked = cfg.EnableOrderPlacedReply,
+                Margin = new Thickness(0, 0, 0, 8),
+                FontWeight = FontWeights.SemiBold
+            };
+            sp.Children.Add(_orderPlacedReplyEnabled);
+
+            var modeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            modeRow.Children.Add(new TextBlock { Text = "回复来源", Width = 90, VerticalAlignment = VerticalAlignment.Center });
+            _orderPlacedReplyMode = new ComboBox { Width = 190, Height = 26 };
+            _orderPlacedReplyMode.Items.Add("固定预设答案");
+            _orderPlacedReplyMode.Items.Add("调用HTTP接口");
+            _orderPlacedReplyMode.SelectedItem = string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyMode)
+                ? "固定预设答案"
+                : cfg.OrderPlacedReplyMode;
+            modeRow.Children.Add(_orderPlacedReplyMode);
+            sp.Children.Add(modeRow);
+
+            _orderPlacedReplyText = AddLabeledText(
+                sp,
+                "预设/兜底答案",
+                cfg.OrderPlacedReplyText,
+                72,
+                "支持 {客服}、{买家}、{订单号}、{时间}。接口失败时也会使用这段话兜底。",
+                true);
+            _orderPlacedApiUrl = AddLabeledText(
+                sp,
+                "HTTP接口",
+                cfg.OrderPlacedApiUrl,
+                28,
+                "POST JSON：event、seller、buyer、orderId、eventTime、message；返回 reply、answer 或 message。",
+                false);
+
+            var tokenRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            tokenRow.Children.Add(new TextBlock { Text = "接口令牌", Width = 90, VerticalAlignment = VerticalAlignment.Center });
+            _orderPlacedApiToken = new PasswordBox { Password = cfg.OrderPlacedApiToken ?? string.Empty, Height = 26, ToolTip = "可留空；填写后使用 Bearer Token" };
+            tokenRow.Children.Add(_orderPlacedApiToken);
+            sp.Children.Add(tokenRow);
+
+            var runtimeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
+            runtimeRow.Children.Add(new TextBlock { Text = "接口超时秒", Width = 90, VerticalAlignment = VerticalAlignment.Center });
+            _orderPlacedApiTimeout = new TextBox { Text = cfg.OrderPlacedApiTimeoutSeconds.ToString(), Width = 70, Height = 26 };
+            runtimeRow.Children.Add(_orderPlacedApiTimeout);
+            runtimeRow.Children.Add(new TextBlock { Text = "同订单去重小时", Width = 120, Margin = new Thickness(20, 0, 0, 0), VerticalAlignment = VerticalAlignment.Center });
+            _orderPlacedDedupHours = new TextBox { Text = cfg.OrderPlacedDedupHours.ToString(), Width = 70, Height = 26 };
+            runtimeRow.Children.Add(_orderPlacedDedupHours);
+            sp.Children.Add(runtimeRow);
+
+            sp.Children.Add(new TextBlock
+            {
+                Text = "当前仅在 Bot 运行期间识别实时订单卡片，历史订单不会补发。后续兑换码逻辑可由 HTTP 接口按 orderId 返回一次性回复。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.Gray,
+                FontSize = 11,
+                Margin = new Thickness(0, 5, 0, 0)
+            });
+            return new ScrollViewer { Content = Card(sp), VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
+        }
+
+        private UIElement BuildNotificationTab()
+        {
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            var sp = new StackPanel { Margin = new Thickness(8) };
+
             sp.Children.Add(SectionTitle("人工客服工作时间与下班回复"));
             _workHoursEnabled = new CheckBox { Content = "启用人工客服上下班时间判断", IsChecked = cfg.EnableWorkHours, Margin = new Thickness(0, 0, 0, 8) };
             sp.Children.Add(_workHoursEnabled);
@@ -604,7 +679,7 @@ namespace Bot.Options
             sp.Children.Add(test);
             sp.Children.Add(new TextBlock
             {
-                Text = "微信使用企业微信群机器人；QQ使用兼容Webhook；飞书、钉钉使用群机器人；邮箱使用SMTP。密钥和密码仅保存在本机 params.db。",
+                Text = "企业微信应用消息由 Ubuntu 控制面配置；微信、QQ、飞书、钉钉 Webhook 与 SMTP 密码保存在本机 params.db。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.Gray,
                 FontSize = 11,
@@ -642,6 +717,10 @@ namespace Bot.Options
             if (!int.TryParse(_notificationCooldown == null ? "10" : _notificationCooldown.Text, out cooldown)) cooldown = 10;
             int smtpPort;
             if (!int.TryParse(_smtpPort == null ? "465" : _smtpPort.Text, out smtpPort)) smtpPort = 465;
+            int orderTimeout;
+            if (!int.TryParse(_orderPlacedApiTimeout == null ? "10" : _orderPlacedApiTimeout.Text, out orderTimeout)) orderTimeout = 10;
+            int orderDedupHours;
+            if (!int.TryParse(_orderPlacedDedupHours == null ? "72" : _orderPlacedDedupHours.Text, out orderDedupHours)) orderDedupHours = 72;
             return new AutoReplyRuleConfig
             {
                 Enabled = _rulesEnabled == null || (_rulesEnabled.IsChecked ?? true),
@@ -669,7 +748,16 @@ namespace Bot.Options
                 NotifyFeishu = _notifyFeishu != null && (_notifyFeishu.IsChecked ?? false),
                 FeishuWebhook = _feishuWebhook == null ? string.Empty : _feishuWebhook.Text,
                 NotifyDingTalk = _notifyDingTalk != null && (_notifyDingTalk.IsChecked ?? false),
-                DingTalkWebhook = _dingTalkWebhook == null ? string.Empty : _dingTalkWebhook.Text
+                DingTalkWebhook = _dingTalkWebhook == null ? string.Empty : _dingTalkWebhook.Text,
+                EnableOrderPlacedReply = _orderPlacedReplyEnabled != null && (_orderPlacedReplyEnabled.IsChecked ?? false),
+                OrderPlacedReplyMode = _orderPlacedReplyMode == null || _orderPlacedReplyMode.SelectedItem == null
+                    ? "固定预设答案"
+                    : _orderPlacedReplyMode.SelectedItem.ToString(),
+                OrderPlacedReplyText = _orderPlacedReplyText == null ? string.Empty : _orderPlacedReplyText.Text,
+                OrderPlacedApiUrl = _orderPlacedApiUrl == null ? string.Empty : _orderPlacedApiUrl.Text,
+                OrderPlacedApiToken = _orderPlacedApiToken == null ? string.Empty : _orderPlacedApiToken.Password,
+                OrderPlacedApiTimeoutSeconds = Math.Max(3, Math.Min(60, orderTimeout)),
+                OrderPlacedDedupHours = Math.Max(1, Math.Min(720, orderDedupHours))
             };
         }
 
@@ -1287,6 +1375,13 @@ namespace Bot.ChromeNs
         public string FeishuWebhook { get; set; }
         public bool NotifyDingTalk { get; set; }
         public string DingTalkWebhook { get; set; }
+        public bool EnableOrderPlacedReply { get; set; }
+        public string OrderPlacedReplyMode { get; set; }
+        public string OrderPlacedReplyText { get; set; }
+        public string OrderPlacedApiUrl { get; set; }
+        public string OrderPlacedApiToken { get; set; }
+        public int OrderPlacedApiTimeoutSeconds { get; set; }
+        public int OrderPlacedDedupHours { get; set; }
 
         public static AutoReplyRuleConfig Default()
         {
@@ -1304,7 +1399,14 @@ namespace Bot.ChromeNs
                 EnableHandoffNotification = false,
                 NotificationCooldownMinutes = 10,
                 SmtpPort = 465,
-                SmtpEnableSsl = true
+                SmtpEnableSsl = true,
+                EnableOrderPlacedReply = false,
+                OrderPlacedReplyMode = "固定预设答案",
+                OrderPlacedReplyText = "亲，您的订单已收到，我们会尽快为您处理。",
+                OrderPlacedApiUrl = string.Empty,
+                OrderPlacedApiToken = string.Empty,
+                OrderPlacedApiTimeoutSeconds = 10,
+                OrderPlacedDedupHours = 72
             };
         }
     }
@@ -1441,6 +1543,10 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(cfg.OffHoursFixedText)) cfg.OffHoursFixedText = AutoReplyRuleConfig.Default().OffHoursFixedText;
             if (cfg.NotificationCooldownMinutes <= 0) cfg.NotificationCooldownMinutes = 10;
             if (cfg.SmtpPort <= 0) cfg.SmtpPort = 465;
+            if (string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyMode)) cfg.OrderPlacedReplyMode = "固定预设答案";
+            if (string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyText)) cfg.OrderPlacedReplyText = AutoReplyRuleConfig.Default().OrderPlacedReplyText;
+            if (cfg.OrderPlacedApiTimeoutSeconds <= 0) cfg.OrderPlacedApiTimeoutSeconds = 10;
+            if (cfg.OrderPlacedDedupHours <= 0) cfg.OrderPlacedDedupHours = 72;
             return cfg;
         }
 

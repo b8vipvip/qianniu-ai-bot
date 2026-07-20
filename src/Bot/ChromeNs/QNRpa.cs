@@ -16,7 +16,7 @@ using Bot.Automation;
 
 namespace Bot.ChromeNs
 {
-    public class QNRpa
+    public partial class QNRpa
     {
         private DateTime _preUpdateChatBrowserRectTime;
         private DateTime _preSendPlainTextAndImageTime;
@@ -50,51 +50,7 @@ namespace Bot.ChromeNs
 
         public async void UpdateChatBrowserRect(bool force = false)
         {
-            if (Desk.Inst.IsVisibleAndNotMinimized)
-            {
-                if (force || (DateTime.Now - _preUpdateChatBrowserRectTime).TotalSeconds >= 3)
-                {
-                    _preUpdateChatBrowserRectTime = DateTime.Now;
-                    if (automationApplication.MainWindowHandle.ToInt32() < 1) return;
-                    await Task.Run(() =>
-                    {
-                        try
-                        {
-                            var topWnds = automationApplication.GetAllTopLevelWindows(uia3Automation);
-                            var mainWnd = topWnds.FirstOrDefault(k => k.ClassName == "MutilChatView");
-                            if (mainWnd == null)
-                            {
-                                BotConnectionDiagnostics.RecordRpaScan(false, false, "未找到MutilChatView");
-                                return;
-                            }
-
-                            var descendants = mainWnd.FindAllDescendants();
-                            var sendMessageButton = descendants.FirstOrDefault(k =>
-                            {
-                                if (k.Properties.Name.IsSupported && IsSendButtonName(k.Name)) return true;
-                                return false;
-                            });
-                            _sendMessageButton = sendMessageButton;
-
-                            var messageInputTextArea = descendants.FirstOrDefault(k =>
-                            {
-                                if (k.Properties.ClassName.IsSupported && k.ClassName == "TextRichEdit") return true;
-                                return false;
-                            });
-                            if (messageInputTextArea != null)
-                            {
-                                _messageInputTextArea = messageInputTextArea.AsTextBox();
-                            }
-                            BotConnectionDiagnostics.RecordRpaScan(_sendMessageButton != null, _messageInputTextArea != null, "UIA扫描完成");
-                        }
-                        catch (Exception ex)
-                        {
-                            BotConnectionDiagnostics.RecordRpaScan(false, false, ex.Message);
-                            Log.Exception(ex);
-                        }
-                    });
-                }
-            }
+            await RefreshChatControlsAsync(force);
         }
 
         public async Task SendImageAsync(string buyer, string imagePath)
@@ -148,21 +104,14 @@ namespace Bot.ChromeNs
 
         private string GetEditorTextSafe()
         {
-            try
-            {
-                if (_messageInputTextArea == null) return string.Empty;
-                return _messageInputTextArea.Text ?? string.Empty;
-            }
-            catch
-            {
-                return string.Empty;
-            }
+            string text;
+            return TryGetEditorText(out text) ? text : string.Empty;
         }
 
         private bool IsEditorEmptySafe()
         {
-            if (_messageInputTextArea == null) return false;
-            return string.IsNullOrWhiteSpace(GetEditorTextSafe());
+            string text;
+            return TryGetEditorText(out text) && string.IsNullOrWhiteSpace(text);
         }
 
         private bool TryIsInputboxEmptyByCdp(out bool isEmpty)
@@ -222,7 +171,8 @@ namespace Bot.ChromeNs
             var editorText = GetEditorTextSafe();
             bool cdpEmpty;
             var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
-            BotConnectionDiagnostics.RecordSendAttempt(false, method + "后未确认发送");
+            SetSendFailure("发送确认", method + "后未确认发送；editorText=" + editorText
+                + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty);
             Log.Info(method + "发送未确认，editorText=" + editorText + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty + ", text=" + text);
             return false;
         }
@@ -272,9 +222,18 @@ namespace Bot.ChromeNs
 
             try
             {
-                UpdateChatBrowserRect(true);
-                Thread.Sleep(350);
+                RefreshChatControlsAsync(true).GetAwaiter().GetResult();
+                if (!HasExpectedDraft(text))
+                {
+                    bool cdpEmpty;
+                    if (!TryIsInputboxEmptyByCdp(out cdpEmpty) || cdpEmpty)
+                    {
+                        SetSendFailure("发送按钮回退", "发送前未确认输入框仍包含目标文本");
+                        return false;
+                    }
+                }
                 if (_sendMessageButton != null && TryClickSendButtonLeftPart(buyer, text, sendStart)) return true;
+                SetSendFailure("发送按钮回退", _sendMessageButton == null ? "未找到发送按钮" : "点击后未确认发送");
             }
             catch (Exception ex)
             {
@@ -336,12 +295,11 @@ namespace Bot.ChromeNs
                 {
                     if (_messageInputTextArea == null)
                     {
-                        UpdateChatBrowserRect(true);
-                        Thread.Sleep(500);
+                        RefreshChatControlsAsync(true).GetAwaiter().GetResult();
                     }
                     if (_messageInputTextArea == null)
                     {
-                        Log.Info("FocusEditor失败：未找到输入框TextRichEdit。");
+                        SetSendFailure("聚焦输入框", "未找到聊天输入框");
                         return;
                     }
 
@@ -364,6 +322,7 @@ namespace Bot.ChromeNs
                 }
                 catch (Exception e)
                 {
+                    SetSendFailure("聚焦输入框", e.Message);
                     Log.Exception(e);
                 }
             });
@@ -395,10 +354,14 @@ namespace Bot.ChromeNs
 
                 bool cdpEmpty;
                 var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
-                var editorText = GetEditorTextSafe();
-                var ok = (hasCdpEmpty && !cdpEmpty) || !string.IsNullOrWhiteSpace(editorText);
+                string editorText;
+                var editorReadable = TryGetEditorText(out editorText);
+                var ok = (editorReadable && EditorMatchesExpectedText(editorText, text))
+                    || (hasCdpEmpty && !cdpEmpty);
 
-                Log.Info("CDP写入输入框结果=" + ok + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty + ", editorText=" + editorText + ", text=" + text);
+                Log.Info("CDP写入输入框结果=" + ok + ", editorReadable=" + editorReadable
+                    + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty
+                    + ", editorText=" + editorText + ", text=" + text);
                 return ok;
             }
             catch (Exception ex)
@@ -411,6 +374,7 @@ namespace Bot.ChromeNs
         private async Task<bool> OpenAndSendText(string buyer, string text)
         {
             bool sendResult = false;
+            ResetSendFailure();
             try
             {
                 Log.Info("自动发送开始: buyer=" + buyer + ", text=" + text + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
@@ -428,8 +392,8 @@ namespace Bot.ChromeNs
 
                 if (_qn.Buyer == null || _qn.Buyer.Nick != buyer)
                 {
-                    Log.Info("自动发送跳过：当前会话不是目标买家。target=" + buyer + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
-                    BotConnectionDiagnostics.RecordSendAttempt(false, "当前会话不是目标买家");
+                    SetSendFailure("会话确认", "当前会话不是目标买家；target=" + buyer
+                        + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
                     return false;
                 }
 
@@ -439,9 +403,7 @@ namespace Bot.ChromeNs
                     Util.WaitFor(new Func<bool>(() => Desk.Inst.IsVisible), 3000, 10, false);
                 }
 
-                UpdateChatBrowserRect(true);
-                Thread.Sleep(500);
-
+                await RefreshChatControlsAsync(true);
                 var setOk = SetPlainText(text);
                 if (!setOk)
                 {
@@ -451,19 +413,23 @@ namespace Bot.ChromeNs
 
                 if (!setOk)
                 {
-                    Log.Info("自动发送失败：写入输入框失败。buyer=" + buyer + ", text=" + text);
-                    BotConnectionDiagnostics.RecordSendAttempt(false, "写入输入框失败");
+                    SetSendFailure("写入输入框", "UIA与CDP均未确认目标文本");
                     return false;
                 }
 
                 Thread.Sleep(250);
                 var sendStart = DateTime.Now;
                 sendResult = TryClickSendButton(buyer, text, sendStart);
-                Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer + ", text=" + text);
+                if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
+                {
+                    SetSendFailure("发送确认", "Enter与发送按钮均未确认消息送达");
+                }
+                Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer
+                    + ", failure=" + GetSendFailureReason() + ", text=" + text);
             }
             catch (Exception ex)
             {
-                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
+                SetSendFailure("自动发送异常", ex.Message);
                 Log.Exception(ex);
                 sendResult = false;
             }
@@ -496,8 +462,9 @@ namespace Bot.ChromeNs
                     DateTime now = DateTime.Now;
                     do
                     {
-                        var editorText = GetEditorTextSafe();
-                        if (!string.IsNullOrWhiteSpace(editorText))
+                        string editorText;
+                        if (TryGetEditorText(out editorText)
+                            && EditorMatchesExpectedText(editorText, text))
                         {
                             isok = true;
                             break;

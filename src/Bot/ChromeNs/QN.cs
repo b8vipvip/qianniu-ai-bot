@@ -13,7 +13,7 @@ using BotLib;
 
 namespace Bot.ChromeNs
 {
-    public class QN
+    public partial class QN
     {
         public event EventHandler<BuyerSwitchedEventArgs> EvBuyerSwitched;
         public event EventHandler<SellerSwitchedEventArgs> EvSellerSwitched;
@@ -115,9 +115,10 @@ namespace Bot.ChromeNs
             await _sendGate.WaitAsync();
             try
             {
+                rpa.ResetSendFailure();
                 if (!await EnsureActiveBuyerForSendAsync(buyer))
                 {
-                    BotConnectionDiagnostics.RecordSendAttempt(false, "无法确认目标买家会话");
+                    rpa.SetSendFailure("会话确认", "无法确认目标买家会话");
                     return false;
                 }
 
@@ -125,10 +126,20 @@ namespace Bot.ChromeNs
                 var retry = Math.Max(0, retryCount);
                 for (var i = 0; !ok && i < retry; i++)
                 {
-                    Log.Info("自动发送失败，准备重试第" + (i + 1) + "次。buyer=" + buyer + ", text=" + text);
+                    Log.Info("自动发送失败，准备重试第" + (i + 1) + "次。buyer=" + buyer
+                        + ", reason=" + rpa.GetSendFailureReason() + ", text=" + text);
+                    rpa.InvalidateChatControls();
                     await Task.Delay(1800);
-                    if (!await EnsureActiveBuyerForSendAsync(buyer)) return false;
+                    if (!await EnsureActiveBuyerForSendAsync(buyer))
+                    {
+                        rpa.SetSendFailure("重试会话确认", "无法确认目标买家会话");
+                        return false;
+                    }
                     ok = await SendTextAsync(buyer, text);
+                }
+                if (!ok)
+                {
+                    Log.Error("自动发送最终失败: buyer=" + buyer + ", reason=" + rpa.GetSendFailureReason());
                 }
                 return ok;
             }
@@ -293,6 +304,7 @@ namespace Bot.ChromeNs
             if (e != null && e.Seller != null && e.Buyer != null)
             {
                 Log.Info("收到后台买家消息通知: seller=" + e.Seller.Nick + ", buyer=" + e.Buyer.Nick);
+                ScheduleBackgroundMessageRecovery(e);
             }
             if (EvShopRobotReceriveNewMessage != null)
             {
@@ -336,6 +348,22 @@ namespace Bot.ChromeNs
 
             var sellerNick = message.toid.nick;
             var buyerNick = message.fromid.nick;
+            MarkBuyerMessageObserved(sellerNick, buyerNick);
+
+            OrderPlacedReplyPlan orderPlan;
+            if (OrderPlacedAutoReplyService.TryCreatePlan(
+                message,
+                messageText,
+                sellerNick,
+                buyerNick,
+                _messageSafetyStartedAt,
+                out orderPlan))
+            {
+                return orderPlan == null
+                    ? Task.CompletedTask
+                    : ProcessOrderPlacedReplyAsync(orderPlan);
+            }
+
             var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt);
             var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
             var visionDecision = VisionMessageDecision.Decide(
@@ -469,7 +497,7 @@ namespace Bot.ChromeNs
             }
             if (conversationCtl != null)
             {
-                conversationCtl.SetSendResult(sendOk, sendOk ? "已发送（合并本轮买家消息）" : "发送失败：目标买家会话未确认或发送未完成");
+                conversationCtl.SetSendResult(sendOk, sendOk ? "已发送（合并本轮买家消息）" : "发送失败：" + rpa.GetSendFailureReason());
             }
         }
 
@@ -545,7 +573,7 @@ namespace Bot.ChromeNs
                     burst.SellerNick,
                     burst.BuyerNick);
             }
-            if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。");
+            if (ctl != null) ctl.SetSendResult(sendOk, sendOk ? "已发送（合并图片与本轮消息）" : "识别完成，但目标买家会话未确认，未发送。原因：" + rpa.GetSendFailureReason());
         }
 
         private void AddSkippedConversation(string seller, string buyer, string question, string note)
