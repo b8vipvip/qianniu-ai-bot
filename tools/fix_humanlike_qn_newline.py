@@ -1,0 +1,110 @@
+from pathlib import Path
+
+root = Path(__file__).resolve().parents[1]
+qn_path = root / "src/Bot/ChromeNs/QN.cs"
+text = qn_path.read_text(encoding="utf-8-sig")
+old = 'burst.CombinedQuestion.Replace("\n", " | ")'
+new = 'burst.CombinedQuestion.Replace("\\n", " | ")'
+count = text.count(old)
+if count != 1:
+    raise RuntimeError("expected one broken multiline Replace expression, got %d" % count)
+qn_path.write_text(text.replace(old, new, 1), encoding="utf-8-sig")
+
+workflow = '''name: API control plane CI
+
+on:
+  push:
+    branches:
+      - feat/api-control-plane
+      - agent/reply-dedup-knowledge-navigation
+    paths:
+      - services/api-control-plane/**
+      - .github/workflows/api-control-plane-ci.yml
+  pull_request:
+    paths:
+      - services/api-control-plane/**
+      - .github/workflows/api-control-plane-ci.yml
+
+permissions:
+  contents: read
+
+jobs:
+  test-build-package:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api-control-plane
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/api-control-plane/requirements.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Compile Python
+        run: python -m py_compile app.py bootstrap.py wecom_bridge.py wecom_crypto.py tests/test_control_plane.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py
+
+      - name: Run control plane tests
+        run: python -m pytest -q --tb=short 2>&1 | tee pytest.log
+
+      - name: Upload pytest diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-control-plane-pytest-${{ github.sha }}
+          path: services/api-control-plane/pytest.log
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Check browser JavaScript syntax
+        run: node --check static/app.js
+
+      - name: Build Ubuntu container
+        run: docker build -t qianniu-api-control-plane:${{ github.sha }} .
+
+      - name: Validate Compose configuration
+        run: |
+          cp .env.example .env
+          docker compose config >/dev/null
+          docker compose -f docker-compose.bt.yml config >/dev/null
+
+      - name: Clean generated caches
+        run: |
+          rm -f .env pytest.log
+          rm -rf .test-data
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          find . -type d -name .pytest_cache -prune -exec rm -rf {} +
+          find . -type f \( -name '*.pyc' -o -name '*.pyo' \) -delete
+
+      - name: Upload Ubuntu deployment package
+        uses: actions/upload-artifact@v4
+        with:
+          name: qianniu-api-control-plane-ubuntu-${{ github.sha }}
+          path: |
+            services/api-control-plane/app.py
+            services/api-control-plane/bootstrap.py
+            services/api-control-plane/wecom_bridge.py
+            services/api-control-plane/wecom_crypto.py
+            services/api-control-plane/static/**
+            services/api-control-plane/tests/**
+            services/api-control-plane/requirements.txt
+            services/api-control-plane/Dockerfile
+            services/api-control-plane/docker-compose.yml
+            services/api-control-plane/docker-compose.bt.yml
+            services/api-control-plane/Caddyfile
+            services/api-control-plane/.env.example
+            services/api-control-plane/.dockerignore
+            services/api-control-plane/README.md
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+'''
+(root / ".github/workflows/api-control-plane-ci.yml").write_text(workflow, encoding="utf-8")
+print("fixed QN newline expression and restored normal API CI")
