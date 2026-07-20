@@ -57,6 +57,14 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Upload workflow sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-sources-${{ github.sha }}
+          path: .github/workflows/**
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
