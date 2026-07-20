@@ -13,7 +13,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py .
+COPY app.py bootstrap.py wecom_bridge.py ./
 COPY static ./static
 
 RUN useradd --create-home --uid 10001 appuser \
@@ -27,4 +27,4 @@ VOLUME ["/data"]
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
-CMD ["python", "app.py"]
+CMD ["python", "bootstrap.py"]
