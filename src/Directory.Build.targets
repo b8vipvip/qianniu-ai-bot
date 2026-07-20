@@ -25,4 +25,7 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReplyDeduplicationService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReplyDeduplicationService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs" />
+  </ItemGroup>
 </Project>
