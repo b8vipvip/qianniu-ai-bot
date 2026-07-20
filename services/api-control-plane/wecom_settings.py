@@ -270,6 +270,24 @@ def save_settings(data: WeComSettingsInput, path: Optional[Path] = None) -> Dict
     return load_settings(path)
 
 
+def apply_to_bridge(bridge: Any) -> Dict[str, Any]:
+    settings = load_settings()
+    bridge.WECOM_ENABLED = bool(settings.get("enabled"))
+    bridge.WECOM_CORP_ID = str(settings.get("corp_id") or "")
+    bridge.WECOM_APP_SECRET = str(settings.get("app_secret") or "")
+    bridge.WECOM_AGENT_ID = str(settings.get("agent_id") or "")
+    bridge.WECOM_TO_USERS = str(settings.get("to_users") or "")
+    bridge.WECOM_CALLBACK_TOKEN = str(settings.get("callback_token") or "")
+    bridge.WECOM_CALLBACK_AES_KEY = str(settings.get("callback_aes_key") or "")
+    bridge.WECOM_ALLOWED_REPLY_USERS = str(settings.get("allowed_reply_users") or "")
+    bridge.WECOM_TICKET_HOURS = max(1, min(168, int(settings.get("ticket_hours") or 24)))
+    if hasattr(bridge, "TOKEN_LOCK") and hasattr(bridge, "TOKEN_CACHE"):
+        with bridge.TOKEN_LOCK:
+            bridge.TOKEN_CACHE.clear()
+            bridge.TOKEN_CACHE.update({"value": "", "expires_at": 0.0})
+    return settings
+
+
 @router.get("/api/admin/wecom/settings")
 def admin_get_wecom_settings(_: str = Depends(require_admin)) -> Dict[str, Any]:
     return public_settings(load_settings())
@@ -280,7 +298,7 @@ def admin_save_wecom_settings(data: WeComSettingsInput, _: str = Depends(require
     saved = save_settings(data)
     try:
         import wecom_bridge
-        wecom_bridge.clear_access_token_cache()
+        apply_to_bridge(wecom_bridge)
     except Exception:
         pass
     return public_settings(saved)
