@@ -38,14 +38,21 @@ jobs:
           python-version: '3.11'
 
       - name: Reconstruct and apply migration
+        id: apply
+        continue-on-error: true
+        shell: bash
         run: |
-          cat .migration/bot-observability-speed.part* | base64 -d > /tmp/migrate_bot_observability_speed.py
-          python -m py_compile /tmp/migrate_bot_observability_speed.py
-          python /tmp/migrate_bot_observability_speed.py
-          git diff --binary > migration-source.diff
+          set -o pipefail
+          {
+            cat .migration/bot-observability-speed.part* | base64 -d > /tmp/migrate_bot_observability_speed.py
+            python -m py_compile /tmp/migrate_bot_observability_speed.py
+            python /tmp/migrate_bot_observability_speed.py
+            git diff --binary > migration-source.diff
+          } 2>&1 | tee migration-apply.log
 
       - name: Run repository static tests
         id: tests
+        if: steps.apply.outcome == 'success'
         continue-on-error: true
         run: |
           python -m pip install pytest
@@ -54,6 +61,7 @@ jobs:
 
       - name: Verify expected source changes
         id: verify
+        if: steps.apply.outcome == 'success'
         continue-on-error: true
         run: |
           grep -F 'Content="测试 Bot 真实流程"' src/Bot/Options/CtlRobotOptions.xaml
@@ -70,13 +78,14 @@ jobs:
         with:
           name: bot-observability-speed-migration-${{ github.sha }}
           path: |
+            migration-apply.log
             migration-pytest.log
             migration-source.diff
           if-no-files-found: warn
           retention-days: 7
 
       - name: Stop on migration validation failure
-        if: steps.tests.outcome != 'success' || steps.verify.outcome != 'success'
+        if: steps.apply.outcome != 'success' || steps.tests.outcome != 'success' || steps.verify.outcome != 'success'
         run: exit 1
 
       - name: Commit migrated source
@@ -85,7 +94,7 @@ jobs:
           rm -f .migration/bot-observability-speed.part*
           rmdir .migration 2>/dev/null || true
           rm -f .github/workflows/migrate-bot-observability-speed.yml
-          rm -f migration-pytest.log migration-source.diff
+          rm -f migration-apply.log migration-pytest.log migration-source.diff
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type d -name .pytest_cache -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
