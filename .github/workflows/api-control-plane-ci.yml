@@ -21,7 +21,6 @@ permissions:
 
 jobs:
   apply-humanlike-patch:
-    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout integration branch
