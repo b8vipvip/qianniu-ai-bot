@@ -41,11 +41,30 @@ jobs:
         run: |
           python -m py_compile tools/migrate_message_notification_order_reliability.py
           python tools/migrate_message_notification_order_reliability.py
+          git diff --binary > migration-source.diff
 
       - name: Run repository static tests
+        id: tests
+        continue-on-error: true
         run: |
           python -m pip install pytest
-          python -m pytest -q --tb=short tests
+          set -o pipefail
+          python -m pytest -q --tb=short tests 2>&1 | tee migration-pytest.log
+
+      - name: Upload migration diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: message-migration-diagnostics-${{ github.sha }}
+          path: |
+            migration-pytest.log
+            migration-source.diff
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stop on static test failure
+        if: steps.tests.outcome != 'success'
+        run: exit 1
 
       - name: Verify expected source changes
         run: |
@@ -60,6 +79,7 @@ jobs:
         run: |
           rm -f tools/migrate_message_notification_order_reliability.py
           rm -f .github/workflows/migrate-message-notifications-order-reliability.yml
+          rm -f migration-pytest.log migration-source.diff
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type d -name .pytest_cache -prune -exec rm -rf {} +
           find . -type f -name '*.pyc' -delete
