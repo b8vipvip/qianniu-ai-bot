@@ -36,7 +36,14 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    var result = await SendAsync(cfg, BuildMessage(seller, buyer, question, decision));
+                    var result = await SendAsync(
+                        cfg,
+                        BuildMessage(seller, buyer, question, decision),
+                        seller,
+                        buyer,
+                        question,
+                        decision,
+                        false);
                     Log.Info("转人工通知结果：" + result);
                 }
                 catch (Exception ex)
@@ -49,9 +56,15 @@ namespace Bot.ChromeNs
         public static async Task<string> TestAsync(AutoReplyRuleConfig cfg)
         {
             cfg = cfg ?? AutoReplyRuleConfig.Default();
-            return await SendAsync(cfg,
+            return await SendAsync(
+                cfg,
                 "【千牛Bot测试通知】\n时间：" + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
-                + "\n这是一条转人工通知通道测试消息。");
+                    + "\n这是一条转人工通知通道测试消息。",
+                "测试客服",
+                "测试买家",
+                "这是一条企业微信应用消息双向链路测试。",
+                null,
+                true);
         }
 
         private static string BuildMessage(
@@ -66,10 +79,17 @@ namespace Bot.ChromeNs
                 + "\n买家：" + Safe(buyer, 80)
                 + "\n状态：" + (decision.IsOffHours ? "人工客服下班" : "人工客服工作时间")
                 + "\n原因：" + Safe(decision.Reason, 200)
-                + "\n问题：" + Safe(question, 500);
+                + "\n买家消息：\n" + SafeBuyerMessage(question, 1200);
         }
 
-        private static async Task<string> SendAsync(AutoReplyRuleConfig cfg, string message)
+        private static async Task<string> SendAsync(
+            AutoReplyRuleConfig cfg,
+            string message,
+            string seller,
+            string buyer,
+            string question,
+            AutoReplyRuleDecision decision,
+            bool test)
         {
             var results = new List<string>();
             if (cfg.NotifyWeChat)
@@ -96,7 +116,16 @@ namespace Bot.ChromeNs
             {
                 results.Add("邮箱=" + await SendEmail(cfg, message));
             }
-            return results.Count == 0 ? "未选择任何通知渠道" : string.Join("；", results);
+            if (WeComAppBridgeClient.IsConfigured())
+            {
+                results.Add("企业微信应用消息=" + await WeComAppBridgeClient.SendNotificationAsync(
+                    seller,
+                    buyer,
+                    question,
+                    decision,
+                    test));
+            }
+            return results.Count == 0 ? "未选择任何通知渠道，且统一API服务未配置" : string.Join("；", results);
         }
 
         private static async Task<string> PostJson(string url, JObject payload)
@@ -170,6 +199,19 @@ namespace Bot.ChromeNs
         private static string Normalize(string value)
         {
             return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty);
+        }
+
+        private static string SafeBuyerMessage(string value, int max)
+        {
+            var lines = (value ?? string.Empty)
+                .Replace("\r", string.Empty)
+                .Split(new[] { '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => Safe(x, 300))
+                .Where(x => x.Length > 0)
+                .Take(10)
+                .ToList();
+            var text = lines.Count == 0 ? "[空白或未知消息]" : string.Join("\n", lines);
+            return text.Length <= max ? text : text.Substring(0, max) + "...";
         }
 
         private static string Safe(string value, int max)

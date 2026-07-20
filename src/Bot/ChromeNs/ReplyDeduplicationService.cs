@@ -1,0 +1,271 @@
+using Bot.Knowledge;
+using BotLib;
+using Newtonsoft.Json.Linq;
+using System;
+using System.Collections.Concurrent;
+using System.Linq;
+using System.Text.RegularExpressions;
+using System.Threading;
+
+namespace Bot.ChromeNs
+{
+    internal sealed class ReplyDeduplicationResult
+    {
+        public string Answer { get; set; }
+        public string PreviousAnswer { get; set; }
+        public string Source { get; set; }
+        public bool Regenerated { get; set; }
+    }
+
+    internal static class ReplyDeduplicationService
+    {
+        private sealed class DeliveredAnswerStamp
+        {
+            public string Answer;
+            public DateTime SentAt;
+        }
+
+        private static readonly ConcurrentDictionary<string, DeliveredAnswerStamp> LastDelivered =
+            new ConcurrentDictionary<string, DeliveredAnswerStamp>(StringComparer.Ordinal);
+
+        public static ReplyDeduplicationResult EnsureDistinct(
+            string seller,
+            string buyer,
+            string question,
+            string candidateAnswer)
+        {
+            var result = new ReplyDeduplicationResult
+            {
+                Answer = candidateAnswer ?? string.Empty,
+                PreviousAnswer = string.Empty,
+                Source = string.Empty,
+                Regenerated = false
+            };
+
+            if (string.IsNullOrWhiteSpace(result.Answer)
+                || result.Answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                return result;
+            }
+
+            string previousAnswer;
+            DateTime previousAt;
+            if (!TryGetLastDelivered(seller, buyer, out previousAnswer, out previousAt)
+                || !SameAnswer(previousAnswer, result.Answer))
+            {
+                return result;
+            }
+
+            var knowledge = ResolveKnowledge(seller, buyer, question, result.Answer);
+            var regenerated = Regenerate(seller, buyer, question, previousAnswer, knowledge);
+            if (string.IsNullOrWhiteSpace(regenerated)
+                || regenerated.StartsWith("错误：", StringComparison.Ordinal)
+                || SameAnswer(previousAnswer, regenerated))
+            {
+                regenerated = BuildSafeFallback(question);
+            }
+
+            regenerated = BotFeatureStore.ApplyOutputPolicy(regenerated);
+            if (string.IsNullOrWhiteSpace(regenerated) || SameAnswer(previousAnswer, regenerated))
+            {
+                regenerated = "如果前面的步骤都试过仍无效，建议转人工进一步核查。";
+            }
+
+            result.Answer = regenerated;
+            result.PreviousAnswer = previousAnswer;
+            result.Source = knowledge == null ? "AI重答" : "本地知识库重答";
+            result.Regenerated = true;
+            KnowledgeLearningService.RegisterAnswerSource(
+                seller,
+                buyer,
+                question,
+                result.Answer,
+                result.Source);
+            Log.Info("检测到与上一轮完全相同的答案，已重新生成。seller="
+                + seller + ", buyer=" + buyer + ", source=" + result.Source);
+            return result;
+        }
+
+        public static void RememberDelivered(string seller, string buyer, string answer)
+        {
+            if (string.IsNullOrWhiteSpace(answer)
+                || answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            LastDelivered[Key(seller, buyer)] = new DeliveredAnswerStamp
+            {
+                Answer = answer.Trim(),
+                SentAt = DateTime.Now
+            };
+            Cleanup();
+        }
+
+        public static bool TryGetLastDelivered(
+            string seller,
+            string buyer,
+            out string answer,
+            out DateTime sentAt)
+        {
+            answer = string.Empty;
+            sentAt = DateTime.MinValue;
+            DeliveredAnswerStamp stamp;
+            if (LastDelivered.TryGetValue(Key(seller, buyer), out stamp)
+                && stamp != null
+                && stamp.SentAt >= DateTime.Now.AddMinutes(-30)
+                && !string.IsNullOrWhiteSpace(stamp.Answer))
+            {
+                answer = stamp.Answer;
+                sentAt = stamp.SentAt;
+                return true;
+            }
+
+            var latest = ConversationContextStore
+                .GetRecentTurns(seller, buyer, string.Empty, 12)
+                .Where(x => x != null
+                    && x.Role == "assistant"
+                    && !x.Withdrawn
+                    && !string.IsNullOrWhiteSpace(x.Text))
+                .OrderByDescending(x => x.Timestamp)
+                .FirstOrDefault();
+            if (latest == null) return false;
+            if (latest.Timestamp != DateTime.MinValue
+                && latest.Timestamp < DateTime.Now.AddMinutes(-30))
+            {
+                return false;
+            }
+
+            answer = latest.Text.Trim();
+            sentAt = latest.Timestamp == DateTime.MinValue ? DateTime.Now : latest.Timestamp;
+            return true;
+        }
+
+        private static KnowledgeBaseEntry ResolveKnowledge(
+            string seller,
+            string buyer,
+            string question,
+            string candidateAnswer)
+        {
+            var answerKey = Canonical(candidateAnswer);
+            var knowledge = BotFeatureStore.GetKnowledgeBase()
+                .FirstOrDefault(x => x != null
+                    && x.Enabled
+                    && !string.IsNullOrWhiteSpace(x.Answer)
+                    && (Canonical(x.Answer) == answerKey
+                        || Canonical(BotFeatureStore.ApplyOutputPolicy(x.Answer)) == answerKey));
+            if (knowledge != null) return knowledge;
+
+            KnowledgeBaseEntry matched;
+            double score;
+            return KnowledgeLearningService.TryFindLocalAnswer(
+                seller,
+                buyer,
+                question,
+                out matched,
+                out score)
+                ? matched
+                : null;
+        }
+
+        private static string Regenerate(
+            string seller,
+            string buyer,
+            string question,
+            string previousAnswer,
+            KnowledgeBaseEntry knowledge)
+        {
+            try
+            {
+                var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
+                var factBoundary = knowledge == null
+                    ? "上一轮答案是当前唯一事实边界，不得增加新的商品承诺或结论。"
+                    : "知识库问题：" + knowledge.Title + "\n知识库答案：" + knowledge.Answer;
+                var messages = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "system",
+                        ["content"] = "你是电商客服续答助手。候选答案与上一轮客服回复完全相同，禁止再次原样回复，也不要只做同义改写。必须结合买家当前新消息推进对话：买家表示已解决时简短确认；表示没解决、否定或追问时，承认前一步未解决，并给出事实范围内的下一步；没有新步骤时建议转人工核查。只回复一句，最多60字，不得编造价格、库存、到账状态、时效或售后承诺。"
+                    },
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = factBoundary
+                            + "\n上一轮客服答案：" + previousAnswer
+                            + "\n当前买家消息：" + (question ?? string.Empty)
+                            + (string.IsNullOrWhiteSpace(timeline)
+                                ? string.Empty
+                                : "\n同一买家最近时间线：\n" + timeline)
+                    }
+                };
+                var response = MyOpenAI.CallStructuredChat(
+                    messages,
+                    180,
+                    0.35,
+                    90,
+                    CancellationToken.None);
+                return response != null && response.Success
+                    ? (response.Answer ?? string.Empty).Trim()
+                    : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("重复答案重新生成失败，使用安全兜底：" + ex.Message);
+                return string.Empty;
+            }
+        }
+
+        private static string BuildSafeFallback(string question)
+        {
+            var compact = Canonical(question);
+            if (ContainsAny(compact, "好了", "可以了", "解决了", "能用了", "正常了"))
+            {
+                return "好的，能正常使用就行，有其他问题再告诉我。";
+            }
+            if (ContainsAny(compact, "没有", "没到", "不行", "不可以", "不能", "还是", "没解决"))
+            {
+                return "明白，刚才的方法还没解决，我换个方向继续帮您排查。";
+            }
+            if (ContainsAny(compact, "怎么回事", "为什么", "怎么了"))
+            {
+                return "这说明刚才的处理还没生效，我继续帮您核查下一步。";
+            }
+            return "明白，我换个思路继续帮您处理，避免重复前面的步骤。";
+        }
+
+        private static bool ContainsAny(string value, params string[] cues)
+        {
+            return cues.Any(x => value.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static bool SameAnswer(string left, string right)
+        {
+            return string.Equals(Canonical(left), Canonical(right), StringComparison.Ordinal);
+        }
+
+        private static string Canonical(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim(), @"\s+", " ");
+        }
+
+        private static string Key(string seller, string buyer)
+        {
+            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+                + "|" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
+        }
+
+        private static void Cleanup()
+        {
+            var cutoff = DateTime.Now.AddHours(-2);
+            foreach (var key in LastDelivered
+                .Where(x => x.Value == null || x.Value.SentAt < cutoff)
+                .Select(x => x.Key)
+                .ToList())
+            {
+                DeliveredAnswerStamp ignored;
+                LastDelivered.TryRemove(key, out ignored);
+            }
+        }
+    }
+}

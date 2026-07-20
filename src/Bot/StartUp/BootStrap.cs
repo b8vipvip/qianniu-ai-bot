@@ -24,6 +24,7 @@ namespace Bot
             DeskScanner.LoopScan();
             MyWebSocketServer.WSocketSvrInst.Start();
             QNInject.StartInject();
+            WeComAppBridgeClient.Start();
 
             //var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"inject.js"));
             //IseiyaHttpProxy.StartProxy(script);

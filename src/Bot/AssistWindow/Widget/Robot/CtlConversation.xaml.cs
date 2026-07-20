@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using Bot.ChromeNs;
+using Bot.Knowledge;
 
 namespace Bot.AssistWindow.Widget.Robot
 {
@@ -194,6 +195,16 @@ namespace Bot.AssistWindow.Widget.Robot
         {
             e.Handled = true;
             var menu = new ContextMenu();
+
+            var view = new MenuItem { Header = "查看" };
+            view.Click += (s, args) => KnowledgeCenterWindow.ShowManagerAndLocate(
+                Window.GetWindow(this),
+                _seller,
+                _buyer,
+                _question,
+                _answer);
+            menu.Items.Add(view);
+
             if (_canResend)
             {
                 var resend = new MenuItem { Header = "重发" };

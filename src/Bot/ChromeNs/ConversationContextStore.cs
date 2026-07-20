@@ -172,13 +172,23 @@ namespace Bot.ChromeNs
 
                 if (!string.IsNullOrWhiteSpace(normalizedCurrent))
                 {
+                    var currentParts = new HashSet<string>(
+                        (currentQuestion ?? string.Empty)
+                            .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Select(NormalizeText)
+                            .Where(x => x.Length > 0),
+                        StringComparer.Ordinal);
                     for (var i = eligible.Count - 1; i >= 0; i--)
                     {
                         var item = eligible[i];
-                        if (item.Role == "user" && NormalizeText(item.Text) == normalizedCurrent)
+                        if (item.Role == "assistant") break;
+                        var itemText = NormalizeText(item.Text);
+                        if (item.Role == "user"
+                            && (itemText == normalizedCurrent
+                                || currentParts.Contains(itemText)
+                                || (itemText.Length >= 2 && normalizedCurrent.Contains(itemText))))
                         {
                             eligible.RemoveAt(i);
-                            break;
                         }
                     }
                 }
@@ -290,11 +300,11 @@ namespace Bot.ChromeNs
             else if (from == buyer && to == seller) role = "user";
             else return;
 
-            var cleanText = (text ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(cleanText))
+            var cleanText = IncomingMessageSafety.GetDisplayText(message, text);
+            if (string.IsNullOrWhiteSpace(cleanText)
+                || string.Equals(cleanText, "[空白或未知消息]", StringComparison.Ordinal))
             {
-                if (IsProductLink(message, text)) cleanText = "[商品链接]";
-                else return;
+                return;
             }
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, cleanText);
             lock (state.Sync)

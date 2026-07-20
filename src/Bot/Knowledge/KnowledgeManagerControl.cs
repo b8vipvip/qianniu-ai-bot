@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -140,6 +141,123 @@ namespace Bot.Knowledge
             _all = BotFeatureStore.GetKnowledgeBase();
             RefreshCategories();
             ApplyFilter();
+        }
+
+        public bool LocateEntry(
+            string seller,
+            string buyer,
+            string question,
+            string answer)
+        {
+            RefreshData();
+            var item = ResolveEntry(seller, buyer, question, answer);
+            if (item == null)
+            {
+                _cat.SelectedIndex = 0;
+                _search.Text = !string.IsNullOrWhiteSpace(answer)
+                    ? answer.Trim()
+                    : (question ?? string.Empty).Trim();
+                ApplyFilter();
+                _search.Focus();
+                return false;
+            }
+
+            _cat.SelectedIndex = 0;
+            _search.Text = string.IsNullOrWhiteSpace(item.Title)
+                ? item.Answer ?? string.Empty
+                : item.Title;
+            ApplyFilter();
+
+            var selected = _view.FirstOrDefault(x => SameEntry(x, item));
+            if (selected == null)
+            {
+                _search.Text = string.Empty;
+                ApplyFilter();
+                selected = _view.FirstOrDefault(x => SameEntry(x, item));
+            }
+            if (selected == null) return false;
+
+            _grid.SelectedItem = selected;
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                _grid.ScrollIntoView(selected);
+                _grid.Focus();
+            }));
+            return true;
+        }
+
+        private KnowledgeBaseEntry ResolveEntry(
+            string seller,
+            string buyer,
+            string question,
+            string answer)
+        {
+            var answerKey = Canonical(answer);
+            if (!string.IsNullOrWhiteSpace(answerKey))
+            {
+                var byAnswer = _all.FirstOrDefault(x => x != null
+                    && (Canonical(x.Answer) == answerKey
+                        || Canonical(BotFeatureStore.ApplyOutputPolicy(x.Answer)) == answerKey));
+                if (byAnswer != null) return byAnswer;
+            }
+
+            var questionKey = KnowledgeAiService.NormalizeQuestion(question);
+            if (!string.IsNullOrWhiteSpace(questionKey))
+            {
+                var byQuestion = _all.FirstOrDefault(x => x != null
+                    && KnowledgeAiService.NormalizeQuestion(x.Title) == questionKey);
+                if (byQuestion != null) return byQuestion;
+            }
+
+            KnowledgeBaseEntry matched;
+            double score;
+            if (KnowledgeLearningService.TryFindLocalAnswer(
+                seller,
+                buyer,
+                question,
+                out matched,
+                out score))
+            {
+                var byId = _all.FirstOrDefault(x => SameEntry(x, matched));
+                if (byId != null) return byId;
+            }
+
+            var previousAssistant = ConversationContextStore
+                .GetRecentTurns(seller, buyer, question, 12)
+                .Where(x => x != null
+                    && x.Role == "assistant"
+                    && !x.Withdrawn
+                    && !string.IsNullOrWhiteSpace(x.Text))
+                .OrderByDescending(x => x.Timestamp)
+                .FirstOrDefault();
+            if (previousAssistant != null)
+            {
+                var previousKey = Canonical(previousAssistant.Text);
+                var byPreviousAnswer = _all.FirstOrDefault(x => x != null
+                    && (Canonical(x.Answer) == previousKey
+                        || Canonical(BotFeatureStore.ApplyOutputPolicy(x.Answer)) == previousKey));
+                if (byPreviousAnswer != null) return byPreviousAnswer;
+            }
+
+            return null;
+        }
+
+        private static bool SameEntry(KnowledgeBaseEntry left, KnowledgeBaseEntry right)
+        {
+            if (left == null || right == null) return false;
+            if (!string.IsNullOrWhiteSpace(left.Id)
+                && !string.IsNullOrWhiteSpace(right.Id))
+            {
+                return string.Equals(left.Id, right.Id, StringComparison.Ordinal);
+            }
+            return KnowledgeAiService.NormalizeQuestion(left.Title)
+                == KnowledgeAiService.NormalizeQuestion(right.Title)
+                && Canonical(left.Answer) == Canonical(right.Answer);
+        }
+
+        private static string Canonical(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim(), @"\s+", " ");
         }
 
         private void RefreshCategories()

@@ -45,8 +45,12 @@ def test_message_safety_and_cross_buyer_guard_remain_in_path():
     qn = read('src/Bot/ChromeNs/QN.cs')
     assert 'IncomingMessageSafety.Evaluate' in qn
     assert 'BuildMessageKey' in qn
-    assert 'VisionReplyTask { SellerNick = sellerNick, BuyerNick = buyerNick, MessageKey = messageKey' in qn
-    assert 'SendTextWithRetryAsync(task.BuyerNick' in qn
+    assert 'var task = new VisionReplyTask' in qn
+    assert 'SellerNick = burst.SellerNick' in qn
+    assert 'BuyerNick = burst.BuyerNick' in qn
+    assert 'MessageKey = visionItem.MessageKey' in qn
+    assert 'CombinedQuestion = burst.CombinedQuestion' in qn
+    assert 'SendTextWithRetryAsync(burst.BuyerNick, answer, 1)' in qn
     assert 'EnsureActiveBuyerForSendAsync' in qn and 'GetCurrentConversationID' in qn
     assert '识别完成，但目标买家会话未确认，未发送。' in qn
 

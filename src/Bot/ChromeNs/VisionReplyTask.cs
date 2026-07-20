@@ -9,6 +9,8 @@ namespace Bot.ChromeNs
         public string BuyerNick { get; set; }
         public string MessageKey { get; set; }
         public QNChatMessage Message { get; set; }
+        public string CombinedQuestion { get; set; }
+        public bool DeferLearningUntilDelivered { get; set; }
         public DateTime CreatedAt { get; set; }
         public string EndpointId { get; set; }
 
