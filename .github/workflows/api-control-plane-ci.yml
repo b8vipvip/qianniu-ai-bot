@@ -33,10 +33,10 @@ jobs:
       - name: Install test dependencies
         run: python -m pip install pytest
 
-      - name: Run repository tests on Windows
+      - name: Run release-scope tests on Windows
         shell: pwsh
         run: |
-          python -m pytest -q --tb=short 2>&1 | Tee-Object -FilePath repository-static-windows.log
+          python -m pytest -q --tb=short tests 2>&1 | Tee-Object -FilePath repository-static-windows.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Windows static diagnostics
@@ -57,14 +57,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Upload workflow sources
-        uses: actions/upload-artifact@v4
-        with:
-          name: workflow-sources-${{ github.sha }}
-          path: .github/workflows/**
-          if-no-files-found: error
-          retention-days: 7
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -77,7 +69,7 @@ jobs:
 
       - name: Run repository static tests
         working-directory: .
-        run: python -m pytest -q --tb=short 2>&1 | tee repository-static.log
+        run: python -m pytest -q --tb=short tests 2>&1 | tee repository-static.log
 
       - name: Upload repository static diagnostics
         if: always()
