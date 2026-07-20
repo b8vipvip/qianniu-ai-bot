@@ -1,0 +1,11 @@
+services:
+  control-plane:
+    build: .
+    container_name: qianniu-api-control-plane
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+    ports:
+      - "127.0.0.1:${CONTROL_PLANE_BIND_PORT:-18081}:8080"
