@@ -38,8 +38,8 @@ def test_every_text_burst_is_checked_before_display_and_send():
     generated = text.index("var answer = await Task.Run(() => MyOpenAI.GetAnswer")
     stale_check = text.index("if (!lease.IsCurrent)", generated)
     checked = text.index("ReplyDeduplicationService.EnsureDistinct", stale_check)
-    stable = text.index("ConfirmStableAsync(450)", checked)
-    displayed = text.index("Desk.Inst.AddConversation", stable)
+    stable = text.index("ConfirmStableAsync(220)", checked)
+    displayed = text.index("ResponseProgressTracker.SetAnswerReady", stable)
     sent = text.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)", displayed)
     remembered = text.index("ReplyDeduplicationService.RememberDelivered", sent)
     assert generated < stale_check < checked < stable < displayed < sent < remembered
@@ -66,5 +66,5 @@ def test_new_services_are_included_in_windows_and_wpf_temp_builds():
     text = read("src/Directory.Build.targets")
     assert "ReplyDeduplicationService.cs" in text
     assert "BuyerMessageBurstCoordinator.cs" in text
-    assert '<Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReplyDeduplicationService.cs" />' in text
-    assert '<Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerMessageBurstCoordinator.cs" />' in text
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\ReplyDeduplicationService.cs" />' in text
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\BuyerMessageBurstCoordinator.cs" />' in text
