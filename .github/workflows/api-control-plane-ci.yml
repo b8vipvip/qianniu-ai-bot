@@ -7,6 +7,10 @@ on:
     paths:
       - tools/fix_humanlike_qn_newline.py
       - .github/workflows/api-control-plane-ci.yml
+  pull_request:
+    paths:
+      - tools/fix_humanlike_qn_newline.py
+      - .github/workflows/api-control-plane-ci.yml
 
 permissions:
   contents: write
