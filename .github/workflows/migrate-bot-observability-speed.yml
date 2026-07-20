@@ -44,9 +44,9 @@ jobs:
         run: |
           set -o pipefail
           {
-            cat .migration/bot-observability-speed.part* | base64 -d > /tmp/migrate_bot_observability_speed.py
-            python -m py_compile /tmp/migrate_bot_observability_speed.py
-            python /tmp/migrate_bot_observability_speed.py
+            cat .migration/bot-observability-speed.part* | base64 -d > tools/.migrate_bot_observability_speed.py
+            python -m py_compile tools/.migrate_bot_observability_speed.py
+            python tools/.migrate_bot_observability_speed.py
             git diff --binary > migration-source.diff
           } 2>&1 | tee migration-apply.log
 
@@ -94,6 +94,7 @@ jobs:
           rm -f .migration/bot-observability-speed.part*
           rmdir .migration 2>/dev/null || true
           rm -f .github/workflows/migrate-bot-observability-speed.yml
+          rm -f tools/.migrate_bot_observability_speed.py
           rm -f migration-apply.log migration-pytest.log migration-source.diff
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           find . -type d -name .pytest_cache -prune -exec rm -rf {} +
