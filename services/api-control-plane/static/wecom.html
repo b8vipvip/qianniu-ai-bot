@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>企业微信配置 - 千牛 AI</title>
+  <style>
+    :root{font-family:Inter,"Microsoft YaHei",sans-serif;color:#13213a;background:#f3f6fb}
+    *{box-sizing:border-box} body{margin:0} button,input{font:inherit}
+    .shell{display:grid;grid-template-columns:242px minmax(0,1fr);min-height:100vh}
+    aside{background:#111d31;color:#fff;padding:28px 20px;display:flex;flex-direction:column}
+    .brand{display:flex;gap:12px;align-items:center;padding:0 8px 24px;border-bottom:1px solid #2a3649}
+    .mark{width:36px;height:36px;border-radius:10px;background:#4d82ff;display:grid;place-items:center;font-weight:800}
+    .brand span{display:block;font-size:12px;color:#9fb0ca;margin-top:4px}
+    nav{display:grid;gap:8px;margin-top:22px}.nav{color:#b7c6dc;text-decoration:none;padding:12px 14px;border-radius:9px}
+    .nav:hover,.nav.active{background:#213451;color:#fff}.foot{margin-top:auto;color:#91a4c0;font-size:13px;padding:12px}
+    main{padding:32px;max-width:1250px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
+    h1{margin:0;font-size:28px}.sub{margin:7px 0 0;color:#68758a}.pill{padding:9px 14px;border-radius:20px;background:#e3f8ef;color:#087b50;font-weight:700}
+    .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:18px}.metric,.panel{background:#fff;border:1px solid #e1e7f0;border-radius:15px;box-shadow:0 7px 24px rgba(32,52,84,.05)}
+    .metric{padding:20px}.metric small{color:#778398}.metric strong{display:block;font-size:25px;margin-top:8px}.ok{color:#087b50}.bad{color:#ba2d38}
+    .panel{padding:22px;margin-bottom:18px}.panel-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}.panel h2{font-size:19px;margin:0}.panel p{margin:6px 0 0;color:#6e7b90;line-height:1.7}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.span2{grid-column:1/-1}label{display:grid;gap:7px;font-size:14px;font-weight:700;color:#33435c}input{width:100%;border:1px solid #cfd8e6;border-radius:9px;padding:11px 12px;background:#fff;color:#17243a}input:focus{outline:2px solid #b9d0ff;border-color:#4d82ff}
+    .switch{display:flex;align-items:center;gap:8px;white-space:nowrap}.switch input{width:auto}.hint{font-size:12px;color:#7b8799;font-weight:400}.secret-note{background:#f7f9fd;border:1px solid #dde5f2;border-radius:10px;padding:12px;color:#58667b;line-height:1.65;font-size:13px}
+    .callback{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px}.actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
+    button{border:0;border-radius:9px;padding:10px 16px;cursor:pointer;font-weight:700}.primary{background:#2563eb;color:#fff}.secondary{background:#edf3ff;color:#2552a5}.ghost{background:#f1f4f8;color:#34445c}button:disabled{opacity:.55;cursor:not-allowed}
+    .clear-row{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px}.clear-row label{display:flex;align-items:center;gap:7px;font-weight:500}.clear-row input{width:auto}
+    #message{position:fixed;right:24px;bottom:24px;max-width:460px;padding:13px 16px;border-radius:10px;background:#17243a;color:white;box-shadow:0 10px 35px #0003;display:none;white-space:pre-wrap}.error{background:#a82935!important}
+    code{background:#eef2f7;padding:2px 5px;border-radius:5px}@media(max-width:850px){.shell{display:block}aside{display:none}main{padding:18px}.metrics,.grid{grid-template-columns:1fr}.span2{grid-column:auto}.top{align-items:flex-start}.pill{display:none}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand"><div class="mark">Q</div><div><strong>千牛 AI</strong><span>API 控制台</span></div></div>
+    <nav><a class="nav" href="/">返回控制面总览</a><a class="nav active" href="/static/wecom.html">企业微信</a></nav>
+    <div class="foot">敏感字段只加密保存在服务端 SQLite，不通过页面回显。</div>
+  </aside>
+  <main>
+    <header class="top"><div><h1>企业微信</h1><p class="sub">管理应用消息、加密回调、工单接收人和人工回复权限。</p></div><div class="pill">控制面在线</div></header>
+    <div class="metrics"><div class="metric"><small>功能开关</small><strong id="mEnabled">读取中</strong></div><div class="metric"><small>应用消息</small><strong id="mOutbound">读取中</strong></div><div class="metric"><small>加密回调</small><strong id="mCallback">读取中</strong></div></div>
+    <form id="form">
+      <section class="panel">
+        <div class="panel-head"><div><h2>自建应用</h2><p>Secret 留空表示保留原值。保存后的 Secret 不会从接口返回。</p></div><label class="switch"><input id="enabled" type="checkbox">启用企业微信转人工</label></div>
+        <div class="grid">
+          <label>企业 CorpID<input id="corpId" autocomplete="off" placeholder="wwxxxxxxxxxxxxxxxx"></label><label>应用 AgentId<input id="agentId" inputmode="numeric" autocomplete="off" placeholder="1000002"></label>
+          <label class="span2">应用 Secret<input id="appSecret" type="password" autocomplete="new-password" placeholder="留空表示不修改"><span id="appSecretHint" class="hint"></span></label>
+          <label class="span2">接收成员 UserID<input id="toUsers" autocomplete="off" placeholder="多个成员使用 | 分隔，例如 zhangsan|lisi"></label>
+          <label class="span2">允许回复工单的成员 UserID<input id="allowedUsers" autocomplete="off" placeholder="留空时沿用接收成员"></label>
+          <label>工单有效时间（小时）<input id="ticketHours" type="number" min="1" max="168" value="24"></label>
+        </div>
+      </section>
+      <section class="panel">
+        <div class="panel-head"><div><h2>接收消息回调</h2><p>先在本页生成或填写参数并保存，再把完全相同的 URL、Token、EncodingAESKey 填入企业微信后台。</p></div><button id="generate" class="secondary" type="button">生成回调参数</button></div>
+        <div class="grid">
+          <label class="span2">回调 URL<div class="callback"><input id="callbackUrl" readonly><button id="copyUrl" class="ghost" type="button">复制</button></div></label>
+          <label class="span2">Token<input id="callbackToken" type="password" autocomplete="new-password" placeholder="留空表示不修改"><span id="tokenHint" class="hint"></span></label>
+          <label class="span2">EncodingAESKey<input id="callbackAes" type="password" autocomplete="new-password" maxlength="43" placeholder="43 位；留空表示不修改"><span id="aesHint" class="hint"></span></label>
+        </div>
+        <div class="clear-row"><label><input id="clearAppSecret" type="checkbox">清除应用 Secret</label><label><input id="clearToken" type="checkbox">清除回调 Token</label><label><input id="clearAes" type="checkbox">清除 EncodingAESKey</label></div>
+        <div class="secret-note" style="margin-top:16px">数据库只保存 Fernet 密文。加密依赖部署时长期固定的 <code>API_KEY_ENCRYPTION_KEY</code>；备份 SQLite 时也必须备份该主密钥。企业微信业务参数不再从 <code>.env</code> 读取。</div>
+        <div class="actions"><button id="refresh" class="ghost" type="button">重新读取</button><button id="test" class="secondary" type="button">发送测试消息</button><button id="save" class="primary" type="submit">保存配置</button></div>
+      </section>
+    </form>
+  </main>
+</div>
+<div id="message"></div>
+<script>
+const $=id=>document.getElementById(id);let current=null;
+function notify(text,error=false){const el=$('message');el.textContent=text;el.className=error?'error':'';el.style.display='block';clearTimeout(el.timer);el.timer=setTimeout(()=>el.style.display='none',5000)}
+async function api(url,options={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});if(r.status===401){location.href='/';throw new Error('登录已失效')};let data=null;try{data=await r.json()}catch{}if(!r.ok)throw new Error(data?.detail||`请求失败：${r.status}`);return data}
+function flag(id,ok,on='已配置',off='未配置'){const el=$(id);el.textContent=ok?on:off;el.className=ok?'ok':'bad'}
+function render(s){current=s;$('enabled').checked=!!s.enabled;$('corpId').value=s.corp_id||'';$('agentId').value=s.agent_id||'';$('toUsers').value=s.to_users||'';$('allowedUsers').value=s.allowed_reply_users||'';$('ticketHours').value=s.ticket_hours||24;$('callbackUrl').value=s.callback_url||'';$('appSecret').value='';$('callbackToken').value='';$('callbackAes').value='';$('appSecretHint').textContent=s.app_secret_configured?'已加密保存；留空表示不修改':'尚未配置';$('tokenHint').textContent=s.callback_token_configured?'已加密保存；留空表示不修改':'尚未配置';$('aesHint').textContent=s.callback_aes_key_configured?'已加密保存；留空表示不修改':'尚未配置';flag('mEnabled',s.enabled,'已启用','未启用');flag('mOutbound',s.outbound_configured);flag('mCallback',s.callback_configured)}
+async function load(){try{render(await api('/api/admin/wecom/settings'))}catch(e){notify(e.message,true)}}
+function payload(){return{enabled:$('enabled').checked,corp_id:$('corpId').value.trim(),app_secret:$('appSecret').value.trim(),agent_id:$('agentId').value.trim(),to_users:$('toUsers').value.trim(),callback_token:$('callbackToken').value.trim(),callback_aes_key:$('callbackAes').value.trim(),allowed_reply_users:$('allowedUsers').value.trim(),ticket_hours:Number($('ticketHours').value||24),clear_app_secret:$('clearAppSecret').checked,clear_callback_token:$('clearToken').checked,clear_callback_aes_key:$('clearAes').checked}}
+$('form').addEventListener('submit',async e=>{e.preventDefault();$('save').disabled=true;try{const s=await api('/api/admin/wecom/settings',{method:'PUT',body:JSON.stringify(payload())});render(s);$('clearAppSecret').checked=$('clearToken').checked=$('clearAes').checked=false;notify('企业微信配置已保存并立即生效')}catch(err){notify(err.message,true)}finally{$('save').disabled=false}});
+$('generate').onclick=async()=>{try{const x=await api('/api/admin/wecom/generate-callback',{method:'POST',body:'{}'});$('callbackToken').value=x.callback_token;$('callbackAes').value=x.callback_aes_key;notify('已生成新参数；保存后再填写到企业微信后台')}catch(e){notify(e.message,true)}};
+$('test').onclick=async()=>{try{$('test').disabled=true;const x=await api('/api/admin/wecom/test',{method:'POST',body:'{}'});notify(x.message||'测试消息发送成功')}catch(e){notify(e.message,true)}finally{$('test').disabled=false}};
+$('copyUrl').onclick=async()=>{try{await navigator.clipboard.writeText($('callbackUrl').value);notify('回调 URL 已复制')}catch{notify('复制失败，请手动复制',true)}};$('refresh').onclick=load;load();
+</script>
+</body>
+</html>
