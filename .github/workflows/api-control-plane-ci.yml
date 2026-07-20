@@ -8,6 +8,7 @@ on:
     paths:
       - services/api-control-plane/**
       - tools/apply_humanlike_reply_v2.py
+      - tools/repair_humanlike_patcher.py
       - src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs
       - .github/workflows/api-control-plane-ci.yml
       - .github/workflows/apply-humanlike-reply-v2.yml
@@ -45,8 +46,19 @@ jobs:
           fi
           echo "present=true" >> "$GITHUB_OUTPUT"
           set +e
-          python -m py_compile tools/apply_humanlike_reply_v2.py 2>&1 | tee humanlike-patch.log
-          compile_status=${PIPESTATUS[0]}
+          if [ -f tools/repair_humanlike_patcher.py ]; then
+            python tools/repair_humanlike_patcher.py 2>&1 | tee humanlike-patch.log
+            repair_status=${PIPESTATUS[0]}
+          else
+            repair_status=0
+            : > humanlike-patch.log
+          fi
+          if [ "$repair_status" -eq 0 ]; then
+            python -m py_compile tools/apply_humanlike_reply_v2.py 2>&1 | tee -a humanlike-patch.log
+            compile_status=${PIPESTATUS[0]}
+          else
+            compile_status=$repair_status
+          fi
           if [ "$compile_status" -eq 0 ]; then
             python tools/apply_humanlike_reply_v2.py 2>&1 | tee -a humanlike-patch.log
             patch_status=${PIPESTATUS[0]}
@@ -86,6 +98,7 @@ jobs:
         if: steps.patch.outputs.present == 'true' && steps.patch.outputs.status == '0'
         run: |
           rm -f tools/apply_humanlike_reply_v2.py
+          rm -f tools/repair_humanlike_patcher.py
           rm -f .github/workflows/apply-humanlike-reply-v2.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
