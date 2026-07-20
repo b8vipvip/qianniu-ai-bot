@@ -21,11 +21,12 @@ def test_burst_waits_for_fragments_and_collapses_input_artifacts():
     assert 'if (normalized == previousNormalized) continue;' in coordinator
     assert "normalized.StartsWith(previousNormalized" in coordinator
     assert "previousNormalized.EndsWith(normalized" in coordinator
-    assert "if (IsGreetingOnly(compact)) return 1800;" in coordinator
-    assert "if (IsOpenShortFragment(compact)) return 2200;" in coordinator
-    assert "if (IncomingMessageSafety.IsMediaPlaceholder(latest)) return 1200;" in coordinator
-    assert "if (list.Count >= 6) return 650;" in coordinator
-    assert "TimeSpan.FromSeconds(6)" in coordinator
+    assert "if (IsGreetingOnly(compact)) return 950;" in coordinator
+    assert "if (IsOpenShortFragment(compact)) return 1200;" in coordinator
+    assert "if (IncomingMessageSafety.IsMediaPlaceholder(latest)) return 700;" in coordinator
+    assert "if (list.Count >= 6) return 420;" in coordinator
+    assert "TimeSpan.FromSeconds(4)" in coordinator
+    assert "return 350;" in coordinator
 
 
 def test_versioned_lease_invalidates_answers_when_buyer_adds_messages():
@@ -42,7 +43,7 @@ def test_qn_ingests_all_messages_and_invalidates_stale_drafts():
     assert "_buyerMessageBurstCoordinator.Enqueue" in qn
     assert "旧文本草稿已作废" in qn
     assert "旧视觉草稿已作废" in qn
-    assert "ConfirmStableAsync(450)" in qn
+    assert "ConfirmStableAsync(220)" in qn
     assert 'burst.CombinedQuestion.Replace("\\n", " | ")' in qn
     assert 'burst.CombinedQuestion.Replace("\n", " | ")' not in qn
     assert "deferLearningUntilDelivered" in text("src/Bot/ChromeNs/MyOpenAI.cs")
@@ -63,9 +64,9 @@ def test_media_placeholders_and_human_conversation_rules():
 def test_wecom_notification_contains_buyer_message_text_only():
     bridge = text("services/api-control-plane/wecom_bridge.py")
     handoff = text("src/Bot/ChromeNs/HandoffNotificationService.cs")
-    assert "买家消息：\\n" in bridge
+    assert "买家消息：\n" in bridge
     assert "safe_buyer_message" in bridge
-    assert "买家消息：\\n" in handoff
+    assert "买家消息：\n" in handoff
     assert "SafeBuyerMessage" in handoff
     assert "[手机号]" in bridge
     assert "[API_KEY]" in bridge
