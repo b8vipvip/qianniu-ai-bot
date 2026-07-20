@@ -1,5 +1,6 @@
 using Bot.AssistWindow.Widget.Robot;
 using Bot.Automation.ChatDeskNs;
+using BotLib;
 using System;
 using System.Collections.Concurrent;
 
@@ -69,6 +70,8 @@ namespace Bot.ChromeNs
         {
             var control = ObserveQuestion(seller, buyer, combinedQuestion, detectedAt);
             if (control != null) control.SetProcessing("正在获取答案...");
+            Log.Info("回复进度进入答案生成: seller=" + seller + ", buyer=" + buyer
+                + ", queueMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             return control;
         }
 
@@ -87,6 +90,9 @@ namespace Bot.ChromeNs
                 control.SetAnswer(answer, source, answerReadyAt);
                 control.SetSendPending("答案已生成，准备发送...");
             }
+            Log.Info("回复进度答案就绪: seller=" + seller + ", buyer=" + buyer
+                + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detectedAt).TotalMilliseconds)
+                + ", source=" + (source ?? string.Empty));
             return control;
         }
 
