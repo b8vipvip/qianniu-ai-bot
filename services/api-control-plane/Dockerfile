@@ -13,7 +13,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py bootstrap.py wecom_bridge.py wecom_crypto.py ./
+COPY app.py bootstrap.py wecom_bridge.py wecom_crypto.py wecom_settings.py ./
 COPY static ./static
 
 RUN useradd --create-home --uid 10001 appuser \
