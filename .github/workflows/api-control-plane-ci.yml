@@ -36,7 +36,30 @@ jobs:
         run: python tools/migrate_burst_static_guards.py
 
       - name: Run migrated static tests
-        run: python -m pip install pytest && python -m pytest -q tests
+        id: tests
+        shell: bash
+        run: |
+          python -m pip install pytest
+          set +e
+          python -m pytest -q --tb=short tests 2>&1 | tee burst-guard-tests.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload migration test diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: burst-guard-tests-${{ github.sha }}
+          path: burst-guard-tests.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Stop on test failure
+        if: steps.tests.outputs.status != '0'
+        run: |
+          cat burst-guard-tests.log
+          exit 1
 
       - name: Commit code and guard migration
         shell: bash
