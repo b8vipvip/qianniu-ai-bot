@@ -1,0 +1,290 @@
+using Bot.ChatRecord;
+using BotLib;
+using DbEntity.Response;
+using Newtonsoft.Json;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
+
+namespace Bot.ChromeNs
+{
+    internal static class ConversationSessionLearningRuntimeBridge
+    {
+        private static readonly ConcurrentDictionary<int, bool> Attached =
+            new ConcurrentDictionary<int, bool>();
+        private static readonly ConcurrentDictionary<string, DateTime> Seen =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly DateTime StartedAt = DateTime.Now;
+        private static Timer _attachTimer;
+        private static int _initialized;
+
+        public static void Initialize()
+        {
+            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
+            AttachExisting();
+            _attachTimer = new Timer(_ => AttachExisting(), null, 200, 500);
+        }
+
+        public static List<ConversationContextTurn> GetTurnsBetween(
+            string seller,
+            string buyer,
+            DateTime from,
+            DateTime to,
+            int maxTurns,
+            bool includeWithdrawn)
+        {
+            try
+            {
+                var state = GetTimelineState(seller, buyer);
+                if (state == null) return new List<ConversationContextTurn>();
+                var stateType = state.GetType();
+                var syncField = stateType.GetField("Sync", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var turnsField = stateType.GetField("Turns", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+                var sync = syncField == null ? null : syncField.GetValue(state);
+                var turns = turnsField == null ? null : turnsField.GetValue(state) as List<ConversationContextTurn>;
+                if (sync == null || turns == null) return new List<ConversationContextTurn>();
+
+                lock (sync)
+                {
+                    var take = Math.Max(1, Math.Min(200, maxTurns <= 0 ? 120 : maxTurns));
+                    return turns
+                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Text))
+                        .Where(x => includeWithdrawn || !x.Withdrawn)
+                        .Where(x => x.Timestamp == DateTime.MinValue
+                            || ((from == DateTime.MinValue || x.Timestamp >= from)
+                                && (to == DateTime.MinValue || x.Timestamp <= to)))
+                        .OrderBy(x => x.Timestamp)
+                        .Take(take)
+                        .Select(CloneTurn)
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取接待学习时间线失败：" + ex.Message, 10);
+                return new List<ConversationContextTurn>();
+            }
+        }
+
+        public static bool RefreshRemoteHistory(
+            string seller,
+            string buyer,
+            string ccode)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            ccode = (ccode ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return false;
+
+            try
+            {
+                // Do not allow the existing fallback to QN.CurQN to cross shops during learning.
+                // We only invoke the private refresh method when the exact seller QN exists.
+                var qn = QN.FindExistingBySellerNick(seller);
+                if (qn == null || qn.CDP == null) return false;
+
+                var state = GetTimelineState(seller, buyer);
+                if (state == null) return false;
+                var method = typeof(ConversationContextStore).GetMethod(
+                    "RefreshRemoteHistory",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                if (method == null) return false;
+                method.Invoke(null, new[] { state, seller, buyer, ccode });
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("接待学习刷新聊天历史失败: seller=" + seller
+                    + ", buyer=" + buyer + ", error=" + ex.Message);
+                return false;
+            }
+        }
+
+        private static void AttachExisting()
+        {
+            try
+            {
+                QN[] qns;
+                try
+                {
+                    qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                }
+                catch
+                {
+                    return;
+                }
+
+                foreach (var qn in qns)
+                {
+                    if (qn == null) continue;
+                    var key = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(qn);
+                    if (!Attached.TryAdd(key, true)) continue;
+                    var captured = qn;
+                    captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                }
+                CleanupSeen();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("安装接待自动学习消息监听失败：" + ex.Message, 10);
+            }
+        }
+
+        private static void OnRawMessages(QN qn, RecieveNewMessageEventArgs e)
+        {
+            if (qn == null || e == null || string.IsNullOrWhiteSpace(e.Message)) return;
+            try
+            {
+                var response = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
+                if (response == null || response.result == null) return;
+                foreach (var message in response.result
+                    .Where(x => x != null)
+                    .OrderBy(IncomingMessageSafety.GetSortValue))
+                {
+                    ObserveMessage(qn, message);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("解析接待自动学习消息失败：" + ex.Message, 10);
+            }
+        }
+
+        private static void ObserveMessage(QN qn, QNChatMessage message)
+        {
+            if (message == null) return;
+            var messageTime = GetMessageTime(message);
+            if (messageTime != DateTime.MinValue && messageTime < StartedAt.AddSeconds(-8)) return;
+
+            var text = ExtractMessageText(message);
+            var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
+            if (!string.IsNullOrWhiteSpace(messageKey))
+            {
+                if (!Seen.TryAdd(messageKey, DateTime.Now)) return;
+            }
+
+            var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(seller)
+                && message.loginid != null
+                && !string.IsNullOrWhiteSpace(message.loginid.nick))
+            {
+                seller = message.loginid.nick.Trim();
+            }
+            if (string.IsNullOrWhiteSpace(seller)) return;
+
+            var from = message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
+            var to = message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
+            var buyer = from == seller ? to : (to == seller ? from : string.Empty);
+            if (string.IsNullOrWhiteSpace(buyer)) return;
+
+            ConversationSessionLearningService.ObserveLiveMessage(
+                message,
+                text,
+                seller,
+                buyer);
+        }
+
+        private static object GetTimelineState(string seller, string buyer)
+        {
+            var statesField = typeof(ConversationContextStore).GetField(
+                "States",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var states = statesField == null ? null : statesField.GetValue(null);
+            if (states == null) return null;
+            var tryGetValue = states.GetType().GetMethod("TryGetValue");
+            if (tryGetValue == null) return null;
+            var args = new object[]
+            {
+                (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim(),
+                null
+            };
+            var found = Convert.ToBoolean(tryGetValue.Invoke(states, args));
+            return found ? args[1] : null;
+        }
+
+        private static ConversationContextTurn CloneTurn(ConversationContextTurn source)
+        {
+            return new ConversationContextTurn
+            {
+                Role = source.Role,
+                Text = source.Text,
+                Timestamp = source.Timestamp,
+                MessageKey = source.MessageKey,
+                Withdrawn = source.Withdrawn
+            };
+        }
+
+        private static string ExtractMessageText(QNChatMessage message)
+        {
+            if (message == null) return string.Empty;
+            try
+            {
+                if (message.originalData != null)
+                {
+                    var text = message.originalData.text ?? string.Empty;
+                    if (message.originalData.header != null)
+                    {
+                        text += message.originalData.header.summary ?? string.Empty;
+                    }
+                    if (!string.IsNullOrWhiteSpace(text)) return text.Trim();
+                }
+            }
+            catch
+            {
+            }
+            return (message.summary ?? string.Empty).Trim();
+        }
+
+        private static DateTime GetMessageTime(QNChatMessage message)
+        {
+            if (message == null) return DateTime.MinValue;
+            DateTime result;
+            if (TryParseTime(message.sendTime, out result)) return result;
+            if (TryParseTime(message.sortTimeMicrosecond, out result)) return result;
+            return DateTime.MinValue;
+        }
+
+        private static bool TryParseTime(string value, out DateTime result)
+        {
+            result = DateTime.MinValue;
+            if (string.IsNullOrWhiteSpace(value)) return false;
+            long raw;
+            if (long.TryParse(value.Trim(), out raw))
+            {
+                try
+                {
+                    if (raw > 1000000000000000L) result = DateTimeOffset.FromUnixTimeMilliseconds(raw / 1000L).LocalDateTime;
+                    else if (raw > 100000000000L) result = DateTimeOffset.FromUnixTimeMilliseconds(raw).LocalDateTime;
+                    else if (raw > 1000000000L) result = DateTimeOffset.FromUnixTimeSeconds(raw).LocalDateTime;
+                    if (result != DateTime.MinValue) return true;
+                }
+                catch
+                {
+                }
+            }
+            DateTimeOffset dto;
+            if (DateTimeOffset.TryParse(value, CultureInfo.CurrentCulture, DateTimeStyles.AssumeLocal, out dto)
+                || DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out dto))
+            {
+                result = dto.LocalDateTime;
+                return true;
+            }
+            return false;
+        }
+
+        private static void CleanupSeen()
+        {
+            if (Seen.Count < 5000) return;
+            var cutoff = DateTime.Now.AddHours(-2);
+            foreach (var key in Seen.Where(x => x.Value < cutoff).Select(x => x.Key).Take(2500).ToList())
+            {
+                DateTime ignored;
+                Seen.TryRemove(key, out ignored);
+            }
+        }
+    }
+}
