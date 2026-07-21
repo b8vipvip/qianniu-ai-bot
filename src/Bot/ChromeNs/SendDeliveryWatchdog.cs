@@ -41,9 +41,11 @@ namespace Bot.ChromeNs
             string answer,
             string source,
             DateTime detectedAt,
-            DateTime answerReadyAt)
+            DateTime answerReadyAt,
+            bool force = false)
         {
-            if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()) return;
+            if (!Params.Robot.CanUseRobotReal) return;
+            if (!force && !Params.Robot.GetIsAutoReply()) return;
             answer = (answer ?? string.Empty).Trim();
             if (answer.Length == 0 || answer.StartsWith("错误：", StringComparison.Ordinal)) return;
 
@@ -66,7 +68,8 @@ namespace Bot.ChromeNs
             CleanupKnownAnswers();
 
             Log.Info("已启动真实发送回显监控: seller=" + pending.Seller
-                + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id);
+                + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id
+                + ", force=" + force);
 
             Task.Run(async () =>
             {
