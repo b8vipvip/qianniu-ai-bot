@@ -95,9 +95,6 @@ namespace Bot.ChromeNs
                     var previous = parts[parts.Count - 1];
                     var previousNormalized = NormalizeCompare(previous);
                     if (normalized == previousNormalized) continue;
-
-                    // 输入法上屏、复制修改或网络重发时，后一条可能完整包含前一条短片段。
-                    // 此时保留更完整的新文本，避免模型把它误判为两个独立问题。
                     if (previousNormalized.Length <= 16
                         && normalized.Length > previousNormalized.Length
                         && normalized.StartsWith(previousNormalized, StringComparison.Ordinal))
@@ -203,9 +200,6 @@ namespace Bot.ChromeNs
                 if (state.Items.Count == 0) state.StartedAt = DateTime.Now;
                 state.Items.Add(item);
                 if (state.Items.Count > 12) state.Items.RemoveRange(0, state.Items.Count - 12);
-
-                // Version 同时代表“最新买家输入代次”。已经分派给 AI 的旧 lease 会在新消息到达时立即失效，
-                // 但旧 AI 网络请求可以在后台自然结束，绝不能继续阻塞新一轮买家消息。
                 state.Version++;
 
                 try { state.DelayCancellation.Cancel(); } catch { }
@@ -278,11 +272,9 @@ namespace Bot.ChromeNs
                 BuyerMessageBurst burst;
                 lock (state.Sync)
                 {
-                    if (capturedVersion != state.Version) continue;
+                    if (state.Version != capturedVersion) continue;
                     if (state.Items.Count < 1) continue;
 
-                    // 关键：一旦本轮已达到静默窗口，就把它从“待聚合队列”摘走再调用 AI。
-                    // 后续新消息只进入新的 pending list，并可以立即启动新的 worker；不会再把两分钟前的旧问题合并回来。
                     var dispatchedItems = state.Items.ToList();
                     state.Items.Clear();
                     state.StartedAt = DateTime.MinValue;
