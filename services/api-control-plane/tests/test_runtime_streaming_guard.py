@@ -34,6 +34,12 @@ def test_extract_delta_ignores_role_only_event():
     assert guard._extract_delta(payload) == ""
 
 
+def test_finish_reason_detection_requires_real_finish_value():
+    assert guard._has_finish_reason(json.dumps({"choices": [{"finish_reason": "stop"}]})) is True
+    assert guard._has_finish_reason(json.dumps({"choices": [{"finish_reason": None}]})) is False
+    assert guard._has_finish_reason(json.dumps({"choices": [{"delta": {"content": "继续"}}]})) is False
+
+
 def test_synthetic_chunk_is_valid_openai_sse_data():
     chunk = guard._synthetic_chunk("fallback-model", "完整答案").decode("utf-8")
     assert chunk.startswith("data: ")
@@ -44,6 +50,13 @@ def test_synthetic_chunk_is_valid_openai_sse_data():
     assert body["choices"][0]["delta"]["content"] == "完整答案"
 
 
+def test_abort_marker_is_private_and_can_be_transported_as_sse_delta():
+    assert guard.STREAM_ABORT_MARKER == "[[QN_STREAM_ABORTED]]"
+    chunk = guard._synthetic_chunk("model", guard.STREAM_ABORT_MARKER).decode("utf-8")
+    body = json.loads(chunk[len("data: ") :].strip())
+    assert body["choices"][0]["delta"]["content"] == guard.STREAM_ABORT_MARKER
+
+
 def test_install_registers_streaming_middleware():
     app = FastAPI()
     before = len(app.user_middleware)
@@ -52,10 +65,13 @@ def test_install_registers_streaming_middleware():
     assert len(app.user_middleware) == before + 1
 
 
-def test_streaming_source_commits_only_after_real_text_and_has_nonstream_fallback():
+def test_streaming_source_commits_only_after_real_text_and_blocks_partial_eof():
     source = Path(guard.__file__).read_text(encoding="utf-8")
     assert 'if route[2] == "chat"' in source
     assert "if not first_text_seen and delta:" in source
+    assert "committed = True" in source
+    assert "clean_finish_seen" in source
+    assert "STREAM_ABORT_MARKER" in source
     assert "control_plane.dispatch_chat" in source
     assert '"text/event-stream"' in source
     assert '"X-Accel-Buffering": "no"' in source
