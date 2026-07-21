@@ -65,4 +65,5 @@ def test_control_plane_runtime_guard_is_installed_and_packaged():
     assert "runtime_routing_guard.py" in dockerfile
     assert "RUNTIME_TOTAL_BUDGET_SECONDS" in guard
     assert "RUNTIME_ATTEMPT_TIMEOUT_SECONDS" in guard
-    assert "Round-robin protocols across models" in guard
+    assert "Interleave providers, models and protocols" in guard
+    assert "for provider, models, protocols_by_model in prepared" in guard
