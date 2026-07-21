@@ -10,12 +10,11 @@ namespace Bot.AssistWindow.Widget.Robot
 {
     public partial class CtlRobot
     {
-        private static readonly bool HistoryClassHandlersRegistered = RegisterHistoryClassHandlers();
         private readonly ConcurrentDictionary<string, byte> _historyLoadedKeys =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private DispatcherTimer _historyRestoreTimer;
 
-        private static bool RegisterHistoryClassHandlers()
+        static CtlRobot()
         {
             EventManager.RegisterClassHandler(
                 typeof(CtlRobot),
@@ -27,7 +26,6 @@ namespace Bot.AssistWindow.Widget.Robot
                 FrameworkElement.UnloadedEvent,
                 new RoutedEventHandler(CtlRobotHistory_ClassUnloaded),
                 true);
-            return true;
         }
 
         private static void CtlRobotHistory_ClassLoaded(object sender, RoutedEventArgs e)
