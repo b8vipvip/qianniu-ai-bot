@@ -34,11 +34,17 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.History.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.History.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.OrderAutoReplyGuard.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.OrderAutoReplyGuard.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerMessageBurstCoordinator.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerMessageBurstCoordinator.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs" />
@@ -69,6 +75,12 @@
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs" />
