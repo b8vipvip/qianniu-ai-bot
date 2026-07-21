@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import runtime_routing_guard
 
 
+STREAM_ABORT_MARKER = "[[QN_STREAM_ABORTED]]"
 STREAM_FIRST_EVENT_TIMEOUT_SECONDS = max(
     4,
     min(20, int(__import__("os").getenv("RUNTIME_STREAM_FIRST_EVENT_TIMEOUT_SECONDS", "8"))),
@@ -48,8 +49,6 @@ def install(control_plane: Any) -> None:
             return JSONResponse(status_code=400, content={"error": {"message": "请求JSON无效"}})
 
         if not bool(payload.get("stream")):
-            # The Bot's streaming client always sends both stream=true and an SSE Accept header.
-            # A third-party caller asking for SSE while stream=false receives the ordinary JSON route.
             return await call_next(request)
 
         token = control_plane.bearer_token(request)
@@ -139,6 +138,7 @@ async def stream_chat(
                     break
 
                 attempt_started = time.monotonic()
+                committed = False
                 upstream_payload = {
                     "model": model,
                     "messages": list(messages),
@@ -196,8 +196,8 @@ async def stream_chat(
                             yield b"data: [DONE]\n\n"
                             return
 
-                        buffered: List[str] = []
                         first_text_seen = False
+                        clean_finish_seen = False
                         iterator = response.aiter_lines().__aiter__()
 
                         while True:
@@ -227,8 +227,6 @@ async def stream_chat(
 
                             normalized = line.strip()
                             if not normalized.startswith("data:"):
-                                if not first_text_seen:
-                                    buffered.append(line)
                                 continue
 
                             data = normalized[5:].strip()
@@ -240,21 +238,27 @@ async def stream_chat(
                                 break
 
                             delta = _extract_delta(data)
+                            if _has_finish_reason(data):
+                                clean_finish_seen = True
                             if not first_text_seen and delta:
                                 first_text_seen = True
+                                committed = True
                                 attempt["success"] = True
                                 attempt["latency_ms"] = int((time.monotonic() - attempt_started) * 1000)
                                 control_plane.log_request(client_name, "text-stream", requested_model, attempt)
 
                             if first_text_seen:
-                                # Do not replay pre-content metadata events. The Bot only needs content deltas,
-                                # and holding them lets us safely fail over until a real text token appears.
                                 yield (line + "\n\n").encode("utf-8")
 
                         if first_text_seen:
-                            # We already committed response bytes to the caller. If the upstream dies later,
-                            # failover is no longer safe because it could duplicate the beginning of the answer.
-                            yield b"data: [DONE]\n\n"
+                            if clean_finish_seen:
+                                yield b"data: [DONE]\n\n"
+                            else:
+                                # Bytes have already been sent, so switching to another model would mix answers.
+                                # Emit a private abort marker; the Bot recognizes it at the final outbound formatter
+                                # and blocks the partial answer from being delivered to the buyer.
+                                yield _synthetic_chunk(model, STREAM_ABORT_MARKER)
+                                yield b"data: [DONE]\n\n"
                             return
 
                         attempt["latency_ms"] = int((time.monotonic() - attempt_started) * 1000)
@@ -268,12 +272,14 @@ async def stream_chat(
                 except Exception as exc:
                     attempt["latency_ms"] = int((time.monotonic() - attempt_started) * 1000)
                     attempt["error"] = control_plane.safe_text(exc, 500)
+                    if committed:
+                        yield _synthetic_chunk(model, STREAM_ABORT_MARKER)
+                        yield b"data: [DONE]\n\n"
+                        return
                     failures.append(dict(attempt))
                     control_plane.log_request(client_name, "text-stream", requested_model, attempt)
                     continue
 
-    # No chat-stream route produced a token. Fall back to the proven bounded non-streaming router,
-    # then synthesize a valid SSE answer so stream clients still receive a usable result.
     if not await request.is_disconnected():
         remaining = max(5, min(30, int(max(5, deadline - time.monotonic()))))
         dispatched = await asyncio.to_thread(
@@ -316,6 +322,18 @@ def _extract_delta(data: str) -> str:
         return content if isinstance(content, str) else ""
     except Exception:
         return ""
+
+
+def _has_finish_reason(data: str) -> bool:
+    try:
+        obj = json.loads(data)
+        choices = obj.get("choices") or []
+        if not choices:
+            return False
+        reason = (choices[0] or {}).get("finish_reason")
+        return reason is not None and str(reason).strip() != ""
+    except Exception:
+        return False
 
 
 def _extract_json_answer(control_plane: Any, body: str) -> str:
