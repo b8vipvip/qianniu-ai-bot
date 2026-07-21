@@ -1,5 +1,7 @@
 using Bot.ChatRecord;
 using BotLib;
+using DbEntity;
+using DbEntity.Response;
 using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
@@ -82,15 +84,12 @@ namespace Bot.ChromeNs
                     var text = ExtractMessageText(message);
                     if (text.Length == 0) continue;
 
-                    // 自动回复的卖家回显用于确认真实送达；不能把自己的Bot回显误判成人工客服介入。
                     if (SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text)
                         || SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, text))
                     {
                         continue;
                     }
 
-                    // 与正在生成中的买家问题相比，出现一条不同内容的卖家消息，说明人工客服已经接管。
-                    // 让旧 lease 立即失效，AI即使稍后返回也不能再把过时答案发出去。
                     qn.CancelActiveBuyerGeneration(seller, buyer, "检测到客服回复：" + Short(text, 120));
                     ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);
                 }
