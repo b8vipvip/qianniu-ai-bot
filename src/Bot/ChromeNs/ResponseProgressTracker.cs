@@ -39,8 +39,6 @@ namespace Bot.ChromeNs
 
             SendDeliveryWatchdog.OnBuyerMessageObserved(seller, buyer, detectedAt);
 
-            // 没有对应理解能力的媒体消息会在聚合结束后直接生成“已跳过”卡片。
-            // 这里不提前创建处理中卡片，避免同一条媒体消息出现两张卡片并留下无法清理的进度状态。
             if (ShouldDeferUnsupportedMediaCard(question)) return null;
 
             var key = Key(seller, buyer);
@@ -55,10 +53,15 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    // 答案已经就绪，或者上一轮已经正式进入AI生成后又收到买家新消息，
-                    // 都必须创建全新的进度卡片。后者正是“直接拍吗？”等待AI时又收到“好的”的场景，
-                    // 不能继续把两分钟以前的旧问题合并进新一轮。
-                    if (entry.AnswerReadyAt != DateTime.MinValue || entry.AnswerStartedAt != DateTime.MinValue)
+                    var observedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
+                    var newerTurnDuringGeneration = entry.AnswerStartedAt != DateTime.MinValue
+                        && entry.DetectedAt != DateTime.MinValue
+                        && observedAt > entry.DetectedAt.AddMilliseconds(5)
+                        && !string.Equals(entry.Question, question, StringComparison.Ordinal);
+
+                    // 答案已经就绪，或者上一轮已经正式进入AI生成后又收到一条真正更新的买家消息，
+                    // 都必须创建全新的进度卡片。SetExactQuestion 在同一轮内部重复同步原问题时不能触发轮换。
+                    if (entry.AnswerReadyAt != DateTime.MinValue || newerTurnDuringGeneration)
                     {
                         if (entry.AnswerReadyAt == DateTime.MinValue && entry.Control != null)
                         {
@@ -88,8 +91,6 @@ namespace Bot.ChromeNs
                         }
                         catch (Exception ex)
                         {
-                            // 千牛右侧辅助窗口刚重建时 CtlRobot 可能尚未挂载。UI失败不能打断真实回复流程，
-                            // 后续 BeginAnswer / SetAnswerReady 会继续尝试创建卡片。
                             Log.ErrorWithMaxCount("创建回复进度卡片失败，已忽略UI异常继续处理消息：" + ex.Message, 10);
                             entry.Control = null;
                         }
@@ -156,7 +157,6 @@ namespace Bot.ChromeNs
                 + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds)
                 + ", source=" + (source ?? string.Empty));
 
-            // 慢响应诊断和真实发送回显监控都必须完全异步，不能阻塞正常发送流程。
             SlowResponseAnomalyService.QueueIfSlow(
                 seller,
                 buyer,
@@ -215,7 +215,6 @@ namespace Bot.ChromeNs
             {
                 Entry current;
                 if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) return;
-                // 新消息到达后会使用一个尚未有答案的新 Entry。旧流程不得把它删除。
                 if (entry.AnswerReadyAt == DateTime.MinValue) return;
                 Entry ignored;
                 Entries.TryRemove(key, out ignored);
