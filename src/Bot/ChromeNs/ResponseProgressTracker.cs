@@ -110,8 +110,8 @@ namespace Bot.ChromeNs
             DateTime detectedAt,
             DateTime answerReadyAt)
         {
-            var readyAt = answerReadyAt == DateTime.MinValue ? DateTime.Now : answerReadyAt;
-            var detected = detectedAt == DateTime.MinValue ? readyAt : detectedAt;
+            if (answerReadyAt == DateTime.MinValue) answerReadyAt = DateTime.Now;
+            var detected = detectedAt == DateTime.MinValue ? answerReadyAt : detectedAt;
             var control = SetExactQuestion(seller, buyer, question, detected);
             var answerStartedAt = detected;
             var key = Key(seller, buyer);
@@ -123,7 +123,7 @@ namespace Bot.ChromeNs
                     Entry current;
                     if (Entries.TryGetValue(key, out current) && ReferenceEquals(current, entry))
                     {
-                        entry.AnswerReadyAt = readyAt;
+                        entry.AnswerReadyAt = answerReadyAt;
                         answerStartedAt = entry.AnswerStartedAt == DateTime.MinValue
                             ? detected
                             : entry.AnswerStartedAt;
@@ -132,11 +132,11 @@ namespace Bot.ChromeNs
             }
             if (control != null)
             {
-                control.SetAnswer(answer, source, readyAt);
+                control.SetAnswer(answer, source, answerReadyAt);
                 control.SetSendPending("答案已生成，准备发送...");
             }
             Log.Info("回复进度答案就绪: seller=" + seller + ", buyer=" + buyer
-                + ", responseMs=" + Math.Max(0, (long)(readyAt - detected).TotalMilliseconds)
+                + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds)
                 + ", source=" + (source ?? string.Empty));
 
             // 慢响应诊断必须完全异步，不能阻塞正常发送流程。
@@ -148,7 +148,7 @@ namespace Bot.ChromeNs
                 source,
                 detected,
                 answerStartedAt,
-                readyAt);
+                answerReadyAt);
             return control;
         }
 
