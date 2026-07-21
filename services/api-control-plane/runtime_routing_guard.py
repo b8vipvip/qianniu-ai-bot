@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from typing import Any, Dict, List, Sequence, Tuple
@@ -127,7 +128,10 @@ def fast_upstream_call(
         answer = _extract_answer(control_plane, protocol, data)
         if not answer:
             attempt["error"] = "未解析到模型回复文本"
-            attempt["response_preview"] = control_plane.safe_text(control_plane.json_text(data), 500)
+            attempt["response_preview"] = control_plane.safe_text(
+                json.dumps(data, ensure_ascii=False, default=str),
+                500,
+            )
             attempts.append(dict(attempt))
             final = attempt
             continue
@@ -157,20 +161,32 @@ def fast_upstream_call(
 
 def _build_routes(control_plane: Any, requested_model: str, messages: Sequence[Dict[str, Any]]) -> List[Tuple[Dict[str, Any], str, str]]:
     vision = control_plane.messages_have_image(messages)
-    routes: List[Tuple[Dict[str, Any], str, str]] = []
+    providers = control_plane.list_providers(include_secret=True, enabled_only=True)
+    prepared: List[Tuple[Dict[str, Any], List[str], Dict[str, List[str]]]] = []
 
-    for provider in control_plane.list_providers(include_secret=True, enabled_only=True):
+    for provider in providers:
         models = control_plane.model_candidates(provider, requested_model, vision)
         protocols_by_model = {
             model: control_plane.protocol_candidates(provider, model, vision)
             for model in models
         }
-        max_protocol_count = max([len(x) for x in protocols_by_model.values()] or [0])
+        prepared.append((provider, models, protocols_by_model))
 
-        # Round-robin protocols across models: main and backup models all get their preferred
-        # protocol chance before one slow model consumes the whole request on secondary protocols.
-        for protocol_index in range(max_protocol_count):
-            for model in models:
+    max_model_count = max([len(models) for _, models, _ in prepared] or [0])
+    max_protocol_count = max(
+        [len(protocols) for _, _, mapping in prepared for protocols in mapping.values()] or [0]
+    )
+    routes: List[Tuple[Dict[str, Any], str, str]] = []
+
+    # Interleave providers, models and protocols. This ensures another relay/provider and every
+    # backup model receive a preferred-protocol chance before a single broken relay/model can
+    # consume the request budget on secondary protocols.
+    for protocol_index in range(max_protocol_count):
+        for model_index in range(max_model_count):
+            for provider, models, protocols_by_model in prepared:
+                if model_index >= len(models):
+                    continue
+                model = models[model_index]
                 protocols = protocols_by_model.get(model, [])
                 if protocol_index < len(protocols):
                     routes.append((provider, model, protocols[protocol_index]))
