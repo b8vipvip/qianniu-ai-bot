@@ -21,7 +21,6 @@ namespace Bot
             SlowResponseDiagnosticsUi.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
-            Bot.AssistWindow.Widget.Robot.CtlConversation.InstallOrderAutoReplyGuard();
             BuyerStreamingReplyPipeline.Initialize();
             Startup += App_Startup;
             SessionEnding += App_SessionEnding;
