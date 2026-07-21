@@ -122,11 +122,15 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(generated) || generated.StartsWith("错误：", StringComparison.Ordinal))
             {
                 var error = string.IsNullOrWhiteSpace(generated) ? "AI 未返回答案。" : generated;
-                if (ctl != null)
-                {
-                    ctl.SetAnswer(error, "Bot真实流程测试", DateTime.Now);
-                    ctl.SetSendResult(false, "测试失败：答案生成阶段");
-                }
+                ctl = ResponseProgressTracker.SetAnswerReady(
+                    candidate.Seller,
+                    candidate.Buyer,
+                    label,
+                    error,
+                    "Bot真实流程测试",
+                    detectedAt,
+                    DateTime.Now);
+                if (ctl != null) ctl.SetSendResult(false, "测试失败：答案生成阶段");
                 ResponseProgressTracker.Complete(candidate.Seller, candidate.Buyer);
                 return Failure(error, total, candidate, ai.ElapsedMilliseconds);
             }
