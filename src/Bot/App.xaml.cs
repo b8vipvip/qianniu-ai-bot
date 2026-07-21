@@ -1,4 +1,5 @@
-﻿using BotLib;
+﻿using Bot.Options;
+using BotLib;
 using System;
 using System.Collections.Generic;
 using System.Configuration;
@@ -16,6 +17,7 @@ namespace Bot
     {
         public App()
         {
+            SlowResponseDiagnosticsUi.Initialize();
             Startup += App_Startup;
             SessionEnding += App_SessionEnding;
             Exit += App_Exit;
