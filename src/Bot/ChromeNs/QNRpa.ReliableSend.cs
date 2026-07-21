@@ -138,7 +138,11 @@ namespace Bot.ChromeNs
         internal bool HasExpectedDraft(string expected)
         {
             string text;
-            return TryGetEditorText(out text) && EditorMatchesExpectedText(text, expected);
+            if (!TryGetEditorText(out text)) return false;
+            // 图片粘贴在 UIA 文本属性中通常表现为对象占位内容，而调用方没有可比较的文本。
+            // 对文本消息必须严格逐字匹配；只有图片发送路径（expected 为空）允许以“编辑器存在非空内容”作为草稿存在证明。
+            if (string.IsNullOrEmpty(expected)) return !string.IsNullOrWhiteSpace(NormalizeEditorText(text));
+            return EditorMatchesExpectedText(text, expected);
         }
 
         private static string NormalizeEditorText(string value)
