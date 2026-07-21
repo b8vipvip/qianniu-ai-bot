@@ -14,6 +14,9 @@ def test_send_watchdog_requires_real_seller_echo_and_queues_ai_report():
     assert "SendFailureAnomalyService.Queue" in source
     assert "答案已经生成并进入自动发送流程" in source
     assert "VerifyDelayMilliseconds = 9000" in source
+    assert "Pending[pending.Id] = pending;" in source
+    assert "新买家消息不能取消上一条答案的送达核验" in source
+    assert "Pending.TryRemove(pending.Id" in source
 
 
 def test_unknown_qianniu_version_cannot_fall_into_smart_tip_false_success_path():
