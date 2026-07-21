@@ -14,6 +14,7 @@ namespace Bot.ChromeNs
 {
     internal static class ConversationSessionLearningRuntimeBridge
     {
+        private const string StyleMessageKeyPrefix = "session-style:";
         private static readonly ConcurrentDictionary<int, bool> Attached =
             new ConcurrentDictionary<int, bool>();
         private static readonly ConcurrentDictionary<string, DateTime> Seen =
@@ -41,18 +42,16 @@ namespace Bot.ChromeNs
             {
                 var state = GetTimelineState(seller, buyer);
                 if (state == null) return new List<ConversationContextTurn>();
-                var stateType = state.GetType();
-                var syncField = stateType.GetField("Sync", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var turnsField = stateType.GetField("Turns", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
-                var sync = syncField == null ? null : syncField.GetValue(state);
-                var turns = turnsField == null ? null : turnsField.GetValue(state) as List<ConversationContextTurn>;
-                if (sync == null || turns == null) return new List<ConversationContextTurn>();
+                object sync;
+                List<ConversationContextTurn> turns;
+                if (!TryGetStateParts(state, out sync, out turns)) return new List<ConversationContextTurn>();
 
                 lock (sync)
                 {
                     var take = Math.Max(1, Math.Min(200, maxTurns <= 0 ? 120 : maxTurns));
                     return turns
                         .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Text))
+                        .Where(x => x.Role == "user" || x.Role == "assistant")
                         .Where(x => includeWithdrawn || !x.Withdrawn)
                         .Where(x => x.Timestamp == DateTime.MinValue
                             || ((from == DateTime.MinValue || x.Timestamp >= from)
@@ -70,10 +69,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static bool RefreshRemoteHistory(
-            string seller,
-            string buyer,
-            string ccode)
+        public static bool RefreshRemoteHistory(string seller, string buyer, string ccode)
         {
             seller = (seller ?? string.Empty).Trim();
             buyer = (buyer ?? string.Empty).Trim();
@@ -82,11 +78,9 @@ namespace Bot.ChromeNs
 
             try
             {
-                // Do not allow the existing fallback to QN.CurQN to cross shops during learning.
-                // We only invoke the private refresh method when the exact seller QN exists.
+                // Learning must never use QN.CurQN as a cross-shop fallback.
                 var qn = QN.FindExistingBySellerNick(seller);
                 if (qn == null || qn.CDP == null) return false;
-
                 var state = GetTimelineState(seller, buyer);
                 if (state == null) return false;
                 var method = typeof(ConversationContextStore).GetMethod(
@@ -162,10 +156,7 @@ namespace Bot.ChromeNs
 
             var text = ExtractMessageText(message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, text);
-            if (!string.IsNullOrWhiteSpace(messageKey))
-            {
-                if (!Seen.TryAdd(messageKey, DateTime.Now)) return;
-            }
+            if (!string.IsNullOrWhiteSpace(messageKey) && !Seen.TryAdd(messageKey, DateTime.Now)) return;
 
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller)
@@ -181,11 +172,43 @@ namespace Bot.ChromeNs
             var buyer = from == seller ? to : (to == seller ? from : string.Empty);
             if (string.IsNullOrWhiteSpace(buyer)) return;
 
-            ConversationSessionLearningService.ObserveLiveMessage(
-                message,
-                text,
-                seller,
-                buyer);
+            var isBuyer = from == buyer && to == seller;
+            if (isBuyer && !ConversationContextStore.IsPlatformSystemTip(message, text))
+            {
+                // This event is raised before QN processes the same buyer message. Recording now is safe
+                // because ConversationContextStore deduplicates by message key, and it gives us a state in
+                // which to inject the store-specific style as a system turn before AI generation starts.
+                ConversationContextStore.RefreshAndRecord(message, text);
+                InjectLearnedStyle(seller, buyer);
+            }
+
+            ConversationSessionLearningService.ObserveLiveMessage(message, text, seller, buyer);
+        }
+
+        private static void InjectLearnedStyle(string seller, string buyer)
+        {
+            var addon = ConversationSessionLearningService.BuildReplyStylePromptAddon(seller);
+            var state = GetTimelineState(seller, buyer);
+            if (state == null) return;
+            object sync;
+            List<ConversationContextTurn> turns;
+            if (!TryGetStateParts(state, out sync, out turns)) return;
+
+            lock (sync)
+            {
+                turns.RemoveAll(x => x != null
+                    && !string.IsNullOrWhiteSpace(x.MessageKey)
+                    && x.MessageKey.StartsWith(StyleMessageKeyPrefix, StringComparison.Ordinal));
+                if (string.IsNullOrWhiteSpace(addon)) return;
+                turns.Add(new ConversationContextTurn
+                {
+                    Role = "system",
+                    Text = addon,
+                    Timestamp = DateTime.Now.AddMilliseconds(-1),
+                    MessageKey = StyleMessageKeyPrefix + StableHash(addon),
+                    Withdrawn = false
+                });
+            }
         }
 
         private static object GetTimelineState(string seller, string buyer)
@@ -204,6 +227,22 @@ namespace Bot.ChromeNs
             };
             var found = Convert.ToBoolean(tryGetValue.Invoke(states, args));
             return found ? args[1] : null;
+        }
+
+        private static bool TryGetStateParts(
+            object state,
+            out object sync,
+            out List<ConversationContextTurn> turns)
+        {
+            sync = null;
+            turns = null;
+            if (state == null) return false;
+            var stateType = state.GetType();
+            var syncField = stateType.GetField("Sync", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            var turnsField = stateType.GetField("Turns", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            sync = syncField == null ? null : syncField.GetValue(state);
+            turns = turnsField == null ? null : turnsField.GetValue(state) as List<ConversationContextTurn>;
+            return sync != null && turns != null;
         }
 
         private static ConversationContextTurn CloneTurn(ConversationContextTurn source)
@@ -274,6 +313,16 @@ namespace Bot.ChromeNs
                 return true;
             }
             return false;
+        }
+
+        private static int StableHash(string value)
+        {
+            unchecked
+            {
+                var hash = 17;
+                foreach (var ch in value ?? string.Empty) hash = hash * 31 + ch;
+                return hash == int.MinValue ? 0 : Math.Abs(hash);
+            }
         }
 
         private static void CleanupSeen()
