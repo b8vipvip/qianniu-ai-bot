@@ -14,6 +14,7 @@ namespace Bot.ChromeNs
             public CtlConversation Control;
             public string Question = string.Empty;
             public DateTime DetectedAt = DateTime.MinValue;
+            public DateTime AnswerStartedAt = DateTime.MinValue;
             public DateTime AnswerReadyAt = DateTime.MinValue;
         }
 
@@ -93,9 +94,10 @@ namespace Bot.ChromeNs
             DateTime detectedAt)
         {
             var control = SetExactQuestion(seller, buyer, combinedQuestion, detectedAt);
+            var startedAt = MarkAnswerStarted(seller, buyer, DateTime.Now);
             if (control != null) control.SetProcessing("正在获取答案...");
             Log.Info("回复进度进入答案生成: seller=" + seller + ", buyer=" + buyer
-                + ", queueMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
+                + ", queueMs=" + Math.Max(0, (long)(startedAt - detectedAt).TotalMilliseconds));
             return control;
         }
 
@@ -108,7 +110,10 @@ namespace Bot.ChromeNs
             DateTime detectedAt,
             DateTime answerReadyAt)
         {
-            var control = SetExactQuestion(seller, buyer, question, detectedAt);
+            var readyAt = answerReadyAt == DateTime.MinValue ? DateTime.Now : answerReadyAt;
+            var detected = detectedAt == DateTime.MinValue ? readyAt : detectedAt;
+            var control = SetExactQuestion(seller, buyer, question, detected);
+            var answerStartedAt = detected;
             var key = Key(seller, buyer);
             Entry entry;
             if (Entries.TryGetValue(key, out entry) && entry != null)
@@ -118,18 +123,32 @@ namespace Bot.ChromeNs
                     Entry current;
                     if (Entries.TryGetValue(key, out current) && ReferenceEquals(current, entry))
                     {
-                        entry.AnswerReadyAt = answerReadyAt == DateTime.MinValue ? DateTime.Now : answerReadyAt;
+                        entry.AnswerReadyAt = readyAt;
+                        answerStartedAt = entry.AnswerStartedAt == DateTime.MinValue
+                            ? detected
+                            : entry.AnswerStartedAt;
                     }
                 }
             }
             if (control != null)
             {
-                control.SetAnswer(answer, source, answerReadyAt);
+                control.SetAnswer(answer, source, readyAt);
                 control.SetSendPending("答案已生成，准备发送...");
             }
             Log.Info("回复进度答案就绪: seller=" + seller + ", buyer=" + buyer
-                + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detectedAt).TotalMilliseconds)
+                + ", responseMs=" + Math.Max(0, (long)(readyAt - detected).TotalMilliseconds)
                 + ", source=" + (source ?? string.Empty));
+
+            // 慢响应诊断必须完全异步，不能阻塞正常发送流程。
+            SlowResponseAnomalyService.QueueIfSlow(
+                seller,
+                buyer,
+                question,
+                answer,
+                source,
+                detected,
+                answerStartedAt,
+                readyAt);
             return control;
         }
 
@@ -160,6 +179,23 @@ namespace Bot.ChromeNs
                 if (entry.AnswerReadyAt == DateTime.MinValue) return;
                 Entry ignored;
                 Entries.TryRemove(key, out ignored);
+            }
+        }
+
+        private static DateTime MarkAnswerStarted(string seller, string buyer, DateTime startedAt)
+        {
+            var key = Key(seller, buyer);
+            Entry entry;
+            if (!Entries.TryGetValue(key, out entry) || entry == null) return startedAt;
+            lock (entry.Sync)
+            {
+                Entry current;
+                if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) return startedAt;
+                if (entry.AnswerStartedAt == DateTime.MinValue)
+                {
+                    entry.AnswerStartedAt = startedAt == DateTime.MinValue ? DateTime.Now : startedAt;
+                }
+                return entry.AnswerStartedAt;
             }
         }
 
