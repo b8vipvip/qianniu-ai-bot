@@ -92,8 +92,16 @@ namespace Bot.ChromeNs
             var total = Stopwatch.StartNew();
             if (candidate == null) return Failure("没有可用的测试问题。", total);
             if (!Params.Robot.CanUseRobotReal) return Failure("Bot 总开关已停用。", total, candidate);
-            var qn = QN.FindExistingBySellerNick(candidate.Seller) ?? QN.CurQN;
-            if (qn == null || qn.CDP == null) return Failure("未找到可用的千牛消息连接。", total, candidate);
+            var qn = QN.FindExistingBySellerNick(candidate.Seller);
+            if (qn == null || qn.CDP == null)
+            {
+                return Failure("目标客服账号当前没有可用的千牛消息连接，已阻止回退到其他店铺。", total, candidate);
+            }
+            if (qn.Seller == null
+                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), (candidate.Seller ?? string.Empty).Trim(), StringComparison.Ordinal))
+            {
+                return Failure("目标客服账号校验失败，已阻止跨店铺执行测试。", total, candidate);
+            }
 
             var detectedAt = DateTime.Now;
             var label = "[Bot真实流程测试] " + candidate.Question;
@@ -207,7 +215,12 @@ namespace Bot.ChromeNs
                     .Take(20)
                     .ToList();
                 if (candidates.Count == 0) return null;
-                var picked = candidates[Random.Next(candidates.Count)];
+                int pickedIndex;
+                lock (Sync)
+                {
+                    pickedIndex = Random.Next(candidates.Count);
+                }
+                var picked = candidates[pickedIndex];
                 return new BotFlowTestCandidate
                 {
                     Seller = qn.Seller.Nick,
