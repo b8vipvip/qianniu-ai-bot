@@ -42,6 +42,7 @@ def test_order_auto_reply_arms_exact_manual_bypass_at_actual_send_point():
 
 def test_streaming_pipeline_cancels_stale_buyer_generation_and_only_sends_final_answer():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    formatter = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     app = read("src/Bot/App.xaml.cs")
     targets = read("src/Directory.Build.targets")
 
@@ -56,3 +57,8 @@ def test_streaming_pipeline_cancels_stale_buyer_generation_and_only_sends_final_
     assert "MyOpenAI.CallStructuredChat(messages, 220, 0.15, 30, token)" in pipeline
     assert "BuyerStreamingReplyPipeline.Initialize();" in app
     assert "ChromeNs\\BuyerStreamingReplyPipeline.cs" in targets
+
+    assert 'StreamAbortMarker = "[[QN_STREAM_ABORTED]]"' in formatter
+    assert "value.IndexOf(StreamAbortMarker" in formatter
+    assert "已阻止发送半截答案" in formatter
+    assert "return \"错误：AI流式输出中断" in formatter
