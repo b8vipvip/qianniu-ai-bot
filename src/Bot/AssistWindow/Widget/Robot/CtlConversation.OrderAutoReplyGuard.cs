@@ -14,16 +14,18 @@ namespace Bot.AssistWindow.Widget.Robot
             if (Interlocked.Exchange(ref _orderAutoReplyGuardInstalled, 1) != 0) return;
             EventManager.RegisterClassHandler(
                 typeof(CtlConversation),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnConversationLoadedForOrderAutoReplyGuard),
+                FrameworkElement.InitializedEvent,
+                new RoutedEventHandler(OnConversationInitializedForOrderAutoReplyGuard),
                 true);
         }
 
-        private static void OnConversationLoadedForOrderAutoReplyGuard(object sender, RoutedEventArgs e)
+        private static void OnConversationInitializedForOrderAutoReplyGuard(object sender, RoutedEventArgs e)
         {
             var ctl = sender as CtlConversation;
             if (ctl == null) return;
-            ctl.PrepareOrderAutoReplyManualBypass();
+            // Initialized 发生在 Setup 之前，因此排到当前UI调用结束后执行；
+            // 这样即使卡片没有进入当前可见买家列表，也能在 QNRpa 的 180ms 人工介入检查前完成登记。
+            ctl.Dispatcher.BeginInvoke(new Action(ctl.PrepareOrderAutoReplyManualBypass));
         }
 
         private void PrepareOrderAutoReplyManualBypass()
