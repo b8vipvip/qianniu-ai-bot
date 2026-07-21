@@ -135,7 +135,9 @@ namespace Bot.ChromeNs
                 return Failure(error, total, candidate, ai.ElapsedMilliseconds);
             }
 
-            var outgoing = "【Bot测试】" + BotFeatureStore.ApplyOutputPolicy(generated);
+            var outgoing = BotOutboundMessageFormatter.EnsureAiMarker(
+                "【Bot测试】" + BotOutboundMessageFormatter.StripAiMarker(
+                    BotFeatureStore.ApplyOutputPolicy(generated)));
             var answerReadyAt = DateTime.Now;
             ctl = ResponseProgressTracker.SetAnswerReady(
                 candidate.Seller,

@@ -247,6 +247,19 @@ namespace Bot.AssistWindow.Widget.Robot
                 _answer);
             menu.Items.Add(view);
 
+            var copy = new MenuItem { Header = "复制" };
+            copy.Click += (s, args) =>
+            {
+                try
+                {
+                    Clipboard.SetText(_answer ?? string.Empty);
+                }
+                catch
+                {
+                }
+            };
+            menu.Items.Add(copy);
+
             if (_canResend)
             {
                 var resend = new MenuItem { Header = "重发" };

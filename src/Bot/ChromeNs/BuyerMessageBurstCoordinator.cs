@@ -95,9 +95,6 @@ namespace Bot.ChromeNs
                     var previous = parts[parts.Count - 1];
                     var previousNormalized = NormalizeCompare(previous);
                     if (normalized == previousNormalized) continue;
-
-                    // 输入法上屏、复制修改或网络重发时，后一条可能完整包含前一条短片段。
-                    // 此时保留更完整的新文本，避免模型把它误判为两个独立问题。
                     if (previousNormalized.Length <= 16
                         && normalized.Length > previousNormalized.Length
                         && normalized.StartsWith(previousNormalized, StringComparison.Ordinal))
@@ -199,6 +196,7 @@ namespace Bot.ChromeNs
                 {
                     return;
                 }
+
                 if (state.Items.Count == 0) state.StartedAt = DateTime.Now;
                 state.Items.Add(item);
                 if (state.Items.Count > 12) state.Items.RemoveRange(0, state.Items.Count - 12);
@@ -218,6 +216,29 @@ namespace Bot.ChromeNs
             if (startWorker) Task.Run(() => RunAsync(key, state));
         }
 
+        public void CancelBuyer(string seller, string buyer, string reason)
+        {
+            var key = Key(seller, buyer);
+            BurstState state;
+            if (!_states.TryGetValue(key, out state) || state == null) return;
+
+            lock (state.Sync)
+            {
+                state.Version++;
+                state.Items.Clear();
+                state.StartedAt = DateTime.MinValue;
+                try { state.DelayCancellation.Cancel(); } catch { }
+                state.DelayCancellation.Dispose();
+                state.DelayCancellation = new CancellationTokenSource();
+                state.WorkerRunning = false;
+            }
+
+            BurstState ignored;
+            _states.TryRemove(key, out ignored);
+            Log.Info("买家自动回复任务已因人工介入失效: seller=" + seller
+                + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
+        }
+
         private async Task RunAsync(string key, BurstState state)
         {
             while (true)
@@ -227,6 +248,13 @@ namespace Bot.ChromeNs
                 int delayMilliseconds;
                 lock (state.Sync)
                 {
+                    if (state.Items.Count < 1)
+                    {
+                        state.WorkerRunning = false;
+                        BurstState empty;
+                        _states.TryRemove(key, out empty);
+                        return;
+                    }
                     token = state.DelayCancellation.Token;
                     capturedVersion = state.Version;
                     delayMilliseconds = QuietDelayMilliseconds(state.Items, state.StartedAt);
@@ -244,11 +272,17 @@ namespace Bot.ChromeNs
                 BuyerMessageBurst burst;
                 lock (state.Sync)
                 {
-                    if (capturedVersion != state.Version) continue;
+                    if (state.Version != capturedVersion) continue;
+                    if (state.Items.Count < 1) continue;
+
+                    var dispatchedItems = state.Items.ToList();
+                    state.Items.Clear();
+                    state.StartedAt = DateTime.MinValue;
+                    state.WorkerRunning = false;
                     burst = new BuyerMessageBurst(
-                        state.Items[0].SellerNick,
-                        state.Items[0].BuyerNick,
-                        state.Items.ToList(),
+                        dispatchedItems[0].SellerNick,
+                        dispatchedItems[0].BuyerNick,
+                        dispatchedItems,
                         capturedVersion);
                 }
 
@@ -273,14 +307,15 @@ namespace Bot.ChromeNs
 
                 lock (state.Sync)
                 {
-                    if (state.Version != capturedVersion) continue;
-                    state.Items.Clear();
-                    state.StartedAt = DateTime.MinValue;
-                    state.WorkerRunning = false;
-                    BurstState ignored;
-                    _states.TryRemove(key, out ignored);
-                    return;
+                    if (state.Version == capturedVersion
+                        && state.Items.Count < 1
+                        && !state.WorkerRunning)
+                    {
+                        BurstState ignored;
+                        _states.TryRemove(key, out ignored);
+                    }
                 }
+                return;
             }
         }
 

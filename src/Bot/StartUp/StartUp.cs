@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Security.Principal;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -19,7 +20,7 @@ namespace Bot.SingleStartUp
 		[STAThread]
 		public static void Main(string[] args)
 		{
-            try
+			try
 			{
                 // 检查当前用户是否已经是管理员
                 bool isRuningAdmin = IsRuningForAdmin();
@@ -37,6 +38,17 @@ namespace Bot.SingleStartUp
 					if (createdNew)
 					{
                         KillProcess();
+
+                        // 如果永久数据目录被用户误删为空，不要因为旧迁移标记存在而静默启动空数据库。
+                        // 清除标记后重新进入旧数据发现/首次初始化流程。
+                        ResetMigrationMarkerWhenPersistentDataIsMissing();
+
+                        // 必须在日志、PersistentParams、DbHelper 等任何可能打开数据库的组件之前执行。
+                        if (!UserDataMigrationManager.PrepareBeforeAppStartup())
+                        {
+                            return;
+                        }
+
 						AppLife.Init();
 						App app = new App();
 						app.InitializeComponent();
@@ -59,6 +71,21 @@ namespace Bot.SingleStartUp
 				Log.Exception(ex);
 			}
 		}
+
+        private static void ResetMigrationMarkerWhenPersistentDataIsMissing()
+        {
+            var markerPath = Path.Combine(PathEx.UserDataRoot, "data-migration-v2.done");
+            if (!File.Exists(markerPath))
+            {
+                return;
+            }
+
+            Directory.CreateDirectory(PathEx.DataDir);
+            if (!Directory.EnumerateFileSystemEntries(PathEx.DataDir).Any())
+            {
+                File.Delete(markerPath);
+            }
+        }
 
 		private static bool IsRuningFromExplorer()
 		{
@@ -108,5 +135,5 @@ namespace Bot.SingleStartUp
             }
         }
 
-    }
+	}
 }

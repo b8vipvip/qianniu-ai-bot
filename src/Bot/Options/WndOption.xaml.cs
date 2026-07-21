@@ -30,6 +30,7 @@ namespace Bot.Options
 		{
 			Style style = FindResource("tabLevel1") as Style;
             CreateOpTab("AI大模型设置", new CtlRobotOptions(Seller), style);
+            CreateOpTab("数据管理", new CtlDataManagement(), style);
             sbSave.ToolTip = string.Format("保存成 {0} 个人设置", Seller);
 		}
 

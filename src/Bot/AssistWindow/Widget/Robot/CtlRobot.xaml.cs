@@ -148,19 +148,62 @@ namespace Bot.AssistWindow.Widget.Robot
             try
             {
                 ctl.SetSendPending("手动重发中...");
-                var qn = QN.CurQN;
-                if (qn == null)
+                var qn = QN.FindExistingBySellerNick(e.Seller);
+                if (qn == null || qn.CDP == null)
                 {
-                    ctl.SetSendResult(false, "重发失败：未识别千牛会话");
+                    ctl.SetSendResult(false, "重发失败：未找到该客服账号对应的在线千牛会话");
+                    SendFailureAnomalyService.Queue(
+                        e.Seller,
+                        e.Buyer,
+                        e.Question,
+                        e.Answer,
+                        "手动重发",
+                        "点击重发时未找到与原客服账号精确匹配且CDP在线的千牛实例，已阻止回退到其他店铺或错误会话。",
+                        DateTime.Now,
+                        DateTime.Now,
+                        DateTime.Now);
                     return;
                 }
+
+                var resendStartedAt = DateTime.Now;
+                SendDeliveryWatchdog.ExpectDelivery(
+                    e.Seller,
+                    e.Buyer,
+                    e.Question,
+                    e.Answer,
+                    "手动重发",
+                    resendStartedAt,
+                    resendStartedAt);
                 KnowledgeLearningService.AllowNextManualSend(e.Seller, e.Buyer, e.Answer);
                 var ok = await qn.SendTextWithRetryAsync(e.Buyer, e.Answer, 1);
                 ctl.SetSendResult(ok, ok ? "重发成功" : "重发失败，已重试1次");
+                if (!ok)
+                {
+                    SendFailureAnomalyService.Queue(
+                        e.Seller,
+                        e.Buyer,
+                        e.Question,
+                        e.Answer,
+                        "手动重发",
+                        "精确匹配到客服账号后，SendTextWithRetryAsync 重试结束仍返回失败。",
+                        resendStartedAt,
+                        resendStartedAt,
+                        DateTime.Now);
+                }
             }
             catch (Exception ex)
             {
                 ctl.SetSendResult(false, "重发异常");
+                SendFailureAnomalyService.Queue(
+                    e.Seller,
+                    e.Buyer,
+                    e.Question,
+                    e.Answer,
+                    "手动重发",
+                    "手动重发抛出异常：" + ex.Message,
+                    DateTime.Now,
+                    DateTime.Now,
+                    DateTime.Now);
                 Log.Exception(ex);
             }
         }

@@ -36,7 +36,7 @@ namespace Bot.ChromeNs
         {
             var result = new ReplyDeduplicationResult
             {
-                Answer = candidateAnswer ?? string.Empty,
+                Answer = BotOutboundMessageFormatter.EnsureAiMarker(candidateAnswer),
                 PreviousAnswer = string.Empty,
                 Source = string.Empty,
                 Regenerated = false
@@ -71,7 +71,7 @@ namespace Bot.ChromeNs
                 regenerated = "如果前面的步骤都试过仍无效，建议转人工进一步核查。";
             }
 
-            result.Answer = regenerated;
+            result.Answer = BotOutboundMessageFormatter.EnsureAiMarker(regenerated);
             result.PreviousAnswer = previousAnswer;
             result.Source = knowledge == null ? "AI重答" : "本地知识库重答";
             result.Regenerated = true;
@@ -79,7 +79,7 @@ namespace Bot.ChromeNs
                 seller,
                 buyer,
                 question,
-                result.Answer,
+                BotOutboundMessageFormatter.StripAiMarker(result.Answer),
                 result.Source);
             Log.Info("检测到与上一轮完全相同的答案，已重新生成。seller="
                 + seller + ", buyer=" + buyer + ", source=" + result.Source);
@@ -96,7 +96,7 @@ namespace Bot.ChromeNs
 
             LastDelivered[Key(seller, buyer)] = new DeliveredAnswerStamp
             {
-                Answer = answer.Trim(),
+                Answer = BotOutboundMessageFormatter.EnsureAiMarker(answer),
                 SentAt = DateTime.Now
             };
             Cleanup();
@@ -192,7 +192,7 @@ namespace Bot.ChromeNs
                     {
                         ["role"] = "user",
                         ["content"] = factBoundary
-                            + "\n上一轮客服答案：" + previousAnswer
+                            + "\n上一轮客服答案：" + BotOutboundMessageFormatter.StripAiMarker(previousAnswer)
                             + "\n当前买家消息：" + (question ?? string.Empty)
                             + (string.IsNullOrWhiteSpace(timeline)
                                 ? string.Empty
@@ -246,6 +246,7 @@ namespace Bot.ChromeNs
 
         private static string Canonical(string value)
         {
+            value = BotOutboundMessageFormatter.StripAiMarker(value);
             return Regex.Replace((value ?? string.Empty).Trim(), @"\s+", " ");
         }
 
@@ -266,6 +267,35 @@ namespace Bot.ChromeNs
                 DeliveredAnswerStamp ignored;
                 LastDelivered.TryRemove(key, out ignored);
             }
+        }
+    }
+
+    internal static class BotOutboundMessageFormatter
+    {
+        public const string AiMarker = "[AI]";
+        public const string StreamAbortMarker = "[[QN_STREAM_ABORTED]]";
+
+        public static string EnsureAiMarker(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.IndexOf(StreamAbortMarker, StringComparison.Ordinal) >= 0)
+            {
+                Log.Info("检测到AI流式输出中断标识，已阻止发送半截答案。");
+                return "错误：AI流式输出中断，已阻止发送半截答案，请重新获取完整答案。";
+            }
+            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;
+            if (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase)) return value;
+            return value + " " + AiMarker;
+        }
+
+        public static string StripAiMarker(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();
+            }
+            return value;
         }
     }
 }

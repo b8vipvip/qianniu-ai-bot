@@ -36,7 +36,8 @@ namespace Bot.Options
         HotKey,
         Robot,
         RemindPay,
-        InviteOrder
+        InviteOrder,
+        DataManagement
     }
 
 }

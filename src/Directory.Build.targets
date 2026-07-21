@@ -25,11 +25,23 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReplyDeduplicationService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReplyDeduplicationService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotConversationHistoryStore.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotConversationHistoryStore.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.History.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlRobot.History.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerMessageBurstCoordinator.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerMessageBurstCoordinator.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs" />
@@ -37,16 +49,46 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.RuntimeSafety.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.RuntimeSafety.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QnRuntimeSafetyMonitor.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QnRuntimeSafetyMonitor.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SendDeliveryWatchdog.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SendDeliveryWatchdog.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SendFailureAnomalyService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SendFailureAnomalyService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderPlacedAutoReplyService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderPlacedAutoReplyService.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ResponseProgressTracker.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ResponseProgressTracker.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SlowResponseAnomalyService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SlowResponseAnomalyService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\SlowResponseDiagnosticsUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\SlowResponseDiagnosticsUi.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlDataManagement.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\CtlDataManagement.cs" />
   </ItemGroup>
 </Project>

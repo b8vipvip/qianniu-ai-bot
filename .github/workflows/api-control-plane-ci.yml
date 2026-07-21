@@ -7,11 +7,15 @@ on:
       - agent/reply-dedup-knowledge-navigation
     paths:
       - services/api-control-plane/**
+      - scripts/update-api-control-plane.sh
+      - scripts/update-bot.ps1
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
   pull_request:
     paths:
       - services/api-control-plane/**
+      - scripts/update-api-control-plane.sh
+      - scripts/update-bot.ps1
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
 
@@ -24,6 +28,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate Windows updater PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/update-bot.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -52,6 +70,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate server updater shell syntax
+        working-directory: .
+        run: bash -n scripts/update-api-control-plane.sh
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -72,7 +93,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Compile Python
-        run: python -m py_compile app.py bootstrap.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_control_plane.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
+        run: python -m py_compile app.py bootstrap.py runtime_routing_guard.py runtime_streaming_guard.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_control_plane.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
       - name: Run control plane tests
         run: python -m pytest -q --tb=short 2>&1 | tee pytest.log
       - name: Upload pytest diagnostics
@@ -87,6 +108,31 @@ jobs:
         run: node --check static/app.js
       - name: Build Ubuntu container
         run: docker build -t qianniu-api-control-plane:${{ github.sha }} .
+      - name: Smoke test Ubuntu container startup
+        run: |
+          set -euo pipefail
+          FERNET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+          docker run -d --name qianniu-api-control-plane-smoke \
+            -e APP_SECRET='ci-smoke-test-secret-at-least-32-bytes' \
+            -e ADMIN_USERNAME='admin' \
+            -e ADMIN_PASSWORD='ci-smoke-password' \
+            -e API_KEY_ENCRYPTION_KEY="$FERNET_KEY" \
+            -p 127.0.0.1:18081:8080 \
+            qianniu-api-control-plane:${{ github.sha }}
+          cleanup() {
+            docker logs qianniu-api-control-plane-smoke || true
+            docker rm -f qianniu-api-control-plane-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18081/healthz >/tmp/control-plane-health.json; then
+              cat /tmp/control-plane-health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'control plane container did not become healthy in time' >&2
+          exit 1
       - name: Validate Compose configuration
         run: |
           cp .env.example .env
@@ -106,6 +152,8 @@ jobs:
           path: |
             services/api-control-plane/app.py
             services/api-control-plane/bootstrap.py
+            services/api-control-plane/runtime_routing_guard.py
+            services/api-control-plane/runtime_streaming_guard.py
             services/api-control-plane/wecom_bridge.py
             services/api-control-plane/wecom_crypto.py
             services/api-control-plane/wecom_settings.py
