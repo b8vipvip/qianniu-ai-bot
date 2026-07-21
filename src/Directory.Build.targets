@@ -43,11 +43,17 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ResponseProgressTracker.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ResponseProgressTracker.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SlowResponseAnomalyService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SlowResponseAnomalyService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotFlowTestService.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\SlowResponseDiagnosticsUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\SlowResponseDiagnosticsUi.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs" />
