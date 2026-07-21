@@ -6,12 +6,14 @@ import uvicorn
 
 import app as control_plane
 import runtime_routing_guard
+import runtime_streaming_guard
 import wecom_bridge
 import wecom_settings
 from wecom_crypto import install_on_bridge
 
 
 runtime_routing_guard.install(control_plane)
+runtime_streaming_guard.install(control_plane)
 install_on_bridge(wecom_bridge)
 control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
