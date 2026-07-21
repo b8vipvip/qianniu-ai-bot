@@ -25,16 +25,19 @@ def test_knowledge_manager_has_ai_optimization_runtime_ui():
     assert "Knowledge\\KnowledgeOptimizationUi.cs" in targets
 
 
-def test_order_auto_reply_arms_exact_manual_bypass_before_send():
-    guard = read("src/Bot/AssistWindow/Widget/Robot/CtlConversation.OrderAutoReplyGuard.cs")
+def test_order_auto_reply_arms_exact_manual_bypass_at_actual_send_point():
+    order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     app = read("src/Bot/App.xaml.cs")
     targets = read("src/Directory.Build.targets")
 
-    assert "FrameworkElement.LoadedEvent" in guard
-    assert 'StartsWith("[买家下单]"' in guard
-    assert "KnowledgeLearningService.AllowNextManualSend(_seller, _buyer, _answer);" in guard
-    assert "InstallOrderAutoReplyGuard();" in app
-    assert "CtlConversation.OrderAutoReplyGuard.cs" in targets
+    bypass = "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);"
+    send = "var sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);"
+    assert bypass in order
+    assert send in order
+    assert order.index(bypass) < order.index(send)
+    assert "下单自动回复已登记精确发送豁免" in order
+    assert "InstallOrderAutoReplyGuard" not in app
+    assert "CtlConversation.OrderAutoReplyGuard.cs" not in targets
 
 
 def test_streaming_pipeline_cancels_stale_buyer_generation_and_only_sends_final_answer():
