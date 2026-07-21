@@ -1,6 +1,7 @@
 using BotLib;
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -28,16 +29,9 @@ namespace Bot.ChromeNs
 
         public static void OnBuyerMessageObserved(string seller, string buyer, DateTime observedAt)
         {
-            var key = ConversationKey(seller, buyer);
-            PendingDelivery pending;
-            if (Pending.TryGetValue(key, out pending)
-                && pending != null
-                && (observedAt == DateTime.MinValue || pending.AnswerReadyAt <= observedAt))
-            {
-                PendingDelivery ignored;
-                Pending.TryRemove(key, out ignored);
-                Log.Info("发送回显监控因买家新消息结束等待: seller=" + seller + ", buyer=" + buyer);
-            }
+            // 新买家消息不能取消上一条答案的送达核验。
+            // 否则“答案其实没发出去，买家又追问了一次”的关键故障会被静默吞掉。
+            // 每个待发送答案都使用独立 watchdogId，直到卖家真实回显确认或超时产生异常报告。
         }
 
         public static void ExpectDelivery(
@@ -67,8 +61,7 @@ namespace Bot.ChromeNs
             };
             if (pending.Seller.Length == 0 || pending.Buyer.Length == 0) return;
 
-            var key = ConversationKey(pending.Seller, pending.Buyer);
-            Pending[key] = pending;
+            Pending[pending.Id] = pending;
             KnownBotAnswers[AnswerKey(pending.Seller, pending.Buyer, pending.Answer)] = DateTime.Now.AddMinutes(2);
             CleanupKnownAnswers();
 
@@ -79,7 +72,7 @@ namespace Bot.ChromeNs
             {
                 await Task.Delay(VerifyDelayMilliseconds);
                 PendingDelivery current;
-                if (!Pending.TryGetValue(key, out current)
+                if (!Pending.TryGetValue(pending.Id, out current)
                     || current == null
                     || !ReferenceEquals(current, pending))
                 {
@@ -99,7 +92,7 @@ namespace Bot.ChromeNs
                 }
 
                 PendingDelivery removed;
-                if (!Pending.TryRemove(key, out removed) || !ReferenceEquals(removed, pending)) return;
+                if (!Pending.TryRemove(pending.Id, out removed) || !ReferenceEquals(removed, pending)) return;
                 if (delivered)
                 {
                     Log.Info("发送回显监控确认成功: seller=" + pending.Seller
@@ -131,16 +124,24 @@ namespace Bot.ChromeNs
             var normalized = Normalize(answer);
             if (normalized.Length == 0) return false;
 
-            var key = ConversationKey(seller, buyer);
-            PendingDelivery pending;
-            if (Pending.TryGetValue(key, out pending)
-                && pending != null
-                && Normalize(pending.Answer) == normalized)
+            var matched = Pending
+                .Where(pair => pair.Value != null
+                    && string.Equals(pair.Value.Seller, (seller ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    && string.Equals(pair.Value.Buyer, (buyer ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    && Normalize(pair.Value.Answer) == normalized)
+                .ToList();
+
+            var confirmed = false;
+            foreach (var pair in matched)
             {
                 PendingDelivery ignored;
-                Pending.TryRemove(key, out ignored);
+                if (Pending.TryRemove(pair.Key, out ignored)) confirmed = true;
+            }
+            if (confirmed)
+            {
                 KnownBotAnswers[AnswerKey(seller, buyer, answer)] = DateTime.Now.AddMinutes(2);
-                Log.Info("通过卖家消息回显确认Bot真实发送: seller=" + seller + ", buyer=" + buyer);
+                Log.Info("通过卖家消息回显确认Bot真实发送: seller=" + seller
+                    + ", buyer=" + buyer + ", matchedWatchdogs=" + matched.Count);
                 return true;
             }
 
