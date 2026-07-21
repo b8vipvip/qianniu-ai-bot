@@ -119,7 +119,7 @@ if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) {
 
 $packageHash = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$backupRoot = Join-Path ([IO.Path]::GetPathRoot($InstallDir)) 'QianniuAiBot-backups'
+$backupRoot = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater\backups'
 $backupDir = Join-Path $backupRoot $timestamp
 $programBackup = Join-Path $backupDir 'program'
 $persistentData = Join-Path $env:LOCALAPPDATA 'QianniuAiBot\data'
