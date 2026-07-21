@@ -30,7 +30,7 @@ def test_order_auto_reply_arms_exact_manual_bypass_before_send():
     app = read("src/Bot/App.xaml.cs")
     targets = read("src/Directory.Build.targets")
 
-    assert "FrameworkElement.InitializedEvent" in guard
+    assert "FrameworkElement.LoadedEvent" in guard
     assert 'StartsWith("[买家下单]"' in guard
     assert "KnowledgeLearningService.AllowNextManualSend(_seller, _buyer, _answer);" in guard
     assert "InstallOrderAutoReplyGuard();" in app
