@@ -60,6 +60,21 @@ def test_answer_context_menu_has_copy_action():
     assert "Clipboard.SetText(_answer ?? string.Empty);" in source
 
 
+def test_all_generated_bot_text_replies_get_idempotent_ai_marker():
+    formatter = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    flow_test = read("src/Bot/ChromeNs/BotFlowTestService.cs")
+
+    assert 'public const string AiMarker = "[AI]";' in formatter
+    assert "BotOutboundMessageFormatter.EnsureAiMarker(candidateAnswer)" in formatter
+    assert "value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase)" in formatter
+    assert "BotOutboundMessageFormatter.StripAiMarker(value)" in formatter
+    assert qn.count("ReplyDeduplicationService.EnsureDistinct(") >= 2
+    assert "BotOutboundMessageFormatter.EnsureAiMarker(" in order
+    assert "BotOutboundMessageFormatter.EnsureAiMarker(" in flow_test
+
+
 def test_control_plane_runtime_guard_is_installed_and_packaged():
     bootstrap = read("services/api-control-plane/bootstrap.py")
     dockerfile = read("services/api-control-plane/Dockerfile")
