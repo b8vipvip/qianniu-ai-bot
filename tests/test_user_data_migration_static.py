@@ -42,10 +42,10 @@ def test_import_is_staged_backed_up_and_applied_before_database_open():
     assert "pending-data-import.txt" in source
 
 
-def test_settings_exposes_data_management_actions():
+def test_settings_exposes_data_management_actions_and_shared_build_includes():
     options = read("src/Bot/Options/WndOption.xaml.cs")
     control = read("src/Bot/Options/CtlDataManagement.cs")
-    build_targets = read("src/Bot/Directory.Build.targets")
+    build_targets = read("src/Directory.Build.targets")
 
     assert 'CreateOpTab("数据管理", new CtlDataManagement(), style)' in options
     assert "打开数据目录" in control
@@ -54,3 +54,5 @@ def test_settings_exposes_data_management_actions():
     assert "从旧版导入" in control
     assert "UserDataMigrationManager.cs" in build_targets
     assert "CtlDataManagement.cs" in build_targets
+    assert "BuyerMessageBurstCoordinator.cs" in build_targets
+    assert not (ROOT / "src/Bot/Directory.Build.targets").exists()
