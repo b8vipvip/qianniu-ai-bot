@@ -1,4 +1,5 @@
-﻿using Bot.Options;
+﻿using Bot.ChromeNs;
+using Bot.Options;
 using BotLib;
 using System;
 using System.Collections.Generic;
@@ -18,6 +19,7 @@ namespace Bot
         public App()
         {
             SlowResponseDiagnosticsUi.Initialize();
+            QnRuntimeSafetyMonitor.Start();
             Startup += App_Startup;
             SessionEnding += App_SessionEnding;
             Exit += App_Exit;
