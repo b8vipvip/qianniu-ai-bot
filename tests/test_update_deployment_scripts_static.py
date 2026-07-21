@@ -37,13 +37,16 @@ def test_server_updater_preserves_data_uses_master_and_verifies_baota_domain():
 def test_windows_updater_backs_up_persistent_data_and_refuses_source_repo_overwrite():
     script = read("scripts/update-bot.ps1")
 
+    # Windows PowerShell 5.1 treats UTF-8 without BOM as the system ANSI code page.
+    # Keep the executable script itself ASCII-only so checkout encoding cannot corrupt parsing.
+    assert script.isascii()
     assert "Get-RunningBotInstallDir" in script
     assert "QianniuAiBot\\data" in script
     assert "Get-FileHash" in script
     assert "Expand-Archive" in script
     assert "Bin\\Bot.exe" in script
     assert "Join-Path $InstallDir '.git'" in script
-    assert "自动回滚" in script
+    assert "automatic rollback" in script.lower()
 
 
 def test_update_manual_records_current_production_environment():
