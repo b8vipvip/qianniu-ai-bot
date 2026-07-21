@@ -1,0 +1,189 @@
+using BotLib;
+using System;
+using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
+using System.Threading.Tasks;
+
+namespace Bot.ChromeNs
+{
+    internal static class SendDeliveryWatchdog
+    {
+        private const int VerifyDelayMilliseconds = 9000;
+        private static readonly ConcurrentDictionary<string, PendingDelivery> Pending =
+            new ConcurrentDictionary<string, PendingDelivery>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> KnownBotAnswers =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+
+        private sealed class PendingDelivery
+        {
+            public string Id;
+            public string Seller;
+            public string Buyer;
+            public string Question;
+            public string Answer;
+            public string Source;
+            public DateTime DetectedAt;
+            public DateTime AnswerReadyAt;
+        }
+
+        public static void OnBuyerMessageObserved(string seller, string buyer, DateTime observedAt)
+        {
+            var key = ConversationKey(seller, buyer);
+            PendingDelivery pending;
+            if (Pending.TryGetValue(key, out pending)
+                && pending != null
+                && (observedAt == DateTime.MinValue || pending.AnswerReadyAt <= observedAt))
+            {
+                PendingDelivery ignored;
+                Pending.TryRemove(key, out ignored);
+                Log.Info("发送回显监控因买家新消息结束等待: seller=" + seller + ", buyer=" + buyer);
+            }
+        }
+
+        public static void ExpectDelivery(
+            string seller,
+            string buyer,
+            string question,
+            string answer,
+            string source,
+            DateTime detectedAt,
+            DateTime answerReadyAt)
+        {
+            if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply()) return;
+            answer = (answer ?? string.Empty).Trim();
+            if (answer.Length == 0 || answer.StartsWith("错误：", StringComparison.Ordinal)) return;
+
+            var readyAt = answerReadyAt == DateTime.MinValue ? DateTime.Now : answerReadyAt;
+            var pending = new PendingDelivery
+            {
+                Id = Guid.NewGuid().ToString("N"),
+                Seller = (seller ?? string.Empty).Trim(),
+                Buyer = (buyer ?? string.Empty).Trim(),
+                Question = question ?? string.Empty,
+                Answer = answer,
+                Source = source ?? string.Empty,
+                DetectedAt = detectedAt == DateTime.MinValue ? readyAt : detectedAt,
+                AnswerReadyAt = readyAt
+            };
+            if (pending.Seller.Length == 0 || pending.Buyer.Length == 0) return;
+
+            var key = ConversationKey(pending.Seller, pending.Buyer);
+            Pending[key] = pending;
+            KnownBotAnswers[AnswerKey(pending.Seller, pending.Buyer, pending.Answer)] = DateTime.Now.AddMinutes(2);
+            CleanupKnownAnswers();
+
+            Log.Info("已启动真实发送回显监控: seller=" + pending.Seller
+                + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id);
+
+            Task.Run(async () =>
+            {
+                await Task.Delay(VerifyDelayMilliseconds);
+                PendingDelivery current;
+                if (!Pending.TryGetValue(key, out current)
+                    || current == null
+                    || !ReferenceEquals(current, pending))
+                {
+                    return;
+                }
+
+                var delivered = false;
+                try
+                {
+                    var qn = QN.FindExistingBySellerNick(pending.Seller);
+                    delivered = qn != null
+                        && qn.HasRecentSellerEcho(pending.Buyer, pending.Answer, pending.AnswerReadyAt);
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("发送回显监控检查异常: " + ex.Message);
+                }
+
+                PendingDelivery removed;
+                if (!Pending.TryRemove(key, out removed) || !ReferenceEquals(removed, pending)) return;
+                if (delivered)
+                {
+                    Log.Info("发送回显监控确认成功: seller=" + pending.Seller
+                        + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id);
+                    return;
+                }
+
+                var reason = "答案已经生成并进入自动发送流程，但在 "
+                    + (VerifyDelayMilliseconds / 1000) + " 秒内未检测到相同内容的卖家消息回显。"
+                    + "可能是误走智能提示接口、会话切换失败、输入框/发送按钮操作未真正送达，或发送结果被错误判定为成功。";
+                Log.Error("[发送异常] seller=" + pending.Seller
+                    + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id
+                    + ", reason=" + reason);
+                SendFailureAnomalyService.Queue(
+                    pending.Seller,
+                    pending.Buyer,
+                    pending.Question,
+                    pending.Answer,
+                    pending.Source,
+                    reason,
+                    pending.DetectedAt,
+                    pending.AnswerReadyAt,
+                    DateTime.Now);
+            });
+        }
+
+        public static bool ConfirmDelivery(string seller, string buyer, string answer)
+        {
+            var normalized = Normalize(answer);
+            if (normalized.Length == 0) return false;
+
+            var key = ConversationKey(seller, buyer);
+            PendingDelivery pending;
+            if (Pending.TryGetValue(key, out pending)
+                && pending != null
+                && Normalize(pending.Answer) == normalized)
+            {
+                PendingDelivery ignored;
+                Pending.TryRemove(key, out ignored);
+                KnownBotAnswers[AnswerKey(seller, buyer, answer)] = DateTime.Now.AddMinutes(2);
+                Log.Info("通过卖家消息回显确认Bot真实发送: seller=" + seller + ", buyer=" + buyer);
+                return true;
+            }
+
+            DateTime expiresAt;
+            if (KnownBotAnswers.TryGetValue(AnswerKey(seller, buyer, answer), out expiresAt)
+                && expiresAt >= DateTime.Now)
+            {
+                return true;
+            }
+            return false;
+        }
+
+        public static bool IsKnownBotAnswer(string seller, string buyer, string answer)
+        {
+            DateTime expiresAt;
+            return KnownBotAnswers.TryGetValue(AnswerKey(seller, buyer, answer), out expiresAt)
+                && expiresAt >= DateTime.Now;
+        }
+
+        private static void CleanupKnownAnswers()
+        {
+            var now = DateTime.Now;
+            foreach (var pair in KnownBotAnswers)
+            {
+                if (pair.Value >= now) continue;
+                DateTime ignored;
+                KnownBotAnswers.TryRemove(pair.Key, out ignored);
+            }
+        }
+
+        private static string ConversationKey(string seller, string buyer)
+        {
+            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+        }
+
+        private static string AnswerKey(string seller, string buyer, string answer)
+        {
+            return ConversationKey(seller, buyer) + "#" + Normalize(answer);
+        }
+
+        private static string Normalize(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim(), @"\s+", string.Empty);
+        }
+    }
+}
