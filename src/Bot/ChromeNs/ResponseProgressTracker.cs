@@ -37,6 +37,8 @@ namespace Bot.ChromeNs
             question = (question ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return null;
 
+            SendDeliveryWatchdog.OnBuyerMessageObserved(seller, buyer, detectedAt);
+
             // 没有对应理解能力的媒体消息会在聚合结束后直接生成“已跳过”卡片。
             // 这里不提前创建处理中卡片，避免同一条媒体消息出现两张卡片并留下无法清理的进度状态。
             if (ShouldDeferUnsupportedMediaCard(question)) return null;
@@ -53,10 +55,15 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    // 上一轮答案已经就绪时，新消息必须创建新的卡片。
-                    // 这样旧发送流程后续更新状态时不会覆盖新问题，也不会把新问题合并进旧答案卡片。
-                    if (entry.AnswerReadyAt != DateTime.MinValue)
+                    // 答案已经就绪，或者上一轮已经正式进入AI生成后又收到买家新消息，
+                    // 都必须创建全新的进度卡片。后者正是“直接拍吗？”等待AI时又收到“好的”的场景，
+                    // 不能继续把两分钟以前的旧问题合并进新一轮。
+                    if (entry.AnswerReadyAt != DateTime.MinValue || entry.AnswerStartedAt != DateTime.MinValue)
                     {
+                        if (entry.AnswerReadyAt == DateTime.MinValue && entry.Control != null)
+                        {
+                            entry.Control.SetStatus("已被买家新消息替代，旧答案不会发送", false);
+                        }
                         var replacement = new Entry();
                         if (!Entries.TryUpdate(key, replacement, entry)) continue;
                         continue;
@@ -69,13 +76,23 @@ namespace Bot.ChromeNs
                     entry.Question = MergeQuestion(entry.Question, question);
                     if (entry.Control == null && Desk.Inst != null)
                     {
-                        entry.Control = Desk.Inst.AddConversation(
-                            seller,
-                            buyer,
-                            entry.Question,
-                            "正在识别并等待买家本轮消息结束...",
-                            false,
-                            "处理中");
+                        try
+                        {
+                            entry.Control = Desk.Inst.AddConversation(
+                                seller,
+                                buyer,
+                                entry.Question,
+                                "正在识别并等待买家本轮消息结束...",
+                                false,
+                                "处理中");
+                        }
+                        catch (Exception ex)
+                        {
+                            // 千牛右侧辅助窗口刚重建时 CtlRobot 可能尚未挂载。UI失败不能打断真实回复流程，
+                            // 后续 BeginAnswer / SetAnswerReady 会继续尝试创建卡片。
+                            Log.ErrorWithMaxCount("创建回复进度卡片失败，已忽略UI异常继续处理消息：" + ex.Message, 10);
+                            entry.Control = null;
+                        }
                     }
                     if (entry.Control != null)
                     {
@@ -139,7 +156,7 @@ namespace Bot.ChromeNs
                 + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds)
                 + ", source=" + (source ?? string.Empty));
 
-            // 慢响应诊断必须完全异步，不能阻塞正常发送流程。
+            // 慢响应诊断和真实发送回显监控都必须完全异步，不能阻塞正常发送流程。
             SlowResponseAnomalyService.QueueIfSlow(
                 seller,
                 buyer,
@@ -149,7 +166,30 @@ namespace Bot.ChromeNs
                 detected,
                 answerStartedAt,
                 answerReadyAt);
+            SendDeliveryWatchdog.ExpectDelivery(
+                seller,
+                buyer,
+                question,
+                answer,
+                source,
+                detected,
+                answerReadyAt);
             return control;
+        }
+
+        public static void MarkManualIntervention(string seller, string buyer, string sellerReply)
+        {
+            Entry entry;
+            if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
+            lock (entry.Sync)
+            {
+                if (entry.AnswerReadyAt == DateTime.MinValue && entry.Control != null)
+                {
+                    entry.Control.SetStatus("检测到客服已人工回复，停止等待旧AI答案", true);
+                }
+            }
+            Log.Info("回复进度因人工客服介入结束: seller=" + seller + ", buyer=" + buyer
+                + ", reply=" + (sellerReply ?? string.Empty));
         }
 
         public static void Fail(string seller, string buyer, string detail)
