@@ -10,18 +10,42 @@ namespace Bot.AssistWindow.Widget.Robot
 {
     public partial class CtlRobot
     {
+        private static readonly bool HistoryClassHandlersRegistered = RegisterHistoryClassHandlers();
         private readonly ConcurrentDictionary<string, byte> _historyLoadedKeys =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private DispatcherTimer _historyRestoreTimer;
 
-        protected override void OnInitialized(EventArgs e)
+        private static bool RegisterHistoryClassHandlers()
         {
-            base.OnInitialized(e);
-            Loaded += CtlRobotHistory_Loaded;
-            Unloaded += CtlRobotHistory_Unloaded;
+            EventManager.RegisterClassHandler(
+                typeof(CtlRobot),
+                FrameworkElement.LoadedEvent,
+                new RoutedEventHandler(CtlRobotHistory_ClassLoaded),
+                true);
+            EventManager.RegisterClassHandler(
+                typeof(CtlRobot),
+                FrameworkElement.UnloadedEvent,
+                new RoutedEventHandler(CtlRobotHistory_ClassUnloaded),
+                true);
+            return true;
         }
 
-        private void CtlRobotHistory_Loaded(object sender, RoutedEventArgs e)
+        private static void CtlRobotHistory_ClassLoaded(object sender, RoutedEventArgs e)
+        {
+            var ctl = sender as CtlRobot;
+            if (ctl != null) ctl.StartHistoryRestoreMonitor();
+        }
+
+        private static void CtlRobotHistory_ClassUnloaded(object sender, RoutedEventArgs e)
+        {
+            var ctl = sender as CtlRobot;
+            if (ctl != null && ctl._historyRestoreTimer != null)
+            {
+                ctl._historyRestoreTimer.Stop();
+            }
+        }
+
+        private void StartHistoryRestoreMonitor()
         {
             BotConversationHistoryStore.Initialize();
             if (_historyRestoreTimer == null)
@@ -34,11 +58,6 @@ namespace Bot.AssistWindow.Widget.Robot
             }
             _historyRestoreTimer.Start();
             Dispatcher.BeginInvoke(new Action(EnsureCurrentConversationHistoryLoaded));
-        }
-
-        private void CtlRobotHistory_Unloaded(object sender, RoutedEventArgs e)
-        {
-            if (_historyRestoreTimer != null) _historyRestoreTimer.Stop();
         }
 
         private void EnsureCurrentConversationHistoryLoaded()
