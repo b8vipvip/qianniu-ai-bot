@@ -14,6 +14,7 @@ namespace Bot.ChromeNs
             public CtlConversation Control;
             public string Question = string.Empty;
             public DateTime DetectedAt = DateTime.MinValue;
+            public DateTime AnswerReadyAt = DateTime.MinValue;
         }
 
         private static readonly ConcurrentDictionary<string, Entry> Entries =
@@ -35,30 +36,53 @@ namespace Bot.ChromeNs
             question = (question ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return null;
 
-            var entry = Entries.GetOrAdd(Key(seller, buyer), _ => new Entry());
-            lock (entry.Sync)
+            // 没有对应理解能力的媒体消息会在聚合结束后直接生成“已跳过”卡片。
+            // 这里不提前创建处理中卡片，避免同一条媒体消息出现两张卡片并留下无法清理的进度状态。
+            if (ShouldDeferUnsupportedMediaCard(question)) return null;
+
+            var key = Key(seller, buyer);
+            while (true)
             {
-                if (entry.DetectedAt == DateTime.MinValue || detectedAt < entry.DetectedAt)
+                var entry = Entries.GetOrAdd(key, _ => new Entry());
+                lock (entry.Sync)
                 {
-                    entry.DetectedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
+                    Entry current;
+                    if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry))
+                    {
+                        continue;
+                    }
+
+                    // 上一轮答案已经就绪时，新消息必须创建新的卡片。
+                    // 这样旧发送流程后续更新状态时不会覆盖新问题，也不会把新问题合并进旧答案卡片。
+                    if (entry.AnswerReadyAt != DateTime.MinValue)
+                    {
+                        var replacement = new Entry();
+                        if (!Entries.TryUpdate(key, replacement, entry)) continue;
+                        continue;
+                    }
+
+                    if (entry.DetectedAt == DateTime.MinValue || detectedAt < entry.DetectedAt)
+                    {
+                        entry.DetectedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
+                    }
+                    entry.Question = MergeQuestion(entry.Question, question);
+                    if (entry.Control == null && Desk.Inst != null)
+                    {
+                        entry.Control = Desk.Inst.AddConversation(
+                            seller,
+                            buyer,
+                            entry.Question,
+                            "正在识别并等待买家本轮消息结束...",
+                            false,
+                            "处理中");
+                    }
+                    if (entry.Control != null)
+                    {
+                        entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
+                        entry.Control.SetProcessing("已识别，等待合并本轮消息...");
+                    }
+                    return entry.Control;
                 }
-                entry.Question = MergeQuestion(entry.Question, question);
-                if (entry.Control == null && Desk.Inst != null)
-                {
-                    entry.Control = Desk.Inst.AddConversation(
-                        seller,
-                        buyer,
-                        entry.Question,
-                        "正在识别并等待买家本轮消息结束...",
-                        false,
-                        "处理中");
-                }
-                if (entry.Control != null)
-                {
-                    entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
-                    entry.Control.SetProcessing("已识别，等待合并本轮消息...");
-                }
-                return entry.Control;
             }
         }
 
@@ -68,7 +92,7 @@ namespace Bot.ChromeNs
             string combinedQuestion,
             DateTime detectedAt)
         {
-            var control = ObserveQuestion(seller, buyer, combinedQuestion, detectedAt);
+            var control = SetExactQuestion(seller, buyer, combinedQuestion, detectedAt);
             if (control != null) control.SetProcessing("正在获取答案...");
             Log.Info("回复进度进入答案生成: seller=" + seller + ", buyer=" + buyer
                 + ", queueMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
@@ -84,7 +108,20 @@ namespace Bot.ChromeNs
             DateTime detectedAt,
             DateTime answerReadyAt)
         {
-            var control = ObserveQuestion(seller, buyer, question, detectedAt);
+            var control = SetExactQuestion(seller, buyer, question, detectedAt);
+            var key = Key(seller, buyer);
+            Entry entry;
+            if (Entries.TryGetValue(key, out entry) && entry != null)
+            {
+                lock (entry.Sync)
+                {
+                    Entry current;
+                    if (Entries.TryGetValue(key, out current) && ReferenceEquals(current, entry))
+                    {
+                        entry.AnswerReadyAt = answerReadyAt == DateTime.MinValue ? DateTime.Now : answerReadyAt;
+                    }
+                }
+            }
             if (control != null)
             {
                 control.SetAnswer(answer, source, answerReadyAt);
@@ -112,8 +149,58 @@ namespace Bot.ChromeNs
 
         public static void Complete(string seller, string buyer)
         {
-            Entry ignored;
-            Entries.TryRemove(Key(seller, buyer), out ignored);
+            var key = Key(seller, buyer);
+            Entry entry;
+            if (!Entries.TryGetValue(key, out entry) || entry == null) return;
+            lock (entry.Sync)
+            {
+                Entry current;
+                if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) return;
+                // 新消息到达后会使用一个尚未有答案的新 Entry。旧流程不得把它删除。
+                if (entry.AnswerReadyAt == DateTime.MinValue) return;
+                Entry ignored;
+                Entries.TryRemove(key, out ignored);
+            }
+        }
+
+        private static CtlConversation SetExactQuestion(
+            string seller,
+            string buyer,
+            string question,
+            DateTime detectedAt)
+        {
+            var control = ObserveQuestion(seller, buyer, question, detectedAt);
+            var key = Key(seller, buyer);
+            Entry entry;
+            if (!Entries.TryGetValue(key, out entry) || entry == null) return control;
+            lock (entry.Sync)
+            {
+                Entry current;
+                if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) return control;
+                entry.Question = (question ?? string.Empty).Trim();
+                if (entry.DetectedAt == DateTime.MinValue || detectedAt < entry.DetectedAt)
+                {
+                    entry.DetectedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
+                }
+                if (entry.Control != null)
+                {
+                    entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
+                    control = entry.Control;
+                }
+            }
+            return control;
+        }
+
+        private static bool ShouldDeferUnsupportedMediaCard(string question)
+        {
+            question = (question ?? string.Empty).Trim();
+            if (!IncomingMessageSafety.IsMediaPlaceholder(question)) return false;
+            if (string.Equals(question, "[图片]", StringComparison.Ordinal)
+                && AiEndpointStore.GetVisionEnabledEndpoints().Count > 0)
+            {
+                return false;
+            }
+            return true;
         }
 
         private static string MergeQuestion(string existing, string latest)
