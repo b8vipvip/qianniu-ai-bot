@@ -273,10 +273,16 @@ namespace Bot.ChromeNs
     internal static class BotOutboundMessageFormatter
     {
         public const string AiMarker = "[AI]";
+        public const string StreamAbortMarker = "[[QN_STREAM_ABORTED]]";
 
         public static string EnsureAiMarker(string value)
         {
             value = (value ?? string.Empty).Trim();
+            if (value.IndexOf(StreamAbortMarker, StringComparison.Ordinal) >= 0)
+            {
+                Log.Info("检测到AI流式输出中断标识，已阻止发送半截答案。");
+                return "错误：AI流式输出中断，已阻止发送半截答案，请重新获取完整答案。";
+            }
             if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;
             if (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase)) return value;
             return value + " " + AiMarker;
