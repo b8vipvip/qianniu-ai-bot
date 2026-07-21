@@ -182,13 +182,22 @@ namespace Bot.ChromeNs
             try
             {
                 // 不再按 Esc。千牛在输入框有草稿时按 Esc 会弹出“您还未回复买家/关闭会话确认”，反而阻断发送。
-                FocusEditor();
+                if (!FocusEditor())
+                {
+                    SetSendFailure("Enter发送", "无法聚焦聊天输入框");
+                    return false;
+                }
+                if (!HasExpectedDraft(text))
+                {
+                    SetSendFailure("Enter发送", "发送前未确认输入框仍为目标文本");
+                    return false;
+                }
                 PressEnter();
                 return WaitForSendConfirmed(buyer, text, sendStart, "Enter", 3500);
             }
             catch (Exception ex)
             {
-                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
+                SetSendFailure("Enter发送异常", ex.Message);
                 Log.Exception(ex);
                 return false;
             }
@@ -209,7 +218,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
+                SetSendFailure("发送按钮点击异常", ex.Message);
                 Log.Exception(ex);
                 return false;
             }
@@ -225,19 +234,15 @@ namespace Bot.ChromeNs
                 RefreshChatControlsAsync(true).GetAwaiter().GetResult();
                 if (!HasExpectedDraft(text))
                 {
-                    bool cdpEmpty;
-                    if (!TryIsInputboxEmptyByCdp(out cdpEmpty) || cdpEmpty)
-                    {
-                        SetSendFailure("发送按钮回退", "发送前未确认输入框仍包含目标文本");
-                        return false;
-                    }
+                    SetSendFailure("发送按钮回退", "发送前无法严格确认输入框仍为目标文本，已阻止点击发送按钮");
+                    return false;
                 }
                 if (_sendMessageButton != null && TryClickSendButtonLeftPart(buyer, text, sendStart)) return true;
                 SetSendFailure("发送按钮回退", _sendMessageButton == null ? "未找到发送按钮" : "点击后未确认发送");
             }
             catch (Exception ex)
             {
-                BotConnectionDiagnostics.RecordSendAttempt(false, ex.Message);
+                SetSendFailure("发送按钮回退异常", ex.Message);
                 Log.Exception(ex);
             }
 
@@ -338,6 +343,37 @@ namespace Bot.ChromeNs
             return await OpenAndSendText(buyer, text);
         }
 
+        private async Task<bool> VerifyCurrentBuyerAsync(string buyer, string stage)
+        {
+            try
+            {
+                if (_qn == null || _qn.CDP == null)
+                {
+                    SetSendFailure(stage, "千牛消息连接不可用");
+                    return false;
+                }
+                var current = await _qn.GetCurrentConversationID();
+                var currentNick = current == null || current.Result == null
+                    ? string.Empty
+                    : (current.Result.Nick ?? string.Empty).Trim();
+                if (!string.Equals(currentNick, (buyer ?? string.Empty).Trim(), StringComparison.Ordinal))
+                {
+                    SetSendFailure(stage, "目标买家=" + buyer + "，当前买家=" + currentNick);
+                    return false;
+                }
+                _qn.SetActiveConversationByNick(
+                    _qn.Seller == null ? string.Empty : _qn.Seller.Nick,
+                    currentNick,
+                    stage);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                SetSendFailure(stage, ex.Message);
+                return false;
+            }
+        }
+
         private async Task<bool> TrySetPlainTextByCdpAsync(string buyer, string text)
         {
             try
@@ -351,13 +387,18 @@ namespace Bot.ChromeNs
                 LatestSetTextTime = DateTime.Now;
 
                 await Task.Delay(800);
+                await RefreshChatControlsAsync(true);
 
                 bool cdpEmpty;
                 var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
                 string editorText;
                 var editorReadable = TryGetEditorText(out editorText);
-                var ok = (editorReadable && EditorMatchesExpectedText(editorText, text))
-                    || (hasCdpEmpty && !cdpEmpty);
+                var ok = editorReadable && EditorMatchesExpectedText(editorText, text);
+                if (!ok)
+                {
+                    SetSendFailure("CDP写入输入框", "无法通过UIA严格确认目标文本；hasCdpEmpty="
+                        + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty);
+                }
 
                 Log.Info("CDP写入输入框结果=" + ok + ", editorReadable=" + editorReadable
                     + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty
@@ -366,6 +407,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                SetSendFailure("CDP写入输入框异常", ex.Message);
                 Log.Exception(ex);
                 return false;
             }
@@ -397,6 +439,11 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
+                if (!await VerifyCurrentBuyerAsync(buyer, "写入前会话确认"))
+                {
+                    return false;
+                }
+
                 if (!Desk.Inst.IsVisible)
                 {
                     Desk.Inst.Show();
@@ -413,11 +460,21 @@ namespace Bot.ChromeNs
 
                 if (!setOk)
                 {
-                    SetSendFailure("写入输入框", "UIA与CDP均未确认目标文本");
+                    SetSendFailure("写入输入框", "UIA与CDP均未严格确认目标文本");
                     return false;
                 }
 
-                Thread.Sleep(250);
+                await Task.Delay(120);
+                if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认"))
+                {
+                    return false;
+                }
+                if (!HasExpectedDraft(text))
+                {
+                    SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
+                    return false;
+                }
+
                 var sendStart = DateTime.Now;
                 sendResult = TryClickSendButton(buyer, text, sendStart);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
