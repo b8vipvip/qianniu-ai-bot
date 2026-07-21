@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -11,6 +11,7 @@ def test_answer_source_badges_are_explicit():
     xaml = text("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml")
     code = text("src/Bot/AssistWindow/Widget/Robot/CtlConversation.xaml.cs")
     qn = text("src/Bot/ChromeNs/QN.cs")
+    tracker = text("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     assert "bdSource" in xaml
     assert "txtSourceSeparator" in xaml
     assert "answerSource" in code
@@ -18,7 +19,8 @@ def test_answer_source_badges_are_explicit():
     assert "ReplyDeduplicationService.EnsureDistinct" in qn
     assert 'var source = deduplication.Regenerated' in qn
     assert ': "AI生成";' in qn
-    assert "ctl.SetAnswer(answer, source)" in qn
+    assert "ResponseProgressTracker.SetAnswerReady" in qn
+    assert "control.SetAnswer(answer, source, answerReadyAt)" in tracker
 
 
 def test_history_scan_button_is_in_smart_import_only():

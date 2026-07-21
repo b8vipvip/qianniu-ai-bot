@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -18,6 +19,21 @@ namespace Bot.ChromeNs
 
         private static string systemPrompt;
         private static string lastConfigFingerprint;
+        private static readonly HttpClient SharedHttp = CreateSharedHttpClient();
+
+        private static HttpClient CreateSharedHttpClient()
+        {
+            var handler = new HttpClientHandler
+            {
+                UseProxy = true,
+                Proxy = WebRequest.DefaultWebProxy
+            };
+            var http = new HttpClient(handler);
+            http.Timeout = Timeout.InfiniteTimeSpan;
+            http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
+            http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
+            return http;
+        }
 
         private static string DefaultSystemPrompt
         {
@@ -176,16 +192,14 @@ namespace Bot.ChromeNs
 
             try
             {
-                using (var http = new HttpClient())
+                var timeoutSeconds = endpoint.TimeoutSeconds <= 0 ? 35 : endpoint.TimeoutSeconds;
+                using (var request = new HttpRequestMessage(HttpMethod.Post, url))
+                using (var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(timeoutSeconds)))
                 {
-                    http.Timeout = TimeSpan.FromSeconds(endpoint.TimeoutSeconds <= 0 ? 35 : endpoint.TimeoutSeconds);
-                    http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
-                    http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
-                    http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
-
-                    using (var content = new StringContent(payloadText, Encoding.UTF8, "application/json"))
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                    request.Content = new StringContent(payloadText, Encoding.UTF8, "application/json");
+                    using (var response = SharedHttp.SendAsync(request, cancellation.Token).GetAwaiter().GetResult())
                     {
-                        var response = http.PostAsync(url, content).GetAwaiter().GetResult();
                         var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
                         sw.Stop();
                         if (!response.IsSuccessStatusCode)

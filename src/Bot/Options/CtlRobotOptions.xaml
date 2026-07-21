@@ -89,11 +89,15 @@
                         <TextBox Grid.Row="5" Grid.Column="1" x:Name="txtControlPlaneAdminUrl" Margin="0 4" FontFamily="Consolas"
                                  ToolTip="可与服务端地址相同，也可填写独立后台域名" />
 
-                        <StackPanel Grid.Row="6" Grid.Column="1" Orientation="Horizontal" Margin="0 10 0 0">
+                        <WrapPanel Grid.Row="6" Grid.Column="1" Margin="0 10 0 0">
                             <Button x:Name="btnSaveControlPlane" Content="保存服务端连接" Click="btnSaveControlPlane_Click" Background="#2563EB" Foreground="White" BorderBrush="#2563EB" />
                             <Button x:Name="btnTestControlPlane" Content="测试连接与文本调用" Click="btnTestControlPlane_Click" />
+                            <Button x:Name="btnTestBotFlow" Content="测试 Bot 真实流程" Click="btnTestBotFlow_Click" Background="#0F766E" Foreground="White" BorderBrush="#0F766E"
+                                    ToolTip="随机选择一条真实买家消息，执行答案生成、目标会话定位、UIA写入、发送与结果确认；测试消息会带【Bot测试】前缀。" />
+                            <Button x:Name="btnImportControlPlane" Content="导入配置" Click="btnImportControlPlane_Click" />
+                            <Button x:Name="btnExportControlPlane" Content="导出配置" Click="btnExportControlPlane_Click" />
                             <Button x:Name="btnOpenControlPlaneAdmin" Content="打开 API 管理后台" Click="btnOpenControlPlaneAdmin_Click" />
-                        </StackPanel>
+                        </WrapPanel>
                     </Grid>
                 </Border>
 

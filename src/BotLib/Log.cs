@@ -58,6 +58,16 @@ namespace BotLib
             Writer.Assert(msg);
         }
 
+        public static string CurrentFileName
+        {
+            get { return Writer.FileName; }
+        }
+
+        public static void Flush()
+        {
+            Writer.Flush();
+        }
+
         public static void Clear()
         {
             Writer.Clear();

@@ -23,7 +23,10 @@
                 <Grid.ColumnDefinitions><ColumnDefinition Width="38"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                 <Border Background="#BFE8FF" CornerRadius="6" Margin="6" />
                 <TextBlock Text="问" VerticalAlignment="Center" HorizontalAlignment="Center" FontWeight="Bold" Foreground="#164E63" />
-                <TextBlock x:Name="txtQuestion" Grid.Column="1" Padding="4 8 8 8" Foreground="{StaticResource PrimaryText}" FontWeight="SemiBold" TextWrapping="Wrap" VerticalAlignment="Center" />
+                <StackPanel Grid.Column="1" Margin="4 6 8 6">
+                    <TextBlock x:Name="txtQuestion" Foreground="{StaticResource PrimaryText}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                    <TextBlock x:Name="txtQuestionTime" Margin="0 3 0 0" Foreground="{StaticResource MutedText}" FontSize="11" />
+                </StackPanel>
             </Grid>
             <Grid Grid.Row="1" Background="{StaticResource AnswerBg}" MinHeight="42">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="38"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -38,7 +41,8 @@
                         <TextBlock x:Name="txtSourceSeparator" Text="·  " Foreground="{StaticResource MutedText}" FontSize="11" Visibility="Collapsed" />
                         <TextBlock x:Name="txtStatus" Foreground="{StaticResource SuccessGreen}" FontSize="11" />
                         <TextBlock Text="  ·  " Foreground="{StaticResource MutedText}" FontSize="11" />
-                        <TextBlock x:Name="txtTime" Foreground="{StaticResource MutedText}" FontSize="11" />
+                        <TextBlock x:Name="txtAnswerTime" Foreground="{StaticResource MutedText}" FontSize="11" />
+                        <TextBlock x:Name="txtLatency" Margin="8 0 0 0" Foreground="#7C3AED" FontSize="11" FontWeight="SemiBold" />
                     </StackPanel>
                 </StackPanel>
             </Grid>
