@@ -33,7 +33,7 @@ function Resolve-BotPackage([string]$RequestedPath) {
 
     $latest = $candidates | Sort-Object LastWriteTime -Descending | Select-Object -First 1
     if ($null -eq $latest) {
-        throw '没有找到 qianniu-bot x64 ZIP。请使用 -PackagePath 指定下载的完整运行包。'
+        throw 'No qianniu-bot x64 ZIP was found. Use -PackagePath to specify the downloaded package.'
     }
     return $latest.FullName
 }
@@ -66,6 +66,7 @@ function Copy-DirectoryContents([string]$Source, [string]$Destination) {
     if (-not (Test-Path -LiteralPath $Source)) {
         return
     }
+
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     Get-ChildItem -LiteralPath $Source -Force | ForEach-Object {
         Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force
@@ -74,7 +75,7 @@ function Copy-DirectoryContents([string]$Source, [string]$Destination) {
 
 function Stop-BotProcesses {
     Get-Process -Name 'Bot' -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Host "停止 Bot.exe PID=$($_.Id)"
+        Write-Host "Stopping Bot.exe PID=$($_.Id)"
         Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
     }
     Start-Sleep -Milliseconds 800
@@ -104,17 +105,17 @@ $detectedInstallDir = Get-RunningBotInstallDir
 if ([string]::IsNullOrWhiteSpace($InstallDir)) {
     if (-not [string]::IsNullOrWhiteSpace($detectedInstallDir)) {
         $InstallDir = $detectedInstallDir
-        Write-Host "已从正在运行的 Bot.exe 自动识别安装目录: $InstallDir" -ForegroundColor Green
+        Write-Host "Detected running Bot install directory: $InstallDir" -ForegroundColor Green
     }
     else {
         $InstallDir = 'C:\QianniuAiBot'
-        Write-Host "未检测到正在运行的 Bot.exe，使用默认安装目录: $InstallDir" -ForegroundColor Yellow
+        Write-Host "Running Bot.exe was not detected. Using default install directory: $InstallDir" -ForegroundColor Yellow
     }
 }
 
 $InstallDir = [IO.Path]::GetFullPath($InstallDir)
 if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) {
-    throw "拒绝把运行包覆盖到 Git 源码仓库目录：$InstallDir。请用 -InstallDir 指定真正的 Bot 运行目录。"
+    throw "Refusing to overwrite a Git source repository: $InstallDir. Use -InstallDir to specify the actual Bot runtime directory."
 }
 
 $packageHash = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash
@@ -128,16 +129,16 @@ $tempDir = Join-Path $env:TEMP "qianniu-bot-update-$timestamp"
 $oldProgramExisted = Test-Path -LiteralPath $InstallDir
 $oldExe = Join-Path $InstallDir 'Bin\Bot.exe'
 
-Write-Step "准备更新"
+Write-Step 'Preparing update'
 Write-Host "ZIP: $PackagePath"
 Write-Host "SHA256: $packageHash"
-Write-Host "安装目录: $InstallDir"
-Write-Host "永久数据目录: $persistentData"
+Write-Host "Install directory: $InstallDir"
+Write-Host "Persistent data directory: $persistentData"
 
 try {
     Stop-BotProcesses
 
-    Write-Step "备份当前程序和永久用户数据"
+    Write-Step 'Backing up current program and persistent user data'
     New-Item -ItemType Directory -Path $backupDir -Force | Out-Null
     if ($oldProgramExisted) {
         Copy-DirectoryContents $InstallDir $programBackup
@@ -145,9 +146,9 @@ try {
     if (Test-Path -LiteralPath $persistentData) {
         Copy-DirectoryContents $persistentData $persistentBackup
     }
-    Write-Host "备份目录: $backupDir" -ForegroundColor Green
+    Write-Host "Backup directory: $backupDir" -ForegroundColor Green
 
-    Write-Step "解压并验证新版本"
+    Write-Step 'Extracting and validating new package'
     if (Test-Path -LiteralPath $tempDir) {
         Remove-Item -LiteralPath $tempDir -Recurse -Force
     }
@@ -160,25 +161,24 @@ try {
             Test-Path -LiteralPath (Join-Path $_.FullName 'Bin\Bot.exe')
         })
         if ($roots.Count -ne 1) {
-            throw 'ZIP 结构无效：未找到唯一的 Bin\Bot.exe。'
+            throw 'Invalid ZIP layout: expected exactly one Bin\Bot.exe.'
         }
         $packageRoot = $roots[0].FullName
     }
 
     $newExe = Join-Path $packageRoot 'Bin\Bot.exe'
     if (-not (Test-Path -LiteralPath $newExe)) {
-        throw "新包缺少 Bot.exe: $newExe"
+        throw "New package does not contain Bot.exe: $newExe"
     }
 
-    # 兼容尚未迁移到 %LocalAppData% 的旧版本：把旧运行目录 data 带到新程序目录，
-    # 新版首次启动时会由 UserDataMigrationManager 安全迁移到永久数据目录。
+    # Preserve legacy runtime data so the new first-run migration can move it safely.
     $legacyData = Join-Path $InstallDir 'data'
     if (Test-Path -LiteralPath $legacyData) {
-        Write-Host '检测到旧程序目录 data，复制到新包以便首次启动迁移。'
+        Write-Host 'Legacy runtime data directory detected. Copying it into the new package for first-run migration.'
         Copy-DirectoryContents $legacyData (Join-Path $packageRoot 'data')
     }
 
-    Write-Step "替换程序文件"
+    Write-Step 'Replacing program files'
     if (Test-Path -LiteralPath $InstallDir) {
         Remove-Item -LiteralPath $InstallDir -Recurse -Force
     }
@@ -187,27 +187,27 @@ try {
 
     $installedExe = Join-Path $InstallDir 'Bin\Bot.exe'
     if (-not (Test-Path -LiteralPath $installedExe)) {
-        throw '替换完成后未找到 Bin\Bot.exe。'
+        throw 'Installed package validation failed: Bin\Bot.exe was not found.'
     }
 
     if (-not $NoStart) {
-        Write-Step "启动并验证 Bot.exe"
+        Write-Step 'Starting and validating Bot.exe'
         Start-Process -FilePath $installedExe -WorkingDirectory (Split-Path -Parent $installedExe)
         if (-not (Test-BotStarted $installedExe)) {
-            throw '新 Bot.exe 启动后未保持运行，触发自动回滚。'
+            throw 'New Bot.exe did not remain running. Automatic rollback will start.'
         }
-        Write-Host 'Bot.exe 已成功启动。' -ForegroundColor Green
+        Write-Host 'Bot.exe started successfully.' -ForegroundColor Green
     }
 
-    Write-Step "更新成功"
-    Write-Host "当前程序: $installedExe"
-    Write-Host "备份位置: $backupDir"
-    Write-Host '用户数据继续保存在 %LocalAppData%\QianniuAiBot\data，不会随程序升级被覆盖。'
+    Write-Step 'Update completed successfully'
+    Write-Host "Current program: $installedExe"
+    Write-Host "Backup: $backupDir"
+    Write-Host 'Persistent user data remains under %LocalAppData%\QianniuAiBot\data.'
 }
 catch {
     $failure = $_
-    Write-Host "`n更新失败：$($failure.Exception.Message)" -ForegroundColor Red
-    Write-Host '正在自动回滚...' -ForegroundColor Yellow
+    Write-Host "`nUpdate failed: $($failure.Exception.Message)" -ForegroundColor Red
+    Write-Host 'Starting automatic rollback...' -ForegroundColor Yellow
 
     Stop-BotProcesses
     if (Test-Path -LiteralPath $InstallDir) {
