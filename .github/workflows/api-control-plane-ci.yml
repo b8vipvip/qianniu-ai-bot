@@ -7,11 +7,15 @@ on:
       - agent/reply-dedup-knowledge-navigation
     paths:
       - services/api-control-plane/**
+      - scripts/update-api-control-plane.sh
+      - scripts/update-bot.ps1
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
   pull_request:
     paths:
       - services/api-control-plane/**
+      - scripts/update-api-control-plane.sh
+      - scripts/update-bot.ps1
       - tests/**
       - .github/workflows/api-control-plane-ci.yml
 
@@ -24,6 +28,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate Windows updater PowerShell syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/update-bot.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List | Out-String | Write-Error
+            exit 1
+          }
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -52,6 +70,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Validate server updater shell syntax
+        working-directory: .
+        run: bash -n scripts/update-api-control-plane.sh
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
