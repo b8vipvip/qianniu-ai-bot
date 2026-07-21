@@ -19,6 +19,15 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationContextStore.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationSessionLearningRuntimeBridge.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationSessionLearningRuntimeBridge.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ConversationSessionLearningService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ConversationSessionLearningService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReviewedKnowledgeLearningService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReviewedKnowledgeLearningService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs" />
   </ItemGroup>
@@ -84,6 +93,9 @@
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\SlowResponseDiagnosticsUi.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\SlowResponseDiagnosticsUi.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\ConversationSessionLearningUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\ConversationSessionLearningUi.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs" />
