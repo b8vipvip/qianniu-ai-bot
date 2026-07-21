@@ -87,6 +87,31 @@ jobs:
         run: node --check static/app.js
       - name: Build Ubuntu container
         run: docker build -t qianniu-api-control-plane:${{ github.sha }} .
+      - name: Smoke test Ubuntu container startup
+        run: |
+          set -euo pipefail
+          FERNET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+          docker run -d --name qianniu-api-control-plane-smoke \
+            -e APP_SECRET='ci-smoke-test-secret-at-least-32-bytes' \
+            -e ADMIN_USERNAME='admin' \
+            -e ADMIN_PASSWORD='ci-smoke-password' \
+            -e API_KEY_ENCRYPTION_KEY="$FERNET_KEY" \
+            -p 127.0.0.1:18081:8080 \
+            qianniu-api-control-plane:${{ github.sha }}
+          cleanup() {
+            docker logs qianniu-api-control-plane-smoke || true
+            docker rm -f qianniu-api-control-plane-smoke >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:18081/healthz >/tmp/control-plane-health.json; then
+              cat /tmp/control-plane-health.json
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'control plane container did not become healthy in time' >&2
+          exit 1
       - name: Validate Compose configuration
         run: |
           cp .env.example .env
