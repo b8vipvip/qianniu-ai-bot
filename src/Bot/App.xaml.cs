@@ -19,6 +19,7 @@ namespace Bot
         public App()
         {
             SlowResponseDiagnosticsUi.Initialize();
+            ConversationSessionLearningUi.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
             ConversationSessionLearningService.Initialize();
