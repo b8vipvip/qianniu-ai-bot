@@ -37,6 +37,18 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.RuntimeSafety.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.RuntimeSafety.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QnRuntimeSafetyMonitor.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QnRuntimeSafetyMonitor.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SendDeliveryWatchdog.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SendDeliveryWatchdog.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SendFailureAnomalyService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SendFailureAnomalyService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderPlacedAutoReplyService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderPlacedAutoReplyService.cs" />
   </ItemGroup>
