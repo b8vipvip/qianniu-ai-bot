@@ -18,10 +18,18 @@ def test_client_data_is_persisted_under_local_app_data():
 
 def test_migration_runs_before_any_database_or_logging_initialization():
     source = read("src/Bot/StartUp/StartUp.cs")
+    reset_guard = source.index("ResetMigrationMarkerWhenPersistentDataIsMissing()")
     migration = source.index("UserDataMigrationManager.PrepareBeforeAppStartup()")
     app_life = source.index("AppLife.Init()")
     app_create = source.index("App app = new App()")
-    assert migration < app_life < app_create
+    assert reset_guard < migration < app_life < app_create
+
+
+def test_missing_persistent_data_reenters_discovery_instead_of_silent_empty_start():
+    source = read("src/Bot/StartUp/StartUp.cs")
+    assert 'Path.Combine(PathEx.UserDataRoot, "data-migration-v2.done")' in source
+    assert "Directory.EnumerateFileSystemEntries(PathEx.DataDir).Any()" in source
+    assert "File.Delete(markerPath)" in source
 
 
 def test_first_run_requires_valid_params_db_to_treat_folder_as_old_user_data():
