@@ -174,7 +174,7 @@ git pull --ff-only origin master
 ```powershell
 cd C:\Users\codex\Downloads
 Set-ExecutionPolicy -Scope Process Bypass -Force
-& C:\qianniu-ai-bot\scripts\update-bot.ps1 \
+& C:\qianniu-ai-bot\scripts\update-bot.ps1 `
   -PackagePath .\qianniu-bot-pr16-final-93516b8-x64.zip
 ```
 
@@ -187,8 +187,8 @@ cd C:\Users\codex\Downloads; Set-ExecutionPolicy -Scope Process Bypass -Force; &
 Bot 没有运行、无法自动识别安装目录时，明确指定真正的运行目录：
 
 ```powershell
-& C:\qianniu-ai-bot\scripts\update-bot.ps1 \
-  -PackagePath C:\Users\codex\Downloads\qianniu-bot-pr16-final-93516b8-x64.zip \
+& C:\qianniu-ai-bot\scripts\update-bot.ps1 `
+  -PackagePath C:\Users\codex\Downloads\qianniu-bot-pr16-final-93516b8-x64.zip `
   -InstallDir C:\QianniuAiBot
 ```
 
@@ -199,10 +199,10 @@ cd C:\Users\codex\Downloads
 & C:\qianniu-ai-bot\scripts\update-bot.ps1
 ```
 
-Windows 备份默认保存在系统盘根目录：
+Windows 更新备份默认保存在当前用户目录：
 
 ```text
-C:\QianniuAiBot-backups\YYYYMMDD-HHMMSS\
+%LocalAppData%\QianniuAiBotUpdater\backups\YYYYMMDD-HHMMSS\
 ```
 
 更新完成后至少实测：
