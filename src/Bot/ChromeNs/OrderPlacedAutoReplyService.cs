@@ -51,6 +51,7 @@ namespace Bot.ChromeNs
             out OrderPlacedReplyPlan plan)
         {
             plan = null;
+            if (!Params.Robot.CanUseRobotReal) return false;
             var cfg = BotFeatureStore.GetAutoReplyRules();
             if (cfg == null || !cfg.EnableOrderPlacedReply) return false;
 
