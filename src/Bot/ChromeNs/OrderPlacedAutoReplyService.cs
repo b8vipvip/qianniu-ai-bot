@@ -358,6 +358,13 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            // 下单系统卡片不是普通买家文本消息，因此最近一条卖家回显可能仍指向上一轮 Bot 自动回复。
+            // 在真正发送前登记当前精确答案为 Bot 预期发送，只跳过这一次人工介入检查；
+            // QNRpa 消费后会立即移除该键，不影响后续真实人工回复的保护逻辑。
+            KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);
+            Log.Info("下单自动回复已登记精确发送豁免: seller=" + plan.Seller
+                + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+
             var sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);
             OrderPlacedAutoReplyService.Complete(plan, sendOk);
             if (sendOk)
