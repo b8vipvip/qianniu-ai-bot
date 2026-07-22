@@ -52,6 +52,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs" />
   </ItemGroup>
