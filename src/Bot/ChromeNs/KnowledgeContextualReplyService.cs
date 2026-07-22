@@ -10,10 +10,12 @@ namespace Bot.ChromeNs
     internal sealed class ContextualKnowledgeDecision
     {
         public bool IsFollowUp { get; set; }
+        public string Seller { get; set; }
         public string PreviousBuyerText { get; set; }
         public string PreviousAssistantText { get; set; }
         public string CurrentBuyerText { get; set; }
         public string Reason { get; set; }
+        public SmartReplyPlan SmartPlan { get; set; }
     }
 
     internal static class KnowledgeContextualReplyService
@@ -44,17 +46,28 @@ namespace Bot.ChromeNs
             var decision = new ContextualKnowledgeDecision
             {
                 IsFollowUp = false,
+                Seller = seller ?? string.Empty,
                 PreviousBuyerText = string.Empty,
                 PreviousAssistantText = string.Empty,
                 CurrentBuyerText = (currentQuestion ?? string.Empty).Trim(),
-                Reason = string.Empty
+                Reason = string.Empty,
+                SmartPlan = SmartReplyRouterService.BuildPlan(seller, buyer, currentQuestion)
             };
 
-            var compact = Compact(currentQuestion);
-            if (compact.Length < 1 || compact.Length > 28)
+            // 兼容旧的非流式回复入口：只有Smart Reply Router明确判定为DIRECT_KNOWLEDGE时，
+            // 才允许原有代码直接返回本地固定答案；其余知识命中都进入AI上下文改写。
+            if (decision.SmartPlan != null
+                && decision.SmartPlan.Route != SmartReplyRouteKind.DirectKnowledge
+                && decision.SmartPlan.BestCandidate != null)
             {
+                decision.IsFollowUp = true;
+                decision.Reason = decision.SmartPlan.Reason;
+                FillPreviousTurns(decision, seller, buyer, currentQuestion);
                 return decision;
             }
+
+            var compact = Compact(currentQuestion);
+            if (compact.Length < 1 || compact.Length > 28) return decision;
 
             var turns = ConversationContextStore.GetRecentTurns(seller, buyer, currentQuestion, 10);
             var assistantIndex = -1;
@@ -95,10 +108,7 @@ namespace Bot.ChromeNs
 
             if (previousAssistant == null) return decision;
             if (previousAssistant.Timestamp != DateTime.MinValue
-                && previousAssistant.Timestamp < DateTime.Now.AddMinutes(-20))
-            {
-                return decision;
-            }
+                && previousAssistant.Timestamp < DateTime.Now.AddMinutes(-20)) return decision;
 
             var previousBuyer = turns
                 .Take(Math.Max(0, assistantIndex))
@@ -118,10 +128,7 @@ namespace Bot.ChromeNs
 
             if (standaloneQuestion
                 && !previousWasKnowledgeAnswer
-                && !previousHasOpenCondition)
-            {
-                return decision;
-            }
+                && !previousHasOpenCondition) return decision;
 
             if ((previousHasOpenCondition || previousWasKnowledgeAnswer)
                 && (affirmative || negative || sharedTopic || veryShortReply))
@@ -144,9 +151,19 @@ namespace Bot.ChromeNs
             if (decision == null || !decision.IsFollowUp || knowledge == null) return string.Empty;
 
             var sb = new StringBuilder();
-            sb.Append("\n\n本轮已经优先命中本地知识库，但当前买家消息是对上一轮客服回复的补充、确认或否定，不是一个新的独立问题。")
-                .Append("必须基于知识库事实进行自然衔接，不得原样重复上一条客服回复或整段知识库答案。")
-                .Append("直接给出确认后的结论，一句话即可；不得增加知识库之外的承诺。")
+            sb.Append(StorePromptProfileService.BuildPromptAddon());
+            if (!string.IsNullOrWhiteSpace(decision.Seller))
+            {
+                sb.Append(ConversationSessionLearningService.BuildReplyStylePromptAddon(decision.Seller));
+            }
+            if (decision.SmartPlan != null)
+            {
+                sb.Append(SmartReplyRouterService.BuildPromptAddon(decision.SmartPlan));
+            }
+
+            sb.Append("\n\n本轮已经命中本地知识，但当前消息不应机械套用固定答案。")
+                .Append("必须先理解当前买家消息与上一轮上下文，再把知识库内容当作事实依据进行自然回答。")
+                .Append("不得原样重复上一条客服回复或整段知识库答案，不得增加知识库之外的承诺。")
                 .Append("\n知识库问题：").Append(Safe(knowledge.Title, 240))
                 .Append("\n知识库答案：").Append(Safe(knowledge.Answer, 700));
 
@@ -154,9 +171,12 @@ namespace Bot.ChromeNs
             {
                 sb.Append("\n上一轮买家：").Append(Safe(decision.PreviousBuyerText, 300));
             }
-            sb.Append("\n上一轮客服：").Append(Safe(decision.PreviousAssistantText, 700))
-                .Append("\n当前买家：").Append(Safe(decision.CurrentBuyerText, 300))
-                .Append("\n正确风格示例：买家确认满足条件时，回复“那就可以的”或“那就支持使用”；买家否定条件时，直接说明目前不支持。不要重复条件说明。\n");
+            if (!string.IsNullOrWhiteSpace(decision.PreviousAssistantText))
+            {
+                sb.Append("\n上一轮客服：").Append(Safe(decision.PreviousAssistantText, 700));
+            }
+            sb.Append("\n当前买家：").Append(Safe(decision.CurrentBuyerText, 300))
+                .Append("\n当前买家消息可能是对上一轮客服回复的补充、确认或否定，也可能是需要结合历史才能理解的短句。请直接给出当前最合适的结论。\n");
             return sb.ToString();
         }
 
@@ -165,9 +185,16 @@ namespace Bot.ChromeNs
             KnowledgeBaseEntry knowledge)
         {
             if (decision == null || !decision.IsFollowUp) return string.Empty;
+            if (decision.SmartPlan != null
+                && SmartReplyRouterService.CanUseOfflineKnowledgeFallback(decision.SmartPlan)
+                && decision.SmartPlan.BestCandidate != null
+                && decision.SmartPlan.BestCandidate.Entry != null)
+            {
+                return decision.SmartPlan.BestCandidate.Entry.Answer;
+            }
+
             var current = Compact(decision.CurrentBuyerText);
             var answer = Compact(knowledge == null ? string.Empty : knowledge.Answer);
-
             if (ContainsCue(current, NegativeCues))
             {
                 if (answer.Contains("不支持") || answer.Contains("不能") || answer.Contains("无法"))
@@ -176,7 +203,6 @@ namespace Bot.ChromeNs
                 }
                 return "好的，当前条件不满足，先按前面说明处理。";
             }
-
             if (ContainsCue(current, AffirmativeCues))
             {
                 if (answer.Contains("支持") || answer.Contains("可以") || answer.Contains("能使用"))
@@ -190,8 +216,21 @@ namespace Bot.ChromeNs
                 }
                 return "好的，已确认满足前面说的条件。";
             }
+            return string.Empty;
+        }
 
-            return "好的，已结合您刚才补充的信息确认。";
+        private static void FillPreviousTurns(
+            ContextualKnowledgeDecision decision,
+            string seller,
+            string buyer,
+            string currentQuestion)
+        {
+            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, currentQuestion, 10);
+            var assistant = turns.LastOrDefault(x => x != null && x.Role == "assistant" && !string.IsNullOrWhiteSpace(x.Text));
+            if (assistant != null) decision.PreviousAssistantText = assistant.Text.Trim();
+            var buyerTurn = turns.LastOrDefault(x => x != null && x.Role == "user" && !string.IsNullOrWhiteSpace(x.Text)
+                && !string.Equals(Compact(x.Text), Compact(currentQuestion), StringComparison.Ordinal));
+            if (buyerTurn != null) decision.PreviousBuyerText = buyerTurn.Text.Trim();
         }
 
         private static bool LooksLikeStandaloneQuestion(string compact)
