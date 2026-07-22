@@ -23,6 +23,7 @@ namespace Bot
             OrderPlacedReplyDelaySettings.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
+            Bot.Knowledge.StorePromptProfileUi.Initialize();
             ConversationSessionLearningService.Initialize();
             BuyerStreamingReplyPipeline.Initialize();
             Startup += App_Startup;
