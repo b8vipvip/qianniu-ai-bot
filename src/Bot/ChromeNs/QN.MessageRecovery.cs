@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -17,6 +18,9 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, long> _backgroundRecoveryVersions =
             new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        private static readonly Regex RecoveryOrderIdRegex = new Regex(
+            @"(?:订单号|订单编号|订单)\s*[:：#]?\s*(\d{8,})",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static string RecoveryKey(string seller, string buyer)
         {
@@ -49,8 +53,9 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    // 正常 receiveNewMsg 一般会先到。仅当详细消息事件缺失时才打开会话补抓，
-                    // 避免后台通知一到就抢占用户当前聊天窗口。
+                    // 正常 receiveNewMsg 一般会先到。仅当详细买家消息事件缺失时才打开会话补抓。
+                    // 订单系统卡片可能不是 buyer->seller 消息，因此即使详细事件已到，也不会调用
+                    // MarkBuyerMessageObserved；这时该补偿仍会继续，并从目标买家的远端历史中识别订单卡片。
                     await Task.Delay(1800);
                     long latestVersion;
                     if (!_backgroundRecoveryVersions.TryGetValue(key, out latestVersion) || latestVersion != version) return;
@@ -95,7 +100,7 @@ namespace Bot.ChromeNs
                 await _sendGate.WaitAsync();
                 try
                 {
-                    Log.Info("详细新消息事件未到，开始安全补偿: seller=" + seller + ", buyer=" + buyer);
+                    Log.Info("详细新消息事件未到或可能为系统订单卡片，开始安全补偿: seller=" + seller + ", buyer=" + buyer);
                     OpenChat(buyer);
 
                     DbEntity.Conversation current = null;
@@ -138,8 +143,12 @@ namespace Bot.ChromeNs
                         : history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
                     var threshold = scheduledAt.AddMinutes(-2).Ticks;
                     recovered = (messages ?? new List<QNChatMessage>())
-                        .Where(m => m != null && IsBuyerMessage(m))
-                        .Where(m => m.fromid != null && string.Equals((m.fromid.nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                        .Where(m => m != null)
+                        .Where(m =>
+                            (IsBuyerMessage(m)
+                                && m.fromid != null
+                                && string.Equals((m.fromid.nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                            || IsPotentialRecoveredOrderCard(m))
                         .Where(m =>
                         {
                             var sort = IncomingMessageSafety.GetSortValue(m);
@@ -155,14 +164,14 @@ namespace Bot.ChromeNs
 
                 if (recovered == null || recovered.Count < 1)
                 {
-                    Log.Info("后台消息补偿完成，但没有发现最近买家消息。seller=" + seller + ", buyer=" + buyer);
+                    Log.Info("后台消息补偿完成，但没有发现最近买家消息或订单卡片。seller=" + seller + ", buyer=" + buyer);
                     return;
                 }
 
-                Log.Info("后台消息补偿找回 " + recovered.Count + " 条候选消息。seller=" + seller + ", buyer=" + buyer);
+                Log.Info("后台消息补偿找回 " + recovered.Count + " 条候选消息/订单卡片。seller=" + seller + ", buyer=" + buyer);
                 foreach (var message in recovered)
                 {
-                    await ProcessIncomingMessageAsync(message);
+                    await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer);
                     await Task.Delay(30);
                 }
             }
@@ -176,6 +185,48 @@ namespace Bot.ChromeNs
                 _backgroundRecoveryVersions.TryRemove(RecoveryKey(seller, buyer), out ignored);
                 _backgroundRecoveryGate.Release();
             }
+        }
+
+        private async Task ProcessRecoveredMessageWithKnownBuyerAsync(
+            QNChatMessage message,
+            string seller,
+            string buyer)
+        {
+            if (message == null) return;
+            var text = GetMessageText(message);
+            if (IsPotentialRecoveredOrderCard(message))
+            {
+                OrderPlacedReplyPlan orderPlan;
+                if (OrderPlacedAutoReplyService.TryCreatePlan(
+                    message,
+                    text,
+                    seller,
+                    buyer,
+                    _messageSafetyStartedAt,
+                    out orderPlan))
+                {
+                    if (orderPlan != null)
+                    {
+                        Log.Info("后台补偿识别到直接下单订单卡片: seller=" + seller
+                            + ", buyer=" + buyer + ", orderId=" + orderPlan.OrderId);
+                        await ProcessOrderPlacedReplyAsync(orderPlan);
+                    }
+                    return;
+                }
+            }
+            await ProcessIncomingMessageAsync(message);
+        }
+
+        private static bool IsPotentialRecoveredOrderCard(QNChatMessage message)
+        {
+            if (message == null) return false;
+            var text = GetMessageText(message);
+            if (string.IsNullOrWhiteSpace(text)) return false;
+            if (!RecoveryOrderIdRegex.IsMatch(text)) return false;
+            return (text.Contains("件商品") && text.Contains("合计"))
+                || text.Contains("交易时间")
+                || text.Contains("买家已下单")
+                || text.Contains("订单创建成功");
         }
     }
 }
