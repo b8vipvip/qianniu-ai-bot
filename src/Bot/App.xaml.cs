@@ -20,6 +20,7 @@ namespace Bot
         {
             SlowResponseDiagnosticsUi.Initialize();
             ConversationSessionLearningUi.Initialize();
+            OrderPlacedReplyDelaySettings.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
             ConversationSessionLearningService.Initialize();
