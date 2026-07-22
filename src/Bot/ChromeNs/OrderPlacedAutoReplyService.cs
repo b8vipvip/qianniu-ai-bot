@@ -358,6 +358,24 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();
+            if (delaySeconds > 0)
+            {
+                Log.Info("下单自动回复等待延时发送: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", delaySeconds=" + delaySeconds);
+                await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+
+                if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                {
+                    OrderPlacedAutoReplyService.Complete(plan, false);
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：延时期间 Bot 或自动回复开关已关闭");
+                    Log.Info("下单自动回复延时后取消发送: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    return;
+                }
+            }
+
             // 下单系统卡片不是普通买家文本消息，因此最近一条卖家回显可能仍指向上一轮 Bot 自动回复。
             // 在真正发送前登记当前精确答案为 Bot 预期发送，只跳过这一次人工介入检查；
             // QNRpa 消费后会立即移除该键，不影响后续真实人工回复的保护逻辑。
