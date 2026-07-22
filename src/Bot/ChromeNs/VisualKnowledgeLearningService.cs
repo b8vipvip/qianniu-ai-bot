@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.Common;
 using BotLib;
 using BotLib.Db.Sqlite;
 using System;
