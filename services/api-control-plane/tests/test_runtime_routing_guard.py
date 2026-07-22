@@ -115,10 +115,46 @@ def test_dispatch_rotates_to_backup_model_with_small_per_attempt_timeout(monkeyp
     )
 
     assert result["success"] is True
+    assert result["routing_profile"] == "realtime"
     assert calls[:2][0][:2] == ("main-model", "chat")
     assert calls[:2][1][:2] == ("backup-model", "chat")
     assert all(timeout <= guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS for _, _, timeout in calls)
     assert len(calls) == 2
+
+
+def test_heavy_structured_request_uses_long_background_attempt_timeout(monkeypatch):
+    cp = FakeControlPlane()
+    calls = []
+
+    def fake_call(control_plane, provider, model, protocol, messages, max_tokens, temperature, timeout):
+        calls.append((model, protocol, timeout))
+        return {
+            "provider_id": 1,
+            "provider_name": "provider-a",
+            "model": model,
+            "protocol": protocol,
+            "url": "https://example.invalid/v1/chat/completions",
+            "latency_ms": 25000,
+            "success": True,
+            "answer": "ok",
+        }
+
+    monkeypatch.setattr(guard, "fast_upstream_call", fake_call)
+    result = guard.dispatch_chat(
+        cp,
+        "client",
+        "text-default",
+        [{"role": "user", "content": "optimize a large knowledge batch"}],
+        5000,
+        0.05,
+        300,
+    )
+
+    assert result["success"] is True
+    assert result["routing_profile"] == "background"
+    assert calls[0][2] == guard.BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
+    assert calls[0][2] > guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS
+    assert cp.logged[0][1] == "text-background"
 
 
 def test_dispatch_rotates_to_second_relay_before_secondary_protocol(monkeypatch):

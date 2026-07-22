@@ -4,6 +4,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -34,7 +35,11 @@ namespace Bot.Knowledge
 
     internal static class KnowledgeOptimizationService
     {
-        private const int BatchSize = 12;
+        // Smaller batches reduce prompt size, output JSON size and long-tail model latency.
+        private const int BatchSize = 5;
+        private const int BackgroundTimeoutSeconds = 300;
+        private const int MaxOutputTokens = 5000;
+        private const int QuickFailureRetrySeconds = 30;
 
         private const string SystemPrompt =
             "你是电商客服知识库质量审校助手。任务是修复已有问答，而不是重新编造知识。" +
@@ -99,7 +104,7 @@ namespace Bot.Knowledge
 
                 try
                 {
-                    var changes = await OptimizeBatchAsync(batch, token);
+                    var changes = await OptimizeBatchWithQuickRetryAsync(batch, batchIndex + 1, token);
                     foreach (var item in batch)
                     {
                         token.ThrowIfCancellationRequested();
@@ -155,6 +160,38 @@ namespace Bot.Knowledge
             return result;
         }
 
+        private static async Task<Dictionary<string, JObject>> OptimizeBatchWithQuickRetryAsync(
+            IList<KnowledgeBaseEntry> batch,
+            int batchNumber,
+            CancellationToken token)
+        {
+            var sw = Stopwatch.StartNew();
+            try
+            {
+                return await OptimizeBatchAsync(batch, token);
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                sw.Stop();
+                // A failure after a long wait may mean the upstream model is still finishing and billing.
+                // Do not immediately fan out another duplicate request in that case. Only retry failures
+                // that ended quickly, which are more likely to be transient connection/5xx issues.
+                if (sw.Elapsed.TotalSeconds >= QuickFailureRetrySeconds)
+                {
+                    throw;
+                }
+
+                BotLib.Log.Info("知识库优化批次快速失败，2秒后重试一次：batch=" + batchNumber
+                    + ", elapsedMs=" + sw.ElapsedMilliseconds + ", error=" + ex.Message);
+                await Task.Delay(2000, token);
+                return await OptimizeBatchAsync(batch, token);
+            }
+        }
+
         private static async Task<Dictionary<string, JObject>> OptimizeBatchAsync(
             IList<KnowledgeBaseEntry> batch,
             CancellationToken token)
@@ -186,7 +223,7 @@ namespace Bot.Knowledge
             };
 
             var response = await Task.Run(
-                () => MyOpenAI.CallStructuredChat(messages, 5000, 0.05, 150, token),
+                () => MyOpenAI.CallStructuredChat(messages, MaxOutputTokens, 0.05, BackgroundTimeoutSeconds, token),
                 token);
             if (response == null || !response.Success)
             {

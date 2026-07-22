@@ -17,7 +17,8 @@ def test_knowledge_manager_has_ai_optimization_runtime_ui():
     assert "KnowledgeOptimizationService.OptimizeAsync" in ui
     assert "仅优化 智能导入 / 历史扫描 / 自动学习 / AI生成" in ui
     assert "knowledge-before-optimize-" in service
-    assert "BatchSize = 12" in service
+    assert "BatchSize = 5" in service
+    assert "BackgroundTimeoutSeconds = 300" in service
     assert "明显截断" in service
     assert "不得新增价格" in service
     assert "KnowledgeOptimizationUi.Initialize();" in app

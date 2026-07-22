@@ -10,6 +10,13 @@ RUNTIME_TOTAL_BUDGET_SECONDS = max(15, min(120, int(os.getenv("RUNTIME_TOTAL_BUD
 RUNTIME_ATTEMPT_TIMEOUT_SECONDS = max(5, min(20, int(os.getenv("RUNTIME_ATTEMPT_TIMEOUT_SECONDS", "6"))))
 RUNTIME_MAX_URLS_PER_ROUTE = max(1, min(3, int(os.getenv("RUNTIME_MAX_URLS_PER_ROUTE", "1"))))
 
+# Heavy structured jobs such as knowledge-base optimization legitimately need much longer than
+# realtime buyer chat. Keep these budgets separate so a 6-second realtime failover threshold does
+# not abort healthy 20-60 second model generations and then fan out duplicate paid requests.
+BACKGROUND_MIN_MAX_TOKENS = max(1000, min(16000, int(os.getenv("BACKGROUND_MIN_MAX_TOKENS", "4000"))))
+BACKGROUND_TOTAL_BUDGET_SECONDS = max(60, min(300, int(os.getenv("BACKGROUND_TOTAL_BUDGET_SECONDS", "240"))))
+BACKGROUND_ATTEMPT_TIMEOUT_SECONDS = max(20, min(150, int(os.getenv("BACKGROUND_ATTEMPT_TIMEOUT_SECONDS", "90"))))
+
 
 def install(control_plane: Any) -> None:
     """Replace app.dispatch_chat with a bounded failover dispatcher.
@@ -193,6 +200,12 @@ def _build_routes(control_plane: Any, requested_model: str, messages: Sequence[D
     return routes
 
 
+def _routing_policy(max_tokens: int) -> Tuple[str, int, int]:
+    if int(max_tokens or 0) >= BACKGROUND_MIN_MAX_TOKENS:
+        return "background", BACKGROUND_TOTAL_BUDGET_SECONDS, BACKGROUND_ATTEMPT_TIMEOUT_SECONDS
+    return "realtime", RUNTIME_TOTAL_BUDGET_SECONDS, RUNTIME_ATTEMPT_TIMEOUT_SECONDS
+
+
 def dispatch_chat(
     control_plane: Any,
     client_name: str,
@@ -204,16 +217,18 @@ def dispatch_chat(
 ) -> Dict[str, Any]:
     vision = control_plane.messages_have_image(messages)
     attempts: List[Dict[str, Any]] = []
-    requested_budget = max(5, int(timeout or RUNTIME_TOTAL_BUDGET_SECONDS))
-    total_budget = min(requested_budget, RUNTIME_TOTAL_BUDGET_SECONDS)
+    profile, budget_cap, attempt_cap = _routing_policy(max_tokens)
+    requested_budget = max(5, int(timeout or budget_cap))
+    total_budget = min(requested_budget, budget_cap)
     deadline = time.monotonic() + total_budget
 
     routes = _build_routes(control_plane, requested_model, messages)
     for provider, model, protocol in routes:
         remaining = deadline - time.monotonic()
-        if remaining < 5:
+        minimum_remaining = 10 if profile == "background" else 5
+        if remaining < minimum_remaining:
             break
-        attempt_timeout = min(RUNTIME_ATTEMPT_TIMEOUT_SECONDS, max(5, int(remaining)))
+        attempt_timeout = min(attempt_cap, max(minimum_remaining, int(remaining)))
         attempt = fast_upstream_call(
             control_plane,
             provider,
@@ -224,10 +239,11 @@ def dispatch_chat(
             temperature,
             attempt_timeout,
         )
+        attempt["routing_profile"] = profile
         attempts.append({k: v for k, v in attempt.items() if k != "raw"})
         control_plane.log_request(
             client_name,
-            "vision" if vision else "text",
+            "vision" if vision else ("text-background" if profile == "background" else "text"),
             requested_model,
             attempt,
         )
@@ -237,6 +253,7 @@ def dispatch_chat(
                 "attempt": attempt,
                 "attempts": attempts,
                 "vision": vision,
+                "routing_profile": profile,
             }
 
     if routes and time.monotonic() >= deadline - 1:
@@ -245,9 +262,15 @@ def dispatch_chat(
                 "provider_name": "runtime-router",
                 "model": requested_model,
                 "protocol": "budget",
+                "routing_profile": profile,
                 "success": False,
                 "latency_ms": total_budget * 1000,
-                "error": f"运行时路由总预算 {total_budget} 秒已耗尽；未继续等待剩余低优先级候选。",
+                "error": f"{profile} 路由总预算 {total_budget} 秒已耗尽；未继续等待剩余低优先级候选。",
             }
         )
-    return {"success": False, "attempts": attempts, "vision": vision}
+    return {
+        "success": False,
+        "attempts": attempts,
+        "vision": vision,
+        "routing_profile": profile,
+    }
