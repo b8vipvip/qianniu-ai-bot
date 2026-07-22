@@ -28,7 +28,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
             PatchExisting();
             _patchTimer = new Timer(_ => PatchExisting(), null, 100, 300);
-            Log.Info("买家文本回复流式管线已启动：新消息将取消旧AI流，完整答案生成后才发送。" );
+            Log.Info("买家文本回复流式管线已启动：Smart Reply Router 会区分本地直答、知识上下文和通用AI，新消息仍会取消旧AI流。" );
         }
 
         private static void PatchExisting()
@@ -66,13 +66,13 @@ namespace Bot.ChromeNs
                     Func<BuyerMessageBurstLease, Task> wrapped = lease => HandleAsync(qn, original, lease);
                     handlerField.SetValue(coordinator, wrapped);
                     PatchedCoordinators[key] = true;
-                    Log.Info("已为客服实例启用可取消流式回复管线: seller="
+                    Log.Info("已为客服实例启用可取消Smart Reply流式管线: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("安装流式回复管线失败，将继续使用原回复流程：" + ex.Message, 10);
+                Log.ErrorWithMaxCount("安装Smart Reply流式管线失败，将继续使用原回复流程：" + ex.Message, 10);
             }
         }
 
@@ -242,10 +242,10 @@ namespace Bot.ChromeNs
                 conversationCtl.SetSendResult(
                     sendOk,
                     sendOk
-                        ? "已发送（流式生成，合并本轮买家消息）"
+                        ? "已发送（Smart Reply Router，合并本轮买家消息）"
                         : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
             }
-            Log.Info("流式文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
+            Log.Info("Smart Reply文本真实流程完成: buyer=" + burst.BuyerNick + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
         }
@@ -319,25 +319,7 @@ namespace Bot.ChromeNs
 
             if (string.IsNullOrWhiteSpace(question)) return "错误：买家消息为空，未调用AI。";
 
-            KnowledgeBaseEntry contextualKnowledge = null;
-            ContextualKnowledgeDecision contextualDecision = null;
-            double contextualScore = 0;
-            KnowledgeBaseEntry localKnowledge;
-            double localScore;
-            if (KnowledgeLearningService.TryFindLocalAnswer(seller, buyer, question, out localKnowledge, out localScore))
-            {
-                var localAnswer = BotFeatureStore.ApplyOutputPolicy(localKnowledge.Answer);
-                var contextDecision = KnowledgeContextualReplyService.Analyze(seller, buyer, question, localKnowledge);
-                if (!contextDecision.IsFollowUp)
-                {
-                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, localAnswer, "本地");
-                    return localAnswer;
-                }
-                contextualKnowledge = localKnowledge;
-                contextualDecision = contextDecision;
-                contextualScore = localScore;
-            }
-
+            // 人工确认和转人工规则拥有最高优先级，不能被本地FAQ提前截断。
             var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
             if (manualDecision.Matched)
             {
@@ -370,20 +352,31 @@ namespace Bot.ChromeNs
                 return BotFeatureStore.ApplyOutputPolicy(manualDecision.ReplyText);
             }
 
+            var plan = SmartReplyRouterService.BuildPlan(seller, buyer, question);
+            var best = plan.BestCandidate;
+            if (plan.Route == SmartReplyRouteKind.DirectKnowledge && best != null && best.Entry != null)
+            {
+                var directAnswer = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
+                KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, directAnswer, "智能路由-本地直答");
+                Log.Info("Smart Reply Router本地直答: buyer=" + buyer
+                    + ", knowledgeId=" + best.Entry.Id
+                    + ", score=" + best.FinalScore.ToString("0.00")
+                    + ", contextDependency=" + plan.ContextDependencyScore.ToString("0.00"));
+                return directAnswer;
+            }
+
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             if (endpoints == null || endpoints.Count < 1)
             {
-                if (contextualKnowledge != null)
+                if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
+                    && best != null
+                    && best.Entry != null)
                 {
-                    var offline = KnowledgeContextualReplyService.BuildOfflineFallback(contextualDecision, contextualKnowledge);
-                    if (!string.IsNullOrWhiteSpace(offline))
-                    {
-                        offline = BotFeatureStore.ApplyOutputPolicy(offline);
-                        KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, offline, "本地知识库上下文");
-                        return offline;
-                    }
+                    var fallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
+                    KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fallback, "智能路由-离线知识兜底");
+                    return fallback;
                 }
-                return "错误：没有可用的AI接口，请在设置-API接口中启用至少一个接口。";
+                return "错误：没有可用的AI接口；当前问题需要结合上下文，已阻止直接套用可能不合适的本地固定答案。";
             }
 
             var primary = endpoints.First();
@@ -391,22 +384,31 @@ namespace Bot.ChromeNs
                 ? Params.Robot.GetSystemPrompt()
                 : primary.SystemPrompt;
             var dynamicSystemPrompt = BuildSystemPrompt(configuredPrompt);
-            var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 18);
-            var contextForKnowledge = new StringBuilder(question);
-            foreach (var turn in turns)
+            dynamicSystemPrompt += StorePromptProfileService.BuildPromptAddon();
+            dynamicSystemPrompt += ConversationSessionLearningService.BuildReplyStylePromptAddon(seller);
+
+            var contextForRules = new StringBuilder(question);
+            foreach (var turn in plan.RecentTurns ?? new List<ConversationContextTurn>())
             {
-                if (contextForKnowledge.Length > 3500) break;
-                contextForKnowledge.Append(' ').Append(turn.Text);
+                if (turn == null || string.IsNullOrWhiteSpace(turn.Text)) continue;
+                if (contextForRules.Length > 2200) break;
+                contextForRules.Append(' ').Append(turn.Text);
             }
-            dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForKnowledge.ToString());
-            if (contextualKnowledge != null)
-            {
-                dynamicSystemPrompt += KnowledgeContextualReplyService.BuildPromptAddon(contextualDecision, contextualKnowledge);
-            }
+            dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
+            dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
 
             var messages = new JArray { Message("system", dynamicSystemPrompt) };
-            foreach (var turn in turns)
+            if (!string.IsNullOrWhiteSpace(plan.ContextDigest))
             {
+                messages.Add(Message(
+                    "system",
+                    "【较早会话压缩摘要】以下仅用于保持上下文连续，不代表新的店铺事实：" + plan.ContextDigest));
+            }
+
+            foreach (var turn in plan.RecentTurns ?? new List<ConversationContextTurn>())
+            {
+                if (turn == null || string.IsNullOrWhiteSpace(turn.Text)) continue;
+                if (turn.Role != "assistant" && turn.Role != "user") continue;
                 var time = turn.Timestamp == DateTime.MinValue
                     ? "时间未知"
                     : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
@@ -414,6 +416,12 @@ namespace Bot.ChromeNs
                 messages.Add(Message(turn.Role, "[" + time + " " + speaker + "] " + turn.Text));
             }
             messages.Add(Message("user", "[当前消息 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 买家] " + question));
+
+            Log.Info("Smart Reply Router选择: buyer=" + buyer
+                + ", route=" + plan.Route
+                + ", contextDependency=" + plan.ContextDependencyScore.ToString("0.00")
+                + ", candidates=" + (plan.Candidates == null ? 0 : plan.Candidates.Count)
+                + ", reason=" + plan.Reason);
 
             var answer = await StreamMessagesAsync(messages, token, partial);
             if (string.IsNullOrWhiteSpace(answer))
@@ -426,13 +434,15 @@ namespace Bot.ChromeNs
                 return "错误：该回复已被客服撤回，已阻止再次发送。";
             }
 
-            var source = contextualKnowledge == null ? "AI生成" : "本地知识库上下文";
+            var source = plan.Route == SmartReplyRouteKind.ContextualKnowledge
+                ? "智能路由-知识上下文"
+                : "AI生成";
             KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, answer, source);
-            if (contextualKnowledge != null)
+            if (plan.Route == SmartReplyRouteKind.ContextualKnowledge && best != null && best.Entry != null)
             {
-                Log.Info("流式上下文知识回复生成成功。buyer=" + buyer
-                    + ", knowledgeId=" + contextualKnowledge.Id
-                    + ", score=" + contextualScore.ToString("0.00"));
+                Log.Info("Smart Reply知识上下文回复生成成功: buyer=" + buyer
+                    + ", knowledgeId=" + best.Entry.Id
+                    + ", score=" + best.FinalScore.ToString("0.00"));
             }
             return answer;
         }

@@ -47,7 +47,7 @@ namespace Bot.ChromeNs
                 ? "[图片]"
                 : task.CombinedQuestion.Trim();
             var timeline = ConversationContextStore.BuildTimelineText(task.SellerNick, task.BuyerNick, currentQuestion, 16);
-            var prompt = UserPrompt;
+            var prompt = UserPrompt + ConversationSessionLearningService.BuildReplyStylePromptAddon(task.SellerNick);
             if (!string.Equals(currentQuestion, "[图片]", StringComparison.Ordinal))
             {
                 prompt += "\n\n买家本轮连续发送的消息如下，换行代表先后顺序。图片和这些文字属于同一轮，请合并理解后只回复一次：\n" + currentQuestion;
@@ -161,12 +161,16 @@ namespace Bot.ChromeNs
 
         public static JObject BuildVisionPayload(AiEndpointConfig endpoint, string imageUrl, string prompt)
         {
+            var systemPrompt = string.IsNullOrWhiteSpace(endpoint.SystemPrompt)
+                ? "你是淘宝店铺客服助手。"
+                : endpoint.SystemPrompt;
+            systemPrompt += StorePromptProfileService.BuildPromptAddon();
             return new JObject
             {
                 ["model"] = endpoint.VisionModel,
                 ["messages"] = new JArray
                 {
-                    new JObject { ["role"] = "system", ["content"] = string.IsNullOrWhiteSpace(endpoint.SystemPrompt) ? "你是淘宝店铺客服助手。" : endpoint.SystemPrompt },
+                    new JObject { ["role"] = "system", ["content"] = systemPrompt },
                     new JObject
                     {
                         ["role"] = "user",

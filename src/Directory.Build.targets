@@ -31,6 +31,12 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KnowledgeContextualReplyService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReplyDeduplicationService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReplyDeduplicationService.cs" />
   </ItemGroup>
@@ -90,6 +96,9 @@
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Knowledge\KnowledgeOptimizationUi.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Knowledge\StorePromptProfileUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Knowledge\StorePromptProfileUi.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\CtlRobotOptions.ControlPlane.Portability.cs" />
