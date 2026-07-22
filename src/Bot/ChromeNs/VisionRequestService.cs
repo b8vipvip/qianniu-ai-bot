@@ -21,12 +21,22 @@ namespace Bot.ChromeNs
         public string EndpointName { get; set; }
         public string VisionModel { get; set; }
         public long LatencyMs { get; set; }
+        public string VisualQuestion { get; set; }
+        public string VisualSummary { get; set; }
+        public string VisualTags { get; set; }
+        public string MatchedVisualKnowledgeId { get; set; }
+        public double VisualKnowledgeScore { get; set; }
     }
 
     internal sealed class VisionRequestService
     {
         private readonly VisionImageResolver _resolver = new VisionImageResolver();
-        private const string UserPrompt = "你是淘宝/千牛客服助手。请理解买家当前发送的图片，并结合当前会话上下文生成客服回复。只描述图片中能够确认的内容。不要猜测模糊、遮挡或无法识别的信息。不要声称已经核实订单、账号、付款、充值或售后状态，除非上下文提供了明确数据。回复应简洁、自然，并直接解决买家的当前问题。";
+        private const string UserPrompt =
+            "你是淘宝/千牛客服视觉助手。请理解买家当前发送的图片，并结合当前会话上下文生成客服回复。"
+            + "只描述图片中能够确认的内容，不要猜测模糊、遮挡或无法识别的信息；不要声称已经核实订单、账号、付款、充值或售后状态，除非上下文提供了明确数据。"
+            + "只输出一个JSON对象，不要输出Markdown："
+            + "{\"answer\":\"给买家的简短自然回复\",\"visual_question\":\"这类图片对应的通用问题\",\"visual_summary\":\"仅描述以后可用于匹配相似图片的稳定视觉特征，不包含买家个人信息\",\"visual_tags\":[\"商品或对象\",\"部位\",\"现象\",\"场景\"]}。"
+            + "visual_summary要具体到可区分不同图片场景，但不得保存手机号、订单号、账号、验证码等个人信息。";
 
         public async Task<VisionRequestResult> ExecuteAsync(VisionReplyTask task, CancellationToken cancellationToken)
         {
@@ -72,6 +82,35 @@ namespace Bot.ChromeNs
                         result.VisionModel = endpoint.VisionModel;
                         if (result.Success)
                         {
+                            var generatedAnswer = result.Answer;
+                            VisualKnowledgeMatch learned;
+                            if (!string.IsNullOrWhiteSpace(result.VisualSummary)
+                                && VisualKnowledgeLearningService.TryFindMatch(
+                                    task.SellerNick,
+                                    result.VisualQuestion,
+                                    result.VisualSummary,
+                                    result.VisualTags,
+                                    out learned))
+                            {
+                                result.Answer = learned.Answer;
+                                result.MatchedVisualKnowledgeId = learned.KnowledgeId;
+                                result.VisualKnowledgeScore = learned.Score;
+                                Log.Info("视觉回复采用人工学习知识: seller=" + task.SellerNick
+                                    + ", buyer=" + task.BuyerNick
+                                    + ", knowledgeId=" + learned.KnowledgeId
+                                    + ", score=" + learned.Score.ToString("0.00"));
+                            }
+
+                            VisualKnowledgeLearningService.RecordVisionAnalysis(
+                                task.SellerNick,
+                                task.BuyerNick,
+                                task.Message,
+                                task.MessageKey,
+                                result.VisualQuestion,
+                                result.VisualSummary,
+                                result.VisualTags,
+                                generatedAnswer);
+
                             if (ConversationContextStore.IsWithdrawnAnswer(task.SellerNick, task.BuyerNick, result.Answer))
                             {
                                 return new VisionRequestResult
@@ -83,8 +122,9 @@ namespace Bot.ChromeNs
                                     LatencyMs = result.LatencyMs
                                 };
                             }
-                            KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, "AI生成");
-                            if (!task.DeferLearningUntilDelivered)
+                            var source = string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId) ? "AI生成" : "视觉知识";
+                            KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, source);
+                            if (!task.DeferLearningUntilDelivered && string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId))
                             {
                                 KnowledgeLearningService.QueueLearn(
                                     "买家本轮消息：" + currentQuestion + (string.IsNullOrWhiteSpace(timeline) ? string.Empty : "\n" + timeline),
@@ -138,7 +178,7 @@ namespace Bot.ChromeNs
                     }
                 },
                 ["temperature"] = 0.1,
-                ["max_tokens"] = 180,
+                ["max_tokens"] = 420,
                 ["stream"] = false
             };
         }
@@ -156,11 +196,56 @@ namespace Bot.ChromeNs
                     var response = await http.PostAsync(BuildChatUrl(endpoint.BaseUrl), content, token);
                     var body = await response.Content.ReadAsStringAsync();
                     if (!response.IsSuccessStatusCode) return Fail("HTTP " + (int)response.StatusCode + " " + Classify(response.StatusCode) + "：" + SafeText(body));
-                    var answer = ExtractAnswer(body).Trim();
-                    if (string.IsNullOrWhiteSpace(answer)) return Fail("返回内容为空");
-                    return new VisionRequestResult { Success = true, Answer = answer };
+                    var raw = ExtractAnswer(body).Trim();
+                    if (string.IsNullOrWhiteSpace(raw)) return Fail("返回内容为空");
+                    return ParseVisionResult(raw);
                 }
             }
+        }
+
+        private static VisionRequestResult ParseVisionResult(string raw)
+        {
+            raw = (raw ?? string.Empty).Trim();
+            try
+            {
+                var start = raw.IndexOf('{');
+                var end = raw.LastIndexOf('}');
+                if (start >= 0 && end > start)
+                {
+                    var obj = JObject.Parse(raw.Substring(start, end - start + 1));
+                    var answer = Convert.ToString(obj["answer"]).Trim();
+                    var visualQuestion = Convert.ToString(obj["visual_question"]).Trim();
+                    var visualSummary = Convert.ToString(obj["visual_summary"]).Trim();
+                    var tagsToken = obj["visual_tags"];
+                    var visualTags = tagsToken is JArray
+                        ? string.Join(",", ((JArray)tagsToken).Select(x => x.ToString().Trim()).Where(x => x.Length > 0))
+                        : Convert.ToString(tagsToken).Trim();
+                    if (!string.IsNullOrWhiteSpace(answer))
+                    {
+                        return new VisionRequestResult
+                        {
+                            Success = true,
+                            Answer = answer,
+                            VisualQuestion = visualQuestion,
+                            VisualSummary = RedactVisualSemantic(visualSummary),
+                            VisualTags = RedactVisualSemantic(visualTags)
+                        };
+                    }
+                }
+            }
+            catch
+            {
+            }
+            return new VisionRequestResult { Success = true, Answer = raw };
+        }
+
+        private static string RedactVisualSemantic(string text)
+        {
+            text = text ?? string.Empty;
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"(?<!\d)1\d{10}(?!\d)", "[手机号]");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"(?<!\d)\d{8,}(?!\d)", "[编号]");
+            text = System.Text.RegularExpressions.Regex.Replace(text, @"(?i)(验证码|校验码)[：:\s]*\d{4,8}", "$1：[已脱敏]");
+            return text.Trim();
         }
 
         private static string BuildChatUrl(string baseUrl)
