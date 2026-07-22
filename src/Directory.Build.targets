@@ -97,6 +97,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\ConversationSessionLearningUi.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\ConversationSessionLearningUi.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\OrderPlacedReplyDelaySettings.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\OrderPlacedReplyDelaySettings.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs" />
   </ItemGroup>
