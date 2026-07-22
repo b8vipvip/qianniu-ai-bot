@@ -7,25 +7,26 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_knowledge_remains_first_for_standalone_questions():
-    code = read("src/Bot/ChromeNs/MyOpenAI.cs")
-    assert "KnowledgeLearningService.TryFindLocalAnswer" in code
-    assert "if (!contextDecision.IsFollowUp)" in code
-    assert "命中本地知识库，未调用AI" in code
-    assert "return localAnswer;" in code
-
-
-def test_follow_up_knowledge_hit_is_contextualized_not_repeated():
+def test_legacy_non_streaming_path_only_directs_when_smart_router_allows_it():
     code = read("src/Bot/ChromeNs/MyOpenAI.cs")
     helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
-    assert "KnowledgeContextualReplyService.Analyze" in code
-    assert "KnowledgeContextualReplyService.BuildPromptAddon" in code
+    assert "KnowledgeLearningService.TryFindLocalAnswer" in code
+    assert "if (!contextDecision.IsFollowUp)" in code
+    assert "SmartReplyRouterService.BuildPlan" in helper
+    assert "decision.SmartPlan.Route != SmartReplyRouteKind.DirectKnowledge" in helper
+
+
+def test_contextual_knowledge_hit_uses_top_candidates_and_context_instead_of_fixed_copy():
+    helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
+    router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
+    assert "SmartReplyRouterService.BuildPromptAddon(decision.SmartPlan)" in helper
     assert "不得原样重复上一条客服回复或整段知识库答案" in helper
-    assert "当前买家消息是对上一轮客服回复的补充、确认或否定" in helper
-    assert "上一条客服回复与本次命中的知识答案相同" in helper
+    assert "当前消息不应机械套用固定答案" in helper
+    assert "PromptCandidateCount = 3" in router
+    assert "这些知识是候选事实依据，不是必须原样发送的固定答案" in router
 
 
-def test_tv_karaoke_confirmation_has_safe_offline_fallback():
+def test_tv_karaoke_confirmation_keeps_safe_offline_fallback_for_legacy_path():
     helper = read("src/Bot/ChromeNs/KnowledgeContextualReplyService.cs")
     assert "ExtractConfirmedFeature" in helper
     assert "那就可以使用" in helper
