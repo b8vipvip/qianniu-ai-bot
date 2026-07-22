@@ -133,6 +133,58 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static List<BotConversationHistoryEntity> LoadRange(
+            string seller,
+            string buyer,
+            DateTime from,
+            DateTime to,
+            int maxCount = 120)
+        {
+            Initialize();
+            FlushNow();
+            EnsureSchema();
+
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            if (seller.Length == 0 || buyer.Length == 0) return new List<BotConversationHistoryEntity>();
+
+            var take = Math.Max(1, Math.Min(MaxRecordsPerConversation, maxCount <= 0 ? 120 : maxCount));
+            var fromTicks = from == DateTime.MinValue ? DateTime.Now.AddDays(-RetentionDays).Ticks : from.Ticks;
+            var toTicks = to == DateTime.MinValue ? DateTime.Now.Ticks : to.Ticks;
+            if (toTicks < fromTicks)
+            {
+                var swap = fromTicks;
+                fromTicks = toTicks;
+                toTicks = swap;
+            }
+
+            try
+            {
+                lock (DbSync)
+                {
+                    var rows = DbHelper.Db.Select(
+                        typeof(BotConversationHistoryEntity),
+                        "where Seller = ? and Buyer = ? and CreatedAtTicks >= ? and CreatedAtTicks <= ? "
+                        + "order by CreatedAtTicks asc limit " + take,
+                        seller,
+                        buyer,
+                        fromTicks,
+                        toTicks);
+                    return (rows ?? new List<object>())
+                        .OfType<BotConversationHistoryEntity>()
+                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.EntityId))
+                        .OrderBy(x => x.CreatedAtTicks)
+                        .ThenBy(x => x.UpdatedAtTicks)
+                        .ToList();
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("按接待时间读取Bot问答历史失败：" + ex.Message, 10);
+                return new List<BotConversationHistoryEntity>();
+            }
+        }
+
         public static void FlushNow()
         {
             Initialize();
