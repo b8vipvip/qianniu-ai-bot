@@ -18,6 +18,8 @@ namespace Bot.ChromeNs
     {
         public KnowledgeBaseEntry Entry { get; set; }
         public double RetrievalScore { get; set; }
+        public double ResolvedQueryScore { get; set; }
+        public double EntityScore { get; set; }
         public double FinalScore { get; set; }
         public bool ExactQuestionMatch { get; set; }
         public string Intent { get; set; }
@@ -31,6 +33,8 @@ namespace Bot.ChromeNs
         public List<SmartKnowledgeCandidate> Candidates { get; set; }
         public List<ConversationContextTurn> RecentTurns { get; set; }
         public string ContextDigest { get; set; }
+        public ConversationStateSnapshot ConversationState { get; set; }
+        public ContextualQueryResolution QueryResolution { get; set; }
 
         public SmartKnowledgeCandidate BestCandidate
         {
@@ -71,13 +75,17 @@ namespace Bot.ChromeNs
                 .OrderBy(x => x.Timestamp)
                 .ToList();
             var dependency = CalculateContextDependency(question, turns);
-            var candidates = RetrieveCandidates(question, turns);
+            var state = ConversationStateService.Build(seller, buyer, question, turns);
+            var queryResolution = ContextualQueryRewriteService.Resolve(question, dependency, state, turns);
+            var candidates = RetrieveCandidates(question, queryResolution, state, turns);
             var plan = new SmartReplyPlan
             {
                 ContextDependencyScore = dependency,
                 Candidates = candidates.Take(PromptCandidateCount).ToList(),
                 RecentTurns = turns.Skip(Math.Max(0, turns.Count - RecentPromptTurns)).ToList(),
                 ContextDigest = BuildContextDigest(turns),
+                ConversationState = state,
+                QueryResolution = queryResolution,
                 Route = SmartReplyRouteKind.AiGeneral,
                 Reason = "未找到足够可靠的本地知识，交给AI结合上下文处理"
             };
@@ -87,18 +95,18 @@ namespace Bot.ChromeNs
 
             var second = plan.Candidates.Count > 1 ? plan.Candidates[1] : null;
             var margin = second == null ? best.FinalScore : best.FinalScore - second.FinalScore;
-            if (CanDirectReply(question, best, dependency, margin))
+            if (CanDirectReply(question, best, dependency, margin, queryResolution))
             {
                 plan.Route = SmartReplyRouteKind.DirectKnowledge;
                 plan.Reason = "独立问题且知识命中唯一、确定，可直接本地回复";
                 return plan;
             }
 
-            if (best.FinalScore >= 0.58 || best.RetrievalScore >= 0.72)
+            if (best.FinalScore >= 0.55 || best.RetrievalScore >= 0.70 || best.ResolvedQueryScore >= 0.72)
             {
                 plan.Route = SmartReplyRouteKind.ContextualKnowledge;
-                plan.Reason = dependency >= 0.35
-                    ? "当前消息明显依赖上下文，本地知识仅作为事实依据"
+                plan.Reason = dependency >= 0.35 || (queryResolution != null && queryResolution.Rewritten)
+                    ? "当前消息依赖上下文，已先还原完整问题，再把本地知识作为事实依据"
                     : "知识相关但不满足直接发送条件，交给AI结合上下文重写";
             }
             return plan;
@@ -109,29 +117,44 @@ namespace Bot.ChromeNs
             var best = plan == null ? null : plan.BestCandidate;
             return best != null
                 && plan.ContextDependencyScore < 0.28
+                && (plan.QueryResolution == null || !plan.QueryResolution.Rewritten)
                 && best.FinalScore >= 0.90
                 && !IsUnsafeDirectAnswer(best.Entry == null ? string.Empty : best.Entry.Answer);
         }
 
         public static string BuildPromptAddon(SmartReplyPlan plan)
         {
-            if (plan == null || plan.Candidates == null || plan.Candidates.Count == 0) return string.Empty;
+            if (plan == null) return string.Empty;
             var sb = new StringBuilder();
-            sb.Append("\n\n【智能知识路由】\n")
+            sb.Append(ConversationStateService.BuildPromptAddon(plan.ConversationState));
+
+            if (plan.QueryResolution != null && plan.QueryResolution.Rewritten)
+            {
+                sb.Append("\n【上下文问题还原】\n")
+                    .Append("买家原话：").Append(Safe(plan.QueryResolution.OriginalQuery, 300)).Append("\n")
+                    .Append("用于检索和理解的完整问题：").Append(Safe(plan.QueryResolution.ResolvedQuery, 700)).Append("\n")
+                    .Append("还原原因：").Append(Safe(plan.QueryResolution.Reason, 220)).Append("\n")
+                    .Append("回复时仍然只回答买家当前真正想问的内容，不要把还原过程告诉买家。\n");
+            }
+
+            if (plan.Candidates == null || plan.Candidates.Count == 0) return sb.ToString();
+            sb.Append("\n【智能知识路由】\n")
                 .Append("当前路由：").Append(RouteName(plan.Route)).Append("。")
                 .Append("上下文依赖度：").Append(plan.ContextDependencyScore.ToString("0.00")).Append("。")
                 .Append("这些知识是候选事实依据，不是必须原样发送的固定答案。")
-                .Append("必须先理解当前买家消息和最近对话，只采用真正相关的知识；候选之间冲突或与上下文不符时应忽略不相关候选。")
+                .Append("必须先理解当前买家消息、还原后的问题和最近对话，只采用真正相关的知识；候选之间冲突或与上下文不符时应忽略不相关候选。")
                 .Append("不得编造候选知识和店铺固定提示词之外的价格、库存、订单状态、服务范围或售后承诺。")
                 .Append("回复应像真人客服自然承接上下文，避免机械重复上一条回复。\n");
 
             for (var i = 0; i < plan.Candidates.Count; i++)
             {
-                var item = plan.Candidates[i].Entry;
+                var candidate = plan.Candidates[i];
+                var item = candidate.Entry;
                 if (item == null) continue;
                 sb.Append("候选知识").Append(i + 1).Append("：\n")
                     .Append("问题：").Append(Safe(item.Title, 260)).Append("\n")
-                    .Append("答案：").Append(Safe(item.Answer, 900)).Append("\n");
+                    .Append("答案：").Append(Safe(item.Answer, 900)).Append("\n")
+                    .Append("综合相关度：").Append(candidate.FinalScore.ToString("0.00")).Append("\n");
                 if (!string.IsNullOrWhiteSpace(item.Category))
                 {
                     sb.Append("分类：").Append(Safe(item.Category, 100)).Append("\n");
@@ -146,90 +169,122 @@ namespace Bot.ChromeNs
 
         private static List<SmartKnowledgeCandidate> RetrieveCandidates(
             string question,
+            ContextualQueryResolution queryResolution,
+            ConversationStateSnapshot state,
             List<ConversationContextTurn> turns)
         {
             var knowledge = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
-            var query = KnowledgeAiService.NormalizeQuestion(question);
-            if (query.Length == 0) return new List<SmartKnowledgeCandidate>();
-            var queryIntent = DetectIntent(question);
+            var originalQuery = KnowledgeAiService.NormalizeQuestion(question);
+            if (originalQuery.Length == 0) return new List<SmartKnowledgeCandidate>();
+            var resolvedText = queryResolution == null || string.IsNullOrWhiteSpace(queryResolution.ResolvedQuery)
+                ? question
+                : queryResolution.ResolvedQuery;
+            var resolvedQuery = KnowledgeAiService.NormalizeQuestion(resolvedText);
+            var queryIntent = state == null || string.IsNullOrWhiteSpace(state.BuyerGoal)
+                ? DetectIntent(resolvedText)
+                : NormalizeIntent(state.BuyerGoal);
             var context = string.Join(" ", (turns ?? new List<ConversationContextTurn>())
                 .Skip(Math.Max(0, (turns == null ? 0 : turns.Count) - 5))
                 .Select(x => x.Text ?? string.Empty));
 
             var pool = knowledge
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
-                .Select(x => ScoreCandidate(x, query, question, queryIntent))
-                .Where(x => x.RetrievalScore >= 0.24)
-                .OrderByDescending(x => x.RetrievalScore)
+                .Select(x => ScoreCandidate(x, originalQuery, resolvedQuery, queryIntent, state, context))
+                .Where(x => x.RetrievalScore >= 0.20 || x.ResolvedQueryScore >= 0.24 || x.EntityScore >= 0.35)
+                .OrderByDescending(x => x.FinalScore)
                 .Take(RetrievalPoolSize)
                 .ToList();
-
-            foreach (var candidate in pool)
-            {
-                var itemText = (candidate.Entry.Title ?? string.Empty) + " "
-                    + (candidate.Entry.Keywords ?? string.Empty) + " "
-                    + (candidate.Entry.Category ?? string.Empty);
-                var contextScore = TextSimilarity(context, itemText);
-                var itemIntent = DetectIntent(candidate.Entry.Title + " " + candidate.Entry.Keywords);
-                var intentAdjustment = 0.0;
-                if (queryIntent.Length > 0 && itemIntent.Length > 0)
-                {
-                    intentAdjustment = queryIntent == itemIntent ? 0.07 : -0.08;
-                }
-                candidate.FinalScore = Clamp(candidate.RetrievalScore * 0.88 + contextScore * 0.12 + intentAdjustment);
-                candidate.Intent = itemIntent;
-            }
 
             return pool.OrderByDescending(x => x.FinalScore).ToList();
         }
 
         private static SmartKnowledgeCandidate ScoreCandidate(
             KnowledgeBaseEntry item,
-            string normalizedQuery,
-            string originalQuestion,
-            string queryIntent)
+            string originalQuery,
+            string resolvedQuery,
+            string queryIntent,
+            ConversationStateSnapshot state,
+            string context)
         {
             var title = KnowledgeAiService.NormalizeQuestion(item.Title);
-            var exact = normalizedQuery == title && title.Length > 0;
-            double score;
-            if (exact)
-            {
-                score = 1.0;
-            }
-            else if (Math.Min(normalizedQuery.Length, title.Length) >= 4
-                && (normalizedQuery.Contains(title) || title.Contains(normalizedQuery)))
-            {
-                score = 0.91;
-            }
-            else
-            {
-                score = TextSimilarity(normalizedQuery, title) * 0.76;
-            }
+            var exact = originalQuery == title && title.Length > 0;
+            var originalScore = BaseTextScore(originalQuery, title);
+            var resolvedScore = BaseTextScore(resolvedQuery, title);
 
-            var keywordBest = 0.0;
+            var keywordScore = 0.0;
             foreach (var keyword in SplitKeywords(item.Keywords))
             {
                 var normalizedKeyword = KnowledgeAiService.NormalizeQuestion(keyword);
                 if (normalizedKeyword.Length < 2) continue;
-                if (normalizedQuery.Contains(normalizedKeyword)) keywordBest = Math.Max(keywordBest, 0.18);
-                else keywordBest = Math.Max(keywordBest, TextSimilarity(normalizedQuery, normalizedKeyword) * 0.12);
+                if (originalQuery.Contains(normalizedKeyword) || resolvedQuery.Contains(normalizedKeyword))
+                    keywordScore = Math.Max(keywordScore, 1.0);
+                else
+                    keywordScore = Math.Max(keywordScore,
+                        Math.Max(TextSimilarity(originalQuery, normalizedKeyword), TextSimilarity(resolvedQuery, normalizedKeyword)));
             }
-            score = Math.Min(1.0, score + keywordBest);
 
-            var titleIntent = DetectIntent(item.Title + " " + item.Keywords);
-            if (queryIntent.Length > 0 && titleIntent.Length > 0 && queryIntent != titleIntent)
+            var itemText = (item.Title ?? string.Empty) + " "
+                + (item.Keywords ?? string.Empty) + " "
+                + (item.Category ?? string.Empty);
+            var contextScore = TextSimilarity(context, itemText);
+            var entityScore = CalculateEntityScore(state, itemText);
+            var itemIntent = DetectIntent(item.Title + " " + item.Keywords);
+            var intentAdjustment = 0.0;
+            if (!string.IsNullOrWhiteSpace(queryIntent) && !string.IsNullOrWhiteSpace(itemIntent))
             {
-                score -= 0.08;
+                intentAdjustment = queryIntent == itemIntent ? 0.08 : -0.06;
             }
+
+            // Phase 1 hybrid local retrieval: current text + rewritten query + keywords + entities + context + intent.
+            // Embedding semantic similarity will be added in Phase 2 without changing the public router contract.
+            var final = originalScore * 0.38
+                + resolvedScore * 0.28
+                + keywordScore * 0.12
+                + entityScore * 0.10
+                + contextScore * 0.06
+                + Math.Max(0, intentAdjustment);
+            if (intentAdjustment < 0) final += intentAdjustment;
+            if (exact) final = Math.Max(final, 0.99);
 
             return new SmartKnowledgeCandidate
             {
                 Entry = item,
-                RetrievalScore = Clamp(score),
-                FinalScore = Clamp(score),
+                RetrievalScore = Clamp(originalScore),
+                ResolvedQueryScore = Clamp(resolvedScore),
+                EntityScore = Clamp(entityScore),
+                FinalScore = Clamp(final),
                 ExactQuestionMatch = exact,
-                Intent = titleIntent
+                Intent = itemIntent
             };
+        }
+
+        private static double BaseTextScore(string query, string title)
+        {
+            if (string.IsNullOrWhiteSpace(query) || string.IsNullOrWhiteSpace(title)) return 0;
+            if (query == title) return 1.0;
+            if (Math.Min(query.Length, title.Length) >= 4
+                && (query.Contains(title) || title.Contains(query)))
+            {
+                return 0.92;
+            }
+            return TextSimilarity(query, title);
+        }
+
+        private static double CalculateEntityScore(ConversationStateSnapshot state, string itemText)
+        {
+            if (state == null || state.Entities == null || state.Entities.Count == 0) return 0;
+            var compactItem = Compact(itemText);
+            var matched = 0;
+            var total = 0;
+            foreach (var entity in state.Entities.Take(5))
+            {
+                var compactEntity = Compact(entity);
+                if (compactEntity.Length < 2) continue;
+                total++;
+                if (compactItem.Contains(compactEntity)) matched++;
+            }
+            if (total == 0) return 0;
+            return Math.Min(1.0, matched / (double)Math.Min(3, total));
         }
 
         private static double CalculateContextDependency(string question, List<ConversationContextTurn> turns)
@@ -267,15 +322,17 @@ namespace Bot.ChromeNs
             string question,
             SmartKnowledgeCandidate best,
             double dependency,
-            double margin)
+            double margin,
+            ContextualQueryResolution resolution)
         {
             if (best == null || best.Entry == null) return false;
             if (dependency > 0.20) return false;
+            if (resolution != null && resolution.Rewritten) return false;
             if (Compact(question).Length < 4) return false;
             if (ContextCues.Any(x => Compact(question).Contains(Compact(x)))) return false;
             if (IsUnsafeDirectAnswer(best.Entry.Answer)) return false;
             if (best.ExactQuestionMatch && best.FinalScore >= 0.95) return true;
-            return best.FinalScore >= 0.985 && margin >= 0.12;
+            return best.FinalScore >= 0.90 && margin >= 0.14 && best.RetrievalScore >= 0.88;
         }
 
         private static bool IsUnsafeDirectAnswer(string answer)
@@ -313,6 +370,19 @@ namespace Bot.ChromeNs
             if (Regex.IsMatch(value, @"为什么|失败|不行|报错|异常|不能用")) return "troubleshoot";
             if (Regex.IsMatch(value, @"可以|能不能|能否|是否|支持|可不可以")) return "capability";
             if (Regex.IsMatch(value, @"需要什么|提供什么|要什么|资料|条件")) return "requirement";
+            return string.Empty;
+        }
+
+        private static string NormalizeIntent(string value)
+        {
+            value = value ?? string.Empty;
+            if (value.Contains("售后")) return "after_sale";
+            if (value.Contains("价格")) return "price";
+            if (value.Contains("时间") || value.Contains("时效")) return "time";
+            if (value.Contains("操作")) return "how_to";
+            if (value.Contains("故障")) return "troubleshoot";
+            if (value.Contains("支持")) return "capability";
+            if (value.Contains("条件")) return "requirement";
             return string.Empty;
         }
 
