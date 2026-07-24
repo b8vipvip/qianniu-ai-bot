@@ -34,4 +34,4 @@ def test_semantics_only_assist_retrieval_not_direct_fixed_reply():
     assert 'existing.FinalScore * 0.72 + existing.SemanticScore * 0.28' in router
     assert 'scored.Score * 0.78' in router
     assert 'best.RetrievalScore >= 0.88' in router
-    assert '语义向量只能辅助召回' in router
+    assert 'best.ExactQuestionMatch && best.RetrievalScore >= 0.95' in router
