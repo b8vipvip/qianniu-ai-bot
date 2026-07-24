@@ -17,6 +17,19 @@ namespace Bot.ChromeNs
         public List<string> ConfirmedFacts { get; set; }
         public List<string> Entities { get; set; }
 
+        // Compatibility aliases keep policy/validator modules decoupled from the original Phase 1 naming.
+        public string PendingSellerQuestion
+        {
+            get { return PendingQuestion; }
+            set { PendingQuestion = value; }
+        }
+
+        public string Stage
+        {
+            get { return ConversationStage; }
+            set { ConversationStage = value; }
+        }
+
         public ConversationStateSnapshot()
         {
             ConfirmedFacts = new List<string>();
@@ -116,7 +129,6 @@ namespace Bot.ChromeNs
                 if (turn == null || turn.Role != "assistant" || string.IsNullOrWhiteSpace(turn.Text)) continue;
                 var text = turn.Text.Trim();
                 if (LooksLikePendingQuestion(text)) return text;
-                // 最近一条客服消息不是问题时，不再向更久以前强行寻找未决问题。
                 break;
             }
             return string.Empty;

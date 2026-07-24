@@ -24,6 +24,7 @@ namespace Bot
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
             Bot.Knowledge.StorePromptProfileUi.Initialize();
+            Bot.Knowledge.KnowledgePolicyProfileUi.Initialize();
             ConversationSessionLearningService.Initialize();
             BuyerStreamingReplyPipeline.Initialize();
             Startup += App_Startup;
