@@ -21,6 +21,7 @@ namespace Bot.Options
         private const string ControlPlaneTextRouteKey = "ControlPlaneTextRoute";
         private const string ControlPlaneVisionRouteKey = "ControlPlaneVisionRoute";
         private const string ControlPlaneVisionEnabledKey = "ControlPlaneVisionEnabled";
+        private const string ControlPlaneEmbeddingModelKey = "ControlPlaneEmbeddingModel";
         private const string ControlPlaneAdminUrlKey = "ControlPlaneAdminUrl";
         private bool _controlPlaneLoaded;
 
@@ -54,6 +55,7 @@ namespace Bot.Options
                     ReadControlPlaneValue(ControlPlaneVisionEnabledKey, existing != null && existing.SupportsVision ? "true" : "false"),
                     "true",
                     StringComparison.OrdinalIgnoreCase);
+                txtControlPlaneEmbeddingModel.Text = ReadControlPlaneValue(ControlPlaneEmbeddingModelKey, string.Empty);
                 txtControlPlaneAdminUrl.Text = ReadControlPlaneValue(ControlPlaneAdminUrlKey, storedUrl);
                 txtControlPlaneStatus.Text = string.IsNullOrWhiteSpace(storedUrl)
                     ? "尚未配置统一 API 服务。请先部署 Ubuntu 服务端，在后台创建供应商和 Bot 客户端令牌。"
@@ -79,7 +81,10 @@ namespace Bot.Options
                 }
 
                 SaveControlPlaneConfiguration(endpoint);
-                txtControlPlaneStatus.Text = "服务端连接已保存。Bot 后续只调用统一网关，上游供应商密钥不会保存在本机。";
+                txtControlPlaneStatus.Text = "服务端连接已保存。Bot 后续只调用统一网关，上游供应商密钥不会保存在本机。"
+                    + (string.IsNullOrWhiteSpace(txtControlPlaneEmbeddingModel.Text)
+                        ? " 语义向量检索未启用，将使用本地混合检索。"
+                        : " 已启用可选 Embedding 语义检索；接口异常时会自动降级。 ");
             }
             catch (Exception ex)
             {
@@ -193,6 +198,7 @@ namespace Bot.Options
             SaveControlPlaneValue(ControlPlaneTextRouteKey, endpoint.TextModel);
             SaveControlPlaneValue(ControlPlaneVisionRouteKey, endpoint.VisionModel);
             SaveControlPlaneValue(ControlPlaneVisionEnabledKey, endpoint.SupportsVision ? "true" : "false");
+            SaveControlPlaneValue(ControlPlaneEmbeddingModelKey, (txtControlPlaneEmbeddingModel.Text ?? string.Empty).Trim());
             SaveControlPlaneValue(ControlPlaneAdminUrlKey, NormalizeServerUrl(txtControlPlaneAdminUrl.Text));
 
             if (_endpoints != null)
