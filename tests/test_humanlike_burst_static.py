@@ -18,15 +18,21 @@ def test_buyer_message_burst_coordinator_is_in_build():
 
 def test_burst_waits_for_fragments_and_collapses_input_artifacts():
     coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    timing = text("src/Bot/ChromeNs/AdaptiveReplyTimingService.cs")
     assert 'if (normalized == previousNormalized) continue;' in coordinator
     assert "normalized.StartsWith(previousNormalized" in coordinator
     assert "previousNormalized.EndsWith(normalized" in coordinator
-    assert "if (IsGreetingOnly(compact)) return 950;" in coordinator
-    assert "if (IsOpenShortFragment(compact)) return 1200;" in coordinator
-    assert "if (IncomingMessageSafety.IsMediaPlaceholder(latest)) return 700;" in coordinator
-    assert "if (list.Count >= 6) return 420;" in coordinator
+    assert "baseline = 950;" in coordinator
+    assert "baseline = 1200;" in coordinator
+    assert "baseline = 700;" in coordinator
+    assert "baseline = 420;" in coordinator
+    assert "baseline = 350;" in coordinator
+    assert "AdaptiveReplyTimingService.AdjustDelay" in coordinator
+    assert "Clamp(adjusted, 700, 1450)" in timing
+    assert "Clamp(adjusted, 650, 1550)" in timing
+    assert "Clamp(adjusted, 600, 1400)" in timing
+    assert "Clamp(adjusted, 300, 720)" in timing
     assert "TimeSpan.FromSeconds(4)" in coordinator
-    assert "return 350;" in coordinator
 
 
 def test_versioned_lease_invalidates_answers_when_buyer_adds_messages():
