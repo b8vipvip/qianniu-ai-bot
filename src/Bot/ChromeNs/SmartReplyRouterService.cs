@@ -20,6 +20,7 @@ namespace Bot.ChromeNs
         public double RetrievalScore { get; set; }
         public double ResolvedQueryScore { get; set; }
         public double EntityScore { get; set; }
+        public double SemanticScore { get; set; }
         public double FinalScore { get; set; }
         public bool ExactQuestionMatch { get; set; }
         public string Intent { get; set; }
@@ -35,6 +36,9 @@ namespace Bot.ChromeNs
         public string ContextDigest { get; set; }
         public ConversationStateSnapshot ConversationState { get; set; }
         public ContextualQueryResolution QueryResolution { get; set; }
+        public bool SemanticRetrievalApplied { get; set; }
+        public string SemanticModel { get; set; }
+        public long SemanticLatencyMs { get; set; }
 
         public SmartKnowledgeCandidate BestCandidate
         {
@@ -87,8 +91,30 @@ namespace Bot.ChromeNs
                 ConversationState = state,
                 QueryResolution = queryResolution,
                 Route = SmartReplyRouteKind.AiGeneral,
-                Reason = "未找到足够可靠的本地知识，交给AI结合上下文处理"
+                Reason = "未找到足够可靠的本地知识，交给AI结合上下文处理",
+                SemanticModel = string.Empty
             };
+
+            var provisionalBest = candidates.FirstOrDefault();
+            var rewritten = queryResolution != null && queryResolution.Rewritten;
+            var exactIndependent = provisionalBest != null
+                && provisionalBest.ExactQuestionMatch
+                && dependency <= 0.20
+                && !rewritten;
+            if (!exactIndependent && SemanticEmbeddingService.IsConfigured())
+            {
+                var resolvedText = queryResolution == null || string.IsNullOrWhiteSpace(queryResolution.ResolvedQuery)
+                    ? question
+                    : queryResolution.ResolvedQuery;
+                var semantic = SemanticEmbeddingService.TryScore(
+                    resolvedText,
+                    BotFeatureStore.GetKnowledgeBase(),
+                    candidates);
+                if (semantic != null && semantic.Applied)
+                {
+                    ApplySemanticScores(plan, candidates, semantic);
+                }
+            }
 
             var best = plan.BestCandidate;
             if (best == null) return plan;
@@ -102,12 +128,17 @@ namespace Bot.ChromeNs
                 return plan;
             }
 
-            if (best.FinalScore >= 0.55 || best.RetrievalScore >= 0.70 || best.ResolvedQueryScore >= 0.72)
+            if (best.FinalScore >= 0.55
+                || best.RetrievalScore >= 0.70
+                || best.ResolvedQueryScore >= 0.72
+                || best.SemanticScore >= 0.72)
             {
                 plan.Route = SmartReplyRouteKind.ContextualKnowledge;
-                plan.Reason = dependency >= 0.35 || (queryResolution != null && queryResolution.Rewritten)
+                plan.Reason = dependency >= 0.35 || rewritten
                     ? "当前消息依赖上下文，已先还原完整问题，再把本地知识作为事实依据"
-                    : "知识相关但不满足直接发送条件，交给AI结合上下文重写";
+                    : (best.SemanticScore >= 0.72 && best.RetrievalScore < 0.55
+                        ? "文本表面相似度较低，但语义向量找到高相关知识，将交给AI结合上下文使用"
+                        : "知识相关但不满足直接发送条件，交给AI结合上下文重写");
             }
             return plan;
         }
@@ -118,6 +149,7 @@ namespace Bot.ChromeNs
             return best != null
                 && plan.ContextDependencyScore < 0.28
                 && (plan.QueryResolution == null || !plan.QueryResolution.Rewritten)
+                && best.RetrievalScore >= 0.80
                 && best.FinalScore >= 0.90
                 && !IsUnsafeDirectAnswer(best.Entry == null ? string.Empty : best.Entry.Answer);
         }
@@ -140,8 +172,12 @@ namespace Bot.ChromeNs
             if (plan.Candidates == null || plan.Candidates.Count == 0) return sb.ToString();
             sb.Append("\n【智能知识路由】\n")
                 .Append("当前路由：").Append(RouteName(plan.Route)).Append("。")
-                .Append("上下文依赖度：").Append(plan.ContextDependencyScore.ToString("0.00")).Append("。")
-                .Append("这些知识是候选事实依据，不是必须原样发送的固定答案。")
+                .Append("上下文依赖度：").Append(plan.ContextDependencyScore.ToString("0.00")).Append("。");
+            if (plan.SemanticRetrievalApplied)
+            {
+                sb.Append("已使用语义向量辅助检索，但向量相似只用于找候选知识，不能单独证明业务事实正确。");
+            }
+            sb.Append("这些知识是候选事实依据，不是必须原样发送的固定答案。")
                 .Append("必须先理解当前买家消息、还原后的问题和最近对话，只采用真正相关的知识；候选之间冲突或与上下文不符时应忽略不相关候选。")
                 .Append("不得编造候选知识和店铺固定提示词之外的价格、库存、订单状态、服务范围或售后承诺。")
                 .Append("回复应像真人客服自然承接上下文，避免机械重复上一条回复。\n");
@@ -155,6 +191,10 @@ namespace Bot.ChromeNs
                     .Append("问题：").Append(Safe(item.Title, 260)).Append("\n")
                     .Append("答案：").Append(Safe(item.Answer, 900)).Append("\n")
                     .Append("综合相关度：").Append(candidate.FinalScore.ToString("0.00")).Append("\n");
+                if (candidate.SemanticScore > 0)
+                {
+                    sb.Append("语义相关度：").Append(candidate.SemanticScore.ToString("0.00")).Append("\n");
+                }
                 if (!string.IsNullOrWhiteSpace(item.Category))
                 {
                     sb.Append("分类：").Append(Safe(item.Category, 100)).Append("\n");
@@ -165,6 +205,70 @@ namespace Bot.ChromeNs
                 }
             }
             return sb.ToString();
+        }
+
+        private static void ApplySemanticScores(
+            SmartReplyPlan plan,
+            List<SmartKnowledgeCandidate> localCandidates,
+            SemanticEmbeddingResult semantic)
+        {
+            plan.SemanticRetrievalApplied = true;
+            plan.SemanticModel = semantic.Model ?? string.Empty;
+            plan.SemanticLatencyMs = semantic.LatencyMs;
+
+            var merged = new List<SmartKnowledgeCandidate>(localCandidates ?? new List<SmartKnowledgeCandidate>());
+            foreach (var scored in semantic.Scores ?? new List<SemanticKnowledgeScore>())
+            {
+                if (scored == null || scored.Entry == null) continue;
+                var existing = merged.FirstOrDefault(x => x != null && x.Entry != null && SameKnowledge(x.Entry, scored.Entry));
+                if (existing != null)
+                {
+                    existing.SemanticScore = Clamp(scored.Score);
+                    if (!existing.ExactQuestionMatch)
+                    {
+                        existing.FinalScore = Clamp(existing.FinalScore * 0.72 + existing.SemanticScore * 0.28);
+                    }
+                    continue;
+                }
+
+                // 允许已经缓存的强语义候选进入 Top3，但它永远不能只靠向量直接固定回复。
+                if (scored.Score < 0.72) continue;
+                merged.Add(new SmartKnowledgeCandidate
+                {
+                    Entry = scored.Entry,
+                    RetrievalScore = 0,
+                    ResolvedQueryScore = 0,
+                    EntityScore = 0,
+                    SemanticScore = Clamp(scored.Score),
+                    FinalScore = Clamp(scored.Score * 0.78),
+                    ExactQuestionMatch = false,
+                    Intent = DetectIntent(scored.Entry.Title + " " + scored.Entry.Keywords)
+                });
+            }
+
+            plan.Candidates = merged
+                .Where(x => x != null && x.Entry != null)
+                .OrderByDescending(x => x.FinalScore)
+                .Take(PromptCandidateCount)
+                .ToList();
+            Log.Info("Smart Reply语义检索完成: model=" + plan.SemanticModel
+                + ", latencyMs=" + plan.SemanticLatencyMs
+                + ", candidates=" + plan.Candidates.Count);
+        }
+
+        private static bool SameKnowledge(KnowledgeBaseEntry left, KnowledgeBaseEntry right)
+        {
+            if (left == null || right == null) return false;
+            var leftId = Convert.ToString(left.Id);
+            var rightId = Convert.ToString(right.Id);
+            if (!string.IsNullOrWhiteSpace(leftId) && !string.IsNullOrWhiteSpace(rightId))
+            {
+                return string.Equals(leftId, rightId, StringComparison.Ordinal);
+            }
+            return string.Equals(
+                KnowledgeAiService.NormalizeQuestion(left.Title),
+                KnowledgeAiService.NormalizeQuestion(right.Title),
+                StringComparison.Ordinal);
         }
 
         private static List<SmartKnowledgeCandidate> RetrieveCandidates(
@@ -235,8 +339,6 @@ namespace Bot.ChromeNs
                 intentAdjustment = queryIntent == itemIntent ? 0.08 : -0.06;
             }
 
-            // Phase 1 hybrid local retrieval: current text + rewritten query + keywords + entities + context + intent.
-            // Embedding semantic similarity will be added in Phase 2 without changing the public router contract.
             var final = originalScore * 0.38
                 + resolvedScore * 0.28
                 + keywordScore * 0.12
@@ -252,6 +354,7 @@ namespace Bot.ChromeNs
                 RetrievalScore = Clamp(originalScore),
                 ResolvedQueryScore = Clamp(resolvedScore),
                 EntityScore = Clamp(entityScore),
+                SemanticScore = 0,
                 FinalScore = Clamp(final),
                 ExactQuestionMatch = exact,
                 Intent = itemIntent
@@ -331,7 +434,8 @@ namespace Bot.ChromeNs
             if (Compact(question).Length < 4) return false;
             if (ContextCues.Any(x => Compact(question).Contains(Compact(x)))) return false;
             if (IsUnsafeDirectAnswer(best.Entry.Answer)) return false;
-            if (best.ExactQuestionMatch && best.FinalScore >= 0.95) return true;
+            // 语义向量只能辅助召回；直接固定回复仍必须有很强的原始文本证据。
+            if (best.ExactQuestionMatch && best.RetrievalScore >= 0.95) return true;
             return best.FinalScore >= 0.90 && margin >= 0.14 && best.RetrievalScore >= 0.88;
         }
 
