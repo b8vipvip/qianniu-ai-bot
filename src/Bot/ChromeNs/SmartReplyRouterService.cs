@@ -25,6 +25,7 @@ namespace Bot.ChromeNs
         public double FinalScore { get; set; }
         public bool ExactQuestionMatch { get; set; }
         public string Intent { get; set; }
+        public KnowledgePolicyEvaluation PolicyEvaluation { get; set; }
     }
 
     internal sealed class SmartReplyPlan
@@ -92,7 +93,7 @@ namespace Bot.ChromeNs
                 ConversationState = state,
                 QueryResolution = queryResolution,
                 Route = SmartReplyRouteKind.AiGeneral,
-                Reason = "未找到足够可靠的本地知识，交给AI结合上下文处理",
+                Reason = "未找到足够可靠且适用于当前场景的本地知识，交给AI结合上下文处理",
                 SemanticModel = string.Empty
             };
 
@@ -101,7 +102,8 @@ namespace Bot.ChromeNs
             var exactIndependent = provisionalBest != null
                 && provisionalBest.ExactQuestionMatch
                 && dependency <= 0.20
-                && !rewritten;
+                && !rewritten
+                && PolicyAllowsDirect(provisionalBest);
             if (!exactIndependent && SemanticEmbeddingService.IsConfigured())
             {
                 var resolvedText = queryResolution == null || string.IsNullOrWhiteSpace(queryResolution.ResolvedQuery)
@@ -113,7 +115,7 @@ namespace Bot.ChromeNs
                     candidates);
                 if (semantic != null && semantic.Applied)
                 {
-                    ApplySemanticScores(plan, candidates, semantic);
+                    ApplySemanticScores(plan, candidates, semantic, question, resolvedText);
                 }
             }
 
@@ -125,21 +127,36 @@ namespace Bot.ChromeNs
             if (CanDirectReply(question, best, dependency, margin, queryResolution))
             {
                 plan.Route = SmartReplyRouteKind.DirectKnowledge;
-                plan.Reason = "独立问题且知识命中唯一、确定，可直接本地回复";
+                plan.Reason = "独立问题、知识适用条件满足且可靠度允许直接回复";
+                KnowledgePolicyProfileService.RecordRouteSelection(best.Entry, true);
                 return plan;
             }
 
-            if (best.FinalScore >= 0.55
+            var forceContextual = best.PolicyEvaluation != null && best.PolicyEvaluation.ForceContextual;
+            if (forceContextual
+                || best.FinalScore >= 0.55
                 || best.RetrievalScore >= 0.70
                 || best.ResolvedQueryScore >= 0.72
                 || best.SemanticScore >= 0.72)
             {
                 plan.Route = SmartReplyRouteKind.ContextualKnowledge;
-                plan.Reason = dependency >= 0.35 || rewritten
-                    ? "当前消息依赖上下文，已先还原完整问题，再把本地知识作为事实依据"
-                    : (best.SemanticScore >= 0.72 && best.RetrievalScore < 0.55
-                        ? "文本表面相似度较低，但语义向量找到高相关知识，将交给AI结合上下文使用"
-                        : "知识相关但不满足直接发送条件，交给AI结合上下文重写");
+                if (best.PolicyEvaluation != null && best.PolicyEvaluation.ConstraintOnly)
+                {
+                    plan.Reason = "命中的知识被设置为事实约束，只能约束AI结论，禁止机械原样回复";
+                }
+                else if (best.PolicyEvaluation != null && best.PolicyEvaluation.ForceContextual)
+                {
+                    plan.Reason = "知识回答模式、必要上下文或历史可靠度要求必须结合当前对话生成答案";
+                }
+                else
+                {
+                    plan.Reason = dependency >= 0.35 || rewritten
+                        ? "当前消息依赖上下文，已先还原完整问题，再把本地知识作为事实依据"
+                        : (best.SemanticScore >= 0.72 && best.RetrievalScore < 0.55
+                            ? "文本表面相似度较低，但语义向量找到高相关知识，将交给AI结合上下文使用"
+                            : "知识相关但不满足直接发送条件，交给AI结合上下文重写");
+                }
+                KnowledgePolicyProfileService.RecordRouteSelection(best.Entry, false);
             }
             return plan;
         }
@@ -150,6 +167,7 @@ namespace Bot.ChromeNs
             return best != null
                 && plan.ContextDependencyScore < 0.28
                 && (plan.QueryResolution == null || !plan.QueryResolution.Rewritten)
+                && PolicyAllowsDirect(best)
                 && best.RetrievalScore >= 0.80
                 && best.FinalScore >= 0.90
                 && !IsUnsafeDirectAnswer(best.Entry == null ? string.Empty : best.Entry.Answer);
@@ -179,7 +197,7 @@ namespace Bot.ChromeNs
                 sb.Append("已使用语义向量辅助检索，但向量相似只用于找候选知识，不能单独证明业务事实正确。");
             }
             sb.Append("这些知识是候选事实依据，不是必须原样发送的固定答案。")
-                .Append("必须先理解当前买家消息、还原后的问题和最近对话，只采用真正相关的知识；候选之间冲突或与上下文不符时应忽略不相关候选。")
+                .Append("必须先理解当前买家消息、还原后的问题和最近对话，只采用真正相关且满足适用条件的知识；候选之间冲突或与上下文不符时应忽略不相关候选。")
                 .Append("不得编造候选知识和店铺固定提示词之外的价格、库存、订单状态、服务范围或售后承诺。")
                 .Append("回复应像真人客服自然承接上下文，避免机械重复上一条回复。\n");
 
@@ -204,6 +222,8 @@ namespace Bot.ChromeNs
                 {
                     sb.Append("关键词：").Append(Safe(item.Keywords, 240)).Append("\n");
                 }
+                sb.Append(KnowledgePolicyProfileService.BuildPromptAddon(item, candidate.PolicyEvaluation));
+                sb.Append("\n");
             }
             return sb.ToString();
         }
@@ -211,13 +231,17 @@ namespace Bot.ChromeNs
         private static void ApplySemanticScores(
             SmartReplyPlan plan,
             List<SmartKnowledgeCandidate> localCandidates,
-            SemanticEmbeddingResult semantic)
+            SemanticEmbeddingResult semantic,
+            string originalQuestion,
+            string resolvedQuestion)
         {
             plan.SemanticRetrievalApplied = true;
             plan.SemanticModel = semantic.Model ?? string.Empty;
             plan.SemanticLatencyMs = semantic.LatencyMs;
 
             var merged = new List<SmartKnowledgeCandidate>(localCandidates ?? new List<SmartKnowledgeCandidate>());
+            var recentContext = string.Join(" ", (plan.RecentTurns ?? new List<ConversationContextTurn>())
+                .Select(x => x == null ? string.Empty : x.Text ?? string.Empty));
             foreach (var scored in semantic.Scores ?? new List<SemanticKnowledgeScore>())
             {
                 if (scored == null || scored.Entry == null) continue;
@@ -233,6 +257,13 @@ namespace Bot.ChromeNs
                 }
 
                 if (scored.Score < 0.72) continue;
+                var policy = KnowledgePolicyProfileService.Evaluate(
+                    scored.Entry,
+                    originalQuestion,
+                    resolvedQuestion,
+                    plan.ConversationState,
+                    recentContext);
+                if (policy.Excluded) continue;
                 merged.Add(new SmartKnowledgeCandidate
                 {
                     Entry = scored.Entry,
@@ -240,14 +271,16 @@ namespace Bot.ChromeNs
                     ResolvedQueryScore = 0,
                     EntityScore = 0,
                     SemanticScore = Clamp(scored.Score),
-                    FinalScore = Clamp(scored.Score * 0.78),
+                    FinalScore = Clamp(scored.Score * 0.78 + policy.ScoreAdjustment),
                     ExactQuestionMatch = false,
-                    Intent = DetectIntent(scored.Entry.Title + " " + scored.Entry.Keywords)
+                    Intent = ResolvePolicyIntent(scored.Entry, policy),
+                    PolicyEvaluation = policy
                 });
             }
 
             plan.Candidates = merged
                 .Where(x => x != null && x.Entry != null)
+                .Where(x => x.PolicyEvaluation == null || !x.PolicyEvaluation.Excluded)
                 .OrderByDescending(x => x.FinalScore)
                 .Take(PromptCandidateCount)
                 .ToList();
@@ -293,8 +326,12 @@ namespace Bot.ChromeNs
 
             var pool = knowledge
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
-                .Select(x => ScoreCandidate(x, originalQuery, resolvedQuery, queryIntent, state, context))
-                .Where(x => x.RetrievalScore >= 0.20 || x.ResolvedQueryScore >= 0.24 || x.EntityScore >= 0.35)
+                .Select(x => ScoreCandidate(x, question, resolvedText, originalQuery, resolvedQuery, queryIntent, state, context))
+                .Where(x => x.PolicyEvaluation == null || !x.PolicyEvaluation.Excluded)
+                .Where(x => x.RetrievalScore >= 0.20
+                    || x.ResolvedQueryScore >= 0.24
+                    || x.EntityScore >= 0.35
+                    || (x.PolicyEvaluation != null && x.PolicyEvaluation.ScoreAdjustment > 0))
                 .OrderByDescending(x => x.FinalScore)
                 .Take(RetrievalPoolSize)
                 .ToList();
@@ -304,6 +341,8 @@ namespace Bot.ChromeNs
 
         private static SmartKnowledgeCandidate ScoreCandidate(
             KnowledgeBaseEntry item,
+            string rawOriginalQuestion,
+            string rawResolvedQuestion,
             string originalQuery,
             string resolvedQuery,
             string queryIntent,
@@ -314,6 +353,12 @@ namespace Bot.ChromeNs
             var exact = originalQuery == title && title.Length > 0;
             var originalScore = BaseTextScore(originalQuery, title);
             var resolvedScore = BaseTextScore(resolvedQuery, title);
+            var policy = KnowledgePolicyProfileService.Evaluate(
+                item,
+                rawOriginalQuestion,
+                rawResolvedQuestion,
+                state,
+                context);
 
             var keywordScore = 0.0;
             foreach (var keyword in SplitKeywords(item.Keywords))
@@ -327,12 +372,14 @@ namespace Bot.ChromeNs
                         Math.Max(TextSimilarity(originalQuery, normalizedKeyword), TextSimilarity(resolvedQuery, normalizedKeyword)));
             }
 
+            var profileEntities = policy == null || policy.Profile == null ? string.Empty : policy.Profile.Entities;
             var itemText = (item.Title ?? string.Empty) + " "
                 + (item.Keywords ?? string.Empty) + " "
-                + (item.Category ?? string.Empty);
+                + (item.Category ?? string.Empty) + " "
+                + profileEntities;
             var contextScore = TextSimilarity(context, itemText);
             var entityScore = CalculateEntityScore(state, itemText);
-            var itemIntent = DetectIntent(item.Title + " " + item.Keywords);
+            var itemIntent = ResolvePolicyIntent(item, policy);
             var intentAdjustment = 0.0;
             if (!string.IsNullOrWhiteSpace(queryIntent) && !string.IsNullOrWhiteSpace(itemIntent))
             {
@@ -344,9 +391,10 @@ namespace Bot.ChromeNs
                 + keywordScore * 0.12
                 + entityScore * 0.10
                 + contextScore * 0.06
-                + Math.Max(0, intentAdjustment);
+                + Math.Max(0, intentAdjustment)
+                + (policy == null ? 0 : policy.ScoreAdjustment);
             if (intentAdjustment < 0) final += intentAdjustment;
-            if (exact) final = Math.Max(final, 0.99);
+            if (exact) final = Math.Max(final, 0.99 + Math.Min(0, policy == null ? 0 : policy.ScoreAdjustment));
 
             return new SmartKnowledgeCandidate
             {
@@ -357,8 +405,16 @@ namespace Bot.ChromeNs
                 SemanticScore = 0,
                 FinalScore = Clamp(final),
                 ExactQuestionMatch = exact,
-                Intent = itemIntent
+                Intent = itemIntent,
+                PolicyEvaluation = policy
             };
+        }
+
+        private static string ResolvePolicyIntent(KnowledgeBaseEntry entry, KnowledgePolicyEvaluation policy)
+        {
+            if (policy != null && policy.Profile != null && !string.IsNullOrWhiteSpace(policy.Profile.Intent))
+                return policy.Profile.Intent.Trim();
+            return DetectIntent((entry == null ? string.Empty : entry.Title) + " " + (entry == null ? string.Empty : entry.Keywords));
         }
 
         private static double BaseTextScore(string query, string title)
@@ -431,11 +487,33 @@ namespace Bot.ChromeNs
             if (best == null || best.Entry == null) return false;
             if (dependency > 0.20) return false;
             if (resolution != null && resolution.Rewritten) return false;
+            if (!PolicyAllowsDirect(best)) return false;
             if (Compact(question).Length < 4) return false;
             if (ContextCues.Any(x => Compact(question).Contains(Compact(x)))) return false;
             if (IsUnsafeDirectAnswer(best.Entry.Answer)) return false;
-            if (best.ExactQuestionMatch && best.RetrievalScore >= 0.95) return true;
-            return best.FinalScore >= 0.90 && margin >= 0.14 && best.RetrievalScore >= 0.88;
+
+            var policy = best.PolicyEvaluation == null ? null : best.PolicyEvaluation.Profile;
+            var mode = policy == null ? KnowledgeAnswerModes.Auto : KnowledgeAnswerModes.Normalize(policy.AnswerMode);
+            var reliability = policy == null ? 0.75 : policy.ReliabilityScore;
+            if (best.ExactQuestionMatch && best.RetrievalScore >= 0.95) return reliability >= 0.58;
+            if (mode == KnowledgeAnswerModes.Direct && reliability >= 0.78)
+            {
+                return best.FinalScore >= 0.86 && margin >= 0.10 && best.RetrievalScore >= 0.82;
+            }
+            return reliability >= 0.65
+                && best.FinalScore >= 0.90
+                && margin >= 0.14
+                && best.RetrievalScore >= 0.88;
+        }
+
+        private static bool PolicyAllowsDirect(SmartKnowledgeCandidate candidate)
+        {
+            return candidate != null
+                && (candidate.PolicyEvaluation == null
+                    || (candidate.PolicyEvaluation.AllowDirect
+                        && !candidate.PolicyEvaluation.ForceContextual
+                        && !candidate.PolicyEvaluation.ConstraintOnly
+                        && !candidate.PolicyEvaluation.Excluded));
         }
 
         private static bool IsUnsafeDirectAnswer(string answer)
