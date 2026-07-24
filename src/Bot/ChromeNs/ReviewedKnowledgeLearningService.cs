@@ -65,7 +65,14 @@ namespace Bot.ChromeNs
                 var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 if (existing != null)
                 {
-                    if (Normalize(existing.Answer) == normalizedAnswer)
+                    var previousAnswer = existing.Answer ?? string.Empty;
+                    KnowledgePolicyProfileService.RecordReviewEvidence(
+                        question,
+                        previousAnswer,
+                        answer,
+                        evidenceType);
+
+                    if (Normalize(previousAnswer) == normalizedAnswer)
                     {
                         MergeMetadata(existing, category, keywords, sourceType, now);
                         BotFeatureStore.SaveKnowledgeBase(list);
@@ -73,7 +80,7 @@ namespace Bot.ChromeNs
                         return new KnowledgeLearningResult
                         {
                             Success = true,
-                            Message = "现有知识答案与人工复盘结论一致，仅更新了学习来源"
+                            Message = "现有知识答案与人工复盘结论一致，已提高该知识的人工确认可靠度"
                         };
                     }
 
@@ -90,7 +97,7 @@ namespace Bot.ChromeNs
                         return new KnowledgeLearningResult
                         {
                             Success = true,
-                            Message = "现有知识属于人工维护内容，当前证据强度不足，未自动覆盖"
+                            Message = "现有知识属于人工维护内容，当前证据强度不足，未自动覆盖；可靠度证据已记录"
                         };
                     }
 
@@ -108,7 +115,7 @@ namespace Bot.ChromeNs
                     {
                         Success = true,
                         Updated = true,
-                        Message = "已根据本轮人工接待最终回复优化现有知识答案"
+                        Message = "已根据本轮人工接待最终回复优化现有知识答案，并降低旧答案直答可靠度"
                     };
                 }
 
@@ -116,14 +123,15 @@ namespace Bot.ChromeNs
                 if (list.Any(x => x != null
                     && KnowledgeAiService.ContentHash(x.Title, x.Answer) == contentHash))
                 {
+                    KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
                     return new KnowledgeLearningResult
                     {
                         Success = true,
-                        Message = "知识库已存在相同问答内容，未重复添加"
+                        Message = "知识库已存在相同问答内容，并记录了一次人工确认"
                     };
                 }
 
-                list.Add(new KnowledgeBaseEntry
+                var added = new KnowledgeBaseEntry
                 {
                     Id = Guid.NewGuid().ToString("N"),
                     Enabled = true,
@@ -135,14 +143,16 @@ namespace Bot.ChromeNs
                     UpdatedAt = now,
                     AiGenerated = false,
                     SourceType = sourceType
-                });
+                };
+                list.Add(added);
                 BotFeatureStore.SaveKnowledgeBase(list);
+                KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
                 RaiseChanged();
                 return new KnowledgeLearningResult
                 {
                     Success = true,
                     Added = true,
-                    Message = "已根据本轮人工接待复盘加入新的可复用知识"
+                    Message = "已根据本轮人工接待复盘加入新的可复用知识，并建立初始可靠度"
                 };
             }
         }
@@ -210,9 +220,7 @@ namespace Bot.ChromeNs
         private static void RaiseChanged()
         {
             // QueueLearn/SaveLearned raises this event from KnowledgeLearningService.
-            // Reuse the public event through a tiny no-op source registration is impossible,
-            // so the knowledge UI will also refresh on its normal reload path. The persisted
-            // knowledge is immediately visible to reply matching because BotFeatureStore is re-read.
+            // Reviewed knowledge is immediately visible because BotFeatureStore is re-read by routing.
         }
 
         private static string StripAiMarker(string value)
