@@ -59,6 +59,7 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Grid.Row="0" Grid.ColumnSpan="2" Text="Bot 连接配置" FontSize="16" FontWeight="Bold" Foreground="#1F2937" Margin="0 0 0 12" />
@@ -85,11 +86,15 @@
                             <CheckBox Grid.Column="1" x:Name="chkControlPlaneVision" Content="启用图片理解" Margin="14 0 0 0" VerticalAlignment="Center" />
                         </Grid>
 
-                        <TextBlock Grid.Row="5" Grid.Column="0" Text="管理后台地址" VerticalAlignment="Center" Foreground="#344054" />
-                        <TextBox Grid.Row="5" Grid.Column="1" x:Name="txtControlPlaneAdminUrl" Margin="0 4" FontFamily="Consolas"
+                        <TextBlock Grid.Row="5" Grid.Column="0" Text="语义模型（可选）" VerticalAlignment="Center" Foreground="#344054" />
+                        <TextBox Grid.Row="5" Grid.Column="1" x:Name="txtControlPlaneEmbeddingModel" Margin="0 4" FontFamily="Consolas"
+                                 ToolTip="填写上游真实支持的 OpenAI 兼容 Embedding 模型名，例如 text-embedding-3-small。留空时完全禁用语义向量检索并自动使用本地混合检索。" />
+
+                        <TextBlock Grid.Row="6" Grid.Column="0" Text="管理后台地址" VerticalAlignment="Center" Foreground="#344054" />
+                        <TextBox Grid.Row="6" Grid.Column="1" x:Name="txtControlPlaneAdminUrl" Margin="0 4" FontFamily="Consolas"
                                  ToolTip="可与服务端地址相同，也可填写独立后台域名" />
 
-                        <WrapPanel Grid.Row="6" Grid.Column="1" Margin="0 10 0 0">
+                        <WrapPanel Grid.Row="7" Grid.Column="1" Margin="0 10 0 0">
                             <Button x:Name="btnSaveControlPlane" Content="保存服务端连接" Click="btnSaveControlPlane_Click" Background="#2563EB" Foreground="White" BorderBrush="#2563EB" />
                             <Button x:Name="btnTestControlPlane" Content="测试连接与文本调用" Click="btnTestControlPlane_Click" />
                             <Button x:Name="btnTestBotFlow" Content="测试 Bot 真实流程" Click="btnTestBotFlow_Click" Background="#0F766E" Foreground="White" BorderBrush="#0F766E"
@@ -115,7 +120,7 @@
                     <StackPanel>
                         <TextBlock Text="工作方式" FontSize="15" FontWeight="Bold" Foreground="#1F2937" />
                         <TextBlock Margin="0 8 0 0" Foreground="{StaticResource Muted}" TextWrapping="Wrap"
-                                   Text="• Bot 不再保存中转站 ApiKey，也不直接访问中转站。&#x0a;• 服务端按供应商 → 模型 → 请求协议顺序自动容错。&#x0a;• 普通测试只验证指定主模型；深度测试可发现全部模型并验证 Responses、Chat、Legacy 与视觉协议。&#x0a;• 定时深测会在主模型不可用时提升最新可用模型，并更新备用模型池。" />
+                                   Text="• Bot 不再保存中转站 ApiKey，也不直接访问中转站。&#x0a;• 服务端按供应商 → 模型 → 请求协议顺序自动容错。&#x0a;• 可选语义模型只用于知识 Embedding 检索，失败或留空会立即降级到本地混合检索。&#x0a;• 普通测试只验证指定主模型；深度测试可发现全部模型并验证 Responses、Chat、Legacy 与视觉协议。&#x0a;• 定时深测会在主模型不可用时提升最新可用模型，并更新备用模型池。" />
                     </StackPanel>
                 </Border>
 

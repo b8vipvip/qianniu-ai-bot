@@ -37,6 +37,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SmartReplyRouterService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\SemanticEmbeddingService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\SemanticEmbeddingService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs" />
   </ItemGroup>
