@@ -67,6 +67,10 @@ namespace Bot.ChromeNs
                         {
                             entry.Control.SetStatus("已被买家新消息替代，旧答案不会发送", false);
                         }
+                        if (newerTurnDuringGeneration)
+                        {
+                            ReplyQualityMetricsService.RecordCancellation(true);
+                        }
                         var replacement = new Entry();
                         if (!Entries.TryUpdate(key, replacement, entry)) continue;
                         continue;
@@ -157,6 +161,16 @@ namespace Bot.ChromeNs
                 + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds)
                 + ", source=" + (source ?? string.Empty));
 
+            if (!string.IsNullOrWhiteSpace(answer)
+                && !answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                ReplyQualityMetricsService.RecordRoute(ResolveQualityRoute(source), false, 0);
+                ReplyQualityMetricsService.RecordAnswerReady(
+                    Math.Max(0, (long)(answerReadyAt - answerStartedAt).TotalMilliseconds),
+                    Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds),
+                    Params.Robot.GetIsAutoReply());
+            }
+
             SlowResponseAnomalyService.QueueIfSlow(
                 seller,
                 buyer,
@@ -188,6 +202,7 @@ namespace Bot.ChromeNs
                     entry.Control.SetStatus("检测到客服已人工回复，停止等待旧AI答案", true);
                 }
             }
+            ReplyQualityMetricsService.RecordCancellation(false);
             Log.Info("回复进度因人工客服介入结束: seller=" + seller + ", buyer=" + buyer
                 + ", reply=" + (sellerReply ?? string.Empty));
         }
@@ -291,6 +306,25 @@ namespace Bot.ChromeNs
             }
             var merged = existing + "\n" + latest;
             return merged.Length <= 1600 ? merged : merged.Substring(merged.Length - 1600);
+        }
+
+        private static string ResolveQualityRoute(string source)
+        {
+            source = (source ?? string.Empty).Trim();
+            if (source.IndexOf("本地直答", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "DIRECT_KNOWLEDGE";
+            if (source.IndexOf("知识上下文", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("本地知识库上下文", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "CONTEXTUAL_KNOWLEDGE";
+            if (source.IndexOf("视觉", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "VISION";
+            if (source.IndexOf("转人工", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("人工确认", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "MANUAL";
+            if (source.IndexOf("本地", StringComparison.OrdinalIgnoreCase) >= 0
+                || source.IndexOf("预设", StringComparison.OrdinalIgnoreCase) >= 0)
+                return "PRESET";
+            return "AI_GENERAL";
         }
     }
 }

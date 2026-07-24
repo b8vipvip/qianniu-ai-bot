@@ -53,6 +53,10 @@ namespace Bot.ChromeNs
                     candidateAnswer,
                     knowledge,
                     false);
+                ReplyQualityMetricsService.RecordValidation(
+                    validation.Action,
+                    validation.Issues,
+                    false);
                 if (validation.Action == AnswerValidationAction.Manual)
                 {
                     return BuildBlockedResult("发送前校验要求人工确认：" + validation.Reason);
@@ -70,6 +74,7 @@ namespace Bot.ChromeNs
                     if (string.IsNullOrWhiteSpace(repaired)
                         || repaired.StartsWith("错误：", StringComparison.Ordinal))
                     {
+                        ReplyQualityMetricsService.RecordRepair(false);
                         return BuildBlockedResult("发送前校验重答失败，已阻止自动发送");
                     }
 
@@ -80,11 +85,17 @@ namespace Bot.ChromeNs
                         repaired,
                         knowledge,
                         true);
+                    ReplyQualityMetricsService.RecordValidation(
+                        secondValidation.Action,
+                        secondValidation.Issues,
+                        true);
                     if (secondValidation.Action != AnswerValidationAction.Pass)
                     {
+                        ReplyQualityMetricsService.RecordRepair(false);
                         return BuildBlockedResult("修正后的答案仍未通过发送前校验：" + secondValidation.Reason);
                     }
 
+                    ReplyQualityMetricsService.RecordRepair(true);
                     candidateAnswer = repaired;
                     validationRegenerated = true;
                     validationSource = "AI校验重答";
@@ -121,6 +132,7 @@ namespace Bot.ChromeNs
                 return result;
             }
 
+            ReplyQualityMetricsService.RecordDuplicateRewrite();
             knowledge = knowledge ?? ResolveKnowledge(seller, buyer, question, result.Answer);
             var regenerated = result.Regenerated
                 ? BuildSafeFallback(question)
@@ -144,6 +156,10 @@ namespace Bot.ChromeNs
                 question,
                 regenerated,
                 knowledge,
+                true);
+            ReplyQualityMetricsService.RecordValidation(
+                duplicateValidation.Action,
+                duplicateValidation.Issues,
                 true);
             if (duplicateValidation.Action != AnswerValidationAction.Pass)
             {

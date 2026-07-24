@@ -71,6 +71,7 @@ namespace Bot.ChromeNs
                         previousAnswer,
                         answer,
                         evidenceType);
+                    ReplyQualityMetricsService.RecordHumanEvidence(evidenceType);
 
                     if (Normalize(previousAnswer) == normalizedAnswer)
                     {
@@ -124,6 +125,7 @@ namespace Bot.ChromeNs
                     && KnowledgeAiService.ContentHash(x.Title, x.Answer) == contentHash))
                 {
                     KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
+                    ReplyQualityMetricsService.RecordHumanEvidence("human_confirmed");
                     return new KnowledgeLearningResult
                     {
                         Success = true,
@@ -147,6 +149,7 @@ namespace Bot.ChromeNs
                 list.Add(added);
                 BotFeatureStore.SaveKnowledgeBase(list);
                 KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
+                ReplyQualityMetricsService.RecordHumanEvidence("human_confirmed");
                 RaiseChanged();
                 return new KnowledgeLearningResult
                 {
