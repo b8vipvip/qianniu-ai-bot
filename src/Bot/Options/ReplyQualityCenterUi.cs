@@ -306,8 +306,7 @@ namespace Bot.Options
                 FontWeight = weight,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalAlignment = VerticalAlignment.Center,
-                Padding = new Thickness(10),
-                Margin = new Thickness(0, 0, 8, 0),
+                Margin = new Thickness(8, 4, 8, 4),
                 Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
                 Foreground = new SolidColorBrush(Color.FromRgb(30, 41, 59))
             };
