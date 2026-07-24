@@ -17,13 +17,14 @@ namespace Bot.Options
             return new JObject
             {
                 ["kind"] = "qianniu-control-plane-config",
-                ["version"] = 1,
+                ["version"] = 2,
                 ["exportedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                 ["serverUrl"] = NormalizeServerUrl(txtControlPlaneUrl.Text),
                 ["clientToken"] = (pwdControlPlaneToken.Password ?? string.Empty).Trim(),
                 ["textRoute"] = (txtControlPlaneTextRoute.Text ?? string.Empty).Trim(),
                 ["visionRoute"] = (txtControlPlaneVisionRoute.Text ?? string.Empty).Trim(),
                 ["visionEnabled"] = chkControlPlaneVision.IsChecked == true,
+                ["embeddingModel"] = (txtControlPlaneEmbeddingModel.Text ?? string.Empty).Trim(),
                 ["adminUrl"] = NormalizeServerUrl(txtControlPlaneAdminUrl.Text)
             };
         }
@@ -95,6 +96,7 @@ namespace Bot.Options
                 chkControlPlaneVision.IsChecked = bool.TryParse(
                     (obj["visionEnabled"] ?? "false").ToString(),
                     out visionEnabled) && visionEnabled;
+                txtControlPlaneEmbeddingModel.Text = (obj["embeddingModel"] ?? string.Empty).ToString();
                 txtControlPlaneAdminUrl.Text = (obj["adminUrl"] ?? obj["serverUrl"] ?? string.Empty).ToString();
 
                 string error;
