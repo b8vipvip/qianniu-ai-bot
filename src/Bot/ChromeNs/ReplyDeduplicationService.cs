@@ -34,12 +34,77 @@ namespace Bot.ChromeNs
             string question,
             string candidateAnswer)
         {
+            var knowledge = ResolveKnowledge(seller, buyer, question, candidateAnswer);
+            var validationRegenerated = false;
+            var validationSource = string.Empty;
+            var exactTrustedKnowledge = knowledge != null
+                && SameAnswer(knowledge.Answer, candidateAnswer);
+
+            // 本地知识原文已经由 Smart Reply Router 的适用条件和可靠度门槛审核，
+            // 这里主要审核 AI 生成、上下文改写和重复重答结果，避免对可信固定答案再次调用 AI。
+            if (!exactTrustedKnowledge
+                && !string.IsNullOrWhiteSpace(candidateAnswer)
+                && !candidateAnswer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                var validation = PreSendAnswerValidator.Validate(
+                    seller,
+                    buyer,
+                    question,
+                    candidateAnswer,
+                    knowledge,
+                    false);
+                if (validation.Action == AnswerValidationAction.Manual)
+                {
+                    return BuildBlockedResult("发送前校验要求人工确认：" + validation.Reason);
+                }
+                if (validation.Action == AnswerValidationAction.Regenerate)
+                {
+                    var repaired = RegenerateInvalidAnswer(
+                        seller,
+                        buyer,
+                        question,
+                        candidateAnswer,
+                        knowledge,
+                        validation);
+                    repaired = BotFeatureStore.ApplyOutputPolicy(repaired);
+                    if (string.IsNullOrWhiteSpace(repaired)
+                        || repaired.StartsWith("错误：", StringComparison.Ordinal))
+                    {
+                        return BuildBlockedResult("发送前校验重答失败，已阻止自动发送");
+                    }
+
+                    var secondValidation = PreSendAnswerValidator.Validate(
+                        seller,
+                        buyer,
+                        question,
+                        repaired,
+                        knowledge,
+                        true);
+                    if (secondValidation.Action != AnswerValidationAction.Pass)
+                    {
+                        return BuildBlockedResult("修正后的答案仍未通过发送前校验：" + secondValidation.Reason);
+                    }
+
+                    candidateAnswer = repaired;
+                    validationRegenerated = true;
+                    validationSource = "AI校验重答";
+                    KnowledgeLearningService.RegisterAnswerSource(
+                        seller,
+                        buyer,
+                        question,
+                        candidateAnswer,
+                        validationSource);
+                    Log.Info("发送前答案校验已完成一次安全重答: seller="
+                        + seller + ", buyer=" + buyer);
+                }
+            }
+
             var result = new ReplyDeduplicationResult
             {
                 Answer = BotOutboundMessageFormatter.EnsureAiMarker(candidateAnswer),
                 PreviousAnswer = string.Empty,
-                Source = string.Empty,
-                Regenerated = false
+                Source = validationSource,
+                Regenerated = validationRegenerated
             };
 
             if (string.IsNullOrWhiteSpace(result.Answer)
@@ -56,8 +121,10 @@ namespace Bot.ChromeNs
                 return result;
             }
 
-            var knowledge = ResolveKnowledge(seller, buyer, question, result.Answer);
-            var regenerated = Regenerate(seller, buyer, question, previousAnswer, knowledge);
+            knowledge = knowledge ?? ResolveKnowledge(seller, buyer, question, result.Answer);
+            var regenerated = result.Regenerated
+                ? BuildSafeFallback(question)
+                : Regenerate(seller, buyer, question, previousAnswer, knowledge);
             if (string.IsNullOrWhiteSpace(regenerated)
                 || regenerated.StartsWith("错误：", StringComparison.Ordinal)
                 || SameAnswer(previousAnswer, regenerated))
@@ -71,9 +138,21 @@ namespace Bot.ChromeNs
                 regenerated = "如果前面的步骤都试过仍无效，建议转人工进一步核查。";
             }
 
+            var duplicateValidation = PreSendAnswerValidator.Validate(
+                seller,
+                buyer,
+                question,
+                regenerated,
+                knowledge,
+                true);
+            if (duplicateValidation.Action != AnswerValidationAction.Pass)
+            {
+                return BuildBlockedResult("重复答案重答未通过发送前校验：" + duplicateValidation.Reason);
+            }
+
             result.Answer = BotOutboundMessageFormatter.EnsureAiMarker(regenerated);
             result.PreviousAnswer = previousAnswer;
-            result.Source = knowledge == null ? "AI重答" : "本地知识库重答";
+            result.Source = result.Regenerated ? "AI校验重答+重复兜底" : (knowledge == null ? "AI重答" : "本地知识库重答");
             result.Regenerated = true;
             KnowledgeLearningService.RegisterAnswerSource(
                 seller,
@@ -168,6 +247,55 @@ namespace Bot.ChromeNs
                 : null;
         }
 
+        private static string RegenerateInvalidAnswer(
+            string seller,
+            string buyer,
+            string question,
+            string invalidAnswer,
+            KnowledgeBaseEntry knowledge,
+            AnswerValidationResult validation)
+        {
+            try
+            {
+                var timeline = ConversationContextStore.BuildTimelineText(seller, buyer, question, 12);
+                var evidence = PreSendAnswerValidator.BuildEvidenceText(knowledge);
+                var messages = new JArray
+                {
+                    new JObject
+                    {
+                        ["role"] = "system",
+                        ["content"] = "你是电商客服答案修正器。" + validation.RegenerationInstruction
+                    },
+                    new JObject
+                    {
+                        ["role"] = "user",
+                        ["content"] = (string.IsNullOrWhiteSpace(evidence)
+                                ? "【可靠事实】未提供可确认的店铺事实，禁止自行补充。"
+                                : evidence)
+                            + "\n【买家当前问题】\n" + (question ?? string.Empty)
+                            + "\n【未通过校验的原答案】\n" + BotOutboundMessageFormatter.StripAiMarker(invalidAnswer)
+                            + (string.IsNullOrWhiteSpace(timeline)
+                                ? string.Empty
+                                : "\n【同一买家最近时间线】\n" + timeline)
+                    }
+                };
+                var response = MyOpenAI.CallStructuredChat(
+                    messages,
+                    220,
+                    0.10,
+                    45,
+                    CancellationToken.None);
+                return response != null && response.Success
+                    ? (response.Answer ?? string.Empty).Trim()
+                    : string.Empty;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("发送前答案校验重答失败：" + ex.Message);
+                return string.Empty;
+            }
+        }
+
         private static string Regenerate(
             string seller,
             string buyer,
@@ -214,6 +342,17 @@ namespace Bot.ChromeNs
                 Log.Info("重复答案重新生成失败，使用安全兜底：" + ex.Message);
                 return string.Empty;
             }
+        }
+
+        private static ReplyDeduplicationResult BuildBlockedResult(string reason)
+        {
+            return new ReplyDeduplicationResult
+            {
+                Answer = "错误：" + (reason ?? "发送前校验未通过"),
+                PreviousAnswer = string.Empty,
+                Source = "发送前校验",
+                Regenerated = false
+            };
         }
 
         private static string BuildSafeFallback(string question)
