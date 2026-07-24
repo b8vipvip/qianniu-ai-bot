@@ -48,6 +48,36 @@ namespace Bot.ChromeNs
                 return result;
             }
 
+            // Phase 4: every generated text answer must pass the local pre-send validator.
+            // Only repairable findings may trigger one compact repair call; a repaired answer is checked again.
+            var validation = PreSendAnswerValidator.ValidateAndRepair(
+                seller,
+                buyer,
+                question,
+                result.Answer,
+                true);
+            result.Answer = validation.Answer;
+            if (validation.Decision == AnswerValidationDecision.Block
+                || string.IsNullOrWhiteSpace(result.Answer)
+                || result.Answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                result.Source = "发送前校验阻止";
+                Log.Info("发送前答案已阻止: seller=" + seller
+                    + ", buyer=" + buyer + ", reason=" + (validation.Reason ?? string.Empty));
+                return result;
+            }
+            if (validation.Repaired)
+            {
+                result.Source = "发送前校验修复";
+                result.Regenerated = true;
+                KnowledgeLearningService.RegisterAnswerSource(
+                    seller,
+                    buyer,
+                    question,
+                    BotOutboundMessageFormatter.StripAiMarker(result.Answer),
+                    result.Source);
+            }
+
             string previousAnswer;
             DateTime previousAt;
             if (!TryGetLastDelivered(seller, buyer, out previousAnswer, out previousAt)
@@ -71,8 +101,27 @@ namespace Bot.ChromeNs
                 regenerated = "如果前面的步骤都试过仍无效，建议转人工进一步核查。";
             }
 
-            result.Answer = BotOutboundMessageFormatter.EnsureAiMarker(regenerated);
+            // Duplicate regeneration already consumed its one AI regeneration. Revalidate locally only;
+            // never stack another repair call on top of the duplicate-reply repair path.
+            var regeneratedValidation = PreSendAnswerValidator.ValidateAndRepair(
+                seller,
+                buyer,
+                question,
+                regenerated,
+                false);
+            result.Answer = regeneratedValidation.Answer;
             result.PreviousAnswer = previousAnswer;
+            if (regeneratedValidation.Decision == AnswerValidationDecision.Block
+                || string.IsNullOrWhiteSpace(result.Answer)
+                || result.Answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                result.Source = "重复答案重答后校验阻止";
+                result.Regenerated = true;
+                Log.Info("重复答案重答后仍未通过发送前校验: seller=" + seller
+                    + ", buyer=" + buyer + ", reason=" + regeneratedValidation.Reason);
+                return result;
+            }
+
             result.Source = knowledge == null ? "AI重答" : "本地知识库重答";
             result.Regenerated = true;
             KnowledgeLearningService.RegisterAnswerSource(
@@ -81,7 +130,7 @@ namespace Bot.ChromeNs
                 question,
                 BotOutboundMessageFormatter.StripAiMarker(result.Answer),
                 result.Source);
-            Log.Info("检测到与上一轮完全相同的答案，已重新生成。seller="
+            Log.Info("检测到与上一轮完全相同的答案，已重新生成并通过发送前校验。seller="
                 + seller + ", buyer=" + buyer + ", source=" + result.Source);
             return result;
         }
