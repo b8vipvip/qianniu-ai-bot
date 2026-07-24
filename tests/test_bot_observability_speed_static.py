@@ -37,11 +37,14 @@ def test_question_and_answer_timestamps_are_visible_before_answer():
 
 def test_speed_optimizations_are_guarded():
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    timing = read("src/Bot/ChromeNs/AdaptiveReplyTimingService.cs")
     context = read("src/Bot/ChromeNs/ConversationContextStore.cs")
     qn = read("src/Bot/ChromeNs/QN.cs")
     ai = read("src/Bot/ChromeNs/MyOpenAI.cs")
-    assert "return 350;" in burst
-    assert "return 800;" in burst
+    assert "baseline = 350;" in burst
+    assert "baseline = 800;" in burst
+    assert "Clamp(adjusted, 300, 950)" in timing
+    assert "Clamp(adjusted, 650, 1550)" in timing
     assert "TimeSpan.FromSeconds(4)" in burst
     assert "Task.Run(() => RefreshRemoteHistory" in context
     assert "ConfirmStableAsync(220)" in qn

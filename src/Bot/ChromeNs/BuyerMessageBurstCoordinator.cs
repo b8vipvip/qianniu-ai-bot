@@ -197,6 +197,15 @@ namespace Bot.ChromeNs
                     return;
                 }
 
+                var previousReceivedAt = state.Items.Count == 0
+                    ? DateTime.MinValue
+                    : state.Items[state.Items.Count - 1].ReceivedAt;
+                AdaptiveReplyTimingService.RecordInterval(
+                    item.SellerNick,
+                    item.BuyerNick,
+                    previousReceivedAt,
+                    item.ReceivedAt);
+
                 if (state.Items.Count == 0) state.StartedAt = DateTime.Now;
                 state.Items.Add(item);
                 if (state.Items.Count > 12) state.Items.RemoveRange(0, state.Items.Count - 12);
@@ -330,14 +339,47 @@ namespace Bot.ChromeNs
                 return 80;
             }
 
-            var latest = (list.Last().DisplayText ?? string.Empty).Trim();
+            var latestItem = list.Last();
+            var latest = (latestItem.DisplayText ?? string.Empty).Trim();
             var compact = Regex.Replace(latest, @"\s+", string.Empty);
-            if (list.Count >= 6) return 420;
-            if (IncomingMessageSafety.IsMediaPlaceholder(latest)) return 700;
-            if (IsGreetingOnly(compact)) return 950;
-            if (IsOpenShortFragment(compact)) return 1200;
-            if (!EndsLikeCompleteSentence(compact) && compact.Length <= 24) return 800;
-            return 350;
+            int baseline;
+            AdaptiveDelayKind kind;
+            if (list.Count >= 6)
+            {
+                baseline = 420;
+                kind = AdaptiveDelayKind.DenseBurst;
+            }
+            else if (IncomingMessageSafety.IsMediaPlaceholder(latest))
+            {
+                baseline = 700;
+                kind = AdaptiveDelayKind.Media;
+            }
+            else if (IsGreetingOnly(compact))
+            {
+                baseline = 950;
+                kind = AdaptiveDelayKind.Greeting;
+            }
+            else if (IsOpenShortFragment(compact))
+            {
+                baseline = 1200;
+                kind = AdaptiveDelayKind.Fragment;
+            }
+            else if (!EndsLikeCompleteSentence(compact) && compact.Length <= 24)
+            {
+                baseline = 800;
+                kind = AdaptiveDelayKind.Fragment;
+            }
+            else
+            {
+                baseline = 350;
+                kind = AdaptiveDelayKind.Complete;
+            }
+
+            return AdaptiveReplyTimingService.AdjustDelay(
+                latestItem.SellerNick,
+                latestItem.BuyerNick,
+                baseline,
+                kind);
         }
 
         private static bool IsGreetingOnly(string text)
