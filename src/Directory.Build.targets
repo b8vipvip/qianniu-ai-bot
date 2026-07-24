@@ -46,6 +46,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\ReplyQualityMetricsService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\ReplyQualityMetricsService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs" />
   </ItemGroup>
@@ -126,6 +129,9 @@
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\ConversationSessionLearningUi.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\ConversationSessionLearningUi.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\ReplyQualityCenterUi.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\ReplyQualityCenterUi.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\OrderPlacedReplyDelaySettings.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\OrderPlacedReplyDelaySettings.cs" />
