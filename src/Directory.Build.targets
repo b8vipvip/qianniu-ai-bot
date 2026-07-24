@@ -43,6 +43,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\KnowledgePolicyProfileService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\KnowledgePolicyProfileService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\PreSendAnswerValidator.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\StorePromptProfileService.cs" />
   </ItemGroup>
