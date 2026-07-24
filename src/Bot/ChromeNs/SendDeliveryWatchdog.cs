@@ -98,11 +98,17 @@ namespace Bot.ChromeNs
                 if (!Pending.TryRemove(pending.Id, out removed) || !ReferenceEquals(removed, pending)) return;
                 if (delivered)
                 {
+                    ReplyQualityMetricsService.RecordSendResult(
+                        true,
+                        Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
                     Log.Info("发送回显监控确认成功: seller=" + pending.Seller
                         + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id);
                     return;
                 }
 
+                ReplyQualityMetricsService.RecordSendResult(
+                    false,
+                    Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
                 var reason = "答案已经生成并进入自动发送流程，但在 "
                     + (VerifyDelayMilliseconds / 1000) + " 秒内未检测到相同内容的卖家消息回显。"
                     + "可能是误走智能提示接口、会话切换失败、输入框/发送按钮操作未真正送达，或发送结果被错误判定为成功。";
@@ -137,8 +143,17 @@ namespace Bot.ChromeNs
             var confirmed = false;
             foreach (var pair in matched)
             {
-                PendingDelivery ignored;
-                if (Pending.TryRemove(pair.Key, out ignored)) confirmed = true;
+                PendingDelivery removed;
+                if (Pending.TryRemove(pair.Key, out removed))
+                {
+                    confirmed = true;
+                    if (removed != null)
+                    {
+                        ReplyQualityMetricsService.RecordSendResult(
+                            true,
+                            Math.Max(0, (long)(DateTime.Now - removed.DetectedAt).TotalMilliseconds));
+                    }
+                }
             }
             if (confirmed)
             {
