@@ -20,6 +20,7 @@ namespace Bot
         {
             SlowResponseDiagnosticsUi.Initialize();
             ConversationSessionLearningUi.Initialize();
+            ReplyQualityCenterUi.Initialize();
             OrderPlacedReplyDelaySettings.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
@@ -36,11 +37,13 @@ namespace Bot
         void App_Exit(object sender, ExitEventArgs e)
         {
             try { AdaptiveReplyTimingService.Flush(); } catch { }
+            try { ReplyQualityMetricsService.Flush(); } catch { }
         }
 
         void App_SessionEnding(object sender, SessionEndingCancelEventArgs e)
         {
             try { AdaptiveReplyTimingService.Flush(); } catch { }
+            try { ReplyQualityMetricsService.Flush(); } catch { }
         }
 
         void App_Startup(object sender, StartupEventArgs e)
