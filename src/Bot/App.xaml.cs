@@ -35,12 +35,12 @@ namespace Bot
 
         void App_Exit(object sender, ExitEventArgs e)
         {
-
+            try { AdaptiveReplyTimingService.Flush(); } catch { }
         }
 
         void App_SessionEnding(object sender, SessionEndingCancelEventArgs e)
         {
-
+            try { AdaptiveReplyTimingService.Flush(); } catch { }
         }
 
         void App_Startup(object sender, StartupEventArgs e)
