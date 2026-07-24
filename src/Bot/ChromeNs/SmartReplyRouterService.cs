@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using BotLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -231,7 +232,6 @@ namespace Bot.ChromeNs
                     continue;
                 }
 
-                // 允许已经缓存的强语义候选进入 Top3，但它永远不能只靠向量直接固定回复。
                 if (scored.Score < 0.72) continue;
                 merged.Add(new SmartKnowledgeCandidate
                 {
@@ -434,7 +434,6 @@ namespace Bot.ChromeNs
             if (Compact(question).Length < 4) return false;
             if (ContextCues.Any(x => Compact(question).Contains(Compact(x)))) return false;
             if (IsUnsafeDirectAnswer(best.Entry.Answer)) return false;
-            // 语义向量只能辅助召回；直接固定回复仍必须有很强的原始文本证据。
             if (best.ExactQuestionMatch && best.RetrievalScore >= 0.95) return true;
             return best.FinalScore >= 0.90 && margin >= 0.14 && best.RetrievalScore >= 0.88;
         }
