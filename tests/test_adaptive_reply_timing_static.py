@@ -8,16 +8,17 @@ def read(path):
 
 
 def test_adaptive_timing_learns_only_realistic_intervals_and_is_bounded():
-    code = read("src/Bot/ChromeNs/AdaptiveReplyTimingService.cs")
-    assert "interval < 120 || interval > 4500" in code
-    assert "RecentIntervalsMs.Count > 24" in code
-    assert "p75 + 180" in code
-    assert "Clamp(p75 + 180, 350, 1600)" in code
-    assert "profile.RecentIntervalsMs.Count < 3" in code
-    assert "AdaptiveDelayKind.Fragment" in code
-    assert "AdaptiveDelayKind.Complete" in code
-    assert "Clamp(adjusted, 300, 950)" in code
-    assert "Clamp(adjusted, 650, 1550)" in code
+    service = read("src/Bot/ChromeNs/AdaptiveReplyTimingService.cs")
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    assert "interval < 120 || interval > 4500" in service
+    assert "RecentIntervalsMs.Count > 24" in service
+    assert "p75 + 180" in service
+    assert "Clamp(p75 + 180, 350, 1600)" in service
+    assert "profile.RecentIntervalsMs.Count < 3" in service
+    assert "AdaptiveDelayKind.Fragment" in service
+    assert "AdaptiveDelayKind.Complete" in coordinator
+    assert "Clamp(adjusted, 300, 950)" in service
+    assert "Clamp(adjusted, 650, 1550)" in service
 
 
 def test_burst_coordinator_records_interval_after_duplicate_filter():
