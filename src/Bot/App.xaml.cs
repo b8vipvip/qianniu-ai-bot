@@ -28,6 +28,7 @@ namespace Bot
             Bot.Knowledge.KnowledgePolicyProfileUi.Initialize();
             ConversationSessionLearningService.Initialize();
             BuyerStreamingReplyPipeline.Initialize();
+            VisionFollowUpContextPipeline.Initialize();
             Startup += App_Startup;
             SessionEnding += App_SessionEnding;
             Exit += App_Exit;
