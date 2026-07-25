@@ -165,6 +165,7 @@ namespace Bot.ChromeNs
             public bool WorkerRunning;
             public int Version;
             public DateTime StartedAt = DateTime.MinValue;
+            public BotActivityLease ActivityLease;
         }
 
         private readonly ConcurrentDictionary<string, BurstState> _states =
@@ -206,6 +207,10 @@ namespace Bot.ChromeNs
                     previousReceivedAt,
                     item.ReceivedAt);
 
+                if (state.ActivityLease == null)
+                {
+                    state.ActivityLease = BotActivityCoordinator.Begin("买家消息聚合/回复", item.SellerNick, item.BuyerNick);
+                }
                 if (state.Items.Count == 0) state.StartedAt = DateTime.Now;
                 state.Items.Add(item);
                 if (state.Items.Count > 12) state.Items.RemoveRange(0, state.Items.Count - 12);
@@ -240,6 +245,7 @@ namespace Bot.ChromeNs
                 state.DelayCancellation.Dispose();
                 state.DelayCancellation = new CancellationTokenSource();
                 state.WorkerRunning = false;
+                DisposeActivity(state);
             }
 
             BurstState ignored;
@@ -260,6 +266,7 @@ namespace Bot.ChromeNs
                     if (state.Items.Count < 1)
                     {
                         state.WorkerRunning = false;
+                        DisposeActivity(state);
                         BurstState empty;
                         _states.TryRemove(key, out empty);
                         return;
@@ -320,6 +327,7 @@ namespace Bot.ChromeNs
                         && state.Items.Count < 1
                         && !state.WorkerRunning)
                     {
+                        DisposeActivity(state);
                         BurstState ignored;
                         _states.TryRemove(key, out ignored);
                     }
@@ -409,6 +417,13 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(text)) return false;
             var last = text[text.Length - 1];
             return "。！？!?；;".IndexOf(last) >= 0;
+        }
+
+        private static void DisposeActivity(BurstState state)
+        {
+            if (state == null || state.ActivityLease == null) return;
+            try { state.ActivityLease.Dispose(); } catch { }
+            state.ActivityLease = null;
         }
 
         private static string Key(string seller, string buyer)

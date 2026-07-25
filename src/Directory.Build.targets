@@ -58,6 +58,15 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotConversationHistoryStore.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotConversationHistoryStore.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotActivityCoordinator.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotActivityCoordinator.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderEventHub.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderEventHub.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\NewOrderAttentionQueue.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\NewOrderAttentionQueue.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs" />
   </ItemGroup>
@@ -138,6 +147,9 @@
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\OrderPlacedReplyDelaySettings.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\OrderPlacedReplyDelaySettings.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\OrderAttentionSettings.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\OrderAttentionSettings.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs" />
