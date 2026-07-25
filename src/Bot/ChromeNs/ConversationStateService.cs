@@ -117,6 +117,9 @@ namespace Bot.ChromeNs
                     .Append(string.Join("；", state.ConfirmedFacts.Take(3).Select(x => Safe(x, 220))))
                     .Append("\n");
             }
+
+            // 详细店铺规则不再作为每次都携带的固定提示词；这里按当前会话状态本地选择Top 3。
+            sb.Append(StorePromptProfileService.BuildTextRulesAddon(state));
             return sb.ToString();
         }
 
