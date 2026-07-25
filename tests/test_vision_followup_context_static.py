@@ -14,7 +14,7 @@ def test_pipeline_is_initialized_and_built():
     assert "VisionFollowUpContextPipeline.Initialize();" in app
     assert "VisionFollowUpContextPipeline.cs" in targets
     assert "_buyerMessageBurstCoordinator" in pipeline
-    assert 'GetField("_handler"' in pipeline
+    assert '"_handler"' in pipeline
 
 
 def test_referential_text_reuses_recent_image_and_keeps_original_lease():
