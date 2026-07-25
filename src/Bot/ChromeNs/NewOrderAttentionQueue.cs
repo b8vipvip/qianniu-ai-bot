@@ -86,6 +86,18 @@ namespace Bot.ChromeNs
 
     public partial class QN
     {
+        private sealed class AutoFocusCheck
+        {
+            public bool Allowed;
+            public string Reason;
+        }
+
+        private sealed class InputboxCheck
+        {
+            public bool Success;
+            public bool Empty;
+        }
+
         private readonly object _orderAttentionSync = new object();
         private readonly List<OrderAttentionItem> _orderAttentionItems = new List<OrderAttentionItem>();
         private int _orderAttentionWorkerRunning;
@@ -147,21 +159,22 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    string reason;
-                    if (!await CanAutoFocusOrderAsync(item.Snapshot, out reason))
+                    var check = await CanAutoFocusOrderAsync(item.Snapshot);
+                    if (!check.Allowed)
                     {
                         item.Attempts++;
-                        UpdateDeferredUi(item, reason);
+                        UpdateDeferredUi(item, check.Reason);
                         await Task.Delay(700);
                         continue;
                     }
 
                     // 二次稳定确认，避免刚判定为空闲时恰好开始生成或人工输入。
                     await Task.Delay(650);
-                    if (!await CanAutoFocusOrderAsync(item.Snapshot, out reason))
+                    check = await CanAutoFocusOrderAsync(item.Snapshot);
+                    if (!check.Allowed)
                     {
                         item.Attempts++;
-                        UpdateDeferredUi(item, reason);
+                        UpdateDeferredUi(item, check.Reason);
                         await Task.Delay(500);
                         continue;
                     }
@@ -232,66 +245,37 @@ namespace Bot.ChromeNs
             OrderAttentionUiService.SetDeferred(item.Snapshot, reason);
         }
 
-        private async Task<bool> CanAutoFocusOrderAsync(OrderSnapshot snapshot, out string reason)
+        private async Task<AutoFocusCheck> CanAutoFocusOrderAsync(OrderSnapshot snapshot)
         {
-            reason = string.Empty;
-            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Buyer))
-            {
-                reason = "订单缺少买家信息";
-                return false;
-            }
-            if (!Params.Robot.CanUseRobotReal)
-            {
-                reason = "Bot当前未启用";
-                return false;
-            }
-            if (cdp == null)
-            {
-                reason = "千牛CDP尚未连接";
-                return false;
-            }
-            if (_incomingMessageGate.CurrentCount < 1)
-            {
-                reason = "正在处理千牛新消息";
-                return false;
-            }
-            if (_sendGate.CurrentCount < 1)
-            {
-                reason = "正在切换会话或发送消息";
-                return false;
-            }
-            if (_backgroundRecoveryGate.CurrentCount < 1)
-            {
-                reason = "正在补抓后台消息";
-                return false;
-            }
-            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return false;
+            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.Buyer)) return Denied("订单缺少买家信息");
+            if (!Params.Robot.CanUseRobotReal) return Denied("Bot当前未启用");
+            if (cdp == null) return Denied("千牛CDP尚未连接");
+            if (_incomingMessageGate.CurrentCount < 1) return Denied("正在处理千牛新消息");
+            if (_sendGate.CurrentCount < 1) return Denied("正在切换会话或发送消息");
+            if (_backgroundRecoveryGate.CurrentCount < 1) return Denied("正在补抓后台消息");
 
-            bool inputEmpty;
-            if (!await TryGetInputboxEmptyAsync(out inputEmpty))
-            {
-                reason = "暂时无法确认输入框状态";
-                return false;
-            }
-            if (!inputEmpty)
+            string reason;
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return Denied(reason);
+
+            var input = await TryGetInputboxEmptyAsync();
+            if (!input.Success) return Denied("暂时无法确认输入框状态");
+            if (!input.Empty)
             {
                 BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容");
-                reason = "客服正在输入消息";
-                return false;
+                return Denied("客服正在输入消息");
             }
 
             var current = await TryGetCurrentBuyerAsync();
             ObserveVisibleBuyer(snapshot.Seller, current);
-            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return false;
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return Denied(reason);
 
             var interval = OrderAttentionSettings.GetSwitchIntervalSeconds();
             if (_orderAttentionLastAutoFocusAt != DateTime.MinValue
                 && DateTime.Now - _orderAttentionLastAutoFocusAt < TimeSpan.FromSeconds(interval))
             {
-                reason = "等待最短自动切换间隔";
-                return false;
+                return Denied("等待最短自动切换间隔");
             }
-            return true;
+            return new AutoFocusCheck { Allowed = true, Reason = string.Empty };
         }
 
         private async Task<bool> FocusOrderBuyerAsync(OrderSnapshot snapshot)
@@ -301,10 +285,13 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    bool inputEmpty;
-                    if (!await TryGetInputboxEmptyAsync(out inputEmpty) || !inputEmpty)
+                    var input = await TryGetInputboxEmptyAsync();
+                    if (!input.Success || !input.Empty)
                     {
-                        if (!inputEmpty) BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
+                        if (input.Success && !input.Empty)
+                        {
+                            BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
+                        }
                         return false;
                     }
 
@@ -367,18 +354,16 @@ namespace Bot.ChromeNs
             catch { return string.Empty; }
         }
 
-        private async Task<bool> TryGetInputboxEmptyAsync(out bool empty)
+        private async Task<InputboxCheck> TryGetInputboxEmptyAsync()
         {
-            empty = true;
             try
             {
                 var task = IsInputboxEmpty();
                 var completed = await Task.WhenAny(task, Task.Delay(1200));
-                if (completed != task) return false;
-                empty = await task;
-                return true;
+                if (completed != task) return new InputboxCheck { Success = false, Empty = false };
+                return new InputboxCheck { Success = true, Empty = await task };
             }
-            catch { return false; }
+            catch { return new InputboxCheck { Success = false, Empty = false }; }
         }
 
         private void ObserveVisibleBuyer(string seller, string currentBuyer)
@@ -402,6 +387,11 @@ namespace Bot.ChromeNs
             {
                 BotActivityCoordinator.MarkHumanInteraction(seller, "客服或其他流程刚切换到买家 " + currentBuyer);
             }
+        }
+
+        private static AutoFocusCheck Denied(string reason)
+        {
+            return new AutoFocusCheck { Allowed = false, Reason = reason ?? string.Empty };
         }
 
         private static string AttentionKey(OrderSnapshot snapshot)
