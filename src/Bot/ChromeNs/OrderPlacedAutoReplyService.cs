@@ -5,12 +5,10 @@ using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
-using System.Globalization;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
 using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
@@ -24,6 +22,7 @@ namespace Bot.ChromeNs
         public DateTime EventTime { get; set; }
         public string ReservationKey { get; set; }
         public AutoReplyRuleConfig Config { get; set; }
+        public OrderSnapshot Snapshot { get; set; }
     }
 
     internal sealed class OrderPlacedReplyResolution
@@ -36,9 +35,6 @@ namespace Bot.ChromeNs
 
     internal static class OrderPlacedAutoReplyService
     {
-        private static readonly Regex OrderIdRegex = new Regex(
-            @"(?:订单号|订单编号|订单)\s*[:：#]?\s*(\d{8,})",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
         private static readonly ConcurrentDictionary<string, DateTime> Reservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
@@ -52,27 +48,53 @@ namespace Bot.ChromeNs
         {
             plan = null;
             if (!Params.Robot.CanUseRobotReal) return false;
-            var cfg = BotFeatureStore.GetAutoReplyRules();
-            if (cfg == null || !cfg.EnableOrderPlacedReply) return false;
 
-            var text = CollectText(message, messageText);
-            var orderId = ExtractOrderId(text);
-            if (string.IsNullOrWhiteSpace(orderId) || !LooksLikeOrderPlaced(text)) return false;
-
-            DateTime eventTime;
-            if (!TryGetMessageTime(message, out eventTime)) eventTime = DateTime.Now;
-            if (eventTime < botStartedAt.AddSeconds(-8))
+            OrderSnapshot snapshot;
+            if (!OrderCardParser.TryParse(
+                message,
+                messageText,
+                seller,
+                buyer,
+                "千牛消息/远端历史订单卡片",
+                out snapshot))
             {
-                Log.Info("下单自动消息已跳过历史订单: orderId=" + orderId + ", eventTime=" + eventTime.ToString("yyyy-MM-dd HH:mm:ss"));
                 return false;
             }
 
-            var key = Normalize(seller) + "#" + Normalize(buyer) + "#" + orderId;
+            if (snapshot.EventTime < botStartedAt.AddSeconds(-8))
+            {
+                Log.Info("订单事件已跳过历史卡片: orderId=" + snapshot.OrderId
+                    + ", eventTime=" + snapshot.EventTime.ToString("yyyy-MM-dd HH:mm:ss"));
+                return true;
+            }
+
+            var published = OrderEventHub.Publish(snapshot);
+            if (!published.Accepted)
+            {
+                return true;
+            }
+
+            if (snapshot.EventType == OrderEventType.Created || snapshot.EventType == OrderEventType.Paid)
+            {
+                var qn = QN.FindExistingBySellerNick(seller);
+                if (qn != null)
+                {
+                    qn.EnqueueNewOrderAttention(snapshot);
+                }
+            }
+
+            // 订单识别和空闲自动切换独立于“下单后自动发送”开关。
+            // 关闭自动发送时仍会生成右侧订单摘要并在空闲时切换，但不会给买家发消息。
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            if (cfg == null || !cfg.EnableOrderPlacedReply) return true;
+            if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return true;
+
+            var key = Normalize(seller) + "#" + Normalize(buyer) + "#" + snapshot.OrderId;
             var now = DateTime.Now;
             DateTime until;
             if (Reservations.TryGetValue(key, out until) && until > now)
             {
-                Log.Info("下单自动消息已去重: orderId=" + orderId + ", buyer=" + buyer);
+                Log.Info("下单自动消息已去重: orderId=" + snapshot.OrderId + ", buyer=" + buyer);
                 return true;
             }
 
@@ -82,11 +104,12 @@ namespace Bot.ChromeNs
             {
                 Seller = (seller ?? string.Empty).Trim(),
                 Buyer = (buyer ?? string.Empty).Trim(),
-                OrderId = orderId,
-                EventText = text,
-                EventTime = eventTime,
+                OrderId = snapshot.OrderId,
+                EventText = snapshot.EventText,
+                EventTime = snapshot.EventTime,
                 ReservationKey = key,
-                Config = cfg
+                Config = cfg,
+                Snapshot = snapshot
             };
             return true;
         }
@@ -153,15 +176,31 @@ namespace Bot.ChromeNs
             }
 
             var timeout = Math.Max(3, Math.Min(60, plan.Config.OrderPlacedApiTimeoutSeconds));
+            var snapshot = plan.Snapshot;
             var payload = new JObject
             {
-                ["event"] = "buyer_order_created",
+                ["event"] = snapshot != null && snapshot.EventType == OrderEventType.Paid
+                    ? "buyer_order_paid"
+                    : "buyer_order_created",
                 ["seller"] = plan.Seller,
                 ["buyer"] = plan.Buyer,
                 ["orderId"] = plan.OrderId,
                 ["eventTime"] = plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"),
                 ["message"] = Short(plan.EventText, 1200)
             };
+            if (snapshot != null)
+            {
+                payload["itemId"] = snapshot.ItemId ?? string.Empty;
+                payload["itemTitle"] = snapshot.ItemTitle ?? string.Empty;
+                payload["skuId"] = snapshot.SkuId ?? string.Empty;
+                payload["skuText"] = snapshot.SkuText ?? string.Empty;
+                payload["quantity"] = snapshot.Quantity;
+                payload["totalAmount"] = snapshot.TotalAmount.HasValue ? (JToken)snapshot.TotalAmount.Value : JValue.CreateNull();
+                payload["paidAmount"] = snapshot.PaidAmount.HasValue ? (JToken)snapshot.PaidAmount.Value : JValue.CreateNull();
+                payload["tradeStatus"] = snapshot.TradeStatus ?? string.Empty;
+                payload["isPaid"] = snapshot.IsPaid.HasValue ? (JToken)snapshot.IsPaid.Value : JValue.CreateNull();
+                payload["productUrl"] = snapshot.ProductUrl ?? string.Empty;
+            }
 
             try
             {
@@ -216,89 +255,19 @@ namespace Bot.ChromeNs
 
         private static string RenderTemplate(string template, OrderPlacedReplyPlan plan)
         {
+            var snapshot = plan == null ? null : plan.Snapshot;
             return (template ?? string.Empty)
-                .Replace("{客服}", plan.Seller ?? string.Empty)
-                .Replace("{买家}", plan.Buyer ?? string.Empty)
-                .Replace("{订单号}", plan.OrderId ?? string.Empty)
-                .Replace("{时间}", plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"))
+                .Replace("{客服}", plan == null ? string.Empty : plan.Seller ?? string.Empty)
+                .Replace("{买家}", plan == null ? string.Empty : plan.Buyer ?? string.Empty)
+                .Replace("{订单号}", plan == null ? string.Empty : plan.OrderId ?? string.Empty)
+                .Replace("{时间}", plan == null ? string.Empty : plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"))
+                .Replace("{商品}", snapshot == null ? string.Empty : snapshot.ItemTitle ?? string.Empty)
+                .Replace("{规格}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)
+                .Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())
+                .Replace("{金额}", snapshot == null || !snapshot.TotalAmount.HasValue ? string.Empty : snapshot.TotalAmount.Value.ToString("0.00"))
+                .Replace("{实付}", snapshot == null || !snapshot.PaidAmount.HasValue ? string.Empty : snapshot.PaidAmount.Value.ToString("0.00"))
+                .Replace("{订单状态}", snapshot == null ? string.Empty : snapshot.TradeStatus ?? string.Empty)
                 .Trim();
-        }
-
-        private static string CollectText(QNChatMessage message, string messageText)
-        {
-            var sb = new StringBuilder();
-            Append(sb, messageText);
-            if (message != null)
-            {
-                Append(sb, message.summary);
-                if (message.originalData != null)
-                {
-                    Append(sb, message.originalData.text);
-                    if (message.originalData.header != null)
-                    {
-                        Append(sb, message.originalData.header.title);
-                        Append(sb, message.originalData.header.summary);
-                    }
-                }
-            }
-            return Regex.Replace(sb.ToString(), @"\s+", " ").Trim();
-        }
-
-        private static void Append(StringBuilder sb, string value)
-        {
-            value = (value ?? string.Empty).Trim();
-            if (value.Length < 1) return;
-            if (sb.Length > 0) sb.Append(' ');
-            sb.Append(value);
-        }
-
-        private static string ExtractOrderId(string text)
-        {
-            var match = OrderIdRegex.Match(text ?? string.Empty);
-            return match.Success ? match.Groups[1].Value : string.Empty;
-        }
-
-        private static bool LooksLikeOrderPlaced(string text)
-        {
-            text = text ?? string.Empty;
-            return (text.Contains("件商品") && text.Contains("合计"))
-                || text.Contains("交易时间")
-                || text.Contains("买家已下单")
-                || text.Contains("订单创建成功");
-        }
-
-        private static bool TryGetMessageTime(QNChatMessage message, out DateTime localTime)
-        {
-            localTime = DateTime.MinValue;
-            if (message == null) return false;
-            return TryParseTime(message.sendTime, out localTime)
-                || TryParseTime(message.sortTimeMicrosecond, out localTime);
-        }
-
-        private static bool TryParseTime(string value, out DateTime localTime)
-        {
-            localTime = DateTime.MinValue;
-            if (string.IsNullOrWhiteSpace(value)) return false;
-            long raw;
-            if (long.TryParse(value.Trim(), out raw))
-            {
-                try
-                {
-                    if (raw > 1000000000000000L) localTime = DateTimeOffset.FromUnixTimeMilliseconds(raw / 1000L).LocalDateTime;
-                    else if (raw > 100000000000L) localTime = DateTimeOffset.FromUnixTimeMilliseconds(raw).LocalDateTime;
-                    else if (raw > 1000000000L) localTime = DateTimeOffset.FromUnixTimeSeconds(raw).LocalDateTime;
-                    if (localTime != DateTime.MinValue) return true;
-                }
-                catch { }
-            }
-            DateTimeOffset dto;
-            if (DateTimeOffset.TryParse(value, CultureInfo.CurrentCulture, DateTimeStyles.AssumeLocal, out dto)
-                || DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out dto))
-            {
-                localTime = dto.LocalDateTime;
-                return true;
-            }
-            return false;
         }
 
         private static OrderPlacedReplyResolution Fail(string error)
@@ -322,80 +291,82 @@ namespace Bot.ChromeNs
     {
         private async Task ProcessOrderPlacedReplyAsync(OrderPlacedReplyPlan plan)
         {
-            var resolution = await OrderPlacedAutoReplyService.ResolveAsync(plan);
-            if (!resolution.Success || string.IsNullOrWhiteSpace(resolution.Reply))
+            using (BotActivityCoordinator.Begin("下单自动回复", plan == null ? string.Empty : plan.Seller, plan == null ? string.Empty : plan.Buyer))
             {
-                OrderPlacedAutoReplyService.Complete(plan, false);
-                var note = "下单自动回复未发送：" + (string.IsNullOrWhiteSpace(resolution.Error) ? "未生成回复" : resolution.Error);
-                AddSkippedConversation(plan.Seller, plan.Buyer, "[买家下单] 订单号 " + plan.OrderId, note);
-                Log.Info(note + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
-                return;
-            }
+                var resolution = await OrderPlacedAutoReplyService.ResolveAsync(plan);
+                if (!resolution.Success || string.IsNullOrWhiteSpace(resolution.Reply))
+                {
+                    OrderPlacedAutoReplyService.Complete(plan, false);
+                    OrderAttentionUiService.SetReplyResult(plan == null ? null : plan.Snapshot, false);
+                    var note = "下单自动回复未发送：" + (string.IsNullOrWhiteSpace(resolution.Error) ? "未生成回复" : resolution.Error);
+                    AddSkippedConversation(plan.Seller, plan.Buyer, "[买家下单] 订单号 " + plan.OrderId, note);
+                    Log.Info(note + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    return;
+                }
 
-            var answer = BotOutboundMessageFormatter.EnsureAiMarker(
-                BotFeatureStore.ApplyOutputPolicy(resolution.Reply));
-            var autoSend = Params.Robot.GetIsAutoReply();
-            KnowledgeLearningService.RegisterAnswerSource(
-                plan.Seller,
-                plan.Buyer,
-                "[买家下单] 订单号 " + plan.OrderId,
-                BotOutboundMessageFormatter.StripAiMarker(answer),
-                resolution.Source);
-            var ctl = Desk.Inst == null
-                ? null
-                : Desk.Inst.AddConversation(
+                var answer = BotOutboundMessageFormatter.EnsureAiMarker(
+                    BotFeatureStore.ApplyOutputPolicy(resolution.Reply));
+                var autoSend = Params.Robot.GetIsAutoReply();
+                KnowledgeLearningService.RegisterAnswerSource(
                     plan.Seller,
                     plan.Buyer,
                     "[买家下单] 订单号 " + plan.OrderId,
-                    answer,
-                    autoSend,
+                    BotOutboundMessageFormatter.StripAiMarker(answer),
                     resolution.Source);
+                var ctl = Desk.Inst == null
+                    ? null
+                    : Desk.Inst.AddConversation(
+                        plan.Seller,
+                        plan.Buyer,
+                        "[买家下单] 订单号 " + plan.OrderId,
+                        answer,
+                        autoSend,
+                        resolution.Source);
 
-            if (!autoSend)
-            {
-                OrderPlacedAutoReplyService.Complete(plan, false);
-                if (ctl != null) ctl.SetSendResult(false, "未发送：自动回复开关已关闭");
-                return;
-            }
-
-            var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();
-            if (delaySeconds > 0)
-            {
-                Log.Info("下单自动回复等待延时发送: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                    + ", delaySeconds=" + delaySeconds);
-                await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
-
-                if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                if (!autoSend)
                 {
                     OrderPlacedAutoReplyService.Complete(plan, false);
-                    if (ctl != null) ctl.SetSendResult(false, "未发送：延时期间 Bot 或自动回复开关已关闭");
-                    Log.Info("下单自动回复延时后取消发送: seller=" + plan.Seller
-                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：自动回复开关已关闭");
                     return;
                 }
-            }
 
-            // 下单系统卡片不是普通买家文本消息，因此最近一条卖家回显可能仍指向上一轮 Bot 自动回复。
-            // 在真正发送前登记当前精确答案为 Bot 预期发送，只跳过这一次人工介入检查；
-            // QNRpa 消费后会立即移除该键，不影响后续真实人工回复的保护逻辑。
-            KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);
-            Log.Info("下单自动回复已登记精确发送豁免: seller=" + plan.Seller
-                + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();
+                if (delaySeconds > 0)
+                {
+                    Log.Info("下单自动回复等待延时发送: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", delaySeconds=" + delaySeconds);
+                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
 
-            var sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);
-            OrderPlacedAutoReplyService.Complete(plan, sendOk);
-            if (sendOk)
-            {
-                ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
-            }
-            if (ctl != null)
-            {
-                ctl.SetSendResult(
-                    sendOk,
-                    sendOk
-                        ? "已发送（买家下单自动消息，订单号 " + plan.OrderId + "）"
-                        : "发送失败：" + rpa.GetSendFailureReason());
+                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    {
+                        OrderPlacedAutoReplyService.Complete(plan, false);
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：延时期间 Bot 或自动回复开关已关闭");
+                        Log.Info("下单自动回复延时后取消发送: seller=" + plan.Seller
+                            + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                        return;
+                    }
+                }
+
+                KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);
+                Log.Info("下单自动回复已登记精确发送豁免: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+
+                var sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);
+                OrderPlacedAutoReplyService.Complete(plan, sendOk);
+                OrderAttentionUiService.SetReplyResult(plan.Snapshot, sendOk);
+                if (sendOk)
+                {
+                    ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
+                }
+                if (ctl != null)
+                {
+                    ctl.SetSendResult(
+                        sendOk,
+                        sendOk
+                            ? "已发送（买家下单自动消息，订单号 " + plan.OrderId + "）"
+                            : "发送失败：" + rpa.GetSendFailureReason());
+                }
             }
         }
     }
