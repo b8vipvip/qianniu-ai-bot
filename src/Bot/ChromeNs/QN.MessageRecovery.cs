@@ -5,7 +5,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -18,9 +17,6 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, long> _backgroundRecoveryVersions =
             new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
-        private static readonly Regex RecoveryOrderIdRegex = new Regex(
-            @"(?:订单号|订单编号|订单)\s*[:：#]?\s*(\d{8,})",
-            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static string RecoveryKey(string seller, string buyer)
         {
@@ -82,108 +78,111 @@ namespace Bot.ChromeNs
             long version)
         {
             await _backgroundRecoveryGate.WaitAsync();
-            List<QNChatMessage> recovered = null;
-            try
+            using (BotActivityCoordinator.Begin("后台消息补偿", seller, buyer))
             {
-                var key = RecoveryKey(seller, buyer);
-                long latestVersion;
-                if (!_backgroundRecoveryVersions.TryGetValue(key, out latestVersion) || latestVersion != version) return;
-                DateTime observedAt;
-                if (_latestBuyerMessageObserved.TryGetValue(key, out observedAt)
-                    && observedAt >= scheduledAt.AddMilliseconds(-250))
-                {
-                    return;
-                }
-                if (cdp == null) return;
-
-                // 与自动发送共用会话切换互斥锁。这里只抓消息，不在持锁期间生成或发送答案。
-                await _sendGate.WaitAsync();
+                List<QNChatMessage> recovered = null;
                 try
                 {
-                    Log.Info("详细新消息事件未到或可能为系统订单卡片，开始安全补偿: seller=" + seller + ", buyer=" + buyer);
-                    OpenChat(buyer);
-
-                    DbEntity.Conversation current = null;
-                    for (var attempt = 0; attempt < 24; attempt++)
+                    var key = RecoveryKey(seller, buyer);
+                    long latestVersion;
+                    if (!_backgroundRecoveryVersions.TryGetValue(key, out latestVersion) || latestVersion != version) return;
+                    DateTime observedAt;
+                    if (_latestBuyerMessageObserved.TryGetValue(key, out observedAt)
+                        && observedAt >= scheduledAt.AddMilliseconds(-250))
                     {
-                        var response = await GetCurrentConversationID();
-                        current = response == null ? null : response.Result;
-                        if (current != null && string.Equals((current.Nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                        return;
+                    }
+                    if (cdp == null) return;
+
+                    // 与自动发送共用会话切换互斥锁。这里只抓消息，不在持锁期间生成或发送答案。
+                    await _sendGate.WaitAsync();
+                    try
+                    {
+                        Log.Info("详细新消息事件未到或可能为系统订单卡片，开始安全补偿: seller=" + seller + ", buyer=" + buyer);
+                        OpenChat(buyer);
+
+                        DbEntity.Conversation current = null;
+                        for (var attempt = 0; attempt < 24; attempt++)
                         {
-                            break;
+                            var response = await GetCurrentConversationID();
+                            current = response == null ? null : response.Result;
+                            if (current != null && string.Equals((current.Nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                            {
+                                break;
+                            }
+                            await Task.Delay(250);
                         }
-                        await Task.Delay(250);
-                    }
 
-                    if (current == null || !string.Equals((current.Nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
-                    {
-                        Log.Info("后台消息补偿失败：无法确认目标买家会话。target=" + buyer
-                            + ", current=" + (current == null ? string.Empty : current.Nick));
-                        return;
-                    }
-
-                    SetActiveConversationByNick(seller, buyer, "backgroundRecovery");
-                    var ccode = (current.Ccode ?? string.Empty).Trim();
-                    if (string.IsNullOrWhiteSpace(ccode))
-                    {
-                        Log.Info("后台消息补偿失败：当前会话没有 ccode。buyer=" + buyer);
-                        return;
-                    }
-
-                    var history = await cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
-                    {
-                        cid = new { ccode = ccode, type = 1 },
-                        count = 30,
-                        gohistory = 1,
-                        msgid = "-1",
-                        msgtime = "-1"
-                    });
-                    var messages = history == null
-                        ? null
-                        : history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
-                    var threshold = scheduledAt.AddMinutes(-2).Ticks;
-                    recovered = (messages ?? new List<QNChatMessage>())
-                        .Where(m => m != null)
-                        .Where(m =>
-                            (IsBuyerMessage(m)
-                                && m.fromid != null
-                                && string.Equals((m.fromid.nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
-                            || IsPotentialRecoveredOrderCard(m))
-                        .Where(m =>
+                        if (current == null || !string.Equals((current.Nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
                         {
-                            var sort = IncomingMessageSafety.GetSortValue(m);
-                            return sort <= 0 || sort >= threshold;
-                        })
-                        .OrderBy(IncomingMessageSafety.GetSortValue)
-                        .ToList();
+                            Log.Info("后台消息补偿失败：无法确认目标买家会话。target=" + buyer
+                                + ", current=" + (current == null ? string.Empty : current.Nick));
+                            return;
+                        }
+
+                        SetActiveConversationByNick(seller, buyer, "backgroundRecovery");
+                        var ccode = (current.Ccode ?? string.Empty).Trim();
+                        if (string.IsNullOrWhiteSpace(ccode))
+                        {
+                            Log.Info("后台消息补偿失败：当前会话没有 ccode。buyer=" + buyer);
+                            return;
+                        }
+
+                        var history = await cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
+                        {
+                            cid = new { ccode = ccode, type = 1 },
+                            count = 30,
+                            gohistory = 1,
+                            msgid = "-1",
+                            msgtime = "-1"
+                        });
+                        var messages = history == null
+                            ? null
+                            : history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
+                        var threshold = scheduledAt.AddMinutes(-2).Ticks;
+                        recovered = (messages ?? new List<QNChatMessage>())
+                            .Where(m => m != null)
+                            .Where(m =>
+                                (IsBuyerMessage(m)
+                                    && m.fromid != null
+                                    && string.Equals((m.fromid.nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                                || IsPotentialRecoveredOrderCard(m))
+                            .Where(m =>
+                            {
+                                var sort = IncomingMessageSafety.GetSortValue(m);
+                                return sort <= 0 || sort >= threshold;
+                            })
+                            .OrderBy(IncomingMessageSafety.GetSortValue)
+                            .ToList();
+                    }
+                    finally
+                    {
+                        _sendGate.Release();
+                    }
+
+                    if (recovered == null || recovered.Count < 1)
+                    {
+                        Log.Info("后台消息补偿完成，但没有发现最近买家消息或订单卡片。seller=" + seller + ", buyer=" + buyer);
+                        return;
+                    }
+
+                    Log.Info("后台消息补偿找回 " + recovered.Count + " 条候选消息/订单卡片。seller=" + seller + ", buyer=" + buyer);
+                    foreach (var message in recovered)
+                    {
+                        await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer);
+                        await Task.Delay(30);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("后台消息补偿失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message);
                 }
                 finally
                 {
-                    _sendGate.Release();
+                    long ignored;
+                    _backgroundRecoveryVersions.TryRemove(RecoveryKey(seller, buyer), out ignored);
+                    _backgroundRecoveryGate.Release();
                 }
-
-                if (recovered == null || recovered.Count < 1)
-                {
-                    Log.Info("后台消息补偿完成，但没有发现最近买家消息或订单卡片。seller=" + seller + ", buyer=" + buyer);
-                    return;
-                }
-
-                Log.Info("后台消息补偿找回 " + recovered.Count + " 条候选消息/订单卡片。seller=" + seller + ", buyer=" + buyer);
-                foreach (var message in recovered)
-                {
-                    await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer);
-                    await Task.Delay(30);
-                }
-            }
-            catch (Exception ex)
-            {
-                Log.Info("后台消息补偿失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message);
-            }
-            finally
-            {
-                long ignored;
-                _backgroundRecoveryVersions.TryRemove(RecoveryKey(seller, buyer), out ignored);
-                _backgroundRecoveryGate.Release();
             }
         }
 
@@ -220,13 +219,14 @@ namespace Bot.ChromeNs
         private static bool IsPotentialRecoveredOrderCard(QNChatMessage message)
         {
             if (message == null) return false;
-            var text = GetMessageText(message);
-            if (string.IsNullOrWhiteSpace(text)) return false;
-            if (!RecoveryOrderIdRegex.IsMatch(text)) return false;
-            return (text.Contains("件商品") && text.Contains("合计"))
-                || text.Contains("交易时间")
-                || text.Contains("买家已下单")
-                || text.Contains("订单创建成功");
+            OrderSnapshot snapshot;
+            return OrderCardParser.TryParse(
+                message,
+                GetMessageText(message),
+                string.Empty,
+                string.Empty,
+                "千牛远端历史订单卡片",
+                out snapshot);
         }
     }
 }
