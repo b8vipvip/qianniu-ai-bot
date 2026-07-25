@@ -1,0 +1,284 @@
+using BotLib;
+using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.Linq;
+using System.Reflection;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace Bot.ChromeNs
+{
+    internal static class VisionFollowUpContextPipeline
+    {
+        private const int FollowUpWindowSeconds = 30;
+        private const int CaptionWindowSeconds = 8;
+
+        private sealed class RecentVisionContext
+        {
+            public BuyerMessageBurstItem Item;
+            public DateTime ObservedAt;
+        }
+
+        private static readonly ConcurrentDictionary<int, Func<BuyerMessageBurstLease, Task>> InstalledWrappers =
+            new ConcurrentDictionary<int, Func<BuyerMessageBurstLease, Task>>();
+        private static readonly ConcurrentDictionary<string, RecentVisionContext> RecentVision =
+            new ConcurrentDictionary<string, RecentVisionContext>(StringComparer.Ordinal);
+        private static Timer _patchTimer;
+        private static int _initialized;
+
+        public static void Initialize()
+        {
+            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
+            PatchExisting();
+            // BuyerStreamingReplyPipeline 也会包装同一个 handler。这里持续检查，确保本包装始终位于最外层，
+            // 这样没有图片的短文本 burst 才有机会先补回最近图片，再交给 Smart Reply / QN 原流程。
+            _patchTimer = new Timer(_ => PatchExisting(), null, 250, 500);
+            Log.Info("图片指代续问上下文管线已启动：图片后的‘这个吗/这里吗/对吗’会继续走视觉理解。");
+        }
+
+        private static void PatchExisting()
+        {
+            try
+            {
+                QN[] qns;
+                try
+                {
+                    qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                }
+                catch
+                {
+                    return;
+                }
+
+                var coordinatorField = typeof(QN).GetField(
+                    "_buyerMessageBurstCoordinator",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                var handlerField = typeof(BuyerMessageBurstCoordinator).GetField(
+                    "_handler",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                if (coordinatorField == null || handlerField == null) return;
+
+                foreach (var qn in qns)
+                {
+                    if (qn == null) continue;
+                    var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
+                    if (coordinator == null) continue;
+                    var key = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(coordinator);
+                    var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
+                    if (current == null) continue;
+
+                    Func<BuyerMessageBurstLease, Task> installed;
+                    if (InstalledWrappers.TryGetValue(key, out installed)
+                        && ReferenceEquals(current, installed))
+                    {
+                        continue;
+                    }
+
+                    var next = current;
+                    Func<BuyerMessageBurstLease, Task> wrapped = lease => HandleAsync(next, lease);
+                    handlerField.SetValue(coordinator, wrapped);
+                    InstalledWrappers[key] = wrapped;
+                    Log.Info("已为客服实例启用图片指代续问上下文: seller="
+                        + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+                }
+                CleanupExpired();
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("安装图片指代续问上下文失败，将继续使用原消息流程：" + ex.Message, 10);
+            }
+        }
+
+        private static async Task HandleAsync(
+            Func<BuyerMessageBurstLease, Task> next,
+            BuyerMessageBurstLease lease)
+        {
+            if (next == null)
+            {
+                return;
+            }
+
+            var burst = lease == null ? null : lease.Burst;
+            if (burst == null || burst.Items == null || burst.Items.Count == 0)
+            {
+                await next(lease);
+                return;
+            }
+
+            var conversationKey = Key(burst.SellerNick, burst.BuyerNick);
+            var vision = burst.LatestVisionItem;
+            if (vision != null && vision.Message != null)
+            {
+                Remember(conversationKey, vision);
+                await next(lease);
+                return;
+            }
+
+            RecentVisionContext recent;
+            if (!RecentVision.TryGetValue(conversationKey, out recent)
+                || recent == null
+                || recent.Item == null
+                || recent.Item.Message == null)
+            {
+                await next(lease);
+                return;
+            }
+
+            var latestAt = burst.Items
+                .Where(x => x != null)
+                .Select(x => x.ReceivedAt == DateTime.MinValue ? DateTime.Now : x.ReceivedAt)
+                .DefaultIfEmpty(DateTime.Now)
+                .Max();
+            var elapsed = latestAt - recent.ObservedAt;
+            if (elapsed < TimeSpan.Zero || elapsed > TimeSpan.FromSeconds(FollowUpWindowSeconds))
+            {
+                RecentVisionContext expired;
+                RecentVision.TryRemove(conversationKey, out expired);
+                await next(lease);
+                return;
+            }
+
+            var question = burst.CombinedQuestion ?? string.Empty;
+            var referential = IsVisionReferentialFollowUp(question);
+            var likelyCaption = elapsed <= TimeSpan.FromSeconds(CaptionWindowSeconds)
+                && IsLikelyImageCaption(question);
+            if (!referential && !likelyCaption)
+            {
+                // 已出现一轮与图片无关的正常文字后，不再让更晚的“这个”误绑到旧图片。
+                RecentVisionContext ignored;
+                RecentVision.TryRemove(conversationKey, out ignored);
+                await next(lease);
+                return;
+            }
+
+            var items = new List<BuyerMessageBurstItem> { CloneVisionItem(recent.Item) };
+            items.AddRange(burst.Items.Where(x => x != null));
+            var combinedBurst = new BuyerMessageBurst(
+                burst.SellerNick,
+                burst.BuyerNick,
+                items,
+                burst.Version);
+            var combinedLease = new BuyerMessageBurstLease(combinedBurst, () => lease.IsCurrent);
+
+            Log.Info("图片指代续问已重新绑定最近图片: seller=" + burst.SellerNick
+                + ", buyer=" + burst.BuyerNick
+                + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds)
+                + ", question=" + SafeLog(question, 100));
+            await next(combinedLease);
+        }
+
+        internal static bool IsVisionReferentialFollowUp(string text)
+        {
+            var compact = Normalize(text);
+            if (string.IsNullOrWhiteSpace(compact) || compact.Length > 28) return false;
+            if (compact == "对吗"
+                || compact == "是吗"
+                || compact == "这个吗"
+                || compact == "是这个吗"
+                || compact == "就是这个吗"
+                || compact == "是不是这个"
+                || compact == "是不是这个吗"
+                || compact == "这个对吗"
+                || compact == "这张吗"
+                || compact == "是这张吗"
+                || compact == "这里吗"
+                || compact == "是这里吗"
+                || compact == "这样吗"
+                || compact == "是这样吗")
+            {
+                return true;
+            }
+
+            var hasReference = compact.Contains("这个")
+                || compact.Contains("这张")
+                || compact.Contains("这里")
+                || compact.Contains("这样")
+                || compact.Contains("图里")
+                || compact.Contains("图片里")
+                || compact.Contains("上面")
+                || compact.Contains("界面")
+                || compact.Contains("页面");
+            var asksConfirmation = compact.Contains("吗")
+                || compact.Contains("么")
+                || compact.Contains("是不是")
+                || compact.Contains("对不对")
+                || compact.Contains("可以")
+                || compact.Contains("行不行");
+            return hasReference && asksConfirmation;
+        }
+
+        private static bool IsLikelyImageCaption(string text)
+        {
+            var compact = Normalize(text);
+            if (string.IsNullOrWhiteSpace(compact) || compact.Length > 60) return false;
+            return compact != "好的"
+                && compact != "好"
+                && compact != "嗯"
+                && compact != "谢谢"
+                && compact != "知道了"
+                && compact != "明白了"
+                && compact != "你好"
+                && compact != "您好"
+                && compact != "在吗";
+        }
+
+        private static void Remember(string key, BuyerMessageBurstItem item)
+        {
+            RecentVision[key] = new RecentVisionContext
+            {
+                Item = CloneVisionItem(item),
+                ObservedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt
+            };
+            CleanupExpired();
+        }
+
+        private static BuyerMessageBurstItem CloneVisionItem(BuyerMessageBurstItem source)
+        {
+            return new BuyerMessageBurstItem
+            {
+                SellerNick = source.SellerNick,
+                BuyerNick = source.BuyerNick,
+                MessageKey = source.MessageKey,
+                DisplayText = source.DisplayText,
+                Message = source.Message,
+                SafetyDecision = source.SafetyDecision,
+                VisionDecision = source.VisionDecision,
+                SortValue = source.SortValue,
+                ReceivedAt = source.ReceivedAt
+            };
+        }
+
+        private static void CleanupExpired()
+        {
+            var cutoff = DateTime.Now.AddSeconds(-FollowUpWindowSeconds);
+            foreach (var pair in RecentVision
+                .Where(x => x.Value == null || x.Value.ObservedAt < cutoff)
+                .ToList())
+            {
+                RecentVisionContext ignored;
+                RecentVision.TryRemove(pair.Key, out ignored);
+            }
+        }
+
+        private static string Normalize(string value)
+        {
+            return Regex.Replace(
+                (value ?? string.Empty).Trim().ToLowerInvariant(),
+                @"[\s，。！？、；：,.!?:;\-—_()（）\[\]【】]+",
+                string.Empty);
+        }
+
+        private static string SafeLog(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
+        }
+
+        private static string Key(string seller, string buyer)
+        {
+            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+        }
+    }
+}
