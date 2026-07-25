@@ -164,7 +164,7 @@ namespace Bot.ChromeNs
             var systemPrompt = string.IsNullOrWhiteSpace(endpoint.SystemPrompt)
                 ? "你是淘宝店铺客服助手。"
                 : endpoint.SystemPrompt;
-            systemPrompt += StorePromptProfileService.BuildPromptAddon();
+            systemPrompt += StorePromptProfileService.BuildVisionPromptAddon(prompt);
             return new JObject
             {
                 ["model"] = endpoint.VisionModel,
