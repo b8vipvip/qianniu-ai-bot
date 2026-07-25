@@ -168,7 +168,7 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    // 二次稳定确认，避免刚判定为空闲时恰好开始生成或人工输入。
+                    // 二次稳定确认，避免刚判定为空闲时恰好开始生成、发送或人工输入。
                     await Task.Delay(650);
                     check = await CanAutoFocusOrderAsync(item.Snapshot);
                     if (!check.Allowed)
@@ -257,6 +257,18 @@ namespace Bot.ChromeNs
             string reason;
             if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return Denied(reason);
 
+            var protectSeconds = OrderAttentionSettings.GetHumanProtectionSeconds();
+            DateTime lastSellerEcho;
+            lock (_sellerEchoLock)
+            {
+                lastSellerEcho = _lastSellerEchoTime;
+            }
+            if (lastSellerEcho != DateTime.MinValue
+                && DateTime.Now - lastSellerEcho < TimeSpan.FromSeconds(protectSeconds))
+            {
+                return Denied("客服或Bot刚发送过消息，人工操作保护中");
+            }
+
             var input = await TryGetInputboxEmptyAsync();
             if (!input.Success) return Denied("暂时无法确认输入框状态");
             if (!input.Empty)
@@ -268,6 +280,12 @@ namespace Bot.ChromeNs
             var current = await TryGetCurrentBuyerAsync();
             ObserveVisibleBuyer(snapshot.Seller, current);
             if (!BotActivityCoordinator.IsSafeToAutoFocus(snapshot.Seller, out reason)) return Denied(reason);
+            if (!string.Equals(current, snapshot.Buyer, StringComparison.Ordinal)
+                && _orderAttentionLastObservedBuyerAt != DateTime.MinValue
+                && DateTime.Now - _orderAttentionLastObservedBuyerAt < TimeSpan.FromSeconds(2))
+            {
+                return Denied("当前买家会话刚发生变化，等待界面稳定");
+            }
 
             var interval = OrderAttentionSettings.GetSwitchIntervalSeconds();
             if (_orderAttentionLastAutoFocusAt != DateTime.MinValue
