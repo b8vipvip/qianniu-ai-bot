@@ -28,16 +28,16 @@ namespace Bot.Knowledge
             if (manager == null) return;
             var top = FindFirst<WrapPanel>(manager);
             if (top == null) return;
-            if (top.Children.OfType<Button>().Any(x => Convert.ToString(x.Tag) == "store-prompt-profile")) return;
+            if (top.Children.OfType<Button>().Any(x => Convert.ToString(x.Tag) == "store-rule-center")) return;
 
             var button = new Button
             {
-                Content = "店铺提示词",
-                Width = 92,
+                Content = "店铺规则中心",
+                Width = 108,
                 Height = 28,
                 Margin = new Thickness(0, 0, 8, 6),
-                Tag = "store-prompt-profile",
-                ToolTip = "填写店铺介绍、链接服务范围、售后保障等资料，并让AI整理成所有智能回复都会使用的固定前置提示词。"
+                Tag = "store-rule-center",
+                ToolTip = "把店铺资料拆成短核心规则和按场景动态检索的规则卡，避免每次AI请求都携带整段长提示词。"
             };
             button.Click += (s, args) =>
             {
@@ -74,19 +74,21 @@ namespace Bot.Knowledge
     internal sealed class StorePromptProfileWindow : Window
     {
         private readonly TextBox _raw;
-        private readonly TextBox _prompt;
+        private readonly TextBox _core;
+        private readonly TextBox _rules;
         private readonly TextBlock _status;
+        private readonly TextBlock _summary;
         private readonly Button _generate;
         private readonly Button _save;
         private CancellationTokenSource _generationCts;
 
         public StorePromptProfileWindow()
         {
-            Title = "店铺固定提示词";
-            Width = 820;
-            Height = 700;
-            MinWidth = 680;
-            MinHeight = 560;
+            Title = "店铺规则中心";
+            Width = 940;
+            Height = 760;
+            MinWidth = 760;
+            MinHeight = 600;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ShowInTaskbar = false;
 
@@ -95,71 +97,80 @@ namespace Bot.Knowledge
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
             root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             Content = root;
 
-            var intro = new TextBlock
+            var intro = new Border
             {
-                Text = "把店铺介绍、商品/服务范围、不同链接支持什么、购买前提、售后保障和明确不支持的事项粘贴到下面。AI会整理成稳定的前置提示词。",
-                TextWrapping = TextWrapping.Wrap,
+                Background = new SolidColorBrush(Color.FromRgb(242, 247, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(196, 216, 245)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(10),
                 Margin = new Thickness(0, 0, 0, 10),
-                Foreground = Brushes.DimGray
+                Child = new TextBlock
+                {
+                    Text = "这里不再生成一整段每次都发送的固定提示词。AI会把原始资料拆成：① 每次携带的短核心规则；② 文本对话按当前场景选取的Top 3规则；③ 图片分析使用的高优先级视觉规则卡。",
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = Brushes.DimGray
+                }
             };
             Grid.SetRow(intro, 0);
             root.Children.Add(intro);
 
-            var rawLabel = new TextBlock
+            var header = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            _summary = new TextBlock
             {
-                Text = "原始店铺资料",
-                FontWeight = FontWeights.Bold,
-                Margin = new Thickness(0, 0, 0, 6)
+                Text = string.Empty,
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
             };
-            Grid.SetRow(rawLabel, 1);
-            root.Children.Add(rawLabel);
-
-            _raw = new TextBox
-            {
-                AcceptsReturn = true,
-                AcceptsTab = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Margin = new Thickness(0, 0, 0, 10)
-            };
-            Grid.SetRow(_raw, 2);
-            root.Children.Add(_raw);
-
-            var promptHeader = new DockPanel { Margin = new Thickness(0, 0, 0, 6) };
-            var promptLabel = new TextBlock
-            {
-                Text = "标准前置提示词（可手动修改）",
-                FontWeight = FontWeights.Bold
-            };
-            DockPanel.SetDock(promptLabel, Dock.Left);
-            promptHeader.Children.Add(promptLabel);
+            DockPanel.SetDock(_summary, Dock.Left);
+            header.Children.Add(_summary);
             _status = new TextBlock
             {
                 Text = string.Empty,
                 Foreground = Brushes.DimGray,
-                HorizontalAlignment = HorizontalAlignment.Right
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center
             };
             DockPanel.SetDock(_status, Dock.Right);
-            promptHeader.Children.Add(_status);
-            Grid.SetRow(promptHeader, 3);
-            root.Children.Add(promptHeader);
+            header.Children.Add(_status);
+            Grid.SetRow(header, 1);
+            root.Children.Add(header);
 
-            _prompt = new TextBox
+            var tabs = new TabControl();
+            _raw = CreateEditor();
+            _core = CreateEditor();
+            _rules = CreateEditor();
+
+            tabs.Items.Add(CreateTab(
+                "1. 原始店铺资料",
+                "可以粘贴完整资料，长度可以较长；运行时不会把这里的原文直接发给AI。",
+                _raw));
+            tabs.Items.Add(CreateTab(
+                "2. 核心规则",
+                "只保留所有场景都必须遵守的店铺定位、保密边界、通用判断原则和回复原则，建议控制在1500字以内。",
+                _core));
+            tabs.Items.Add(CreateTab(
+                "3. 场景规则卡",
+                "JSON数组。文本回复只选最相关Top 3；视觉回复最多携带8条高优先级视觉规则。可手动修改priority、scope、triggers和content。",
+                _rules));
+            Grid.SetRow(tabs, 2);
+            root.Children.Add(tabs);
+
+            var footer = new Grid { Margin = new Thickness(0, 12, 0, 0) };
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var note = new TextBlock
             {
-                AcceptsReturn = true,
-                AcceptsTab = true,
+                Text = "scope：text=文字场景，vision=图片场景，both=两者；priority越高，视觉无文字线索时越优先携带。",
+                Foreground = Brushes.Gray,
                 TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
-                Margin = new Thickness(0, 0, 0, 12)
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0)
             };
-            Grid.SetRow(_prompt, 4);
-            root.Children.Add(_prompt);
+            Grid.SetColumn(note, 0);
+            footer.Children.Add(note);
 
             var buttons = new StackPanel
             {
@@ -168,8 +179,8 @@ namespace Bot.Knowledge
             };
             _generate = new Button
             {
-                Content = "AI生成标准提示词",
-                Width = 145,
+                Content = "AI生成结构化规则",
+                Width = 150,
                 Height = 30,
                 Margin = new Thickness(0, 0, 8, 0)
             };
@@ -189,16 +200,12 @@ namespace Bot.Knowledge
             var close = new Button { Content = "关闭", Width = 80, Height = 30 };
             close.Click += (s, e) => Close();
             buttons.Children.Add(close);
-            Grid.SetRow(buttons, 5);
-            root.Children.Add(buttons);
+            Grid.SetColumn(buttons, 1);
+            footer.Children.Add(buttons);
+            Grid.SetRow(footer, 3);
+            root.Children.Add(footer);
 
-            var profile = StorePromptProfileService.GetProfile();
-            _raw.Text = profile.RawInput ?? string.Empty;
-            _prompt.Text = profile.StandardPrompt ?? string.Empty;
-            _status.Text = string.IsNullOrWhiteSpace(profile.UpdatedAt)
-                ? "尚未配置"
-                : "最后更新：" + profile.UpdatedAt;
-
+            LoadProfile();
             Closing += (s, e) =>
             {
                 if (_generationCts != null)
@@ -208,28 +215,99 @@ namespace Bot.Knowledge
             };
         }
 
+        private static TextBox CreateEditor()
+        {
+            return new TextBox
+            {
+                AcceptsReturn = true,
+                AcceptsTab = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                FontFamily = new FontFamily("Microsoft YaHei UI"),
+                FontSize = 13,
+                Margin = new Thickness(8)
+            };
+        }
+
+        private static TabItem CreateTab(string title, string help, TextBox editor)
+        {
+            var grid = new Grid();
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            var helpText = new TextBlock
+            {
+                Text = help,
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.DimGray,
+                Margin = new Thickness(8, 8, 8, 0)
+            };
+            Grid.SetRow(helpText, 0);
+            grid.Children.Add(helpText);
+            Grid.SetRow(editor, 1);
+            grid.Children.Add(editor);
+            return new TabItem { Header = title, Content = grid };
+        }
+
+        private void LoadProfile()
+        {
+            var profile = StorePromptProfileService.GetProfile();
+            _raw.Text = profile.RawInput ?? string.Empty;
+            _core.Text = !string.IsNullOrWhiteSpace(profile.CorePrompt)
+                ? profile.CorePrompt
+                : profile.StandardPrompt ?? string.Empty;
+            _rules.Text = StorePromptProfileService.SerializeRules(profile.Rules);
+            UpdateSummary(profile);
+            if (StorePromptProfileService.NeedsStructuredMigration(profile))
+            {
+                _status.Text = "检测到旧版整段提示词，请点击AI生成结构化规则";
+                _status.Foreground = Brushes.DarkOrange;
+            }
+            else
+            {
+                _status.Text = string.IsNullOrWhiteSpace(profile.UpdatedAt)
+                    ? "尚未配置"
+                    : "最后更新：" + profile.UpdatedAt;
+                _status.Foreground = Brushes.DimGray;
+            }
+        }
+
+        private void UpdateSummary(StorePromptProfile profile)
+        {
+            var rules = profile == null || profile.Rules == null ? 0 : profile.Rules.Count;
+            var coreLength = profile == null
+                ? 0
+                : (!string.IsNullOrWhiteSpace(profile.CorePrompt)
+                    ? profile.CorePrompt.Length
+                    : (profile.StandardPrompt ?? string.Empty).Length);
+            _summary.Text = "核心规则 " + coreLength + " 字 · 场景规则 " + rules + " 条";
+        }
+
         private async System.Threading.Tasks.Task GenerateAsync()
         {
             if (string.IsNullOrWhiteSpace(_raw.Text))
             {
-                MessageBox.Show("请先填写原始店铺资料。", "店铺提示词", MessageBoxButton.OK, MessageBoxImage.Information);
+                MessageBox.Show("请先填写原始店铺资料。", "店铺规则中心", MessageBoxButton.OK, MessageBoxImage.Information);
                 return;
             }
 
             _generationCts = new CancellationTokenSource();
             _generate.IsEnabled = false;
             _save.IsEnabled = false;
-            _generate.Content = "正在整理...";
-            _status.Text = "AI正在整理，完成后会自动保存";
+            _generate.Content = "正在拆分规则...";
+            _status.Text = "AI正在生成核心规则和场景规则卡";
+            _status.Foreground = Brushes.DimGray;
             try
             {
-                var prompt = await StorePromptProfileService.GenerateStandardPromptAsync(
+                var profile = await StorePromptProfileService.GenerateStructuredProfileAsync(
                     _raw.Text,
                     _generationCts.Token);
-                _prompt.Text = prompt;
-                _status.Text = "已生成并保存 · " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+                _core.Text = profile.CorePrompt ?? string.Empty;
+                _rules.Text = StorePromptProfileService.SerializeRules(profile.Rules);
+                UpdateSummary(profile);
+                _status.Text = "已生成并保存 · " + profile.UpdatedAt;
                 MessageBox.Show(
-                    "标准前置提示词已生成并保存。后续智能回复会自动把它作为高优先级店铺事实和服务边界。",
+                    "结构化店铺规则已生成并保存。以后每次AI回复只携带短核心规则，详细规则会按当前场景动态选择。",
                     "生成完成",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
@@ -241,7 +319,8 @@ namespace Bot.Knowledge
             catch (Exception ex)
             {
                 _status.Text = "生成失败";
-                MessageBox.Show("生成提示词失败：" + ex.Message, "店铺提示词", MessageBoxButton.OK, MessageBoxImage.Error);
+                _status.Foreground = Brushes.Firebrick;
+                MessageBox.Show("生成结构化规则失败：" + ex.Message, "店铺规则中心", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
@@ -252,7 +331,7 @@ namespace Bot.Knowledge
                 }
                 _generate.IsEnabled = true;
                 _save.IsEnabled = true;
-                _generate.Content = "AI生成标准提示词";
+                _generate.Content = "AI生成结构化规则";
             }
         }
 
@@ -260,12 +339,13 @@ namespace Bot.Knowledge
         {
             try
             {
-                StorePromptProfileService.Save(_raw.Text, _prompt.Text);
+                var rules = StorePromptProfileService.ParseRulesJson(_rules.Text);
+                StorePromptProfileService.SaveStructured(_raw.Text, _core.Text, rules);
                 Close();
             }
             catch (Exception ex)
             {
-                MessageBox.Show("保存提示词失败：" + ex.Message, "店铺提示词", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show("保存店铺规则失败：" + ex.Message, "店铺规则中心", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
     }

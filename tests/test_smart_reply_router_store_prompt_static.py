@@ -43,19 +43,47 @@ def test_legacy_non_streaming_local_hit_is_gated_by_same_smart_router():
     assert "StorePromptProfileService.BuildPromptAddon()" in helper
 
 
-def test_store_prompt_can_be_generated_saved_and_injected():
+def test_store_rule_center_generates_core_and_scene_rules_instead_of_one_long_prompt():
     service = read("src/Bot/ChromeNs/StorePromptProfileService.cs")
     ui = read("src/Bot/Knowledge/StorePromptProfileUi.cs")
+    state = read("src/Bot/ChromeNs/ConversationStateService.cs")
+    vision = read("src/Bot/ChromeNs/VisionRequestService.cs")
     app = read("src/Bot/App.xaml.cs")
     targets = read("src/Directory.Build.targets")
 
     assert "store-prompt-profile.json" in service
-    assert "GenerateStandardPromptAsync" in service
-    assert "MyOpenAI.CallStructuredChat(messages, 4000, 0.05, 240" in service
-    assert "店铺固定事实与服务边界" in service
-    assert "不得自行扩大链接服务范围" in service
-    assert 'Content = "店铺提示词"' in ui
-    assert 'Content = "AI生成标准提示词"' in ui
+    assert "GenerateStructuredProfileAsync" in service
+    assert '"core_prompt"' in service
+    assert '"rules"' in service
+    assert "MaxCoreCharacters = 2500" in service
+    assert "MaxTextRules = 3" in service
+    assert "MaxVisionRules = 8" in service
+    assert "BuildTextRulesAddon" in service
+    assert "BuildVisionPromptAddon" in service
+    assert "NeedsStructuredMigration" in service
+    assert "店铺核心规则与服务边界" in service
+    assert "按当前场景动态选取的店铺规则" in service
+    assert "StorePromptProfileService.BuildTextRulesAddon(state)" in state
+    assert "StorePromptProfileService.BuildVisionPromptAddon(prompt)" in vision
+    assert 'Content = "店铺规则中心"' in ui
+    assert 'Content = "AI生成结构化规则"' in ui
+    assert "原始店铺资料" in ui
+    assert "核心规则" in ui
+    assert "场景规则卡" in ui
     assert "StorePromptProfileUi.Initialize()" in app
     assert "StorePromptProfileService.cs" in targets
     assert "StorePromptProfileUi.cs" in targets
+
+
+def test_structured_rules_have_scope_priority_triggers_and_runtime_limits():
+    service = read("src/Bot/ChromeNs/StorePromptProfileService.cs")
+    for field in ["Scope", "Priority", "Triggers", "Content", "Enabled"]:
+        assert "public " in service and field in service
+    assert "StoreRuleScopes.Text" in service
+    assert "StoreRuleScopes.Vision" in service
+    assert "StoreRuleScopes.Both" in service
+    assert "SelectRules" in service
+    assert "CalculateRuleScore" in service
+    assert "includePriorityFallback" in service
+    assert "MaxTextRuleCharacters = 4200" in service
+    assert "MaxVisionRuleCharacters = 6500" in service
