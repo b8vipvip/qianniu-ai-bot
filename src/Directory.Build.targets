@@ -76,6 +76,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerStreamingReplyPipeline.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisionFollowUpContextPipeline.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisionFollowUpContextPipeline.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs" />
   </ItemGroup>
