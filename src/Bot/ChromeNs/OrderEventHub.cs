@@ -1,3 +1,4 @@
+using Bot.ChatRecord;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -310,7 +311,7 @@ namespace Bot.ChromeNs
             {
                 if (value == null || string.IsNullOrWhiteSpace(value.Value)) continue;
                 var path = NormalizeKey(value.Path);
-                if (normalizedAliases.Any(path.EndsWith)) return value.Value.Trim();
+                if (normalizedAliases.Any(alias => path.EndsWith(alias, StringComparison.OrdinalIgnoreCase))) return value.Value.Trim();
             }
             return string.Empty;
         }
@@ -318,11 +319,12 @@ namespace Bot.ChromeNs
         private static string FindUrl(IList<FlatValue> values, IEnumerable<string> aliases, string preferredHost)
         {
             var candidates = new List<string>();
+            var normalizedAliases = new HashSet<string>((aliases ?? new string[0]).Select(NormalizeKey), StringComparer.OrdinalIgnoreCase);
             foreach (var value in values ?? new List<FlatValue>())
             {
                 if (value == null || string.IsNullOrWhiteSpace(value.Value)) continue;
                 var normalizedKey = NormalizeKey(value.Key);
-                if (!(aliases ?? new string[0]).Select(NormalizeKey).Contains(normalizedKey)) continue;
+                if (!normalizedAliases.Contains(normalizedKey)) continue;
                 Uri uri;
                 if (Uri.TryCreate(value.Value.Trim(), UriKind.Absolute, out uri)
                     && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps))
