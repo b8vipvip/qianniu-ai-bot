@@ -36,7 +36,13 @@ namespace Bot.ChromeNs
             + "只描述图片中能够确认的内容，不要猜测模糊、遮挡或无法识别的信息；不要声称已经核实订单、账号、付款、充值或售后状态，除非上下文提供了明确数据。"
             + "只输出一个JSON对象，不要输出Markdown："
             + "{\"answer\":\"给买家的简短自然回复\",\"visual_question\":\"这类图片对应的通用问题\",\"visual_summary\":\"仅描述以后可用于匹配相似图片的稳定视觉特征，不包含买家个人信息\",\"visual_tags\":[\"商品或对象\",\"部位\",\"现象\",\"场景\"]}。"
+            + "无论能否判断业务结论，visual_summary都不能为空；无法判断是否支持时，也要客观描述图片里可见的设备类型、应用名称、页面标题、按钮、二维码、提示文字或界面布局。"
             + "visual_summary要具体到可区分不同图片场景，但不得保存手机号、订单号、账号、验证码等个人信息。";
+
+        private const string StrictSemanticRepairPrompt =
+            "\n\n【结构化输出修复】上一次响应没有提供可学习的visual_summary。"
+            + "这一次必须只返回合法JSON，answer、visual_question、visual_summary、visual_tags四项都必须存在。"
+            + "即使无法确认兼容性，也必须在visual_summary里描述图片实际可见的稳定界面特征；禁止只写‘无法确认’。";
 
         public async Task<VisionRequestResult> ExecuteAsync(VisionReplyTask task, CancellationToken cancellationToken)
         {
@@ -77,11 +83,36 @@ namespace Bot.ChromeNs
                         }
 
                         var result = await CallVisionAsync(endpoint, image.ImageUrl, prompt, cts.Token);
+                        if (result.Success && string.IsNullOrWhiteSpace(result.VisualSummary))
+                        {
+                            var originalAnswer = result.Answer;
+                            Log.Info("视觉接口未返回结构化语义，开始一次同图JSON修复: seller=" + task.SellerNick
+                                + ", buyer=" + task.BuyerNick + ", endpoint=" + endpoint.Name);
+                            var repaired = await CallVisionAsync(
+                                endpoint,
+                                image.ImageUrl,
+                                prompt + StrictSemanticRepairPrompt,
+                                cts.Token);
+                            if (repaired.Success && !string.IsNullOrWhiteSpace(repaired.VisualSummary))
+                            {
+                                if (string.IsNullOrWhiteSpace(repaired.Answer)) repaired.Answer = originalAnswer;
+                                result = repaired;
+                                Log.Info("视觉结构化语义修复成功: seller=" + task.SellerNick
+                                    + ", buyer=" + task.BuyerNick + ", endpoint=" + endpoint.Name);
+                            }
+                            else
+                            {
+                                Log.Info("视觉结构化语义修复仍为空，本轮可回复但不会建立图片学习候选: seller="
+                                    + task.SellerNick + ", buyer=" + task.BuyerNick + ", endpoint=" + endpoint.Name);
+                            }
+                        }
+
                         result.LatencyMs = sw.ElapsedMilliseconds;
                         result.EndpointName = endpoint.Name;
                         result.VisionModel = endpoint.VisionModel;
                         if (result.Success)
                         {
+                            if (string.IsNullOrWhiteSpace(result.VisualQuestion)) result.VisualQuestion = currentQuestion;
                             var generatedAnswer = result.Answer;
                             VisualKnowledgeMatch learned;
                             if (!string.IsNullOrWhiteSpace(result.VisualSummary)
