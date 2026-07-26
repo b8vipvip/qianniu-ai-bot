@@ -70,6 +70,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\DirectOrderEventBridge.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\DirectOrderEventBridge.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderGuidanceDeliveryGuard.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderGuidanceDeliveryGuard.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Update\BotUpdateService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Update\BotUpdateService.cs" />
   </ItemGroup>
