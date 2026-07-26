@@ -22,6 +22,8 @@ namespace Bot.ChromeNs
         public static void Start()
         {
             if (Interlocked.Exchange(ref _started, 1) != 0) return;
+            BuyerIdentityAliasUiBridge.Start();
+            OrderNotificationTraceBridge.Start();
             _timer = new Timer(_ => Refresh(), null, 0, 500);
             Log.Info("千牛发送与人工介入安全监控已启动。");
         }
@@ -77,6 +79,8 @@ namespace Bot.ChromeNs
                 foreach (var message in response.result.Where(x => x != null))
                 {
                     if (message.fromid == null || message.toid == null) continue;
+                    BuyerIdentityAliasService.ObserveMessage(seller, message);
+
                     var from = (message.fromid.nick ?? string.Empty).Trim();
                     var buyer = (message.toid.nick ?? string.Empty).Trim();
                     if (!string.Equals(from, seller, StringComparison.Ordinal) || buyer.Length == 0) continue;
