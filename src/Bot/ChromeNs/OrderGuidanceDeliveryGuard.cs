@@ -19,35 +19,35 @@ namespace Bot.ChromeNs
     internal static class OrderMessageClassifier
     {
         private static readonly Regex LabeledOrderIdRegex = new Regex(
-            @"(?:订单号|订单编号|主订单号|子订单号|交易号)\s*[:：#]?\s*(\d{8,})",
+            "(?:订单号|订单编号|主订单号|子订单号|交易号)\\s*[:：#]?\\s*(\\d{8,})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex StrongOrderIdKeyRegex = new Regex(
-            @"[\"'](?:orderid|bizorderid|mainorderid|suborderid|biztradeid|tradeid)[\"']\s*:\s*[\"']?(\d{8,})",
+            "[\\\"'](?:orderid|bizorderid|mainorderid|suborderid|biztradeid|tradeid)[\\\"']\\s*:\\s*[\\\"']?(\\d{8,})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex StrongSystemCueRegex = new Regex(
-            @"买家已下单|买家下单成功|订单创建成功|已成功下单|买家已付款|付款成功|支付成功|交易成功|等待买家付款|待卖家发货|卖家待发货|订单关闭|交易关闭|申请退款|退款中",
+            "买家已下单|买家下单成功|订单创建成功|已成功下单|买家已付款|付款成功|支付成功|交易成功|等待买家付款|待卖家发货|卖家待发货|订单关闭|交易关闭|申请退款|退款中",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex StrongStatusCodeRegex = new Regex(
-            @"WAIT_BUYER_PAY|WAIT_SELLER_SEND_GOODS|TRADE_BUYER_SIGNED|TRADE_FINISHED|TRADE_CLOSED|REFUND",
+            "WAIT_BUYER_PAY|WAIT_SELLER_SEND_GOODS|TRADE_BUYER_SIGNED|TRADE_FINISHED|TRADE_CLOSED|REFUND",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex StrongItemFieldRegex = new Regex(
-            @"[\"'](?:itemtitle|auctiontitle|producttitle|goodstitle|itemname|productname)[\"']\s*:",
+            "[\\\"'](?:itemtitle|auctiontitle|producttitle|goodstitle|itemname|productname)[\\\"']\\s*:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex StrongSkuFieldRegex = new Regex(
-            @"[\"'](?:skuid|skutext|skuname|skupropertiesname|propertiesname|specification)[\"']\s*:",
+            "[\\\"'](?:skuid|skutext|skuname|skupropertiesname|propertiesname|specification)[\\\"']\\s*:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex StrongAmountFieldRegex = new Regex(
-            @"[\"'](?:paidamount|paidfee|actualfee|realpay|totalamount|totalfee|orderamount)[\"']\s*:",
+            "[\\\"'](?:paidamount|paidfee|actualfee|realpay|totalamount|totalfee|orderamount)[\\\"']\\s*:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex StrongStatusFieldRegex = new Regex(
-            @"[\"'](?:tradestatus|orderstatus|paystatus|statustext)[\"']\s*:",
+            "[\\\"'](?:tradestatus|orderstatus|paystatus|statustext)[\\\"']\\s*:",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static bool IsConfirmedOrderEvent(QNChatMessage message, string visibleText, out string reason)
@@ -67,11 +67,15 @@ namespace Bot.ChromeNs
 
             var systemCue = StrongSystemCueRegex.IsMatch(combined) || StrongStatusCodeRegex.IsMatch(combined);
             var structureScore = 0;
-            if (StrongItemFieldRegex.IsMatch(raw) || Regex.IsMatch(text, @"(?:商品|宝贝)\s*[:：]", RegexOptions.IgnoreCase)) structureScore++;
-            if (StrongSkuFieldRegex.IsMatch(raw) || Regex.IsMatch(text, @"(?:SKU|规格|属性)\s*[:：]", RegexOptions.IgnoreCase)) structureScore++;
-            if (StrongAmountFieldRegex.IsMatch(raw) || Regex.IsMatch(text, @"(?:实付|合计|金额|订单总价)\s*[:：]?\s*[¥￥]?\d", RegexOptions.IgnoreCase)) structureScore++;
-            if (StrongStatusFieldRegex.IsMatch(raw) || Regex.IsMatch(text, @"(?:订单状态|交易状态)\s*[:：]", RegexOptions.IgnoreCase)) structureScore++;
-            if (Regex.IsMatch(text, @"\d+\s*件商品") && text.Contains("合计")) structureScore += 2;
+            if (StrongItemFieldRegex.IsMatch(raw)
+                || Regex.IsMatch(text, "(?:商品|宝贝)\\s*[:：]", RegexOptions.IgnoreCase)) structureScore++;
+            if (StrongSkuFieldRegex.IsMatch(raw)
+                || Regex.IsMatch(text, "(?:SKU|规格|属性)\\s*[:：]", RegexOptions.IgnoreCase)) structureScore++;
+            if (StrongAmountFieldRegex.IsMatch(raw)
+                || Regex.IsMatch(text, "(?:实付|合计|金额|订单总价)\\s*[:：]?\\s*[¥￥]?\\d", RegexOptions.IgnoreCase)) structureScore++;
+            if (StrongStatusFieldRegex.IsMatch(raw)
+                || Regex.IsMatch(text, "(?:订单状态|交易状态)\\s*[:：]", RegexOptions.IgnoreCase)) structureScore++;
+            if (Regex.IsMatch(text, "\\d+\\s*件商品") && text.Contains("合计")) structureScore += 2;
 
             if (systemCue)
             {
@@ -139,11 +143,11 @@ namespace Bot.ChromeNs
         private static OrderGuidanceState _state;
 
         private static readonly Regex NegativeFollowUpRegex = new Regex(
-            @"没下单|没有下单|未下单|还没下单|没付款|未付款|还没付款|没拍|还没拍|怎么下单|不能下单|无法下单",
+            "没下单|没有下单|未下单|还没下单|没付款|未付款|还没付款|没拍|还没拍|怎么下单|不能下单|无法下单",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex PositiveFollowUpRegex = new Regex(
-            @"^(?:我)?(?:已经|已)?(?:拍了|拍好了|拍完了|截图了|截好了|照片拍了|发图了|图片发了|下单了|付款了|付好了|买好了)$|^(?:请问)?(?:怎么充|怎么充值|如何充值|接下来怎么弄|下一步怎么弄|然后呢|下一步呢)[呀啊吗呢？?]*$",
+            "^(?:我)?(?:已经|已)?(?:拍了|拍好了|拍完了|截图了|截好了|照片拍了|发图了|图片发了|下单了|付款了|付好了|买好了)$|^(?:请问)?(?:怎么充|怎么充值|如何充值|接下来怎么弄|下一步怎么弄|然后呢|下一步呢)[呀啊吗呢？?]*$",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         public static void ObserveOrder(OrderSnapshot snapshot)
@@ -159,18 +163,7 @@ namespace Bot.ChromeNs
                 var record = FindInternal(snapshot.Seller, snapshot.Buyer, snapshot.OrderId);
                 if (record == null)
                 {
-                    record = new OrderGuidanceRecord
-                    {
-                        Seller = snapshot.Seller.Trim(),
-                        Buyer = snapshot.Buyer.Trim(),
-                        OrderId = snapshot.OrderId.Trim(),
-                        EventTime = snapshot.EventTime,
-                        ObservedAt = DateTime.Now,
-                        Snapshot = CloneSnapshot(snapshot),
-                        InitialDeliveredBy = string.Empty,
-                        FollowUpDeliveredBy = string.Empty,
-                        FollowUpTriggerHash = string.Empty
-                    };
+                    record = NewRecord(snapshot);
                     _state.Records.Add(record);
                 }
                 else
@@ -180,27 +173,6 @@ namespace Bot.ChromeNs
                     MergeSnapshot(record.Snapshot, snapshot);
                 }
                 SaveInternal();
-            }
-        }
-
-        public static bool TryGetLatestOrder(string seller, string buyer, out OrderSnapshot snapshot)
-        {
-            snapshot = null;
-            lock (Sync)
-            {
-                EnsureLoaded();
-                CleanupInternal();
-                var record = _state.Records
-                    .Where(x => x != null
-                        && Same(x.Seller, seller)
-                        && Same(x.Buyer, buyer)
-                        && x.ObservedAt >= DateTime.Now.AddDays(-7))
-                    .OrderByDescending(x => x.EventTime)
-                    .ThenByDescending(x => x.ObservedAt)
-                    .FirstOrDefault();
-                if (record == null || record.Snapshot == null) return false;
-                snapshot = CloneSnapshot(record.Snapshot);
-                return true;
             }
         }
 
@@ -231,14 +203,7 @@ namespace Bot.ChromeNs
             {
                 EnsureLoaded();
                 CleanupInternal();
-                var record = _state.Records
-                    .Where(x => x != null
-                        && Same(x.Seller, seller)
-                        && Same(x.Buyer, buyer)
-                        && x.ObservedAt >= DateTime.Now.AddDays(-7))
-                    .OrderByDescending(x => x.EventTime)
-                    .ThenByDescending(x => x.ObservedAt)
-                    .FirstOrDefault();
+                var record = FindLatestInternal(seller, buyer);
                 if (record == null || record.Snapshot == null)
                 {
                     reason = "该买家没有经过严格确认的近期订单";
@@ -270,18 +235,7 @@ namespace Bot.ChromeNs
                 var record = FindInternal(plan.Seller, plan.Buyer, plan.OrderId);
                 if (record == null)
                 {
-                    record = new OrderGuidanceRecord
-                    {
-                        Seller = plan.Seller,
-                        Buyer = plan.Buyer,
-                        OrderId = plan.OrderId,
-                        EventTime = plan.EventTime,
-                        ObservedAt = DateTime.Now,
-                        Snapshot = CloneSnapshot(plan.Snapshot),
-                        InitialDeliveredBy = string.Empty,
-                        FollowUpDeliveredBy = string.Empty,
-                        FollowUpTriggerHash = string.Empty
-                    };
+                    record = NewRecord(plan.Snapshot, plan.Seller, plan.Buyer, plan.OrderId, plan.EventTime);
                     _state.Records.Add(record);
                 }
 
@@ -327,23 +281,43 @@ namespace Bot.ChromeNs
                 var record = FindInternal(plan.Seller, plan.Buyer, plan.OrderId);
                 if (record == null)
                 {
-                    record = new OrderGuidanceRecord
-                    {
-                        Seller = plan.Seller,
-                        Buyer = plan.Buyer,
-                        OrderId = plan.OrderId,
-                        EventTime = plan.EventTime,
-                        ObservedAt = DateTime.Now,
-                        Snapshot = CloneSnapshot(plan.Snapshot),
-                        InitialDeliveredBy = string.Empty,
-                        FollowUpDeliveredBy = string.Empty,
-                        FollowUpTriggerHash = string.Empty
-                    };
+                    record = NewRecord(plan.Snapshot, plan.Seller, plan.Buyer, plan.OrderId, plan.EventTime);
                     _state.Records.Add(record);
                 }
                 MarkDeliveredInternal(record, plan, deliveredBy);
                 SaveInternal();
             }
+        }
+
+        private static OrderGuidanceRecord NewRecord(OrderSnapshot snapshot)
+        {
+            return NewRecord(
+                snapshot,
+                snapshot == null ? string.Empty : snapshot.Seller,
+                snapshot == null ? string.Empty : snapshot.Buyer,
+                snapshot == null ? string.Empty : snapshot.OrderId,
+                snapshot == null ? DateTime.Now : snapshot.EventTime);
+        }
+
+        private static OrderGuidanceRecord NewRecord(
+            OrderSnapshot snapshot,
+            string seller,
+            string buyer,
+            string orderId,
+            DateTime eventTime)
+        {
+            return new OrderGuidanceRecord
+            {
+                Seller = (seller ?? string.Empty).Trim(),
+                Buyer = (buyer ?? string.Empty).Trim(),
+                OrderId = (orderId ?? string.Empty).Trim(),
+                EventTime = eventTime,
+                ObservedAt = DateTime.Now,
+                Snapshot = CloneSnapshot(snapshot),
+                InitialDeliveredBy = string.Empty,
+                FollowUpDeliveredBy = string.Empty,
+                FollowUpTriggerHash = string.Empty
+            };
         }
 
         private static void MarkDeliveredInternal(OrderGuidanceRecord record, OrderPlacedReplyPlan plan, string source)
@@ -399,10 +373,7 @@ namespace Bot.ChromeNs
             var min = Math.Min(a.Length, b.Length);
             var max = Math.Max(a.Length, b.Length);
             if (min >= 12 && (a.Contains(b) || b.Contains(a)) && min * 100 / max >= 65) return true;
-
-            var aSignature = HasGuidanceSignature(a);
-            var bSignature = HasGuidanceSignature(b);
-            return aSignature && bSignature;
+            return HasGuidanceSignature(a) && HasGuidanceSignature(b);
         }
 
         private static bool HasGuidanceSignature(string value)
@@ -419,12 +390,27 @@ namespace Bot.ChromeNs
                 .Replace("【AI】", string.Empty)
                 .Replace("亲", string.Empty)
                 .ToLowerInvariant();
-            return Regex.Replace(value, @"[^a-z0-9\u4e00-\u9fff]", string.Empty);
+            return Regex.Replace(value, "[^a-z0-9\\u4e00-\\u9fff]", string.Empty);
         }
 
         private static string Compact(string value)
         {
-            return Regex.Replace((value ?? string.Empty).Trim(), @"[\s，。！!、；;：:‘’“”\"']+", string.Empty);
+            return Regex.Replace(
+                (value ?? string.Empty).Trim(),
+                "[\\s，。！!、；;：:‘’“”\\\"']+",
+                string.Empty);
+        }
+
+        private static OrderGuidanceRecord FindLatestInternal(string seller, string buyer)
+        {
+            return _state.Records
+                .Where(x => x != null
+                    && Same(x.Seller, seller)
+                    && Same(x.Buyer, buyer)
+                    && x.ObservedAt >= DateTime.Now.AddDays(-7))
+                .OrderByDescending(x => x.EventTime)
+                .ThenByDescending(x => x.ObservedAt)
+                .FirstOrDefault();
         }
 
         private static OrderGuidanceRecord FindInternal(string seller, string buyer, string orderId)
