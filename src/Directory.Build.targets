@@ -94,6 +94,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\WeComAppBridgeClient.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\HandoffRuleRemoteConfigService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\HandoffRuleRemoteConfigService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\AdaptiveReplyTimingService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\AdaptiveReplyTimingService.cs" />
   </ItemGroup>
