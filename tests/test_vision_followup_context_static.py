@@ -19,14 +19,17 @@ def test_pipeline_is_initialized_and_built():
 
 def test_referential_text_reuses_recent_image_and_keeps_original_lease():
     pipeline = text("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
-    assert "FollowUpWindowSeconds = 30" in pipeline
-    assert "CaptionWindowSeconds = 8" in pipeline
+    assert "FollowUpWindowSeconds = 45" in pipeline
+    assert "CaptionWindowSeconds = 15" in pipeline
     assert "RecentVision" in pipeline
     assert "IsVisionReferentialFollowUp" in pipeline
     assert 'compact == "这个吗"' in pipeline
     assert 'compact == "是这个吗"' in pipeline
     assert 'compact == "这里吗"' in pipeline
     assert 'compact == "对吗"' in pipeline
+    assert 'compact == "这种能使用吗"' in pipeline
+    assert 'compact.Contains("这种")' in pipeline
+    assert 'compact.Contains("这类")' in pipeline
     assert "var items = new List<BuyerMessageBurstItem> { CloneVisionItem(recent.Item) };" in pipeline
     assert "items.AddRange(burst.Items.Where(x => x != null));" in pipeline
     assert "new BuyerMessageBurst(" in pipeline
