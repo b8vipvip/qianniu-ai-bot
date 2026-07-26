@@ -28,6 +28,7 @@ namespace Bot
             DirectOrderEventBridge.Initialize();
             OrderPaymentNotificationFallback.Initialize();
             BotUpdateService.Initialize();
+            HandoffRuleRemoteConfigService.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
             Bot.Knowledge.StorePromptProfileUi.Initialize();
