@@ -23,6 +23,9 @@ namespace Bot.ChromeNs
         public string ReservationKey { get; set; }
         public AutoReplyRuleConfig Config { get; set; }
         public OrderSnapshot Snapshot { get; set; }
+        public bool IsBuyerFollowUp { get; set; }
+        public string TriggerText { get; set; }
+        public DateTime TriggerTime { get; set; }
     }
 
     internal sealed class OrderPlacedReplyResolution
@@ -49,6 +52,12 @@ namespace Bot.ChromeNs
             plan = null;
             if (!Params.Robot.CanUseRobotReal) return false;
 
+            string classificationReason;
+            if (!OrderMessageClassifier.IsConfirmedOrderEvent(message, messageText, out classificationReason))
+            {
+                return TryCreateBuyerFollowUpPlan(messageText, seller, buyer, out plan);
+            }
+
             OrderSnapshot snapshot;
             if (!OrderCardParser.TryParse(
                 message,
@@ -60,6 +69,11 @@ namespace Bot.ChromeNs
             {
                 return false;
             }
+
+            OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
+            Log.Info("订单事件通过严格证据校验: seller=" + seller
+                + ", buyer=" + buyer + ", orderId=" + snapshot.OrderId
+                + ", reason=" + classificationReason);
 
             if (snapshot.EventTime < botStartedAt.AddSeconds(-8))
             {
@@ -109,8 +123,61 @@ namespace Bot.ChromeNs
                 EventTime = snapshot.EventTime,
                 ReservationKey = key,
                 Config = cfg,
-                Snapshot = snapshot
+                Snapshot = snapshot,
+                IsBuyerFollowUp = false,
+                TriggerText = string.Empty,
+                TriggerTime = DateTime.MinValue
             };
+            return true;
+        }
+
+        private static bool TryCreateBuyerFollowUpPlan(
+            string messageText,
+            string seller,
+            string buyer,
+            out OrderPlacedReplyPlan plan)
+        {
+            plan = null;
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            if (cfg == null || !cfg.EnableOrderPlacedReply) return false;
+
+            OrderSnapshot snapshot;
+            string reason;
+            if (!OrderGuidanceDeliveryGuard.CanCreateFollowUp(
+                seller,
+                buyer,
+                messageText,
+                out snapshot,
+                out reason))
+            {
+                return false;
+            }
+
+            var trigger = (messageText ?? string.Empty).Trim();
+            var key = Normalize(seller) + "#" + Normalize(buyer) + "#" + snapshot.OrderId + "#guidance-followup";
+            DateTime until;
+            if (Reservations.TryGetValue(key, out until) && until > DateTime.Now)
+            {
+                Log.Info("买家充值流程续问已去重: buyer=" + buyer + ", orderId=" + snapshot.OrderId);
+                return true;
+            }
+            Reservations[key] = DateTime.Now.AddMinutes(5);
+            plan = new OrderPlacedReplyPlan
+            {
+                Seller = (seller ?? string.Empty).Trim(),
+                Buyer = (buyer ?? string.Empty).Trim(),
+                OrderId = snapshot.OrderId,
+                EventText = trigger,
+                EventTime = snapshot.EventTime,
+                ReservationKey = key,
+                Config = cfg,
+                Snapshot = snapshot,
+                IsBuyerFollowUp = true,
+                TriggerText = trigger,
+                TriggerTime = DateTime.Now
+            };
+            Log.Info("买家明确询问充值流程，允许额外补发一次: seller=" + seller
+                + ", buyer=" + buyer + ", orderId=" + snapshot.OrderId + ", trigger=" + trigger);
             return true;
         }
 
@@ -128,7 +195,11 @@ namespace Bot.ChromeNs
             if (string.Equals(mode, "调用HTTP接口", StringComparison.Ordinal))
             {
                 var api = await CallReplyApiAsync(plan);
-                if (api.Success) return api;
+                if (api.Success)
+                {
+                    if (plan.IsBuyerFollowUp) api.Source += "（买家明确续问）";
+                    return api;
+                }
                 var fallback = RenderTemplate(cfg.OrderPlacedReplyText, plan);
                 if (!string.IsNullOrWhiteSpace(fallback))
                 {
@@ -137,7 +208,9 @@ namespace Bot.ChromeNs
                     {
                         Success = true,
                         Reply = fallback,
-                        Source = "下单自动回复-接口失败兜底"
+                        Source = plan.IsBuyerFollowUp
+                            ? "下单自动回复-接口失败兜底（买家明确续问）"
+                            : "下单自动回复-接口失败兜底"
                     };
                 }
                 return api;
@@ -149,7 +222,9 @@ namespace Bot.ChromeNs
             {
                 Success = true,
                 Reply = reply,
-                Source = "下单自动回复-固定预设"
+                Source = plan.IsBuyerFollowUp
+                    ? "下单自动回复-固定预设（买家明确续问）"
+                    : "下单自动回复-固定预设"
             };
         }
 
@@ -162,7 +237,9 @@ namespace Bot.ChromeNs
                 Reservations.TryRemove(plan.ReservationKey, out ignored);
                 return;
             }
-            var hours = plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours));
+            var hours = plan.IsBuyerFollowUp
+                ? 720
+                : (plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours)));
             Reservations[plan.ReservationKey] = DateTime.Now.AddHours(hours);
         }
 
@@ -179,14 +256,18 @@ namespace Bot.ChromeNs
             var snapshot = plan.Snapshot;
             var payload = new JObject
             {
-                ["event"] = snapshot != null && snapshot.EventType == OrderEventType.Paid
-                    ? "buyer_order_paid"
-                    : "buyer_order_created",
+                ["event"] = plan.IsBuyerFollowUp
+                    ? "buyer_order_guidance_followup"
+                    : (snapshot != null && snapshot.EventType == OrderEventType.Paid
+                        ? "buyer_order_paid"
+                        : "buyer_order_created"),
                 ["seller"] = plan.Seller,
                 ["buyer"] = plan.Buyer,
                 ["orderId"] = plan.OrderId,
                 ["eventTime"] = plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"),
-                ["message"] = Short(plan.EventText, 1200)
+                ["message"] = Short(plan.EventText, 1200),
+                ["buyerFollowUp"] = plan.IsBuyerFollowUp,
+                ["triggerText"] = plan.TriggerText ?? string.Empty
             };
             if (snapshot != null)
             {
@@ -299,18 +380,31 @@ namespace Bot.ChromeNs
                     OrderPlacedAutoReplyService.Complete(plan, false);
                     OrderAttentionUiService.SetReplyResult(plan == null ? null : plan.Snapshot, false);
                     var note = "下单自动回复未发送：" + (string.IsNullOrWhiteSpace(resolution.Error) ? "未生成回复" : resolution.Error);
-                    AddSkippedConversation(plan.Seller, plan.Buyer, "[买家下单] 订单号 " + plan.OrderId, note);
+                    AddSkippedConversation(plan.Seller, plan.Buyer, BuildPlanQuestion(plan), note);
                     Log.Info(note + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
                     return;
                 }
 
                 var answer = BotOutboundMessageFormatter.EnsureAiMarker(
                     BotFeatureStore.ApplyOutputPolicy(resolution.Reply));
+
+                string duplicateReason;
+                if (OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
+                {
+                    OrderPlacedAutoReplyService.Complete(plan, true);
+                    OrderAttentionUiService.SetReplyResult(plan.Snapshot, true);
+                    AddSkippedConversation(plan.Seller, plan.Buyer, BuildPlanQuestion(plan), "未重复发送：" + duplicateReason);
+                    Log.Info("下单固定预设已抑制重复发送: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", reason=" + duplicateReason);
+                    return;
+                }
+
                 var autoSend = Params.Robot.GetIsAutoReply();
                 KnowledgeLearningService.RegisterAnswerSource(
                     plan.Seller,
                     plan.Buyer,
-                    "[买家下单] 订单号 " + plan.OrderId,
+                    BuildPlanQuestion(plan),
                     BotOutboundMessageFormatter.StripAiMarker(answer),
                     resolution.Source);
                 var ctl = Desk.Inst == null
@@ -318,7 +412,7 @@ namespace Bot.ChromeNs
                     : Desk.Inst.AddConversation(
                         plan.Seller,
                         plan.Buyer,
-                        "[买家下单] 订单号 " + plan.OrderId,
+                        BuildPlanQuestion(plan),
                         answer,
                         autoSend,
                         resolution.Source);
@@ -348,6 +442,18 @@ namespace Bot.ChromeNs
                     }
                 }
 
+                // 延时期间人工客服可能已经发送了同一条充值流程，因此发送前必须再次检查。
+                if (OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
+                {
+                    OrderPlacedAutoReplyService.Complete(plan, true);
+                    OrderAttentionUiService.SetReplyResult(plan.Snapshot, true);
+                    if (ctl != null) ctl.SetSendResult(false, "未发送：" + duplicateReason);
+                    Log.Info("下单固定预设在发送前被人工回复抑制: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", reason=" + duplicateReason);
+                    return;
+                }
+
                 KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);
                 Log.Info("下单自动回复已登记精确发送豁免: seller=" + plan.Seller
                     + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
@@ -357,6 +463,9 @@ namespace Bot.ChromeNs
                 OrderAttentionUiService.SetReplyResult(plan.Snapshot, sendOk);
                 if (sendOk)
                 {
+                    OrderGuidanceDeliveryGuard.MarkDelivered(
+                        plan,
+                        plan.IsBuyerFollowUp ? "Bot补发" : "Bot首次发送");
                     ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
                 }
                 if (ctl != null)
@@ -364,10 +473,20 @@ namespace Bot.ChromeNs
                     ctl.SetSendResult(
                         sendOk,
                         sendOk
-                            ? "已发送（买家下单自动消息，订单号 " + plan.OrderId + "）"
+                            ? (plan.IsBuyerFollowUp
+                                ? "已发送（买家明确续问，充值流程仅补发一次）"
+                                : "已发送（买家下单自动消息，订单号 " + plan.OrderId + "）")
                             : "发送失败：" + rpa.GetSendFailureReason());
                 }
             }
+        }
+
+        private static string BuildPlanQuestion(OrderPlacedReplyPlan plan)
+        {
+            if (plan == null) return "[买家下单]";
+            return plan.IsBuyerFollowUp
+                ? "[买家续问充值流程] " + (plan.TriggerText ?? string.Empty)
+                : "[买家下单] 订单号 " + plan.OrderId;
         }
     }
 }
