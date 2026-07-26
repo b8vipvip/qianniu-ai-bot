@@ -25,8 +25,25 @@ namespace Bot.ChromeNs
             string question,
             AutoReplyRuleDecision decision)
         {
+            if (decision == null || !decision.Matched) return;
+
+            // 本方法在调用方检查 AllowAutoReply 之前同步执行。服务端规则可把
+            // “给朋友/另一个账号充值”等明确安全例外改为固定答复，并且不创建人工工单。
+            string overrideDetail;
+            if (HandoffRuleRemoteConfigService.TryApplySafeAutoReply(
+                question,
+                decision,
+                out overrideDetail))
+            {
+                Log.Info("转人工规则已按安全例外改为自动答复: seller=" + seller
+                    + ", buyer=" + buyer
+                    + ", keyword=" + decision.HitKeyword
+                    + ", detail=" + overrideDetail);
+                return;
+            }
+
             var cfg = BotFeatureStore.GetAutoReplyRules();
-            if (cfg == null || !cfg.EnableHandoffNotification || decision == null || !decision.Matched) return;
+            if (cfg == null || !cfg.EnableHandoffNotification) return;
             var key = Normalize(seller) + "#" + Normalize(buyer) + "#" + Normalize(question);
             var now = DateTime.Now;
             DateTime until;
