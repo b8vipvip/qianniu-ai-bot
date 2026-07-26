@@ -1,7 +1,11 @@
+using Bot.ChromeNs;
 using Bot.UpdateNs;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -9,12 +13,29 @@ using System.Windows.Media;
 
 namespace Bot.Options
 {
+    internal sealed class InstalledBotBuildInfo
+    {
+        public string Version { get; set; }
+        public string Tag { get; set; }
+        public string Commit { get; set; }
+        public string PublishedAt { get; set; }
+        public string Channel { get; set; }
+        public string SourceRunId { get; set; }
+        public string InstallDirectory { get; set; }
+        public string BuildSource { get; set; }
+    }
+
     internal sealed class BotUpdateOptionsControl : UserControl, IOptions
     {
         private readonly TextBlock _currentVersion;
         private readonly TextBlock _latestVersion;
         private readonly TextBlock _status;
         private readonly TextBlock _skipped;
+        private readonly TextBlock _buildCommit;
+        private readonly TextBlock _buildTime;
+        private readonly TextBlock _buildChannel;
+        private readonly TextBlock _buildRun;
+        private readonly TextBlock _installDirectory;
         private readonly CheckBox _autoCheck;
         private readonly CheckBox _notifyPopup;
         private readonly CheckBox _autoDownload;
@@ -50,34 +71,54 @@ namespace Bot.Options
             });
             heroPanel.Children.Add(new TextBlock
             {
-                Text = "自动识别 GitHub Actions 发布的正式版本，下载前校验 SHA-256，安装失败自动回滚。",
+                Text = "查看当前构建信息，手动检查 GitHub 正式版本，并安全下载、校验、安装或自动回滚。",
                 Margin = new Thickness(0, 7, 0, 0),
                 Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
                 TextWrapping = TextWrapping.Wrap
             });
             panel.Children.Add(hero);
 
+            var build = ReadInstalledBuildInfo();
             var versionCard = CreateCard();
             var versionPanel = (StackPanel)versionCard.Child;
-            versionPanel.Children.Add(CreateTitle("版本信息"));
+            versionPanel.Children.Add(CreateTitle("当前程序与构建信息"));
             var versionGrid = new Grid { Margin = new Thickness(0, 10, 0, 0) };
             versionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
             versionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            versionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            versionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-            versionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (var i = 0; i < 8; i++) versionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
             AddLabel(versionGrid, 0, "当前版本");
             _currentVersion = AddValue(versionGrid, 0, BotUpdateService.CurrentVersion);
-            AddLabel(versionGrid, 1, "最新版本");
-            _latestVersion = AddValue(versionGrid, 1, "尚未检查");
-            AddLabel(versionGrid, 2, "跳过版本");
-            _skipped = AddValue(versionGrid, 2, "无");
+            AddLabel(versionGrid, 1, "构建提交");
+            _buildCommit = AddValue(versionGrid, 1, DisplayCommit(build.Commit));
+            AddLabel(versionGrid, 2, "发布时间/构建时间");
+            _buildTime = AddValue(versionGrid, 2, build.PublishedAt);
+            AddLabel(versionGrid, 3, "更新通道");
+            _buildChannel = AddValue(versionGrid, 3, build.Channel);
+            AddLabel(versionGrid, 4, "构建任务");
+            _buildRun = AddValue(versionGrid, 4, build.SourceRunId);
+            AddLabel(versionGrid, 5, "安装目录");
+            _installDirectory = AddValue(versionGrid, 5, build.InstallDirectory);
+            _installDirectory.TextWrapping = TextWrapping.Wrap;
+            AddLabel(versionGrid, 6, "GitHub最新版本");
+            _latestVersion = AddValue(versionGrid, 6, "尚未检查");
+            AddLabel(versionGrid, 7, "已跳过版本");
+            _skipped = AddValue(versionGrid, 7, "无");
             versionPanel.Children.Add(versionGrid);
+
+            versionPanel.Children.Add(new TextBlock
+            {
+                Text = build.BuildSource,
+                Margin = new Thickness(0, 10, 0, 0),
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap
+            });
             panel.Children.Add(versionCard);
 
             var updateCard = CreateCard();
             var updatePanel = (StackPanel)updateCard.Child;
-            updatePanel.Children.Add(CreateTitle("更新方式"));
+            updatePanel.Children.Add(CreateTitle("自动检查设置"));
             _autoCheck = new CheckBox
             {
                 Content = "启动后和运行期间自动检查新版本",
@@ -127,7 +168,7 @@ namespace Bot.Options
             };
             actionPanel.Children.Add(_status);
             var buttons = new WrapPanel();
-            _checkButton = CreateButton("检查更新", true);
+            _checkButton = CreateButton("手动检查更新", true);
             _checkButton.Click += async (s, e) => await CheckAsync();
             buttons.Children.Add(_checkButton);
             _installButton = CreateButton("下载并安装", false);
@@ -141,6 +182,9 @@ namespace Bot.Options
             var releaseButton = CreateButton("查看发布页面", false);
             releaseButton.Click += (s, e) => BotUpdateService.OpenReleasesPage();
             buttons.Children.Add(releaseButton);
+            var openInstall = CreateButton("打开安装目录", false);
+            openInstall.Click += (s, e) => OpenDirectory(ReadInstalledBuildInfo().InstallDirectory);
+            buttons.Children.Add(openInstall);
             var clearSkip = CreateButton("取消跳过版本", false);
             clearSkip.Click += (s, e) =>
             {
@@ -162,7 +206,7 @@ namespace Bot.Options
             };
             note.Child = new TextBlock
             {
-                Text = "更新安全机制：仅接受本仓库 bot-v* 正式 Release；安装包必须通过 update.json 中的 SHA-256 校验；更新前备份程序和永久用户数据；新程序无法启动时自动回滚。自动下载不等于自动安装，安装会关闭并重启 Bot。",
+                Text = "安全机制：只接受本仓库 bot-v* 正式 Release；安装包必须通过 update.json 的 SHA-256 校验；更新前备份程序和永久用户数据；新版本无法启动时自动回滚。自动下载不等于静默安装，安装前始终需要人工确认。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(30, 64, 175))
             };
@@ -172,6 +216,7 @@ namespace Bot.Options
             {
                 LoadSettings();
                 Subscribe();
+                RefreshBuildInfo();
                 ApplyResult(BotUpdateService.LastResult);
             };
             Unloaded += (s, e) => Unsubscribe();
@@ -209,6 +254,7 @@ namespace Bot.Options
         public void InitUI(string seller)
         {
             LoadSettings();
+            RefreshBuildInfo();
         }
 
         private async Task CheckAsync()
@@ -224,13 +270,10 @@ namespace Bot.Options
                 {
                     BotUpdateService.ShowUpdatePrompt(result.Release, Window.GetWindow(this));
                 }
-                else if (result.Success)
-                {
-                    MessageBox.Show(result.Message, "检查更新", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
                 else
                 {
-                    MessageBox.Show(result.Message, "检查更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    MessageBox.Show(result.Message, "检查更新", MessageBoxButton.OK,
+                        result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
                 }
             }
             finally
@@ -270,7 +313,7 @@ namespace Bot.Options
                 return;
             }
             _status.Text = result.Message;
-            _latestVersion.Text = result.Release == null ? "未找到" : result.Release.Version;
+            _latestVersion.Text = result.Release == null ? "未找到正式版本" : result.Release.Version;
             _installButton.IsEnabled = result.UpdateAvailable && result.Release != null;
             LoadSkippedVersionOnly();
         }
@@ -291,6 +334,17 @@ namespace Bot.Options
             _skipped.Text = string.IsNullOrWhiteSpace(settings.SkippedVersion) ? "无" : settings.SkippedVersion;
         }
 
+        private void RefreshBuildInfo()
+        {
+            var build = ReadInstalledBuildInfo();
+            _currentVersion.Text = BotUpdateService.CurrentVersion;
+            _buildCommit.Text = DisplayCommit(build.Commit);
+            _buildTime.Text = build.PublishedAt;
+            _buildChannel.Text = build.Channel;
+            _buildRun.Text = build.SourceRunId;
+            _installDirectory.Text = build.InstallDirectory;
+        }
+
         private void AddInterval(string text, int hours)
         {
             _interval.Items.Add(new ComboBoxItem { Content = text, Tag = hours });
@@ -306,6 +360,96 @@ namespace Bot.Options
                     .FirstOrDefault();
             }
             _interval.SelectedItem = exact;
+        }
+
+        internal static InstalledBotBuildInfo ReadInstalledBuildInfo()
+        {
+            var baseDirectory = Path.GetFullPath(AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar));
+            var installDirectory = string.Equals(Path.GetFileName(baseDirectory), "Bin", StringComparison.OrdinalIgnoreCase)
+                ? Directory.GetParent(baseDirectory).FullName
+                : baseDirectory;
+            var result = new InstalledBotBuildInfo
+            {
+                Version = BotUpdateService.CurrentVersion,
+                Tag = string.Empty,
+                Commit = string.Empty,
+                PublishedAt = string.Empty,
+                Channel = "本地/兼容版本",
+                SourceRunId = "无",
+                InstallDirectory = installDirectory,
+                BuildSource = "当前安装包没有 release-info.json，显示程序集版本和 Bot.exe 文件时间。"
+            };
+
+            foreach (var path in new[]
+            {
+                Path.Combine(installDirectory, "release-info.json"),
+                Path.Combine(baseDirectory, "release-info.json")
+            }.Distinct(StringComparer.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    if (!File.Exists(path)) continue;
+                    var json = JObject.Parse(File.ReadAllText(path));
+                    result.Version = Convert.ToString(json["version"] ?? result.Version);
+                    result.Tag = Convert.ToString(json["tag"] ?? string.Empty);
+                    result.Commit = Convert.ToString(json["commit"] ?? string.Empty);
+                    result.Channel = Convert.ToString(json["channel"] ?? "stable");
+                    result.SourceRunId = Convert.ToString(json["source_run_id"] ?? "无");
+                    var published = Convert.ToString(json["published_at"] ?? string.Empty);
+                    DateTime parsed;
+                    result.PublishedAt = DateTime.TryParse(published, out parsed)
+                        ? parsed.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss")
+                        : published;
+                    result.BuildSource = "构建信息来自已校验安装包中的 release-info.json。";
+                    return NormalizeBuildInfo(result);
+                }
+                catch
+                {
+                }
+            }
+
+            try
+            {
+                var exe = Assembly.GetExecutingAssembly().Location;
+                if (File.Exists(exe)) result.PublishedAt = File.GetLastWriteTime(exe).ToString("yyyy-MM-dd HH:mm:ss");
+            }
+            catch
+            {
+            }
+            return NormalizeBuildInfo(result);
+        }
+
+        private static InstalledBotBuildInfo NormalizeBuildInfo(InstalledBotBuildInfo info)
+        {
+            info.Version = string.IsNullOrWhiteSpace(info.Version) ? BotUpdateService.CurrentVersion : info.Version;
+            info.Commit = string.IsNullOrWhiteSpace(info.Commit) ? "未记录" : info.Commit;
+            info.PublishedAt = string.IsNullOrWhiteSpace(info.PublishedAt) ? "未记录" : info.PublishedAt;
+            info.Channel = string.IsNullOrWhiteSpace(info.Channel) ? "stable" : info.Channel;
+            info.SourceRunId = string.IsNullOrWhiteSpace(info.SourceRunId) ? "未记录" : info.SourceRunId;
+            info.InstallDirectory = string.IsNullOrWhiteSpace(info.InstallDirectory) ? AppDomain.CurrentDomain.BaseDirectory : info.InstallDirectory;
+            return info;
+        }
+
+        private static string DisplayCommit(string commit)
+        {
+            commit = (commit ?? string.Empty).Trim();
+            if (commit.Length == 0 || commit == "未记录") return "未记录";
+            return commit.Length <= 12 ? commit : commit.Substring(0, 12) + "（完整提交已记录在发布信息中）";
+        }
+
+        private static void OpenDirectory(string directory)
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(directory) && Directory.Exists(directory))
+                {
+                    Process.Start("explorer.exe", directory);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("打开安装目录失败：" + ex.Message, "关于与版本更新", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         private static Border CreateCard()
@@ -376,6 +520,50 @@ namespace Bot.Options
                 Foreground = primary ? Brushes.White : null,
                 BorderBrush = primary ? new SolidColorBrush(Color.FromRgb(37, 99, 235)) : null
             };
+        }
+    }
+
+    internal static class BotAboutUpdateLauncher
+    {
+        private static Window _standalone;
+
+        public static void Show()
+        {
+            try
+            {
+                var seller = QN.CurQN == null || QN.CurQN.Seller == null
+                    ? string.Empty
+                    : (QN.CurQN.Seller.Nick ?? string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(seller))
+                {
+                    WndOption.MyShow(seller, null, OptionEnum.AboutUpdate);
+                    return;
+                }
+
+                if (_standalone != null && _standalone.IsVisible)
+                {
+                    _standalone.Activate();
+                    return;
+                }
+                _standalone = new Window
+                {
+                    Title = "关于与版本更新",
+                    Width = 760,
+                    Height = 720,
+                    MinWidth = 680,
+                    MinHeight = 600,
+                    WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                    Content = new BotUpdateOptionsControl()
+                };
+                _standalone.Closed += (s, e) => _standalone = null;
+                _standalone.Show();
+                _standalone.Activate();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("打开关于与版本更新失败：" + ex.Message,
+                    "关于与版本更新", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
         }
     }
 }
