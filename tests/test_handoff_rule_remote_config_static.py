@@ -54,16 +54,25 @@ def test_rule_sync_is_initialized_and_compiled():
     assert "ChromeNs\\HandoffRuleRemoteConfigService.cs" in targets
 
 
-def test_wecom_page_supports_view_edit_add_and_delete_rules():
+def test_wecom_page_uses_one_ai_policy_instead_of_per_keyword_rows():
     page = read("services/api-control-plane/static/wecom.html")
     settings = read("services/api-control-plane/wecom_settings.py")
+    policy = read("services/api-control-plane/wecom_handoff_policy.py")
+    bootstrap = read("services/api-control-plane/bootstrap.py")
 
-    assert "转人工触发规则" in page
-    assert "新增规则" in page
-    assert "删除" in page
-    assert "保存转人工规则" in page
-    assert "/api/admin/wecom/handoff-rules" in page
-    assert "sensitive_context" in page
+    assert "AI 转人工策略" in page
+    assert "AI 分析并生成规则" in page
+    assert "保存并发布" in page
+    assert "恢复上一个版本" in page
+    assert "高级设置 / 查看 AI 生成的结构化规则" in page
+    assert "新增规则" not in page
+    assert "保存转人工规则" not in page
+    assert "r-keyword" not in page
+    assert "/api/admin/wecom/handoff-policy/compile" in page
+    assert "/api/admin/wecom/handoff-policy/publish" in page
+    assert "control_plane.dispatch_chat" in policy
+    assert "validate_policy" in policy
+    assert "include_router(wecom_handoff_policy.router)" in bootstrap
     assert "wecom_handoff_rules" in settings
     assert "default_handoff_rules" in settings
     assert "/api/runtime/v1/handoff/rules" in settings
