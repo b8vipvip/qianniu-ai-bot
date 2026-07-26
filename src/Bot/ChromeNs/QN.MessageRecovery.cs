@@ -20,7 +20,9 @@ namespace Bot.ChromeNs
 
         private static string RecoveryKey(string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            return seller + "#" + buyer;
         }
 
         private void MarkBuyerMessageObserved(string seller, string buyer)
@@ -36,7 +38,8 @@ namespace Bot.ChromeNs
         {
             if (e == null || e.Seller == null || e.Buyer == null) return;
             var seller = (e.Seller.Nick ?? string.Empty).Trim();
-            var buyer = (e.Buyer.Nick ?? string.Empty).Trim();
+            BuyerIdentityAliasService.Observe(seller, e.Buyer.Nick, e.Buyer.Display, e.Buyer.TargetId);
+            var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, e.Buyer.Nick);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
             if (!Params.Robot.CanUseRobotReal) return;
 
@@ -77,6 +80,7 @@ namespace Bot.ChromeNs
             DateTime scheduledAt,
             long version)
         {
+            buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             await _backgroundRecoveryGate.WaitAsync();
             using (BotActivityCoordinator.Begin("后台消息补偿", seller, buyer))
             {
@@ -106,21 +110,27 @@ namespace Bot.ChromeNs
                         {
                             var response = await GetCurrentConversationID();
                             current = response == null ? null : response.Result;
-                            if (current != null && string.Equals((current.Nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                            if (current != null
+                                && BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
                             {
+                                BuyerIdentityAliasService.Observe(seller, current.Nick, current.Display, current.TargetId);
                                 break;
                             }
                             await Task.Delay(250);
                         }
 
-                        if (current == null || !string.Equals((current.Nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                        if (current == null || !BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
                         {
                             Log.Info("后台消息补偿失败：无法确认目标买家会话。target=" + buyer
-                                + ", current=" + (current == null ? string.Empty : current.Nick));
+                                + ", current=" + (current == null ? string.Empty : current.Nick)
+                                + ", equivalent=false");
                             return;
                         }
 
-                        SetActiveConversationByNick(seller, buyer, "backgroundRecovery");
+                        SetActiveConversationByNick(
+                            seller,
+                            BuyerIdentityAliasService.ResolveConversationKey(seller, current.Nick),
+                            "backgroundRecovery");
                         var ccode = (current.Ccode ?? string.Empty).Trim();
                         if (string.IsNullOrWhiteSpace(ccode))
                         {
@@ -145,7 +155,7 @@ namespace Bot.ChromeNs
                             .Where(m =>
                                 (IsBuyerMessage(m)
                                     && m.fromid != null
-                                    && string.Equals((m.fromid.nick ?? string.Empty).Trim(), buyer, StringComparison.Ordinal))
+                                    && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer))
                                 || IsPotentialRecoveredOrderCard(m))
                             .Where(m =>
                             {

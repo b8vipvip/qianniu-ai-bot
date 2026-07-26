@@ -12,8 +12,8 @@ namespace Bot.ChromeNs
 {
     internal static class VisionFollowUpContextPipeline
     {
-        private const int FollowUpWindowSeconds = 30;
-        private const int CaptionWindowSeconds = 8;
+        private const int FollowUpWindowSeconds = 45;
+        private const int CaptionWindowSeconds = 15;
 
         private sealed class RecentVisionContext
         {
@@ -35,7 +35,7 @@ namespace Bot.ChromeNs
             // BuyerStreamingReplyPipeline 也会包装同一个 handler。这里持续检查，确保本包装始终位于最外层，
             // 这样没有图片的短文本 burst 才有机会先补回最近图片，再交给 Smart Reply / QN 原流程。
             _patchTimer = new Timer(_ => PatchExisting(), null, 250, 500);
-            Log.Info("图片指代续问上下文管线已启动：图片后的‘这个吗/这里吗/对吗’会继续走视觉理解。");
+            Log.Info("图片指代续问上下文管线已启动：图片后的‘这个/这种/这类能用吗’会继续走视觉理解。");
         }
 
         private static void PatchExisting()
@@ -136,6 +136,9 @@ namespace Bot.ChromeNs
             {
                 RecentVisionContext expired;
                 RecentVision.TryRemove(conversationKey, out expired);
+                Log.Info("最近图片上下文已过期，文字按普通消息处理: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick
+                    + ", elapsedMs=" + (long)elapsed.TotalMilliseconds);
                 await next(lease);
                 return;
             }
@@ -149,6 +152,11 @@ namespace Bot.ChromeNs
                 // 已出现一轮与图片无关的正常文字后，不再让更晚的“这个”误绑到旧图片。
                 RecentVisionContext ignored;
                 RecentVision.TryRemove(conversationKey, out ignored);
+                Log.Info("最近图片未与后续文字合并: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick
+                    + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds)
+                    + ", referential=false, captionWindow=" + CaptionWindowSeconds
+                    + ", question=" + SafeLog(question, 100));
                 await next(lease);
                 return;
             }
@@ -165,6 +173,7 @@ namespace Bot.ChromeNs
             Log.Info("图片指代续问已重新绑定最近图片: seller=" + burst.SellerNick
                 + ", buyer=" + burst.BuyerNick
                 + ", elapsedMs=" + Math.Max(0, (long)elapsed.TotalMilliseconds)
+                + ", reason=" + (referential ? "图片指代" : "图片说明文字")
                 + ", question=" + SafeLog(question, 100));
             await next(combinedLease);
         }
@@ -172,7 +181,7 @@ namespace Bot.ChromeNs
         internal static bool IsVisionReferentialFollowUp(string text)
         {
             var compact = Normalize(text);
-            if (string.IsNullOrWhiteSpace(compact) || compact.Length > 28) return false;
+            if (string.IsNullOrWhiteSpace(compact) || compact.Length > 36) return false;
             if (compact == "对吗"
                 || compact == "是吗"
                 || compact == "这个吗"
@@ -186,12 +195,19 @@ namespace Bot.ChromeNs
                 || compact == "这里吗"
                 || compact == "是这里吗"
                 || compact == "这样吗"
-                || compact == "是这样吗")
+                || compact == "是这样吗"
+                || compact == "这种能使用吗"
+                || compact == "这种能用吗"
+                || compact == "这类能使用吗"
+                || compact == "这类能用吗")
             {
                 return true;
             }
 
             var hasReference = compact.Contains("这个")
+                || compact.Contains("这种")
+                || compact.Contains("这类")
+                || compact.Contains("这款")
                 || compact.Contains("这张")
                 || compact.Contains("这里")
                 || compact.Contains("这样")
@@ -199,20 +215,25 @@ namespace Bot.ChromeNs
                 || compact.Contains("图片里")
                 || compact.Contains("上面")
                 || compact.Contains("界面")
-                || compact.Contains("页面");
+                || compact.Contains("页面")
+                || compact.Contains("设备")
+                || compact.Contains("软件");
             var asksConfirmation = compact.Contains("吗")
                 || compact.Contains("么")
                 || compact.Contains("是不是")
                 || compact.Contains("对不对")
                 || compact.Contains("可以")
-                || compact.Contains("行不行");
+                || compact.Contains("行不行")
+                || compact.Contains("能用")
+                || compact.Contains("能使用")
+                || compact.Contains("支持");
             return hasReference && asksConfirmation;
         }
 
         private static bool IsLikelyImageCaption(string text)
         {
             var compact = Normalize(text);
-            if (string.IsNullOrWhiteSpace(compact) || compact.Length > 60) return false;
+            if (string.IsNullOrWhiteSpace(compact) || compact.Length > 80) return false;
             return compact != "好的"
                 && compact != "好"
                 && compact != "嗯"
