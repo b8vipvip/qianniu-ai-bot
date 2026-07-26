@@ -6,7 +6,7 @@
   <title>企业微信配置 - 千牛 AI</title>
   <style>
     :root{font-family:Inter,"Microsoft YaHei",sans-serif;color:#13213a;background:#f3f6fb}
-    *{box-sizing:border-box} body{margin:0} button,input{font:inherit}
+    *{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit}
     .shell{display:grid;grid-template-columns:242px minmax(0,1fr);min-height:100vh}
     aside{background:#111d31;color:#fff;padding:28px 20px;display:flex;flex-direction:column}
     .brand{display:flex;gap:12px;align-items:center;padding:0 8px 24px;border-bottom:1px solid #2a3649}
@@ -14,18 +14,23 @@
     .brand span{display:block;font-size:12px;color:#9fb0ca;margin-top:4px}
     nav{display:grid;gap:8px;margin-top:22px}.nav{color:#b7c6dc;text-decoration:none;padding:12px 14px;border-radius:9px}
     .nav:hover,.nav.active{background:#213451;color:#fff}.foot{margin-top:auto;color:#91a4c0;font-size:13px;padding:12px}
-    main{padding:32px;max-width:1250px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
+    main{padding:32px;max-width:1380px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
     h1{margin:0;font-size:28px}.sub{margin:7px 0 0;color:#68758a}.pill{padding:9px 14px;border-radius:20px;background:#e3f8ef;color:#087b50;font-weight:700}
-    .metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:18px}.metric,.panel{background:#fff;border:1px solid #e1e7f0;border-radius:15px;box-shadow:0 7px 24px rgba(32,52,84,.05)}
+    .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px}.metric,.panel{background:#fff;border:1px solid #e1e7f0;border-radius:15px;box-shadow:0 7px 24px rgba(32,52,84,.05)}
     .metric{padding:20px}.metric small{color:#778398}.metric strong{display:block;font-size:25px;margin-top:8px}.ok{color:#087b50}.bad{color:#ba2d38}
     .panel{padding:22px;margin-bottom:18px}.panel-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}.panel h2{font-size:19px;margin:0}.panel p{margin:6px 0 0;color:#6e7b90;line-height:1.7}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.span2{grid-column:1/-1}label{display:grid;gap:7px;font-size:14px;font-weight:700;color:#33435c}input{width:100%;border:1px solid #cfd8e6;border-radius:9px;padding:11px 12px;background:#fff;color:#17243a}input:focus{outline:2px solid #b9d0ff;border-color:#4d82ff}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.span2{grid-column:1/-1}label{display:grid;gap:7px;font-size:14px;font-weight:700;color:#33435c}
+    input,select,textarea{width:100%;border:1px solid #cfd8e6;border-radius:9px;padding:11px 12px;background:#fff;color:#17243a}textarea{resize:vertical;min-height:68px;line-height:1.55}
+    input:focus,select:focus,textarea:focus{outline:2px solid #b9d0ff;border-color:#4d82ff}
     .switch{display:flex;align-items:center;gap:8px;white-space:nowrap}.switch input{width:auto}.hint{font-size:12px;color:#7b8799;font-weight:400}.secret-note{background:#f7f9fd;border:1px solid #dde5f2;border-radius:10px;padding:12px;color:#58667b;line-height:1.65;font-size:13px}
     .callback{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px}.actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
-    button{border:0;border-radius:9px;padding:10px 16px;cursor:pointer;font-weight:700}.primary{background:#2563eb;color:#fff}.secondary{background:#edf3ff;color:#2552a5}.ghost{background:#f1f4f8;color:#34445c}button:disabled{opacity:.55;cursor:not-allowed}
+    button{border:0;border-radius:9px;padding:10px 16px;cursor:pointer;font-weight:700}.primary{background:#2563eb;color:#fff}.secondary{background:#edf3ff;color:#2552a5}.ghost{background:#f1f4f8;color:#34445c}.danger{background:#fff0f1;color:#b42331}button:disabled{opacity:.55;cursor:not-allowed}
     .clear-row{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px}.clear-row label{display:flex;align-items:center;gap:7px;font-weight:500}.clear-row input{width:auto}
-    #message{position:fixed;right:24px;bottom:24px;max-width:460px;padding:13px 16px;border-radius:10px;background:#17243a;color:white;box-shadow:0 10px 35px #0003;display:none;white-space:pre-wrap}.error{background:#a82935!important}
-    code{background:#eef2f7;padding:2px 5px;border-radius:5px}@media(max-width:850px){.shell{display:block}aside{display:none}main{padding:18px}.metrics,.grid{grid-template-columns:1fr}.span2{grid-column:auto}.top{align-items:flex-start}.pill{display:none}}
+    .rule-list{display:grid;gap:14px}.rule-card{border:1px solid #dce4ef;border-radius:12px;padding:16px;background:#fbfcff}.rule-head{display:grid;grid-template-columns:auto 180px 180px 90px 1fr auto;gap:10px;align-items:end;margin-bottom:13px}.rule-head .switch{align-self:center}.rule-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.rule-order{max-width:90px}.empty{padding:28px;text-align:center;border:1px dashed #cad4e3;border-radius:12px;color:#748198}
+    .rule-help{background:#fff8e8;border:1px solid #f2d89b;border-radius:10px;padding:13px 15px;color:#72510a;line-height:1.7;margin-bottom:15px}
+    #message{position:fixed;right:24px;bottom:24px;max-width:500px;padding:13px 16px;border-radius:10px;background:#17243a;color:white;box-shadow:0 10px 35px #0003;display:none;white-space:pre-wrap;z-index:10}.error{background:#a82935!important}
+    code{background:#eef2f7;padding:2px 5px;border-radius:5px}
+    @media(max-width:950px){.shell{display:block}aside{display:none}main{padding:18px}.metrics,.grid,.rule-grid{grid-template-columns:1fr}.span2{grid-column:auto}.top{align-items:flex-start}.pill{display:none}.rule-head{grid-template-columns:1fr 1fr}.rule-head .switch{grid-column:1/-1}}
   </style>
 </head>
 <body>
@@ -33,11 +38,16 @@
   <aside>
     <div class="brand"><div class="mark">Q</div><div><strong>千牛 AI</strong><span>API 控制台</span></div></div>
     <nav><a class="nav" href="/">返回控制面总览</a><a class="nav active" href="/static/wecom.html">企业微信</a></nav>
-    <div class="foot">敏感字段只加密保存在服务端 SQLite，不通过页面回显。</div>
+    <div class="foot">企业微信敏感字段使用 Fernet 加密；转人工规则为普通业务配置，可由 Bot 客户端读取。</div>
   </aside>
   <main>
-    <header class="top"><div><h1>企业微信</h1><p class="sub">管理应用消息、加密回调、工单接收人和人工回复权限。</p></div><div class="pill">控制面在线</div></header>
-    <div class="metrics"><div class="metric"><small>功能开关</small><strong id="mEnabled">读取中</strong></div><div class="metric"><small>应用消息</small><strong id="mOutbound">读取中</strong></div><div class="metric"><small>加密回调</small><strong id="mCallback">读取中</strong></div></div>
+    <header class="top"><div><h1>企业微信</h1><p class="sub">管理应用消息、加密回调、人工回复权限和 Bot 转人工触发规则。</p></div><div class="pill">控制面在线</div></header>
+    <div class="metrics">
+      <div class="metric"><small>功能开关</small><strong id="mEnabled">读取中</strong></div>
+      <div class="metric"><small>应用消息</small><strong id="mOutbound">读取中</strong></div>
+      <div class="metric"><small>加密回调</small><strong id="mCallback">读取中</strong></div>
+      <div class="metric"><small>启用转人工规则</small><strong id="mRules">读取中</strong></div>
+    </div>
     <form id="form">
       <section class="panel">
         <div class="panel-head"><div><h2>自建应用</h2><p>Secret 留空表示保留原值。保存后的 Secret 不会从接口返回。</p></div><label class="switch"><input id="enabled" type="checkbox">启用企业微信转人工</label></div>
@@ -58,24 +68,61 @@
         </div>
         <div class="clear-row"><label><input id="clearAppSecret" type="checkbox">清除应用 Secret</label><label><input id="clearToken" type="checkbox">清除回调 Token</label><label><input id="clearAes" type="checkbox">清除 EncodingAESKey</label></div>
         <div class="secret-note" style="margin-top:16px">数据库只保存 Fernet 密文。加密依赖部署时长期固定的 <code>API_KEY_ENCRYPTION_KEY</code>；备份 SQLite 时也必须备份该主密钥。企业微信业务参数不再从 <code>.env</code> 读取。</div>
-        <div class="actions"><button id="refresh" class="ghost" type="button">重新读取</button><button id="test" class="secondary" type="button">发送测试消息</button><button id="save" class="primary" type="submit">保存配置</button></div>
+        <div class="actions"><button id="refresh" class="ghost" type="button">重新读取</button><button id="test" class="secondary" type="button">发送测试消息</button><button id="save" class="primary" type="submit">保存企业微信配置</button></div>
       </section>
     </form>
+
+    <section class="panel">
+      <div class="panel-head"><div><h2>转人工触发规则</h2><p>这里的启用规则会同步到已连接的 Windows Bot。可查看、修改、停用、删除或新增关键词。</p></div><button id="addRule" class="secondary" type="button">新增规则</button></div>
+      <div class="rule-help">
+        <strong>“账号”默认使用敏感语境匹配：</strong>只有同时出现密码、验证码、登录安全、找回、绑定等风险词时才转人工。<br>
+        “给朋友、另一个账号、再拍月卡、充值”等正常购买场景属于例外，Bot 会直接回复，不再生成企业微信工单。风险词优先于例外词，避免账号安全问题被绕过。
+      </div>
+      <div id="ruleList" class="rule-list"><div class="empty">正在读取规则...</div></div>
+      <div class="actions"><span id="ruleRevision" class="hint" style="margin-right:auto;align-self:center"></span><button id="reloadRules" class="ghost" type="button">重新读取规则</button><button id="saveRules" class="primary" type="button">保存转人工规则</button></div>
+    </section>
   </main>
 </div>
 <div id="message"></div>
 <script>
-const $=id=>document.getElementById(id);let current=null;
-function notify(text,error=false){const el=$('message');el.textContent=text;el.className=error?'error':'';el.style.display='block';clearTimeout(el.timer);el.timer=setTimeout(()=>el.style.display='none',5000)}
+const $=id=>document.getElementById(id);let current=null;let ruleState={revision:'',rules:[]};
+function notify(text,error=false){const el=$('message');el.textContent=text;el.className=error?'error':'';el.style.display='block';clearTimeout(el.timer);el.timer=setTimeout(()=>el.style.display='none',5500)}
 async function api(url,options={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});if(r.status===401){location.href='/';throw new Error('登录已失效')};let data=null;try{data=await r.json()}catch{}if(!r.ok)throw new Error(data?.detail||`请求失败：${r.status}`);return data}
 function flag(id,ok,on='已配置',off='未配置'){const el=$(id);el.textContent=ok?on:off;el.className=ok?'ok':'bad'}
 function render(s){current=s;$('enabled').checked=!!s.enabled;$('corpId').value=s.corp_id||'';$('agentId').value=s.agent_id||'';$('toUsers').value=s.to_users||'';$('allowedUsers').value=s.allowed_reply_users||'';$('ticketHours').value=s.ticket_hours||24;$('callbackUrl').value=s.callback_url||'';$('appSecret').value='';$('callbackToken').value='';$('callbackAes').value='';$('appSecretHint').textContent=s.app_secret_configured?'已加密保存；留空表示不修改':'尚未配置';$('tokenHint').textContent=s.callback_token_configured?'已加密保存；留空表示不修改':'尚未配置';$('aesHint').textContent=s.callback_aes_key_configured?'已加密保存；留空表示不修改':'尚未配置';flag('mEnabled',s.enabled,'已启用','未启用');flag('mOutbound',s.outbound_configured);flag('mCallback',s.callback_configured)}
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function option(value,label,current){return `<option value="${value}"${value===current?' selected':''}>${label}</option>`}
+function newRule(){return{enabled:true,rule_type:'confirm',keyword:'',match_mode:'contains',risk_terms:'',exceptions:'',safe_reply:'',note:'',sort_order:(ruleState.rules.length+1)*10}}
+function renderRules(state){ruleState=state||{revision:'',rules:[]};const rules=Array.isArray(ruleState.rules)?ruleState.rules:[];const list=$('ruleList');if(!rules.length){list.innerHTML='<div class="empty">当前没有规则。点击“新增规则”创建第一条。</div>'}else{list.innerHTML=rules.map((r,i)=>`<div class="rule-card" data-index="${i}">
+  <div class="rule-head">
+    <label class="switch"><input class="r-enabled" type="checkbox"${r.enabled?' checked':''}>启用</label>
+    <label>规则类型<select class="r-type">${option('manual','强制转人工',r.rule_type)}${option('confirm','仅人工确认',r.rule_type)}</select></label>
+    <label>匹配方式<select class="r-mode">${option('contains','任意包含关键词',r.match_mode)}${option('sensitive_context','关键词 + 敏感语境',r.match_mode)}</select></label>
+    <label>排序<input class="r-order rule-order" type="number" min="0" max="100000" value="${Number(r.sort_order||((i+1)*10))}"></label>
+    <label>关键词<input class="r-keyword" value="${esc(r.keyword)}" placeholder="例如：账号"></label>
+    <button class="danger r-delete" type="button">删除</button>
+  </div>
+  <div class="rule-grid">
+    <label>敏感语境词<span class="hint">使用 | 分隔；仅“关键词 + 敏感语境”模式生效</span><textarea class="r-risk" placeholder="密码|验证码|登录|找回">${esc(r.risk_terms)}</textarea></label>
+    <label>例外短语<span class="hint">使用 | 分隔；命中后不转人工</span><textarea class="r-exceptions" placeholder="另一个账号|给朋友|再拍|充值">${esc(r.exceptions)}</textarea></label>
+    <label>例外自动回复<span class="hint">例外成立时由 Bot 发送；留空时使用安全默认答复</span><textarea class="r-reply" placeholder="可以的，可以给朋友或其他账号充值...">${esc(r.safe_reply)}</textarea></label>
+    <label>备注<span class="hint">仅供管理员说明规则用途</span><textarea class="r-note" placeholder="账号安全问题转人工，正常代充不转人工">${esc(r.note)}</textarea></label>
+  </div>
+</div>`).join('')}
+  const enabled=rules.filter(x=>x.enabled).length;$('mRules').textContent=`${enabled}/${rules.length}`;$('mRules').className=enabled?'ok':'bad';$('ruleRevision').textContent=ruleState.revision?`规则版本：${ruleState.revision}`:'';
+  document.querySelectorAll('.r-delete').forEach(btn=>btn.onclick=()=>{const card=btn.closest('.rule-card');ruleState.rules.splice(Number(card.dataset.index),1);renderRules(ruleState)})
+}
+function collectRules(){return Array.from(document.querySelectorAll('.rule-card')).map((card,i)=>({enabled:card.querySelector('.r-enabled').checked,rule_type:card.querySelector('.r-type').value,keyword:card.querySelector('.r-keyword').value.trim(),match_mode:card.querySelector('.r-mode').value,risk_terms:card.querySelector('.r-risk').value.trim(),exceptions:card.querySelector('.r-exceptions').value.trim(),safe_reply:card.querySelector('.r-reply').value.trim(),note:card.querySelector('.r-note').value.trim(),sort_order:Number(card.querySelector('.r-order').value||((i+1)*10))}))}
 async function load(){try{render(await api('/api/admin/wecom/settings'))}catch(e){notify(e.message,true)}}
+async function loadRules(){try{renderRules(await api('/api/admin/wecom/handoff-rules'))}catch(e){notify(e.message,true)}}
 function payload(){return{enabled:$('enabled').checked,corp_id:$('corpId').value.trim(),app_secret:$('appSecret').value.trim(),agent_id:$('agentId').value.trim(),to_users:$('toUsers').value.trim(),callback_token:$('callbackToken').value.trim(),callback_aes_key:$('callbackAes').value.trim(),allowed_reply_users:$('allowedUsers').value.trim(),ticket_hours:Number($('ticketHours').value||24),clear_app_secret:$('clearAppSecret').checked,clear_callback_token:$('clearToken').checked,clear_callback_aes_key:$('clearAes').checked}}
 $('form').addEventListener('submit',async e=>{e.preventDefault();$('save').disabled=true;try{const s=await api('/api/admin/wecom/settings',{method:'PUT',body:JSON.stringify(payload())});render(s);$('clearAppSecret').checked=$('clearToken').checked=$('clearAes').checked=false;notify('企业微信配置已保存并立即生效')}catch(err){notify(err.message,true)}finally{$('save').disabled=false}});
+$('addRule').onclick=()=>{ruleState.rules.push(newRule());renderRules(ruleState);setTimeout(()=>{const cards=document.querySelectorAll('.rule-card');cards[cards.length-1]?.querySelector('.r-keyword')?.focus()},0)};
+$('saveRules').onclick=async()=>{const rules=collectRules();if(rules.some(x=>!x.keyword)){notify('每条规则都必须填写关键词',true);return}$('saveRules').disabled=true;try{renderRules(await api('/api/admin/wecom/handoff-rules',{method:'PUT',body:JSON.stringify({rules})}));notify('转人工规则已保存；在线 Bot 将在约1分钟内同步，重启 Bot 也会读取最近缓存')}catch(e){notify(e.message,true)}finally{$('saveRules').disabled=false}};
+$('reloadRules').onclick=loadRules;
 $('generate').onclick=async()=>{try{const x=await api('/api/admin/wecom/generate-callback',{method:'POST',body:'{}'});$('callbackToken').value=x.callback_token;$('callbackAes').value=x.callback_aes_key;notify('已生成新参数；保存后再填写到企业微信后台')}catch(e){notify(e.message,true)}};
 $('test').onclick=async()=>{try{$('test').disabled=true;const x=await api('/api/admin/wecom/test',{method:'POST',body:'{}'});notify(x.message||'测试消息发送成功')}catch(e){notify(e.message,true)}finally{$('test').disabled=false}};
-$('copyUrl').onclick=async()=>{try{await navigator.clipboard.writeText($('callbackUrl').value);notify('回调 URL 已复制')}catch{notify('复制失败，请手动复制',true)}};$('refresh').onclick=load;load();
+$('copyUrl').onclick=async()=>{try{await navigator.clipboard.writeText($('callbackUrl').value);notify('回调 URL 已复制')}catch{notify('复制失败，请手动复制',true)}};$('refresh').onclick=load;load();loadRules();
 </script>
 </body>
 </html>
