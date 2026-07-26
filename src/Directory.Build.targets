@@ -67,6 +67,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\NewOrderAttentionQueue.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\NewOrderAttentionQueue.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\DirectOrderEventBridge.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\DirectOrderEventBridge.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs" />
   </ItemGroup>
