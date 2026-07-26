@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Media;
 using Bot.ChromeNs;
 using Bot.Options;
 using Microsoft.Win32;
@@ -22,6 +23,7 @@ namespace Bot.Knowledge
         private ComboBox _cat;
         private TextBlock _count;
         private DataGrid _grid;
+        private bool _savingEnabledState;
 
         public KnowledgeManagerControl()
         {
@@ -79,19 +81,111 @@ namespace Bot.Knowledge
                 AutoGenerateColumns = false,
                 CanUserAddRows = false,
                 ItemsSource = _view,
-                IsReadOnly = true
+                IsReadOnly = false,
+                SelectionUnit = DataGridSelectionUnit.FullRow
             };
-            _grid.MouseDoubleClick += (s, e) => EditSelected();
+            _grid.MouseDoubleClick += (s, e) =>
+            {
+                if (HasVisualAncestor<CheckBox>(e.OriginalSource as DependencyObject)
+                    || HasVisualAncestor<Button>(e.OriginalSource as DependencyObject)) return;
+                EditSelected();
+            };
             root.Children.Add(_grid);
 
-            _grid.Columns.Add(new DataGridCheckBoxColumn { Header = "启用", Binding = new Binding("Enabled"), Width = 55 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "分类", Binding = new Binding("Category"), Width = 130 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "问题", Binding = new Binding("Title"), Width = 220 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "答案", Binding = new Binding("Answer"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "关键词", Binding = new Binding("Keywords"), Width = 160 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "来源", Binding = new Binding("SourceType"), Width = 110 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "更新时间", Binding = new Binding("UpdatedAt"), Width = 140 });
-            _grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 120, CellTemplate = OpTemplate() });
+            _grid.Columns.Add(new DataGridTemplateColumn
+            {
+                Header = "启用",
+                Width = 55,
+                IsReadOnly = false,
+                CellTemplate = EnabledTemplate()
+            });
+            _grid.Columns.Add(ReadOnlyTextColumn("分类", "Category", 130));
+            _grid.Columns.Add(ReadOnlyTextColumn("问题", "Title", 220));
+            _grid.Columns.Add(ReadOnlyTextColumn("答案", "Answer", new DataGridLength(1, DataGridLengthUnitType.Star)));
+            _grid.Columns.Add(ReadOnlyTextColumn("关键词", "Keywords", 160));
+            _grid.Columns.Add(ReadOnlyTextColumn("来源", "SourceType", 110));
+            _grid.Columns.Add(ReadOnlyTextColumn("更新时间", "UpdatedAt", 140));
+            _grid.Columns.Add(new DataGridTemplateColumn { Header = "操作", Width = 120, IsReadOnly = true, CellTemplate = OpTemplate() });
+        }
+
+        private static DataGridTextColumn ReadOnlyTextColumn(string header, string property, double width)
+        {
+            return new DataGridTextColumn
+            {
+                Header = header,
+                Binding = new Binding(property),
+                Width = width,
+                IsReadOnly = true
+            };
+        }
+
+        private static DataGridTextColumn ReadOnlyTextColumn(string header, string property, DataGridLength width)
+        {
+            return new DataGridTextColumn
+            {
+                Header = header,
+                Binding = new Binding(property),
+                Width = width,
+                IsReadOnly = true
+            };
+        }
+
+        private DataTemplate EnabledTemplate()
+        {
+            var template = new DataTemplate();
+            var check = new FrameworkElementFactory(typeof(CheckBox));
+            check.SetValue(CheckBox.HorizontalAlignmentProperty, HorizontalAlignment.Center);
+            check.SetValue(CheckBox.VerticalAlignmentProperty, VerticalAlignment.Center);
+            check.SetValue(CheckBox.ToolTipProperty, "点击后立即保存启用状态");
+            check.SetBinding(CheckBox.IsCheckedProperty, new Binding("Enabled")
+            {
+                Mode = BindingMode.TwoWay,
+                UpdateSourceTrigger = UpdateSourceTrigger.PropertyChanged
+            });
+            check.AddHandler(CheckBox.ClickEvent, new RoutedEventHandler(OnEnabledClicked));
+            template.VisualTree = check;
+            return template;
+        }
+
+        private void OnEnabledClicked(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            var check = sender as CheckBox;
+            var item = check == null ? null : check.DataContext as KnowledgeBaseEntry;
+            if (item == null || _savingEnabledState) return;
+
+            item.Enabled = check.IsChecked == true;
+            item.UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            _savingEnabledState = true;
+            try
+            {
+                BotFeatureStore.SaveKnowledgeBase(_all);
+                if (_count != null)
+                {
+                    _count.Text = "已" + (item.Enabled ? "启用" : "停用") + "并保存："
+                        + (string.IsNullOrWhiteSpace(item.Title) ? "未命名知识" : item.Title)
+                        + "；共 " + _all.Count + " 条知识，当前显示 " + _view.Count + " 条";
+                }
+            }
+            catch (Exception ex)
+            {
+                item.Enabled = !item.Enabled;
+                check.IsChecked = item.Enabled;
+                MessageBox.Show("保存启用状态失败：" + ex.Message, "知识库", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                _savingEnabledState = false;
+            }
+        }
+
+        private static bool HasVisualAncestor<T>(DependencyObject source) where T : DependencyObject
+        {
+            for (var current = source; current != null; current = VisualTreeHelper.GetParent(current))
+            {
+                if (current is T) return true;
+            }
+            return false;
         }
 
         private static void AddBtn(Panel panel, string text, double width, RoutedEventHandler handler)
@@ -118,6 +212,7 @@ namespace Bot.Knowledge
             edit.SetValue(Button.MarginProperty, new Thickness(0, 0, 4, 0));
             edit.AddHandler(Button.ClickEvent, new RoutedEventHandler((s, e) =>
             {
+                e.Handled = true;
                 _grid.SelectedItem = ((FrameworkElement)s).DataContext;
                 EditSelected();
             }));
@@ -127,6 +222,7 @@ namespace Bot.Knowledge
             delete.SetValue(Button.ContentProperty, "删除");
             delete.AddHandler(Button.ClickEvent, new RoutedEventHandler((s, e) =>
             {
+                e.Handled = true;
                 _grid.SelectedItem = ((FrameworkElement)s).DataContext;
                 DeleteSelected();
             }));
@@ -138,6 +234,7 @@ namespace Bot.Knowledge
 
         public void RefreshData()
         {
+            if (_savingEnabledState) return;
             _all = BotFeatureStore.GetKnowledgeBase();
             RefreshCategories();
             ApplyFilter();
@@ -411,6 +508,7 @@ namespace Bot.Knowledge
 
         private void OnKnowledgeBaseChanged(object sender, EventArgs e)
         {
+            if (_savingEnabledState) return;
             if (Dispatcher.CheckAccess()) RefreshData();
             else Dispatcher.BeginInvoke(new Action(RefreshData));
         }

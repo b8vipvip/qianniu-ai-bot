@@ -1,6 +1,7 @@
 ﻿using Bot.Common;
 using Bot.Common.Db;
 using Bot.Common.Windows;
+using Bot.Options;
 using BotLib;
 using BotLib.Extensions;
 using BotLib.Wpf.Extensions;
@@ -25,7 +26,7 @@ namespace Bot.AssistWindow.NotifyIcon.MenuCreator
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("打开日志", OnShowLogClicked));
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("清空日志", OnClearLogClicked));
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateSeparator());
-            helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("关于", OnAboutClicked));
+            helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("关于与版本更新", OnAboutClicked));
         }
 
         private static void OnComeNoodles(object sender, EventArgs e)
@@ -50,10 +51,7 @@ namespace Bot.AssistWindow.NotifyIcon.MenuCreator
 
         private static void OnAboutClicked(object sender, EventArgs e)
         {
-            var sb = new StringBuilder();
-            sb.Append("软件版本：");
-            sb.AppendLine(Params.VersionStr);
-            MsgBox.ShowTip(sb.ToString(), "关于");
+            BotAboutUpdateLauncher.Show();
         }
 
         private static void OnOpenDataCatalogClicked(object sender, EventArgs e)
@@ -79,6 +77,5 @@ namespace Bot.AssistWindow.NotifyIcon.MenuCreator
                 Log.Exception(ex);
             }
         }
-
     }
 }
