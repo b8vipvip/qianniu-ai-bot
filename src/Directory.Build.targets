@@ -73,8 +73,17 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderPaymentNotificationFallback.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderPaymentNotificationFallback.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderNotificationTraceBridge.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderNotificationTraceBridge.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderGuidanceDeliveryGuard.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderGuidanceDeliveryGuard.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerIdentityAliasService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerIdentityAliasService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerIdentityAliasUiBridge.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerIdentityAliasUiBridge.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Update\BotUpdateService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Update\BotUpdateService.cs" />
