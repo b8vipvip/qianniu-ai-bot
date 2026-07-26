@@ -19,12 +19,14 @@ namespace Bot
     {
         public App()
         {
+            QianniuWebSocketJsonCompatibility.Initialize();
             SlowResponseDiagnosticsUi.Initialize();
             ConversationSessionLearningUi.Initialize();
             ReplyQualityCenterUi.Initialize();
             OrderPlacedReplyDelaySettings.Initialize();
             OrderAttentionSettings.Initialize();
             DirectOrderEventBridge.Initialize();
+            OrderPaymentNotificationFallback.Initialize();
             BotUpdateService.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
