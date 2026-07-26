@@ -22,10 +22,12 @@ def test_strict_classifier_does_not_treat_generic_tid_or_status_as_order():
 def test_order_plan_requires_strict_evidence_before_parser():
     code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     strict_at = code.index("OrderMessageClassifier.IsConfirmedOrderEvent")
+    followup_at = code.index("TryCreateBuyerFollowUpPlan", strict_at)
     parse_at = code.index("OrderCardParser.TryParse")
-    assert strict_at < parse_at
-    assert "TryCreateBuyerFollowUpPlan" in code
-    assert "return false;" in code[strict_at:parse_at]
+    assert strict_at < followup_at < parse_at
+    helper = code[code.index("private static bool TryCreateBuyerFollowUpPlan"):]
+    assert "OrderGuidanceDeliveryGuard.CanCreateFollowUp" in helper
+    assert "return false;" in helper
 
 
 def test_initial_guidance_is_persisted_once_across_created_paid_and_restart():
