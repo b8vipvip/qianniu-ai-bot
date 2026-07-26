@@ -37,7 +37,7 @@ namespace Bot.Options
         Robot,
         RemindPay,
         InviteOrder,
-        DataManagement
+        DataManagement,
+        AboutUpdate
     }
-
 }

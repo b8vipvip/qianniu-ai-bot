@@ -1,5 +1,6 @@
 ﻿using Bot.ChromeNs;
 using Bot.Options;
+using Bot.UpdateNs;
 using BotLib;
 using System;
 using System.Collections.Generic;
@@ -24,6 +25,7 @@ namespace Bot
             OrderPlacedReplyDelaySettings.Initialize();
             OrderAttentionSettings.Initialize();
             DirectOrderEventBridge.Initialize();
+            BotUpdateService.Initialize();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
             Bot.Knowledge.StorePromptProfileUi.Initialize();

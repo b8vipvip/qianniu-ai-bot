@@ -70,6 +70,15 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\DirectOrderEventBridge.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\DirectOrderEventBridge.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Update\BotUpdateService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Update\BotUpdateService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Update\BotAutoUpdater.ps1')">
+    <Content Include="$(MSBuildProjectDirectory)\Update\BotAutoUpdater.ps1">
+      <Link>BotAutoUpdater.ps1</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\AssistWindow\Widget\Robot\CtlConversation.History.cs" />
   </ItemGroup>
@@ -153,6 +162,9 @@
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\OrderAttentionSettings.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\Options\OrderAttentionSettings.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\Options\BotUpdateOptionsControl.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\Options\BotUpdateOptionsControl.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\StartUp\UserDataMigrationManager.cs" />
