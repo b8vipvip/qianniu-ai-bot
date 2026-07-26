@@ -20,6 +20,8 @@ namespace Bot
         public App()
         {
             QianniuWebSocketJsonCompatibility.Initialize();
+            RuntimeBuildIdentityService.Initialize();
+            LegacyAboutUpdateRedirect.Initialize();
             SlowResponseDiagnosticsUi.Initialize();
             ConversationSessionLearningUi.Initialize();
             ReplyQualityCenterUi.Initialize();
@@ -27,8 +29,11 @@ namespace Bot
             OrderAttentionSettings.Initialize();
             DirectOrderEventBridge.Initialize();
             OrderPaymentNotificationFallback.Initialize();
+            OrderNotificationTraceBridge.Start();
             BotUpdateService.Initialize();
             HandoffRuleRemoteConfigService.Initialize();
+            BuyerIdentityAliasRuntimeBridge.Initialize();
+            BuyerIdentityAliasUiBridge.Start();
             QnRuntimeSafetyMonitor.Start();
             Bot.Knowledge.KnowledgeOptimizationUi.Initialize();
             Bot.Knowledge.StorePromptProfileUi.Initialize();
