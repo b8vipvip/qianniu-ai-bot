@@ -9,6 +9,7 @@ import runtime_embedding_guard
 import runtime_routing_guard
 import runtime_streaming_guard
 import wecom_bridge
+import wecom_handoff_policy
 import wecom_settings
 from wecom_crypto import install_on_bridge
 
@@ -19,12 +20,14 @@ runtime_embedding_guard.install(control_plane)
 install_on_bridge(wecom_bridge)
 control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
+control_plane.app.include_router(wecom_handoff_policy.router)
 
 
 @control_plane.app.on_event("startup")
 def initialize_wecom_bridge() -> None:
     wecom_bridge.init_wecom_db()
     wecom_settings.init_wecom_settings_db()
+    wecom_handoff_policy.init_handoff_policy_db()
     wecom_settings.apply_to_bridge(wecom_bridge)
 
 
