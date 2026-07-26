@@ -6,31 +6,35 @@
   <title>企业微信配置 - 千牛 AI</title>
   <style>
     :root{font-family:Inter,"Microsoft YaHei",sans-serif;color:#13213a;background:#f3f6fb}
-    *{box-sizing:border-box}body{margin:0}button,input,select,textarea{font:inherit}
+    *{box-sizing:border-box}body{margin:0}button,input,textarea{font:inherit}
     .shell{display:grid;grid-template-columns:242px minmax(0,1fr);min-height:100vh}
     aside{background:#111d31;color:#fff;padding:28px 20px;display:flex;flex-direction:column}
     .brand{display:flex;gap:12px;align-items:center;padding:0 8px 24px;border-bottom:1px solid #2a3649}
     .mark{width:36px;height:36px;border-radius:10px;background:#4d82ff;display:grid;place-items:center;font-weight:800}
     .brand span{display:block;font-size:12px;color:#9fb0ca;margin-top:4px}
     nav{display:grid;gap:8px;margin-top:22px}.nav{color:#b7c6dc;text-decoration:none;padding:12px 14px;border-radius:9px}
-    .nav:hover,.nav.active{background:#213451;color:#fff}.foot{margin-top:auto;color:#91a4c0;font-size:13px;padding:12px}
+    .nav:hover,.nav.active{background:#213451;color:#fff}.foot{margin-top:auto;color:#91a4c0;font-size:13px;padding:12px;line-height:1.65}
     main{padding:32px;max-width:1380px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:22px}
     h1{margin:0;font-size:28px}.sub{margin:7px 0 0;color:#68758a}.pill{padding:9px 14px;border-radius:20px;background:#e3f8ef;color:#087b50;font-weight:700}
     .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px}.metric,.panel{background:#fff;border:1px solid #e1e7f0;border-radius:15px;box-shadow:0 7px 24px rgba(32,52,84,.05)}
     .metric{padding:20px}.metric small{color:#778398}.metric strong{display:block;font-size:25px;margin-top:8px}.ok{color:#087b50}.bad{color:#ba2d38}
     .panel{padding:22px;margin-bottom:18px}.panel-head{display:flex;justify-content:space-between;gap:18px;align-items:flex-start;margin-bottom:18px}.panel h2{font-size:19px;margin:0}.panel p{margin:6px 0 0;color:#6e7b90;line-height:1.7}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.span2{grid-column:1/-1}label{display:grid;gap:7px;font-size:14px;font-weight:700;color:#33435c}
-    input,select,textarea{width:100%;border:1px solid #cfd8e6;border-radius:9px;padding:11px 12px;background:#fff;color:#17243a}textarea{resize:vertical;min-height:68px;line-height:1.55}
-    input:focus,select:focus,textarea:focus{outline:2px solid #b9d0ff;border-color:#4d82ff}
+    input,textarea{width:100%;border:1px solid #cfd8e6;border-radius:9px;padding:11px 12px;background:#fff;color:#17243a}textarea{resize:vertical;min-height:68px;line-height:1.65}
+    input:focus,textarea:focus{outline:2px solid #b9d0ff;border-color:#4d82ff}
     .switch{display:flex;align-items:center;gap:8px;white-space:nowrap}.switch input{width:auto}.hint{font-size:12px;color:#7b8799;font-weight:400}.secret-note{background:#f7f9fd;border:1px solid #dde5f2;border-radius:10px;padding:12px;color:#58667b;line-height:1.65;font-size:13px}
-    .callback{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px}.actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px}
-    button{border:0;border-radius:9px;padding:10px 16px;cursor:pointer;font-weight:700}.primary{background:#2563eb;color:#fff}.secondary{background:#edf3ff;color:#2552a5}.ghost{background:#f1f4f8;color:#34445c}.danger{background:#fff0f1;color:#b42331}button:disabled{opacity:.55;cursor:not-allowed}
+    .callback{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px}.actions{display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;margin-top:18px;align-items:center}
+    button{border:0;border-radius:9px;padding:10px 16px;cursor:pointer;font-weight:700}.primary{background:#2563eb;color:#fff}.secondary{background:#edf3ff;color:#2552a5}.ghost{background:#f1f4f8;color:#34445c}.warning{background:#fff5df;color:#855b00}button:disabled{opacity:.55;cursor:not-allowed}
     .clear-row{display:flex;gap:18px;flex-wrap:wrap;margin-top:12px}.clear-row label{display:flex;align-items:center;gap:7px;font-weight:500}.clear-row input{width:auto}
-    .rule-list{display:grid;gap:14px}.rule-card{border:1px solid #dce4ef;border-radius:12px;padding:16px;background:#fbfcff}.rule-head{display:grid;grid-template-columns:auto 180px 180px 90px 1fr auto;gap:10px;align-items:end;margin-bottom:13px}.rule-head .switch{align-self:center}.rule-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.rule-order{max-width:90px}.empty{padding:28px;text-align:center;border:1px dashed #cad4e3;border-radius:12px;color:#748198}
-    .rule-help{background:#fff8e8;border:1px solid #f2d89b;border-radius:10px;padding:13px 15px;color:#72510a;line-height:1.7;margin-bottom:15px}
-    #message{position:fixed;right:24px;bottom:24px;max-width:500px;padding:13px 16px;border-radius:10px;background:#17243a;color:white;box-shadow:0 10px 35px #0003;display:none;white-space:pre-wrap;z-index:10}.error{background:#a82935!important}
+    .policy-help{background:#eef7ff;border:1px solid #c8e1fb;border-radius:11px;padding:14px 16px;color:#24517d;line-height:1.75;margin-bottom:16px}
+    .policy-help strong{color:#173d64}.policy-editor{min-height:250px;font-size:15px}
+    .preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.preview-card{border:1px solid #dce4ef;border-radius:12px;padding:16px;background:#fbfcff;min-height:150px}.preview-card h3{margin:0 0 8px;font-size:16px}.preview-count{font-size:26px;font-weight:800;margin-bottom:10px}.chip-list{display:flex;flex-wrap:wrap;gap:7px}.chip{display:inline-flex;padding:5px 9px;border-radius:999px;background:#edf3ff;color:#315f9b;font-size:12px}.chip.safe{background:#e8f8ef;color:#14734c}.chip.confirm{background:#fff4de;color:#8a5a00}.empty{color:#8591a3;font-size:13px;line-height:1.7}
+    .validation{margin-top:18px;border:1px solid #dfe6f0;border-radius:12px;overflow:hidden}.validation-head{display:flex;justify-content:space-between;gap:12px;padding:13px 15px;background:#f7f9fc;font-weight:700}.validation-list{display:grid}.validation-row{display:grid;grid-template-columns:80px minmax(180px,1fr) 130px 130px;gap:10px;padding:12px 15px;border-top:1px solid #e7ecf3;align-items:center;font-size:13px}.badge{display:inline-flex;justify-content:center;padding:5px 8px;border-radius:999px;font-weight:700}.badge.pass{background:#e8f8ef;color:#14734c}.badge.fail{background:#fff0f1;color:#b42331}.badge.info{background:#edf3ff;color:#315f9b}
+    details{margin-top:18px;border:1px solid #dde5ef;border-radius:11px;background:#fafcff}summary{cursor:pointer;padding:14px 16px;font-weight:700;color:#40516b}pre{margin:0;padding:0 16px 16px;max-height:430px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;color:#33435c}
+    .status-line{margin-right:auto;color:#66758a;font-size:13px}.status-line.busy{color:#2552a5}.status-line.good{color:#087b50}.status-line.warn{color:#9a6800}
+    #message{position:fixed;right:24px;bottom:24px;max-width:520px;padding:13px 16px;border-radius:10px;background:#17243a;color:white;box-shadow:0 10px 35px #0003;display:none;white-space:pre-wrap;z-index:10}.error{background:#a82935!important}
     code{background:#eef2f7;padding:2px 5px;border-radius:5px}
-    @media(max-width:950px){.shell{display:block}aside{display:none}main{padding:18px}.metrics,.grid,.rule-grid{grid-template-columns:1fr}.span2{grid-column:auto}.top{align-items:flex-start}.pill{display:none}.rule-head{grid-template-columns:1fr 1fr}.rule-head .switch{grid-column:1/-1}}
+    @media(max-width:950px){.shell{display:block}aside{display:none}main{padding:18px}.metrics,.grid,.preview-grid{grid-template-columns:1fr}.span2{grid-column:auto}.top{align-items:flex-start}.pill{display:none}.validation-row{grid-template-columns:70px 1fr}.validation-row span:nth-child(n+3){grid-column:2}}
   </style>
 </head>
 <body>
@@ -38,21 +42,23 @@
   <aside>
     <div class="brand"><div class="mark">Q</div><div><strong>千牛 AI</strong><span>API 控制台</span></div></div>
     <nav><a class="nav" href="/">返回控制面总览</a><a class="nav active" href="/static/wecom.html">企业微信</a></nav>
-    <div class="foot">企业微信敏感字段使用 Fernet 加密；转人工规则为普通业务配置，可由 Bot 客户端读取。</div>
+    <div class="foot">企业微信敏感字段使用 Fernet 加密。转人工策略由 AI 编译为本地规则，买家消息判断不会逐条调用 AI。</div>
   </aside>
   <main>
-    <header class="top"><div><h1>企业微信</h1><p class="sub">管理应用消息、加密回调、人工回复权限和 Bot 转人工触发规则。</p></div><div class="pill">控制面在线</div></header>
+    <header class="top"><div><h1>企业微信</h1><p class="sub">管理应用消息、加密回调、人工回复权限和 AI 转人工策略。</p></div><div class="pill">控制面在线</div></header>
     <div class="metrics">
       <div class="metric"><small>功能开关</small><strong id="mEnabled">读取中</strong></div>
       <div class="metric"><small>应用消息</small><strong id="mOutbound">读取中</strong></div>
       <div class="metric"><small>加密回调</small><strong id="mCallback">读取中</strong></div>
-      <div class="metric"><small>启用转人工规则</small><strong id="mRules">读取中</strong></div>
+      <div class="metric"><small>已发布规则</small><strong id="mRules">读取中</strong></div>
     </div>
+
     <form id="form">
       <section class="panel">
         <div class="panel-head"><div><h2>自建应用</h2><p>Secret 留空表示保留原值。保存后的 Secret 不会从接口返回。</p></div><label class="switch"><input id="enabled" type="checkbox">启用企业微信转人工</label></div>
         <div class="grid">
-          <label>企业 CorpID<input id="corpId" autocomplete="off" placeholder="wwxxxxxxxxxxxxxxxx"></label><label>应用 AgentId<input id="agentId" inputmode="numeric" autocomplete="off" placeholder="1000002"></label>
+          <label>企业 CorpID<input id="corpId" autocomplete="off" placeholder="wwxxxxxxxxxxxxxxxx"></label>
+          <label>应用 AgentId<input id="agentId" inputmode="numeric" autocomplete="off" placeholder="1000002"></label>
           <label class="span2">应用 Secret<input id="appSecret" type="password" autocomplete="new-password" placeholder="留空表示不修改"><span id="appSecretHint" class="hint"></span></label>
           <label class="span2">接收成员 UserID<input id="toUsers" autocomplete="off" placeholder="多个成员使用 | 分隔，例如 zhangsan|lisi"></label>
           <label class="span2">允许回复工单的成员 UserID<input id="allowedUsers" autocomplete="off" placeholder="留空时沿用接收成员"></label>
@@ -67,62 +73,263 @@
           <label class="span2">EncodingAESKey<input id="callbackAes" type="password" autocomplete="new-password" maxlength="43" placeholder="43 位；留空表示不修改"><span id="aesHint" class="hint"></span></label>
         </div>
         <div class="clear-row"><label><input id="clearAppSecret" type="checkbox">清除应用 Secret</label><label><input id="clearToken" type="checkbox">清除回调 Token</label><label><input id="clearAes" type="checkbox">清除 EncodingAESKey</label></div>
-        <div class="secret-note" style="margin-top:16px">数据库只保存 Fernet 密文。加密依赖部署时长期固定的 <code>API_KEY_ENCRYPTION_KEY</code>；备份 SQLite 时也必须备份该主密钥。企业微信业务参数不再从 <code>.env</code> 读取。</div>
+        <div class="secret-note" style="margin-top:16px">数据库只保存 Fernet 密文。加密依赖部署时长期固定的 <code>API_KEY_ENCRYPTION_KEY</code>；备份 SQLite 时也必须备份该主密钥。</div>
         <div class="actions"><button id="refresh" class="ghost" type="button">重新读取</button><button id="test" class="secondary" type="button">发送测试消息</button><button id="save" class="primary" type="submit">保存企业微信配置</button></div>
       </section>
     </form>
 
     <section class="panel">
-      <div class="panel-head"><div><h2>转人工触发规则</h2><p>这里的启用规则会同步到已连接的 Windows Bot。可查看、修改、停用、删除或新增关键词。</p></div><button id="addRule" class="secondary" type="button">新增规则</button></div>
-      <div class="rule-help">
-        <strong>“账号”默认使用敏感语境匹配：</strong>只有同时出现密码、验证码、登录安全、找回、绑定等风险词时才转人工。<br>
-        “给朋友、另一个账号、再拍月卡、充值”等正常购买场景属于例外，Bot 会直接回复，不再生成企业微信工单。风险词优先于例外词，避免账号安全问题被绕过。
+      <div class="panel-head">
+        <div><h2>AI 转人工策略</h2><p>用自然语言说明哪些场景转人工、哪些只需人工确认、哪些属于正常业务例外。AI 会统一整理同义词、风险语境、例外和安全回复。</p></div>
+        <span id="policyRevision" class="hint"></span>
       </div>
-      <div id="ruleList" class="rule-list"><div class="empty">正在读取规则...</div></div>
-      <div class="actions"><span id="ruleRevision" class="hint" style="margin-right:auto;align-self:center"></span><button id="reloadRules" class="ghost" type="button">重新读取规则</button><button id="saveRules" class="primary" type="button">保存转人工规则</button></div>
+      <div class="policy-help">
+        <strong>运行方式：</strong>这里只在管理员点击“AI 分析并生成规则”时调用一次 AI。发布后，Windows Bot 下载结构化规则并在本机内存中快速判断，不会为每条买家消息额外请求 AI。<br>
+        <strong>发布保护：</strong>AI 生成后必须先通过账号安全、正常代充和售后等自动测试，再由管理员点击“保存并发布”。
+      </div>
+      <label>自然语言业务策略
+        <textarea id="policyText" class="policy-editor" maxlength="12000" placeholder="例如：退款、投诉和账号安全问题转人工；给朋友或其他账号充值属于正常购买，可以自动回复……"></textarea>
+        <span class="hint">可直接粘贴店铺售后规则、风险边界和允许自动回复的例外，不需要拆成关键词表。</span>
+      </label>
+      <div class="actions">
+        <span id="policyStatus" class="status-line">正在读取已发布策略……</span>
+        <button id="reloadPolicy" class="ghost" type="button">重新读取</button>
+        <button id="rollbackPolicy" class="warning" type="button" disabled>恢复上一个版本</button>
+        <button id="compilePolicy" class="secondary" type="button">AI 分析并生成规则</button>
+        <button id="publishPolicy" class="primary" type="button" disabled>保存并发布</button>
+      </div>
+
+      <div class="preview-grid">
+        <div class="preview-card"><h3>必须转人工</h3><div id="manualCount" class="preview-count">0</div><div id="manualSummary" class="chip-list"><span class="empty">尚未生成</span></div></div>
+        <div class="preview-card"><h3>人工确认</h3><div id="confirmCount" class="preview-count">0</div><div id="confirmSummary" class="chip-list"><span class="empty">尚未生成</span></div></div>
+        <div class="preview-card"><h3>可自动处理的例外</h3><div id="safeCount" class="preview-count">0</div><div id="safeSummary" class="chip-list"><span class="empty">尚未生成</span></div></div>
+      </div>
+
+      <div id="validation" class="validation">
+        <div class="validation-head"><span>策略测试</span><span id="validationSummary" class="hint">尚未运行 AI 分析</span></div>
+        <div id="validationList" class="validation-list"><div class="empty" style="padding:16px">AI 生成后会自动测试典型买家消息。</div></div>
+      </div>
+
+      <details>
+        <summary>高级设置 / 查看 AI 生成的结构化规则</summary>
+        <pre id="advancedRules">尚未读取规则。</pre>
+      </details>
     </section>
   </main>
 </div>
 <div id="message"></div>
 <script>
-const $=id=>document.getElementById(id);let current=null;let ruleState={revision:'',rules:[]};
-function notify(text,error=false){const el=$('message');el.textContent=text;el.className=error?'error':'';el.style.display='block';clearTimeout(el.timer);el.timer=setTimeout(()=>el.style.display='none',5500)}
-async function api(url,options={}){const r=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});if(r.status===401){location.href='/';throw new Error('登录已失效')};let data=null;try{data=await r.json()}catch{}if(!r.ok)throw new Error(data?.detail||`请求失败：${r.status}`);return data}
-function flag(id,ok,on='已配置',off='未配置'){const el=$(id);el.textContent=ok?on:off;el.className=ok?'ok':'bad'}
-function render(s){current=s;$('enabled').checked=!!s.enabled;$('corpId').value=s.corp_id||'';$('agentId').value=s.agent_id||'';$('toUsers').value=s.to_users||'';$('allowedUsers').value=s.allowed_reply_users||'';$('ticketHours').value=s.ticket_hours||24;$('callbackUrl').value=s.callback_url||'';$('appSecret').value='';$('callbackToken').value='';$('callbackAes').value='';$('appSecretHint').textContent=s.app_secret_configured?'已加密保存；留空表示不修改':'尚未配置';$('tokenHint').textContent=s.callback_token_configured?'已加密保存；留空表示不修改':'尚未配置';$('aesHint').textContent=s.callback_aes_key_configured?'已加密保存；留空表示不修改':'尚未配置';flag('mEnabled',s.enabled,'已启用','未启用');flag('mOutbound',s.outbound_configured);flag('mCallback',s.callback_configured)}
-function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-function option(value,label,current){return `<option value="${value}"${value===current?' selected':''}>${label}</option>`}
-function newRule(){return{enabled:true,rule_type:'confirm',keyword:'',match_mode:'contains',risk_terms:'',exceptions:'',safe_reply:'',note:'',sort_order:(ruleState.rules.length+1)*10}}
-function renderRules(state){ruleState=state||{revision:'',rules:[]};const rules=Array.isArray(ruleState.rules)?ruleState.rules:[];const list=$('ruleList');if(!rules.length){list.innerHTML='<div class="empty">当前没有规则。点击“新增规则”创建第一条。</div>'}else{list.innerHTML=rules.map((r,i)=>`<div class="rule-card" data-index="${i}">
-  <div class="rule-head">
-    <label class="switch"><input class="r-enabled" type="checkbox"${r.enabled?' checked':''}>启用</label>
-    <label>规则类型<select class="r-type">${option('manual','强制转人工',r.rule_type)}${option('confirm','仅人工确认',r.rule_type)}</select></label>
-    <label>匹配方式<select class="r-mode">${option('contains','任意包含关键词',r.match_mode)}${option('sensitive_context','关键词 + 敏感语境',r.match_mode)}</select></label>
-    <label>排序<input class="r-order rule-order" type="number" min="0" max="100000" value="${Number(r.sort_order||((i+1)*10))}"></label>
-    <label>关键词<input class="r-keyword" value="${esc(r.keyword)}" placeholder="例如：账号"></label>
-    <button class="danger r-delete" type="button">删除</button>
-  </div>
-  <div class="rule-grid">
-    <label>敏感语境词<span class="hint">使用 | 分隔；仅“关键词 + 敏感语境”模式生效</span><textarea class="r-risk" placeholder="密码|验证码|登录|找回">${esc(r.risk_terms)}</textarea></label>
-    <label>例外短语<span class="hint">使用 | 分隔；命中后不转人工</span><textarea class="r-exceptions" placeholder="另一个账号|给朋友|再拍|充值">${esc(r.exceptions)}</textarea></label>
-    <label>例外自动回复<span class="hint">例外成立时由 Bot 发送；留空时使用安全默认答复</span><textarea class="r-reply" placeholder="可以的，可以给朋友或其他账号充值...">${esc(r.safe_reply)}</textarea></label>
-    <label>备注<span class="hint">仅供管理员说明规则用途</span><textarea class="r-note" placeholder="账号安全问题转人工，正常代充不转人工">${esc(r.note)}</textarea></label>
-  </div>
-</div>`).join('')}
-  const enabled=rules.filter(x=>x.enabled).length;$('mRules').textContent=`${enabled}/${rules.length}`;$('mRules').className=enabled?'ok':'bad';$('ruleRevision').textContent=ruleState.revision?`规则版本：${ruleState.revision}`:'';
-  document.querySelectorAll('.r-delete').forEach(btn=>btn.onclick=()=>{const card=btn.closest('.rule-card');ruleState.rules.splice(Number(card.dataset.index),1);renderRules(ruleState)})
+const $=id=>document.getElementById(id);
+let current=null;
+let policyState=null;
+let policyDraft=null;
+let compiledSourceText='';
+
+function notify(text,error=false){
+  const el=$('message');
+  el.textContent=text;
+  el.className=error?'error':'';
+  el.style.display='block';
+  clearTimeout(el.timer);
+  el.timer=setTimeout(()=>el.style.display='none',6000);
 }
-function collectRules(){return Array.from(document.querySelectorAll('.rule-card')).map((card,i)=>({enabled:card.querySelector('.r-enabled').checked,rule_type:card.querySelector('.r-type').value,keyword:card.querySelector('.r-keyword').value.trim(),match_mode:card.querySelector('.r-mode').value,risk_terms:card.querySelector('.r-risk').value.trim(),exceptions:card.querySelector('.r-exceptions').value.trim(),safe_reply:card.querySelector('.r-reply').value.trim(),note:card.querySelector('.r-note').value.trim(),sort_order:Number(card.querySelector('.r-order').value||((i+1)*10))}))}
-async function load(){try{render(await api('/api/admin/wecom/settings'))}catch(e){notify(e.message,true)}}
-async function loadRules(){try{renderRules(await api('/api/admin/wecom/handoff-rules'))}catch(e){notify(e.message,true)}}
-function payload(){return{enabled:$('enabled').checked,corp_id:$('corpId').value.trim(),app_secret:$('appSecret').value.trim(),agent_id:$('agentId').value.trim(),to_users:$('toUsers').value.trim(),callback_token:$('callbackToken').value.trim(),callback_aes_key:$('callbackAes').value.trim(),allowed_reply_users:$('allowedUsers').value.trim(),ticket_hours:Number($('ticketHours').value||24),clear_app_secret:$('clearAppSecret').checked,clear_callback_token:$('clearToken').checked,clear_callback_aes_key:$('clearAes').checked}}
-$('form').addEventListener('submit',async e=>{e.preventDefault();$('save').disabled=true;try{const s=await api('/api/admin/wecom/settings',{method:'PUT',body:JSON.stringify(payload())});render(s);$('clearAppSecret').checked=$('clearToken').checked=$('clearAes').checked=false;notify('企业微信配置已保存并立即生效')}catch(err){notify(err.message,true)}finally{$('save').disabled=false}});
-$('addRule').onclick=()=>{ruleState.rules.push(newRule());renderRules(ruleState);setTimeout(()=>{const cards=document.querySelectorAll('.rule-card');cards[cards.length-1]?.querySelector('.r-keyword')?.focus()},0)};
-$('saveRules').onclick=async()=>{const rules=collectRules();if(rules.some(x=>!x.keyword)){notify('每条规则都必须填写关键词',true);return}$('saveRules').disabled=true;try{renderRules(await api('/api/admin/wecom/handoff-rules',{method:'PUT',body:JSON.stringify({rules})}));notify('转人工规则已保存；在线 Bot 将在约1分钟内同步，重启 Bot 也会读取最近缓存')}catch(e){notify(e.message,true)}finally{$('saveRules').disabled=false}};
-$('reloadRules').onclick=loadRules;
-$('generate').onclick=async()=>{try{const x=await api('/api/admin/wecom/generate-callback',{method:'POST',body:'{}'});$('callbackToken').value=x.callback_token;$('callbackAes').value=x.callback_aes_key;notify('已生成新参数；保存后再填写到企业微信后台')}catch(e){notify(e.message,true)}};
-$('test').onclick=async()=>{try{$('test').disabled=true;const x=await api('/api/admin/wecom/test',{method:'POST',body:'{}'});notify(x.message||'测试消息发送成功')}catch(e){notify(e.message,true)}finally{$('test').disabled=false}};
-$('copyUrl').onclick=async()=>{try{await navigator.clipboard.writeText($('callbackUrl').value);notify('回调 URL 已复制')}catch{notify('复制失败，请手动复制',true)}};$('refresh').onclick=load;load();loadRules();
+
+async function api(url,options={}){
+  const response=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});
+  if(response.status===401){location.href='/';throw new Error('登录已失效')}
+  let data=null;
+  try{data=await response.json()}catch{}
+  if(!response.ok)throw new Error(data?.detail||`请求失败：${response.status}`);
+  return data;
+}
+
+function flag(id,ok,on='已配置',off='未配置'){
+  const el=$(id);el.textContent=ok?on:off;el.className=ok?'ok':'bad';
+}
+
+function renderSettings(s){
+  current=s;
+  $('enabled').checked=!!s.enabled;
+  $('corpId').value=s.corp_id||'';
+  $('agentId').value=s.agent_id||'';
+  $('toUsers').value=s.to_users||'';
+  $('allowedUsers').value=s.allowed_reply_users||'';
+  $('ticketHours').value=s.ticket_hours||24;
+  $('callbackUrl').value=s.callback_url||'';
+  $('appSecret').value='';$('callbackToken').value='';$('callbackAes').value='';
+  $('appSecretHint').textContent=s.app_secret_configured?'已加密保存；留空表示不修改':'尚未配置';
+  $('tokenHint').textContent=s.callback_token_configured?'已加密保存；留空表示不修改':'尚未配置';
+  $('aesHint').textContent=s.callback_aes_key_configured?'已加密保存；留空表示不修改':'尚未配置';
+  flag('mEnabled',s.enabled,'已启用','未启用');
+  flag('mOutbound',s.outbound_configured);
+  flag('mCallback',s.callback_configured);
+}
+
+function esc(value){
+  return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
+}
+
+function renderChips(id,items,kind){
+  const el=$(id);
+  const values=Array.isArray(items)?items:[];
+  if(!values.length){el.innerHTML='<span class="empty">暂无</span>';return}
+  el.innerHTML=values.slice(0,18).map(item=>`<span class="chip ${kind||''}">${esc(item)}</span>`).join('')+(values.length>18?`<span class="chip">另有 ${values.length-18} 项</span>`:'');
+}
+
+function renderSummary(summary={}){
+  $('manualCount').textContent=Number(summary.manual_count??(summary.manual||[]).length??0);
+  $('confirmCount').textContent=Number(summary.confirm_count??(summary.confirm||[]).length??0);
+  $('safeCount').textContent=Number(summary.safe_exception_count??(summary.safe_exceptions||[]).length??0);
+  renderChips('manualSummary',summary.manual,'');
+  renderChips('confirmSummary',summary.confirm,'confirm');
+  renderChips('safeSummary',summary.safe_exceptions,'safe');
+  const enabled=Number(summary.enabled_rule_count??0);
+  const total=Number(summary.total_rule_count??0);
+  $('mRules').textContent=`${enabled}/${total}`;
+  $('mRules').className=enabled?'ok':'bad';
+}
+
+function labelResult(value){
+  return ({manual:'强制转人工',confirm:'人工确认',handoff:'转人工',safe:'不转人工',safe_reply:'安全自动回复',none:'继续普通AI回复'})[value]||value||'未知';
+}
+
+function renderValidation(validation){
+  const list=$('validationList');
+  const tests=validation?.tests||[];
+  if(!tests.length){
+    $('validationSummary').textContent='尚未运行 AI 分析';
+    list.innerHTML='<div class="empty" style="padding:16px">AI 生成后会自动测试典型买家消息。</div>';
+    return;
+  }
+  $('validationSummary').textContent=validation.ok?`已通过 ${validation.passed_count}/${validation.total_count} 项`:`有 ${validation.required_failure_count} 项安全测试失败`;
+  $('validationSummary').className=validation.ok?'ok':'bad';
+  list.innerHTML=tests.map(test=>`<div class="validation-row">
+    <span class="badge ${test.passed?'pass':'fail'}">${test.passed?'通过':'失败'}</span>
+    <span><strong>${esc(test.message)}</strong><br><span class="hint">${esc(test.reason||'')}</span></span>
+    <span>预期：${esc(labelResult(test.expected))}</span>
+    <span>实际：${esc(labelResult(test.actual))}${test.keyword?`（${esc(test.keyword)}）`:''}</span>
+  </div>`).join('');
+}
+
+function setPolicyStatus(text,kind=''){
+  const el=$('policyStatus');
+  el.textContent=text;
+  el.className=`status-line ${kind}`.trim();
+}
+
+function renderPolicyState(state){
+  policyState=state;
+  policyDraft=null;
+  compiledSourceText='';
+  $('policyText').value=state.policy_text||'';
+  renderSummary(state.summary||{});
+  renderValidation(null);
+  $('advancedRules').textContent=JSON.stringify(state.rules||[],null,2);
+  $('policyRevision').textContent=state.revision?`已发布版本：${state.revision}`:'';
+  $('rollbackPolicy').disabled=!state.can_rollback;
+  $('publishPolicy').disabled=true;
+  const when=state.published_at?`，发布时间 ${state.published_at}`:'';
+  setPolicyStatus(`当前为已发布策略${when}`,'good');
+}
+
+function renderPolicyDraft(draft){
+  policyDraft=draft;
+  compiledSourceText=$('policyText').value.trim();
+  renderSummary(draft.summary||{});
+  renderValidation(draft.validation||null);
+  $('advancedRules').textContent=JSON.stringify(draft.rules||[],null,2);
+  $('publishPolicy').disabled=!(draft.validation?.ok);
+  const source=[draft.provider,draft.model].filter(Boolean).join(' / ');
+  setPolicyStatus(draft.validation?.ok?`AI 分析完成${source?`（${source}）`:''}，确认后可发布`:'AI 分析完成，但安全测试未通过，不能发布',draft.validation?.ok?'good':'warn');
+}
+
+function settingsPayload(){
+  return{
+    enabled:$('enabled').checked,
+    corp_id:$('corpId').value.trim(),
+    app_secret:$('appSecret').value.trim(),
+    agent_id:$('agentId').value.trim(),
+    to_users:$('toUsers').value.trim(),
+    callback_token:$('callbackToken').value.trim(),
+    callback_aes_key:$('callbackAes').value.trim(),
+    allowed_reply_users:$('allowedUsers').value.trim(),
+    ticket_hours:Number($('ticketHours').value||24),
+    clear_app_secret:$('clearAppSecret').checked,
+    clear_callback_token:$('clearToken').checked,
+    clear_callback_aes_key:$('clearAes').checked
+  };
+}
+
+async function loadSettings(){
+  try{renderSettings(await api('/api/admin/wecom/settings'))}catch(error){notify(error.message,true)}
+}
+
+async function loadPolicy(){
+  try{
+    setPolicyStatus('正在读取已发布策略……','busy');
+    renderPolicyState(await api('/api/admin/wecom/handoff-policy'));
+  }catch(error){setPolicyStatus('读取策略失败','warn');notify(error.message,true)}
+}
+
+$('form').addEventListener('submit',async event=>{
+  event.preventDefault();$('save').disabled=true;
+  try{
+    const saved=await api('/api/admin/wecom/settings',{method:'PUT',body:JSON.stringify(settingsPayload())});
+    renderSettings(saved);
+    $('clearAppSecret').checked=$('clearToken').checked=$('clearAes').checked=false;
+    notify('企业微信配置已保存并立即生效');
+  }catch(error){notify(error.message,true)}finally{$('save').disabled=false}
+});
+
+$('policyText').addEventListener('input',()=>{
+  if(!policyDraft)return;
+  if($('policyText').value.trim()!==compiledSourceText){
+    $('publishPolicy').disabled=true;
+    setPolicyStatus('策略文字已修改，请重新点击“AI 分析并生成规则”','warn');
+  }
+});
+
+$('compilePolicy').onclick=async()=>{
+  const policyText=$('policyText').value.trim();
+  if(policyText.length<10){notify('请先填写完整的自然语言业务策略',true);return}
+  $('compilePolicy').disabled=true;$('publishPolicy').disabled=true;
+  setPolicyStatus('AI 正在分析场景、同义词、风险语境和例外，请稍候……','busy');
+  try{
+    renderPolicyDraft(await api('/api/admin/wecom/handoff-policy/compile',{method:'POST',body:JSON.stringify({policy_text:policyText})}));
+    notify('AI 已生成结构化规则，请查看摘要和测试结果后发布');
+  }catch(error){policyDraft=null;setPolicyStatus('AI 分析失败，已保留当前已发布策略','warn');notify(error.message,true)}finally{$('compilePolicy').disabled=false}
+};
+
+$('publishPolicy').onclick=async()=>{
+  const policyText=$('policyText').value.trim();
+  if(!policyDraft||policyText!==compiledSourceText){notify('策略已变化，请重新运行 AI 分析',true);return}
+  if(!policyDraft.validation?.ok){notify('安全测试未通过，不能发布',true);return}
+  $('publishPolicy').disabled=true;$('compilePolicy').disabled=true;
+  setPolicyStatus('正在保存并发布策略……','busy');
+  try{
+    const saved=await api('/api/admin/wecom/handoff-policy/publish',{method:'PUT',body:JSON.stringify({policy_text:policyText,rules:policyDraft.rules,summary:policyDraft.summary,tests:policyDraft.tests||[]})});
+    renderPolicyState(saved);
+    notify('AI 转人工策略已发布；在线 Bot 将在约1分钟内同步');
+  }catch(error){setPolicyStatus('发布失败，当前线上规则未改变','warn');notify(error.message,true)}finally{$('compilePolicy').disabled=false}
+};
+
+$('rollbackPolicy').onclick=async()=>{
+  if(!policyState?.can_rollback){notify('没有可恢复的上一个策略版本',true);return}
+  if(!confirm('确定恢复上一个已发布策略版本吗？在线 Bot 会在约1分钟内同步。'))return;
+  $('rollbackPolicy').disabled=true;
+  setPolicyStatus('正在恢复上一个版本……','busy');
+  try{renderPolicyState(await api('/api/admin/wecom/handoff-policy/rollback',{method:'POST',body:'{}'}));notify('已恢复上一个策略版本')}
+  catch(error){setPolicyStatus('恢复失败','warn');notify(error.message,true)}
+};
+
+$('reloadPolicy').onclick=loadPolicy;
+$('generate').onclick=async()=>{try{const data=await api('/api/admin/wecom/generate-callback',{method:'POST',body:'{}'});$('callbackToken').value=data.callback_token;$('callbackAes').value=data.callback_aes_key;notify('已生成新参数；保存后再填写到企业微信后台')}catch(error){notify(error.message,true)}};
+$('test').onclick=async()=>{try{$('test').disabled=true;const data=await api('/api/admin/wecom/test',{method:'POST',body:'{}'});notify(data.message||'测试消息发送成功')}catch(error){notify(error.message,true)}finally{$('test').disabled=false}};
+$('copyUrl').onclick=async()=>{try{await navigator.clipboard.writeText($('callbackUrl').value);notify('回调 URL 已复制')}catch{notify('复制失败，请手动复制',true)}};
+$('refresh').onclick=loadSettings;
+
+loadSettings();
+loadPolicy();
 </script>
 </body>
 </html>
