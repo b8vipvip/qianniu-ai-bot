@@ -1,0 +1,205 @@
+name: Publish Bot auto-update release
+
+on:
+  workflow_run:
+    workflows: ["Windows x64 release build"]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: publish-bot-auto-update-release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Resolve verified Windows build
+        id: build
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            run_json="$(gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow "Windows x64 release build" \
+              --branch master \
+              --status success \
+              --limit 1 \
+              --json databaseId,number,headSha \
+              --jq '.[0]')"
+            if [[ -z "$run_json" || "$run_json" == "null" ]]; then
+              echo "No successful master Windows x64 release build was found." >&2
+              exit 1
+            fi
+            run_id="$(jq -r '.databaseId' <<<"$run_json")"
+            run_number="$(jq -r '.number' <<<"$run_json")"
+            head_sha="$(jq -r '.headSha' <<<"$run_json")"
+          else
+            run_id="${{ github.event.workflow_run.id }}"
+            run_number="${{ github.event.workflow_run.run_number }}"
+            head_sha="${{ github.event.workflow_run.head_sha }}"
+          fi
+
+          version="1.1.${run_number}"
+          tag="bot-v${version}"
+          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
+          echo "run_number=$run_number" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Publishing $tag from verified workflow run $run_id ($head_sha)"
+
+      - name: Download complete x64 artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.build.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          artifact_id="$(gh api \
+            "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --paginate \
+            --jq '.artifacts[] | select(.expired == false and (.name | startswith("qianniu-bot-complete-x64-"))) | .id' \
+            | head -n 1)"
+          if [[ -z "$artifact_id" ]]; then
+            echo "The verified workflow did not publish a complete x64 Bot artifact." >&2
+            exit 1
+          fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > verified-artifact.zip
+          test -s verified-artifact.zip
+          echo "Downloaded artifact $artifact_id"
+
+      - name: Prepare stable update package and manifest
+        id: package
+        shell: bash
+        env:
+          VERSION: ${{ steps.build.outputs.version }}
+          TAG: ${{ steps.build.outputs.tag }}
+          HEAD_SHA: ${{ steps.build.outputs.head_sha }}
+          RUN_ID: ${{ steps.build.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          rm -rf artifact nested stage
+          mkdir -p artifact stage
+          unzip -q verified-artifact.zip -d artifact
+
+          bot_exe="$(find artifact -type f -path '*/Bin/Bot.exe' | head -n 1 || true)"
+          if [[ -z "$bot_exe" ]]; then
+            nested_zip="$(find artifact -type f -name '*.zip' | head -n 1 || true)"
+            if [[ -z "$nested_zip" ]]; then
+              echo "Artifact contains neither Bin/Bot.exe nor a nested runtime ZIP." >&2
+              find artifact -maxdepth 3 -type f -print
+              exit 1
+            fi
+            mkdir -p nested
+            unzip -q "$nested_zip" -d nested
+            bot_exe="$(find nested -type f -path '*/Bin/Bot.exe' | head -n 1 || true)"
+          fi
+          if [[ -z "$bot_exe" ]]; then
+            echo "Unable to locate Bin/Bot.exe in verified artifact." >&2
+            exit 1
+          fi
+
+          package_root="$(dirname "$(dirname "$bot_exe")")"
+          cp -a "$package_root/." stage/
+          test -f stage/Bin/Bot.exe
+          test -f stage/Bin/BotAutoUpdater.ps1
+
+          published_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          cat > stage/release-info.json <<JSON
+          {
+            "version": "$VERSION",
+            "tag": "$TAG",
+            "commit": "$HEAD_SHA",
+            "published_at": "$published_at",
+            "channel": "stable",
+            "source_run_id": "$RUN_ID"
+          }
+          JSON
+
+          (cd stage && zip -q -r ../qianniu-bot-x64.zip .)
+          sha256="$(sha256sum qianniu-bot-x64.zip | awk '{print $1}')"
+          package_size="$(stat -c '%s' qianniu-bot-x64.zip)"
+          download_url="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/qianniu-bot-x64.zip"
+          cat > update.json <<JSON
+          {
+            "version": "$VERSION",
+            "tag": "$TAG",
+            "commit": "$HEAD_SHA",
+            "published_at": "$published_at",
+            "channel": "stable",
+            "asset": "qianniu-bot-x64.zip",
+            "download_url": "$download_url",
+            "sha256": "$sha256",
+            "size": $package_size
+          }
+          JSON
+
+          echo "sha256=$sha256" >> "$GITHUB_OUTPUT"
+          echo "package_size=$package_size" >> "$GITHUB_OUTPUT"
+          echo "Prepared $TAG package: $package_size bytes, sha256=$sha256"
+
+      - name: Publish GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.build.outputs.version }}
+          TAG: ${{ steps.build.outputs.tag }}
+          HEAD_SHA: ${{ steps.build.outputs.head_sha }}
+          RUN_ID: ${{ steps.build.outputs.run_id }}
+          SHA256: ${{ steps.package.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          commit_message="$(gh api "repos/$GITHUB_REPOSITORY/commits/$HEAD_SHA" --jq '.commit.message' | head -n 1)"
+          cat > release-notes.md <<EOF
+          ## Qianniu AI Bot $VERSION
+
+          这是由 GitHub Actions 完整 x64 Release 构建验证后自动发布的稳定更新版本。
+
+          - 构建提交：\`$HEAD_SHA\`
+          - 构建任务：\`$RUN_ID\`
+          - 安装包 SHA-256：\`$SHA256\`
+          - 本次提交：$commit_message
+
+          客户端会先校验 SHA-256，再备份当前程序和永久用户数据；新版本启动失败时会自动回滚。
+          EOF
+
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release delete "$TAG" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+          fi
+          gh release create "$TAG" \
+            qianniu-bot-x64.zip \
+            update.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$HEAD_SHA" \
+            --title "Qianniu AI Bot $VERSION" \
+            --notes-file release-notes.md \
+            --latest
+
+      - name: Verify published release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.build.outputs.tag }}
+        run: |
+          set -euo pipefail
+          assets="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          grep -Fx 'qianniu-bot-x64.zip' <<<"$assets"
+          grep -Fx 'update.json' <<<"$assets"
