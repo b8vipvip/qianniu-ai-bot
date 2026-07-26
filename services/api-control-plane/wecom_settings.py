@@ -8,10 +8,10 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from cryptography.fernet import Fernet, InvalidToken
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
 
@@ -25,6 +25,10 @@ router = APIRouter()
 
 def iso_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def new_revision() -> str:
+    return iso_now() + "-" + secrets.token_hex(4)
 
 
 def derive_fernet_key() -> bytes:
@@ -72,9 +76,63 @@ def db(path: Optional[Path] = None) -> Iterable[sqlite3.Connection]:
         connection.close()
 
 
+def default_handoff_rules() -> List[Dict[str, Any]]:
+    manual = [
+        "退款", "退货", "投诉", "差评", "赔偿", "发票", "税票",
+        "订单隐私", "身份证", "银行卡", "法律", "维权", "平台介入",
+    ]
+    confirm = ["手机号", "地址", "隐私", "密码", "验证码", "转账", "补偿", "客服主管"]
+    rules: List[Dict[str, Any]] = []
+    order = 10
+    for keyword in manual:
+        rules.append(
+            {
+                "enabled": True,
+                "rule_type": "manual",
+                "keyword": keyword,
+                "match_mode": "contains",
+                "risk_terms": "",
+                "exceptions": "",
+                "safe_reply": "",
+                "note": "命中后转人工，不自动回答具体结论。",
+                "sort_order": order,
+            }
+        )
+        order += 10
+    for keyword in confirm:
+        rules.append(
+            {
+                "enabled": True,
+                "rule_type": "confirm",
+                "keyword": keyword,
+                "match_mode": "contains",
+                "risk_terms": "",
+                "exceptions": "",
+                "safe_reply": "",
+                "note": "命中后仅由人工确认。",
+                "sort_order": order,
+            }
+        )
+        order += 10
+    rules.append(
+        {
+            "enabled": True,
+            "rule_type": "confirm",
+            "keyword": "账号",
+            "match_mode": "sensitive_context",
+            "risk_terms": "密码|验证码|登录|登陆|找回|被盗|冻结|封禁|绑定|解绑|实名|身份证|泄露|安全|申诉|修改账号|换绑",
+            "exceptions": "另一个账号|其他账号|别的账号|朋友账号|好友账号|给朋友|给别人|帮朋友|帮别人|再拍|再买|购买|充值|充到|月卡",
+            "safe_reply": "可以的，月卡可以给朋友或其他账号充值，您再拍对应月卡即可；下单后按页面提示提供需要充值的账号。",
+            "note": "账号安全问题转人工；给朋友或其他账号购买充值属于正常业务，不转人工。",
+            "sort_order": order,
+        }
+    )
+    return rules
+
+
 def init_wecom_settings_db(path: Optional[Path] = None) -> None:
     with db(path) as conn:
-        conn.execute(
+        conn.executescript(
             """
             CREATE TABLE IF NOT EXISTS wecom_settings (
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -88,9 +146,63 @@ def init_wecom_settings_db(path: Optional[Path] = None) -> None:
                 allowed_reply_users TEXT NOT NULL DEFAULT '',
                 ticket_hours INTEGER NOT NULL DEFAULT 24,
                 updated_at TEXT NOT NULL
-            )
+            );
+
+            CREATE TABLE IF NOT EXISTS wecom_handoff_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                rule_type TEXT NOT NULL,
+                keyword TEXT NOT NULL,
+                match_mode TEXT NOT NULL DEFAULT 'contains',
+                risk_terms TEXT NOT NULL DEFAULT '',
+                exceptions TEXT NOT NULL DEFAULT '',
+                safe_reply TEXT NOT NULL DEFAULT '',
+                note TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS wecom_handoff_rule_meta (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                initialized INTEGER NOT NULL DEFAULT 1,
+                revision TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_wecom_handoff_rules_order
+                ON wecom_handoff_rules(enabled, sort_order, id);
             """
         )
+        meta = conn.execute("SELECT id FROM wecom_handoff_rule_meta WHERE id=1").fetchone()
+        if not meta:
+            now = iso_now()
+            conn.executemany(
+                """
+                INSERT INTO wecom_handoff_rules(
+                    enabled,rule_type,keyword,match_mode,risk_terms,exceptions,
+                    safe_reply,note,sort_order,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    (
+                        1 if rule["enabled"] else 0,
+                        rule["rule_type"],
+                        rule["keyword"],
+                        rule["match_mode"],
+                        rule["risk_terms"],
+                        rule["exceptions"],
+                        rule["safe_reply"],
+                        rule["note"],
+                        rule["sort_order"],
+                        now,
+                    )
+                    for rule in default_handoff_rules()
+                ],
+            )
+            conn.execute(
+                "INSERT INTO wecom_handoff_rule_meta(id,initialized,revision,updated_at) VALUES(1,1,?,?)",
+                (new_revision(), now),
+            )
 
 
 def split_users(value: str) -> Tuple[str, ...]:
@@ -136,6 +248,37 @@ def load_settings(path: Optional[Path] = None) -> Dict[str, Any]:
         "allowed_reply_users": str(row["allowed_reply_users"] or "").strip(),
         "ticket_hours": max(1, min(168, int(row["ticket_hours"] or 24))),
         "updated_at": row["updated_at"],
+    }
+
+
+def load_handoff_rules(path: Optional[Path] = None) -> Dict[str, Any]:
+    init_wecom_settings_db(path)
+    with db(path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM wecom_handoff_rules ORDER BY sort_order ASC,id ASC"
+        ).fetchall()
+        meta = conn.execute(
+            "SELECT revision,updated_at FROM wecom_handoff_rule_meta WHERE id=1"
+        ).fetchone()
+    return {
+        "revision": str(meta["revision"] if meta else ""),
+        "updated_at": meta["updated_at"] if meta else None,
+        "rules": [
+            {
+                "id": int(row["id"]),
+                "enabled": bool(row["enabled"]),
+                "rule_type": str(row["rule_type"] or "confirm"),
+                "keyword": str(row["keyword"] or ""),
+                "match_mode": str(row["match_mode"] or "contains"),
+                "risk_terms": str(row["risk_terms"] or ""),
+                "exceptions": str(row["exceptions"] or ""),
+                "safe_reply": str(row["safe_reply"] or ""),
+                "note": str(row["note"] or ""),
+                "sort_order": int(row["sort_order"] or 0),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ],
     }
 
 
@@ -193,6 +336,29 @@ def require_admin(request: Request) -> str:
     return str(username)
 
 
+def bearer_token(request: Request) -> str:
+    header = request.headers.get("authorization", "")
+    if not header.lower().startswith("bearer "):
+        return ""
+    return header.split(" ", 1)[1].strip()
+
+
+def require_runtime_client(request: Request) -> Dict[str, Any]:
+    token = bearer_token(request)
+    if not token:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="客户端令牌无效")
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    with db() as conn:
+        row = conn.execute(
+            "SELECT * FROM client_tokens WHERE token_hash=? AND enabled=1",
+            (token_hash,),
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="客户端令牌无效")
+        conn.execute("UPDATE client_tokens SET last_used_at=? WHERE id=?", (iso_now(), row["id"]))
+    return dict(row)
+
+
 class WeComSettingsInput(BaseModel):
     enabled: bool = False
     corp_id: str = Field(default="", max_length=128)
@@ -206,6 +372,23 @@ class WeComSettingsInput(BaseModel):
     clear_app_secret: bool = False
     clear_callback_token: bool = False
     clear_callback_aes_key: bool = False
+
+
+class HandoffRuleInput(BaseModel):
+    id: int = 0
+    enabled: bool = True
+    rule_type: str = Field(default="confirm", max_length=32)
+    keyword: str = Field(default="", max_length=120)
+    match_mode: str = Field(default="contains", max_length=32)
+    risk_terms: str = Field(default="", max_length=3000)
+    exceptions: str = Field(default="", max_length=3000)
+    safe_reply: str = Field(default="", max_length=1200)
+    note: str = Field(default="", max_length=1000)
+    sort_order: int = Field(default=0, ge=0, le=100000)
+
+
+class HandoffRuleSetInput(BaseModel):
+    rules: List[HandoffRuleInput] = Field(default_factory=list)
 
 
 def save_settings(data: WeComSettingsInput, path: Optional[Path] = None) -> Dict[str, Any]:
@@ -270,6 +453,81 @@ def save_settings(data: WeComSettingsInput, path: Optional[Path] = None) -> Dict
     return load_settings(path)
 
 
+def save_handoff_rules(data: HandoffRuleSetInput, path: Optional[Path] = None) -> Dict[str, Any]:
+    if len(data.rules) > 300:
+        raise HTTPException(status_code=400, detail="转人工规则最多300条")
+
+    normalized: List[Dict[str, Any]] = []
+    seen = set()
+    for index, item in enumerate(data.rules):
+        keyword = (item.keyword or "").strip()
+        if not keyword:
+            raise HTTPException(status_code=400, detail=f"第 {index + 1} 条规则关键词不能为空")
+        key = keyword.casefold()
+        if key in seen:
+            raise HTTPException(status_code=400, detail="关键词不能重复：" + keyword)
+        seen.add(key)
+        rule_type = (item.rule_type or "confirm").strip().lower()
+        if rule_type not in {"manual", "confirm"}:
+            raise HTTPException(status_code=400, detail="规则类型必须是 manual 或 confirm")
+        match_mode = (item.match_mode or "contains").strip().lower()
+        if match_mode not in {"contains", "sensitive_context"}:
+            raise HTTPException(status_code=400, detail="匹配方式必须是 contains 或 sensitive_context")
+        normalized.append(
+            {
+                "enabled": bool(item.enabled),
+                "rule_type": rule_type,
+                "keyword": keyword,
+                "match_mode": match_mode,
+                "risk_terms": (item.risk_terms or "").strip(),
+                "exceptions": (item.exceptions or "").strip(),
+                "safe_reply": (item.safe_reply or "").strip(),
+                "note": (item.note or "").strip(),
+                "sort_order": int(item.sort_order or ((index + 1) * 10)),
+            }
+        )
+
+    now = iso_now()
+    revision = new_revision()
+    init_wecom_settings_db(path)
+    with db(path) as conn:
+        conn.execute("DELETE FROM wecom_handoff_rules")
+        if normalized:
+            conn.executemany(
+                """
+                INSERT INTO wecom_handoff_rules(
+                    enabled,rule_type,keyword,match_mode,risk_terms,exceptions,
+                    safe_reply,note,sort_order,updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                """,
+                [
+                    (
+                        1 if rule["enabled"] else 0,
+                        rule["rule_type"],
+                        rule["keyword"],
+                        rule["match_mode"],
+                        rule["risk_terms"],
+                        rule["exceptions"],
+                        rule["safe_reply"],
+                        rule["note"],
+                        rule["sort_order"],
+                        now,
+                    )
+                    for rule in normalized
+                ],
+            )
+        conn.execute(
+            """
+            INSERT INTO wecom_handoff_rule_meta(id,initialized,revision,updated_at)
+            VALUES(1,1,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                initialized=1,revision=excluded.revision,updated_at=excluded.updated_at
+            """,
+            (revision, now),
+        )
+    return load_handoff_rules(path)
+
+
 def apply_to_bridge(bridge: Any) -> Dict[str, Any]:
     settings = load_settings()
     bridge.WECOM_ENABLED = bool(settings.get("enabled"))
@@ -302,6 +560,28 @@ def admin_save_wecom_settings(data: WeComSettingsInput, _: str = Depends(require
     except Exception:
         pass
     return public_settings(saved)
+
+
+@router.get("/api/admin/wecom/handoff-rules")
+def admin_get_handoff_rules(_: str = Depends(require_admin)) -> Dict[str, Any]:
+    return load_handoff_rules()
+
+
+@router.put("/api/admin/wecom/handoff-rules")
+def admin_save_handoff_rules(
+    data: HandoffRuleSetInput,
+    _: str = Depends(require_admin),
+) -> Dict[str, Any]:
+    return save_handoff_rules(data)
+
+
+@router.get("/api/runtime/v1/handoff/rules")
+def runtime_get_handoff_rules(
+    client: Dict[str, Any] = Depends(require_runtime_client),
+) -> Dict[str, Any]:
+    result = load_handoff_rules()
+    result["client"] = client.get("name", "")
+    return result
 
 
 @router.post("/api/admin/wecom/generate-callback")
