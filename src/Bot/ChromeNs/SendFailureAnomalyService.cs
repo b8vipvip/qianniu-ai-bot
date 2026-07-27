@@ -46,7 +46,7 @@ namespace Bot.ChromeNs
                 Summary = "答案已经获取，但未确认真实发送给买家。已触发发送链路异常分析。",
                 LikelyCause = Limit(failureReason, 2000),
                 Evidence = "发送监控在等待卖家消息回显后仍未发现与目标答案一致的实际发送记录。",
-                Recommendations = "检查是否误走 SendSmartTipMsg 智能提示接口、目标会话是否正确、输入框是否真正写入，以及发送后是否收到卖家消息回显。",
+                Recommendations = "检查目标会话、输入框、发送按钮和卖家消息回显；会话瞬时空值应由本地稳定确认处理。",
                 NotificationStatus = "发送异常已写入异常报告列表"
             };
 
@@ -112,6 +112,13 @@ namespace Bot.ChromeNs
                 SaveReport(report);
                 Log.Info("发送失败AI分析完成: reportId=" + report.Id
                     + ", cause=" + Limit(report.LikelyCause, 500));
+            }
+            catch (TaskCanceledException)
+            {
+                report.AnalysisStatus = "AI诊断超时，已保留本地规则诊断";
+                report.Summary = "发送失败异常已记录；诊断AI超时，不影响Bot继续运行。";
+                SaveReport(report);
+                Log.Info("发送失败AI诊断超时，不影响Bot运行: reportId=" + report.Id);
             }
             catch (Exception ex)
             {
