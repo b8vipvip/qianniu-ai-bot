@@ -199,39 +199,39 @@ namespace Bot.ChromeNs
 
                 PendingDelivery removed;
                 if (!Pending.TryRemove(pending.Id, out removed) || !ReferenceEquals(removed, pending)) return;
-                if (delivered)
+                if (!delivered)
                 {
                     ReplyQualityMetricsService.RecordSendResult(
-                        true,
+                        false,
                         Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
-                    ResponseProgressTracker.MarkDeliveryConfirmed(
-                        pending.Seller, pending.Buyer, pending.Answer, "延迟回显确认已发送");
-                    Log.Info("发送回显监控确认成功: seller=" + pending.Seller
-                        + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id);
+                    var reason = "答案已经生成并进入自动发送流程，并且已真正进入发送动作，但在 "
+                        + (VerifyDelayMilliseconds / 1000) + " 秒内未检测到相同内容的卖家消息回显。"
+                        + "可能是输入框/发送按钮操作未真正送达、回显事件缺失，或发送结果被错误判定。";
+                    ResponseProgressTracker.MarkDeliveryTimedOut(
+                        pending.Seller, pending.Buyer, pending.Answer, reason);
+                    Log.Error("[发送异常] seller=" + pending.Seller
+                        + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id
+                        + ", reason=" + reason);
+                    SendFailureAnomalyService.Queue(
+                        pending.Seller,
+                        pending.Buyer,
+                        pending.Question,
+                        pending.Answer,
+                        pending.Source,
+                        reason,
+                        pending.DetectedAt,
+                        pending.AnswerReadyAt,
+                        DateTime.Now);
                     return;
                 }
 
                 ReplyQualityMetricsService.RecordSendResult(
-                    false,
+                    true,
                     Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
-                var reason = "已真正进入发送动作，但在 "
-                    + (VerifyDelayMilliseconds / 1000) + " 秒内未检测到相同内容的卖家消息回显。"
-                    + "可能是输入框/发送按钮操作未真正送达、回显事件缺失，或发送结果被错误判定。";
-                ResponseProgressTracker.MarkDeliveryTimedOut(
-                    pending.Seller, pending.Buyer, pending.Answer, reason);
-                Log.Error("[发送异常] seller=" + pending.Seller
-                    + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id
-                    + ", reason=" + reason);
-                SendFailureAnomalyService.Queue(
-                    pending.Seller,
-                    pending.Buyer,
-                    pending.Question,
-                    pending.Answer,
-                    pending.Source,
-                    reason,
-                    pending.DetectedAt,
-                    pending.AnswerReadyAt,
-                    DateTime.Now);
+                ResponseProgressTracker.MarkDeliveryConfirmed(
+                    pending.Seller, pending.Buyer, pending.Answer, "延迟回显确认已发送");
+                Log.Info("发送回显监控确认成功: seller=" + pending.Seller
+                    + ", buyer=" + pending.Buyer + ", watchdogId=" + pending.Id);
             });
         }
 
