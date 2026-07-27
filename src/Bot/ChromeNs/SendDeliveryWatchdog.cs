@@ -32,8 +32,8 @@ namespace Bot.ChromeNs
 
         public static void OnBuyerMessageObserved(string seller, string buyer, DateTime observedAt)
         {
-            // 新买家消息不能取消已经真正按下发送键后的送达核验；
-            // 但旧答案是否仍允许重试，由 QNRpa 的答案时效租约单独判断。
+            // 新买家消息不能取消上一条答案的送达核验；已经真正按下发送键的尝试仍须等待回显。
+            // 但尚未真正发送的旧答案是否仍允许重试，由 QNRpa 的答案时效租约单独判断。
         }
 
         public static void ExpectDelivery(
