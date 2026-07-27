@@ -23,6 +23,7 @@ namespace Bot.ChromeNs
         private sealed class DeliveryUiEntry
         {
             public CtlConversation Control;
+            public string Source = string.Empty;
             public DateTime ExpiresAt;
         }
 
@@ -39,6 +40,14 @@ namespace Bot.ChromeNs
         private static string DeliveryKey(string seller, string buyer, string answer)
         {
             return Key(seller, buyer) + "#" + Regex.Replace((answer ?? string.Empty).Trim(), @"\s+", string.Empty);
+        }
+
+        public static bool IsMandatoryOrderAnswer(string seller, string buyer, string answer)
+        {
+            DeliveryUiEntry ui;
+            return DeliveryUi.TryGetValue(DeliveryKey(seller, buyer, answer), out ui)
+                && ui != null
+                && (ui.Source ?? string.Empty).IndexOf("下单自动回复", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
         public static CtlConversation ObserveQuestion(
@@ -83,7 +92,9 @@ namespace Bot.ChromeNs
                         }
                         else if (entry.AnswerReadyAt != DateTime.MinValue && entry.Control != null)
                         {
-                            entry.Control.SetStatus("买家已补充新消息，旧答案禁止再次发送", false);
+                            entry.Control.SetStatus(IsMandatoryOrderAnswer(seller, buyer, entry.Answer)
+                                ? "买家已补充新消息，下单固定预设仍保持优先发送"
+                                : "买家已补充新消息，旧答案禁止再次发送", false);
                         }
                         if (newerTurnDuringGeneration)
                         {
@@ -178,6 +189,7 @@ namespace Bot.ChromeNs
                 DeliveryUi[DeliveryKey(seller, buyer, answer)] = new DeliveryUiEntry
                 {
                     Control = control,
+                    Source = source ?? string.Empty,
                     ExpiresAt = DateTime.Now.AddMinutes(3)
                 };
             }
