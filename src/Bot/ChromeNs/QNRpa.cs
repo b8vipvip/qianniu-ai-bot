@@ -385,6 +385,12 @@ namespace Bot.ChromeNs
 
         private bool VerifyAnswerFreshness(string buyer, string text, DateTime attemptStartedAt, string stage)
         {
+            if (ResponseProgressTracker.IsMandatoryOrderAnswer(SellerNick, buyer, text))
+            {
+                Log.Info("下单固定预设受保护，买家后续消息不会取消本次优先发送: seller="
+                    + SellerNick + ", buyer=" + buyer + ", stage=" + stage);
+                return true;
+            }
             if (_qn == null || !_qn.HasBuyerMessageAfter(SellerNick, buyer, attemptStartedAt)) return true;
             SetSendFailure(stage, "买家已发送更新消息，旧答案不会发送");
             CompleteAttemptLease(buyer, text);
