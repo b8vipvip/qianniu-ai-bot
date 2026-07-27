@@ -31,12 +31,100 @@ function Copy-DirectoryContents([string]$Source, [string]$Destination) {
     }
 }
 
-function Stop-BotProcesses {
-    Get-Process -Name 'Bot' -ErrorAction SilentlyContinue | ForEach-Object {
-        Write-Host "Stopping Bot.exe PID=$($_.Id)"
-        Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+function Get-InstallProcessIds([string]$TargetInstallDir) {
+    $ids = @()
+    $ids += @(Get-Process -Name 'Bot' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+
+    if (-not [string]::IsNullOrWhiteSpace($TargetInstallDir)) {
+        $root = [IO.Path]::GetFullPath($TargetInstallDir).TrimEnd('\') + '\'
+        try {
+            $ids += @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+                if ($null -eq $_ -or [string]::IsNullOrWhiteSpace([string]$_.ExecutablePath)) { return $false }
+                try {
+                    $exe = [IO.Path]::GetFullPath([string]$_.ExecutablePath)
+                    return $exe.StartsWith($root, [StringComparison]::OrdinalIgnoreCase)
+                }
+                catch {
+                    return $false
+                }
+            } | ForEach-Object { [int]$_.ProcessId })
+        }
+        catch {
+            Write-Host "Unable to enumerate processes under install directory: $($_.Exception.Message)" -ForegroundColor Yellow
+        }
     }
-    Start-Sleep -Milliseconds 900
+
+    return @($ids | Where-Object { $_ -gt 0 -and $_ -ne $PID } | Sort-Object -Unique)
+}
+
+function Stop-BotProcesses([string]$TargetInstallDir) {
+    $ids = @(Get-InstallProcessIds $TargetInstallDir)
+    foreach ($id in $ids) {
+        $process = Get-Process -Id $id -ErrorAction SilentlyContinue
+        if ($null -eq $process) { continue }
+        Write-Host "Stopping process PID=$id Name=$($process.ProcessName)"
+        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+    }
+
+    $deadline = (Get-Date).AddSeconds(12)
+    while ((Get-Date) -lt $deadline) {
+        $alive = @($ids | Where-Object { $null -ne (Get-Process -Id $_ -ErrorAction SilentlyContinue) })
+        if ($alive.Count -eq 0) { return }
+        Start-Sleep -Milliseconds 300
+    }
+
+    foreach ($id in $ids) {
+        Stop-Process -Id $id -Force -ErrorAction SilentlyContinue
+    }
+    Start-Sleep -Milliseconds 700
+}
+
+function Get-PossibleDirectoryBlockers([string]$Path) {
+    $needle = [IO.Path]::GetFullPath($Path).TrimEnd('\')
+    try {
+        return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            if ($null -eq $_ -or [int]$_.ProcessId -eq $PID) { return $false }
+            $exe = [string]$_.ExecutablePath
+            $command = [string]$_.CommandLine
+            return ($exe.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0) -or
+                ($command.IndexOf($needle, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+        } | ForEach-Object {
+            "PID=$($_.ProcessId) Name=$($_.Name) Exe=$($_.ExecutablePath)"
+        })
+    }
+    catch {
+        return @()
+    }
+}
+
+function Clear-DirectoryContentsWithRetry([string]$Path, [int]$MaxAttempts = 24) {
+    if (-not (Test-Path -LiteralPath $Path)) { return }
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        Stop-BotProcesses $Path
+        $failures = @()
+        foreach ($item in @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)) {
+            try {
+                Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+            }
+            catch {
+                $failures += "$($item.FullName): $($_.Exception.Message)"
+            }
+        }
+
+        $remaining = @(Get-ChildItem -LiteralPath $Path -Force -ErrorAction SilentlyContinue)
+        if ($remaining.Count -eq 0) {
+            return
+        }
+
+        $summary = if ($failures.Count -gt 0) { $failures -join ' | ' } else { ($remaining.FullName -join ' | ') }
+        Write-Host "Install files are still busy; retry $attempt/$MaxAttempts. $summary" -ForegroundColor Yellow
+        Start-Sleep -Milliseconds ([Math]::Min(1500, 250 + ($attempt * 75)))
+    }
+
+    $blockers = @(Get-PossibleDirectoryBlockers $Path)
+    $detail = if ($blockers.Count -gt 0) { $blockers -join '; ' } else { 'No executable-path blocker was found. Close terminals, Explorer windows, antivirus scans, or other programs using this directory.' }
+    throw "Unable to clear install directory contents after $MaxAttempts attempts: $Path. $detail"
 }
 
 function Test-BotStarted([string]$ExpectedExe) {
@@ -98,7 +186,7 @@ try {
         Stop-Process -Id $CurrentPid -Force -ErrorAction SilentlyContinue
         Start-Sleep -Milliseconds 800
     }
-    Stop-BotProcesses
+    Stop-BotProcesses $InstallDir
 
     Write-Step "Preparing Bot update to version $ExpectedVersion"
     Write-Host "Package: $PackagePath"
@@ -149,10 +237,10 @@ try {
     }
 
     Write-Step 'Replacing program files'
-    if (Test-Path -LiteralPath $InstallDir) {
-        Remove-Item -LiteralPath $InstallDir -Recurse -Force
-    }
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+    # Keep the install root itself. A shell/helper may retain a transient directory handle
+    # after Bot.exe exits; deleting only children avoids treating that harmless root lock as failure.
+    Clear-DirectoryContentsWithRetry $InstallDir
     Copy-DirectoryContents $packageRoot $InstallDir
 
     $installedExe = Join-Path $InstallDir 'Bin\Bot.exe'
@@ -186,9 +274,13 @@ catch {
     Write-Host "`nUpdate failed: $($failure.Exception.Message)" -ForegroundColor Red
     Write-Host 'Starting automatic rollback...' -ForegroundColor Yellow
 
-    Stop-BotProcesses
-    if (Test-Path -LiteralPath $InstallDir) {
-        Remove-Item -LiteralPath $InstallDir -Recurse -Force -ErrorAction SilentlyContinue
+    Stop-BotProcesses $InstallDir
+    try {
+        New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
+        Clear-DirectoryContentsWithRetry $InstallDir
+    }
+    catch {
+        Write-Host "Rollback cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
     }
     if ($oldProgramExisted -and (Test-Path -LiteralPath $programBackup)) {
         New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
