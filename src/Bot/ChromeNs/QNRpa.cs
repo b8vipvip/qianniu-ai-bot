@@ -4,6 +4,7 @@ using BotLib;
 using FlaUI.Core.AutomationElements;
 using FlaUI.UIA3;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -29,6 +30,9 @@ namespace Bot.ChromeNs
 
         private FlaUI.Core.Application automationApplication;
         private UIA3Automation uia3Automation;
+
+        private static readonly ConcurrentDictionary<string, DateTime> AnswerAttemptStartedAt =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
         public string LastSetPlainText { get; private set; }
 
@@ -100,6 +104,13 @@ namespace Bot.ChromeNs
             WinApi.Api.keybd_event(0x0D, 0, 0, 0);
             Thread.Sleep(80);
             WinApi.Api.keybd_event(0x0D, 0, 2, 0);
+        }
+
+        private static void PressBackspace()
+        {
+            WinApi.Api.keybd_event(0x08, 0, 0, 0);
+            Thread.Sleep(50);
+            WinApi.Api.keybd_event(0x08, 0, 2, 0);
         }
 
         private string GetEditorTextSafe()
@@ -181,7 +192,6 @@ namespace Bot.ChromeNs
         {
             try
             {
-                // 不再按 Esc。千牛在输入框有草稿时按 Esc 会弹出“您还未回复买家/关闭会话确认”，反而阻断发送。
                 if (!FocusEditor())
                 {
                     SetSendFailure("Enter发送", "无法聚焦聊天输入框");
@@ -208,8 +218,6 @@ namespace Bot.ChromeNs
             if (_sendMessageButton == null) return false;
             try
             {
-                // 千牛“发送”是分裂按钮，右侧小箭头会打开“按Enter/按Ctrl+Enter发送”菜单。
-                // 这里只点击按钮左侧正文区域，避开右侧下拉箭头。
                 var rect = _sendMessageButton.BoundingRectangle;
                 var x = (int)(rect.Left + Math.Min(Math.Max(rect.Width * 0.35, 10), Math.Max(rect.Width - 32, 10)));
                 var y = (int)(rect.Top + rect.Height / 2);
@@ -226,7 +234,6 @@ namespace Bot.ChromeNs
 
         private bool TryClickSendButton(string buyer, string text, DateTime sendStart)
         {
-            // 首选 Enter。当前千牛菜单已勾选“按Enter发送”，这比点击分裂按钮更稳定，也不会误点下拉箭头。
             if (TryPressEnterSend(buyer, text, sendStart)) return true;
 
             try
@@ -343,8 +350,69 @@ namespace Bot.ChromeNs
             return await OpenAndSendText(buyer, text);
         }
 
+        private string SellerNick
+        {
+            get { return _qn == null || _qn.Seller == null ? string.Empty : (_qn.Seller.Nick ?? string.Empty).Trim(); }
+        }
+
+        private static string AttemptKey(string seller, string buyer, string text)
+        {
+            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim() + "#" + (text ?? string.Empty).Trim();
+        }
+
+        private DateTime GetOrCreateAttemptStartedAt(string buyer, string text)
+        {
+            CleanupAttemptLeases();
+            return AnswerAttemptStartedAt.GetOrAdd(AttemptKey(SellerNick, buyer, text), _ => DateTime.Now);
+        }
+
+        private void CompleteAttemptLease(string buyer, string text)
+        {
+            DateTime ignored;
+            AnswerAttemptStartedAt.TryRemove(AttemptKey(SellerNick, buyer, text), out ignored);
+        }
+
+        private static void CleanupAttemptLeases()
+        {
+            var threshold = DateTime.Now.AddMinutes(-2);
+            foreach (var pair in AnswerAttemptStartedAt)
+            {
+                if (pair.Value >= threshold) continue;
+                DateTime ignored;
+                AnswerAttemptStartedAt.TryRemove(pair.Key, out ignored);
+            }
+        }
+
+        private bool VerifyAnswerFreshness(string buyer, string text, DateTime attemptStartedAt, string stage)
+        {
+            if (_qn == null || !_qn.HasBuyerMessageAfter(SellerNick, buyer, attemptStartedAt)) return true;
+            SetSendFailure(stage, "买家已发送更新消息，旧答案不会发送");
+            CompleteAttemptLease(buyer, text);
+            Log.Info("旧答案发送/重试已取消: seller=" + SellerNick + ", buyer=" + buyer
+                + ", stage=" + stage + ", reason=买家已发送更新消息");
+            return false;
+        }
+
+        private bool IsExpectedBuyer(string expected, string current)
+        {
+            expected = (expected ?? string.Empty).Trim();
+            current = (current ?? string.Empty).Trim();
+            if (expected.Length == 0 || current.Length == 0) return false;
+            if (string.Equals(expected, current, StringComparison.Ordinal)) return true;
+            return BuyerIdentityAliasService.AreEquivalent(SellerNick, expected, current);
+        }
+
+        private async Task<string> ReadCurrentBuyerNickAsync()
+        {
+            var current = await _qn.GetCurrentConversationID();
+            return current == null || current.Result == null
+                ? string.Empty
+                : (current.Result.Nick ?? string.Empty).Trim();
+        }
+
         private async Task<bool> VerifyCurrentBuyerAsync(string buyer, string stage)
         {
+            buyer = (buyer ?? string.Empty).Trim();
             try
             {
                 if (_qn == null || _qn.CDP == null)
@@ -352,25 +420,73 @@ namespace Bot.ChromeNs
                     SetSendFailure(stage, "千牛消息连接不可用");
                     return false;
                 }
-                var current = await _qn.GetCurrentConversationID();
-                var currentNick = current == null || current.Result == null
-                    ? string.Empty
-                    : (current.Result.Nick ?? string.Empty).Trim();
-                if (!string.Equals(currentNick, (buyer ?? string.Empty).Trim(), StringComparison.Ordinal))
+
+                for (var attempt = 0; attempt < 7; attempt++)
                 {
-                    SetSendFailure(stage, "目标买家=" + buyer + "，当前买家=" + currentNick);
-                    return false;
+                    var currentNick = await ReadCurrentBuyerNickAsync();
+                    if (IsExpectedBuyer(buyer, currentNick))
+                    {
+                        _qn.SetActiveConversationByNick(SellerNick,
+                            BuyerIdentityAliasService.ResolveInternalNick(SellerNick, currentNick), stage);
+                        return true;
+                    }
+                    if (!string.IsNullOrWhiteSpace(currentNick))
+                    {
+                        SetSendFailure(stage, "目标买家=" + buyer + "，当前买家=" + currentNick);
+                        return false;
+                    }
+                    Log.Info("会话确认暂时为空，等待稳定: stage=" + stage + ", buyer=" + buyer
+                        + ", attempt=" + (attempt + 1) + "/7");
+                    await Task.Delay(180);
                 }
-                _qn.SetActiveConversationByNick(
-                    _qn.Seller == null ? string.Empty : _qn.Seller.Nick,
-                    currentNick,
-                    stage);
-                return true;
+
+                Log.Info("会话持续为空，重新打开目标买家后再次确认: stage=" + stage + ", buyer=" + buyer);
+                _qn.OpenChat(buyer);
+                await Task.Delay(500);
+                for (var attempt = 0; attempt < 5; attempt++)
+                {
+                    var currentNick = await ReadCurrentBuyerNickAsync();
+                    if (IsExpectedBuyer(buyer, currentNick))
+                    {
+                        _qn.SetActiveConversationByNick(SellerNick,
+                            BuyerIdentityAliasService.ResolveInternalNick(SellerNick, currentNick), stage + "-重开确认");
+                        return true;
+                    }
+                    if (!string.IsNullOrWhiteSpace(currentNick))
+                    {
+                        SetSendFailure(stage, "目标买家=" + buyer + "，重开后当前买家=" + currentNick);
+                        return false;
+                    }
+                    await Task.Delay(200);
+                }
+
+                SetSendFailure(stage, "目标买家=" + buyer + "，当前会话持续为空");
+                return false;
             }
             catch (Exception ex)
             {
                 SetSendFailure(stage, ex.Message);
                 return false;
+            }
+        }
+
+        private void ClearExpectedDraft(string expected, string reason)
+        {
+            try
+            {
+                if (!HasExpectedDraft(expected)) return;
+                DispatcherEx.xInvoke(() =>
+                {
+                    if (!HasExpectedDraft(expected) || !FocusEditor()) return;
+                    PressCtrlA();
+                    PressBackspace();
+                    LastSetPlainText = string.Empty;
+                    Log.Info("已清除过期/不安全发送草稿: reason=" + reason);
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Info("清除过期草稿失败: " + ex.Message);
             }
         }
 
@@ -417,30 +533,42 @@ namespace Bot.ChromeNs
         {
             bool sendResult = false;
             ResetSendFailure();
+            var attemptStartedAt = GetOrCreateAttemptStartedAt(buyer, text);
             try
             {
                 Log.Info("自动发送开始: buyer=" + buyer + ", text=" + text + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
 
-                if (_qn.Buyer == null || _qn.Buyer.Nick != buyer)
+                if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查")) return false;
+
+                if (_qn.Buyer == null || !IsExpectedBuyer(buyer, _qn.Buyer.Nick))
                 {
                     _qn.OpenChat(buyer);
                     await Task.Delay(500);
                     var conv = await _qn.GetCurrentConversationID();
                     if (conv != null && conv.Result != null && !string.IsNullOrWhiteSpace(conv.Result.Nick))
                     {
-                        _qn.SetActiveConversationByNick(_qn.Seller == null ? string.Empty : _qn.Seller.Nick, conv.Result.Nick, "beforeSend");
+                        _qn.SetActiveConversationByNick(SellerNick,
+                            BuyerIdentityAliasService.ResolveInternalNick(SellerNick, conv.Result.Nick), "beforeSend");
                     }
                 }
 
-                if (_qn.Buyer == null || _qn.Buyer.Nick != buyer)
+                if (_qn.Buyer == null || !IsExpectedBuyer(buyer, _qn.Buyer.Nick))
                 {
                     SetSendFailure("会话确认", "当前会话不是目标买家；target=" + buyer
                         + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
 
                 if (!await VerifyCurrentBuyerAsync(buyer, "写入前会话确认"))
                 {
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    return false;
+                }
+
+                if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查"))
+                {
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
 
@@ -461,25 +589,40 @@ namespace Bot.ChromeNs
                 if (!setOk)
                 {
                     SetSendFailure("写入输入框", "UIA与CDP均未严格确认目标文本");
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
 
                 await Task.Delay(120);
+                if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查"))
+                {
+                    ClearExpectedDraft(text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    return false;
+                }
                 if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认"))
                 {
+                    ClearExpectedDraft(text, GetSendFailureReason());
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
                 if (!HasExpectedDraft(text))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
 
+                SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text);
                 var sendStart = DateTime.Now;
                 sendResult = TryClickSendButton(buyer, text, sendStart);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
                     SetSendFailure("发送确认", "Enter与发送按钮均未确认消息送达");
+                }
+                if (sendResult)
+                {
+                    CompleteAttemptLease(buyer, text);
                 }
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer
                     + ", failure=" + GetSendFailureReason() + ", text=" + text);
@@ -487,6 +630,7 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 SetSendFailure("自动发送异常", ex.Message);
+                SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                 Log.Exception(ex);
                 sendResult = false;
             }
