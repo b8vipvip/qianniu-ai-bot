@@ -94,6 +94,22 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
+                    // 卖家回显有时晚于买家的下一条消息到达。此时上一轮发送任务可能已被
+                    // “新消息替代”流程移除，导致 watchdog 状态无法再匹配。Bot 的所有自动
+                    // 对外回复都带结尾 [AI] 署名；该署名是独立于任务生命周期的作者证据，
+                    // 不能把这种迟到的 Bot 回显误判为人工客服介入并取消当前问题的答案。
+                    if (IsExplicitBotAuthoredReply(text))
+                    {
+                        ResponseProgressTracker.MarkDeliveryConfirmed(
+                            seller,
+                            buyer,
+                            text,
+                            "通过[AI]署名确认这是Bot卖家回显");
+                        Log.Info("卖家消息带Bot署名标记，未判定人工介入: seller=" + seller
+                            + ", buyer=" + buyer + ", reply=" + Short(text, 120));
+                        continue;
+                    }
+
                     qn.CancelActiveBuyerGeneration(seller, buyer, "检测到客服回复：" + Short(text, 120));
                     ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);
                 }
@@ -117,6 +133,16 @@ namespace Bot.ChromeNs
             {
             }
             return (message.summary ?? string.Empty).Trim();
+        }
+
+        private static bool IsExplicitBotAuthoredReply(string value)
+        {
+            var compact = new string((value ?? string.Empty)
+                .Where(ch => !char.IsWhiteSpace(ch))
+                .ToArray());
+            return compact.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("【AI】", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("［AI］", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string Short(string value, int max)
