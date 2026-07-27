@@ -32,6 +32,17 @@ def test_stale_answer_retry_is_cancelled_and_draft_is_cleared():
     assert "ClearExpectedDraft" in qnrpa
 
 
+def test_mandatory_order_preset_keeps_priority_when_buyer_sends_follow_up():
+    qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
+    tracker = text("src/Bot/ChromeNs/ResponseProgressTracker.cs")
+
+    assert "IsMandatoryOrderAnswer" in tracker
+    assert 'IndexOf("下单自动回复"' in tracker
+    assert "ResponseProgressTracker.IsMandatoryOrderAnswer" in qnrpa
+    assert "下单固定预设受保护" in qnrpa
+    assert qnrpa.index("ResponseProgressTracker.IsMandatoryOrderAnswer") < qnrpa.index("HasBuyerMessageAfter")
+
+
 def test_delivery_watchdog_starts_only_after_session_and_draft_checks():
     qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
     watchdog = text("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
