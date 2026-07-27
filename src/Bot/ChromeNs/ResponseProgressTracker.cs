@@ -3,6 +3,7 @@ using Bot.Automation.ChatDeskNs;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
 {
@@ -13,17 +14,31 @@ namespace Bot.ChromeNs
             public readonly object Sync = new object();
             public CtlConversation Control;
             public string Question = string.Empty;
+            public string Answer = string.Empty;
             public DateTime DetectedAt = DateTime.MinValue;
             public DateTime AnswerStartedAt = DateTime.MinValue;
             public DateTime AnswerReadyAt = DateTime.MinValue;
         }
 
+        private sealed class DeliveryUiEntry
+        {
+            public CtlConversation Control;
+            public DateTime ExpiresAt;
+        }
+
         private static readonly ConcurrentDictionary<string, Entry> Entries =
             new ConcurrentDictionary<string, Entry>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DeliveryUiEntry> DeliveryUi =
+            new ConcurrentDictionary<string, DeliveryUiEntry>(StringComparer.Ordinal);
 
         private static string Key(string seller, string buyer)
         {
             return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+        }
+
+        private static string DeliveryKey(string seller, string buyer, string answer)
+        {
+            return Key(seller, buyer) + "#" + Regex.Replace((answer ?? string.Empty).Trim(), @"\s+", string.Empty);
         }
 
         public static CtlConversation ObserveQuestion(
@@ -38,6 +53,7 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return null;
 
             SendDeliveryWatchdog.OnBuyerMessageObserved(seller, buyer, detectedAt);
+            CleanupDeliveryUi();
 
             if (ShouldDeferUnsupportedMediaCard(question)) return null;
 
@@ -59,13 +75,15 @@ namespace Bot.ChromeNs
                         && observedAt > entry.DetectedAt.AddMilliseconds(5)
                         && !string.Equals(entry.Question, question, StringComparison.Ordinal);
 
-                    // 答案已经就绪，或者上一轮已经正式进入AI生成后又收到一条真正更新的买家消息，
-                    // 都必须创建全新的进度卡片。SetExactQuestion 在同一轮内部重复同步原问题时不能触发轮换。
                     if (entry.AnswerReadyAt != DateTime.MinValue || newerTurnDuringGeneration)
                     {
                         if (entry.AnswerReadyAt == DateTime.MinValue && entry.Control != null)
                         {
                             entry.Control.SetStatus("已被买家新消息替代，旧答案不会发送", false);
+                        }
+                        else if (entry.AnswerReadyAt != DateTime.MinValue && entry.Control != null)
+                        {
+                            entry.Control.SetStatus("买家已补充新消息，旧答案禁止再次发送", false);
                         }
                         if (newerTurnDuringGeneration)
                         {
@@ -146,6 +164,7 @@ namespace Bot.ChromeNs
                     if (Entries.TryGetValue(key, out current) && ReferenceEquals(current, entry))
                     {
                         entry.AnswerReadyAt = answerReadyAt;
+                        entry.Answer = answer ?? string.Empty;
                         answerStartedAt = entry.AnswerStartedAt == DateTime.MinValue
                             ? detected
                             : entry.AnswerStartedAt;
@@ -156,6 +175,11 @@ namespace Bot.ChromeNs
             {
                 control.SetAnswer(answer, source, answerReadyAt);
                 control.SetSendPending("答案已生成，准备发送...");
+                DeliveryUi[DeliveryKey(seller, buyer, answer)] = new DeliveryUiEntry
+                {
+                    Control = control,
+                    ExpiresAt = DateTime.Now.AddMinutes(3)
+                };
             }
             Log.Info("回复进度答案就绪: seller=" + seller + ", buyer=" + buyer
                 + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds)
@@ -191,8 +215,37 @@ namespace Bot.ChromeNs
             return control;
         }
 
+        public static void MarkDeliveryConfirmed(string seller, string buyer, string answer, string detail)
+        {
+            DeliveryUiEntry ui;
+            if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer), out ui)
+                && ui != null
+                && ui.Control != null)
+            {
+                ui.Control.SetSendResult(true, string.IsNullOrWhiteSpace(detail)
+                    ? "已通过卖家消息回显确认真实发送"
+                    : detail);
+            }
+            BotConnectionDiagnostics.RecordSendAttempt(true,
+                string.IsNullOrWhiteSpace(detail) ? "卖家消息回显确认真实发送" : detail);
+            Log.Info("回复卡片已按卖家回显恢复为发送成功: seller=" + seller
+                + ", buyer=" + buyer + ", detail=" + (detail ?? string.Empty));
+        }
+
+        public static void MarkDeliveryTimedOut(string seller, string buyer, string answer, string detail)
+        {
+            DeliveryUiEntry ui;
+            if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer), out ui)
+                && ui != null
+                && ui.Control != null)
+            {
+                ui.Control.SetSendResult(false, "发送失败：" + (detail ?? string.Empty));
+            }
+        }
+
         public static void MarkManualIntervention(string seller, string buyer, string sellerReply)
         {
+            SendDeliveryWatchdog.CancelConversation(seller, buyer, "检测到客服人工回复");
             Entry entry;
             if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
             lock (entry.Sync)
@@ -200,6 +253,10 @@ namespace Bot.ChromeNs
                 if (entry.AnswerReadyAt == DateTime.MinValue && entry.Control != null)
                 {
                     entry.Control.SetStatus("检测到客服已人工回复，停止等待旧AI答案", true);
+                }
+                else if (entry.Control != null)
+                {
+                    entry.Control.SetStatus("检测到客服已人工回复，旧答案不再自动发送", true);
                 }
             }
             ReplyQualityMetricsService.RecordCancellation(false);
@@ -233,6 +290,17 @@ namespace Bot.ChromeNs
                 if (entry.AnswerReadyAt == DateTime.MinValue) return;
                 Entry ignored;
                 Entries.TryRemove(key, out ignored);
+            }
+        }
+
+        private static void CleanupDeliveryUi()
+        {
+            var now = DateTime.Now;
+            foreach (var pair in DeliveryUi)
+            {
+                if (pair.Value != null && pair.Value.ExpiresAt >= now) continue;
+                DeliveryUiEntry ignored;
+                DeliveryUi.TryRemove(pair.Key, out ignored);
             }
         }
 
