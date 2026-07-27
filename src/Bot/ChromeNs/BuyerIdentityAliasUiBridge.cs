@@ -7,6 +7,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using System.Threading;
+using System.Windows;
+using System.Windows.Threading;
 
 namespace Bot.ChromeNs
 {
@@ -19,6 +21,7 @@ namespace Bot.ChromeNs
     {
         private static Timer _timer;
         private static int _started;
+        private static int _refreshQueued;
         private static FieldInfo _conversationField;
         private static string _lastSignature = string.Empty;
 
@@ -28,56 +31,100 @@ namespace Bot.ChromeNs
             _conversationField = typeof(CtlRobot).GetField(
                 "buyerConversations",
                 BindingFlags.Instance | BindingFlags.NonPublic);
-            _timer = new Timer(_ => Refresh(), null, 500, 500);
+            _timer = new Timer(_ => QueueRefreshOnUiThread(), null, 500, 500);
         }
 
-        private static void Refresh()
+        private static void QueueRefreshOnUiThread()
         {
             try
             {
-                var qn = QN.CurQN;
-                var desk = Desk.Inst;
-                var ctl = desk == null ? null : desk.CtlRobot;
-                if (qn == null || qn.Seller == null || qn.Buyer == null || ctl == null || _conversationField == null) return;
+                var app = Application.Current;
+                if (app == null || app.Dispatcher == null || app.Dispatcher.HasShutdownStarted) return;
 
-                var seller = (qn.Seller.Nick ?? string.Empty).Trim();
-                var visibleBuyer = (qn.Buyer.Nick ?? string.Empty).Trim();
-                if (seller.Length == 0 || visibleBuyer.Length == 0) return;
-
-                var internalNick = BuyerIdentityAliasService.ResolveInternalNick(seller, visibleBuyer);
-                var display = BuyerIdentityAliasService.ResolveDisplay(seller, visibleBuyer);
-                if (internalNick.Length == 0 || display.Length == 0 || string.Equals(internalNick, display, StringComparison.OrdinalIgnoreCase)) return;
-
-                var map = _conversationField.GetValue(ctl) as ConcurrentDictionary<string, List<CtlConversation>>;
-                if (map == null) return;
-                var internalKey = seller + "#" + internalNick;
-                var displayKey = seller + "#" + display;
-
-                List<CtlConversation> internalList;
-                List<CtlConversation> displayList;
-                map.TryGetValue(internalKey, out internalList);
-                map.TryGetValue(displayKey, out displayList);
-                if ((internalList == null || internalList.Count == 0) && (displayList == null || displayList.Count == 0)) return;
-
-                var merged = new List<CtlConversation>();
-                foreach (var item in (displayList ?? new List<CtlConversation>()).Concat(internalList ?? new List<CtlConversation>()))
+                if (app.Dispatcher.CheckAccess())
                 {
-                    if (item != null && !merged.Any(x => ReferenceEquals(x, item))) merged.Add(item);
+                    RefreshOnUiThread();
+                    return;
                 }
-                map[internalKey] = merged;
-                map[displayKey] = merged;
 
-                var signature = seller + "#" + visibleBuyer + "#" + internalNick + "#" + display + "#" + merged.Count;
-                if (string.Equals(signature, _lastSignature, StringComparison.Ordinal)) return;
-                _lastSignature = signature;
-                ctl.ReShowAfterQNChange();
-                Log.Info("Bot消息列表已合并买家昵称别名: seller=" + seller
-                    + ", internal=" + internalNick + ", display=" + display + ", cards=" + merged.Count);
+                // Timer 每 500ms 触发一次；只允许积压一个 UI 刷新，避免窗口繁忙时队列膨胀。
+                if (Interlocked.Exchange(ref _refreshQueued, 1) != 0) return;
+                try
+                {
+                    app.Dispatcher.BeginInvoke(
+                        DispatcherPriority.Background,
+                        new Action(() =>
+                        {
+                            try
+                            {
+                                RefreshOnUiThread();
+                            }
+                            catch (Exception ex)
+                            {
+                                Log.ErrorWithMaxCount("合并Bot买家昵称别名消息失败：" + ex.Message, 10);
+                            }
+                            finally
+                            {
+                                Interlocked.Exchange(ref _refreshQueued, 0);
+                            }
+                        }));
+                }
+                catch
+                {
+                    Interlocked.Exchange(ref _refreshQueued, 0);
+                    throw;
+                }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("合并Bot买家昵称别名消息失败：" + ex.Message, 10);
+                Log.ErrorWithMaxCount("调度Bot买家昵称别名UI刷新失败：" + ex.Message, 10);
             }
+        }
+
+        private static void RefreshOnUiThread()
+        {
+            var qn = QN.CurQN;
+            var desk = Desk.Inst;
+            var ctl = desk == null ? null : desk.CtlRobot;
+            if (qn == null || qn.Seller == null || qn.Buyer == null || ctl == null || _conversationField == null) return;
+            if (!ctl.Dispatcher.CheckAccess())
+            {
+                throw new InvalidOperationException("买家昵称别名UI刷新未在CtlRobot所属Dispatcher执行。");
+            }
+
+            var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+            var visibleBuyer = (qn.Buyer.Nick ?? string.Empty).Trim();
+            if (seller.Length == 0 || visibleBuyer.Length == 0) return;
+
+            var internalNick = BuyerIdentityAliasService.ResolveInternalNick(seller, visibleBuyer);
+            var display = BuyerIdentityAliasService.ResolveDisplay(seller, visibleBuyer);
+            if (internalNick.Length == 0 || display.Length == 0 || string.Equals(internalNick, display, StringComparison.OrdinalIgnoreCase)) return;
+
+            var map = _conversationField.GetValue(ctl) as ConcurrentDictionary<string, List<CtlConversation>>;
+            if (map == null) return;
+            var internalKey = seller + "#" + internalNick;
+            var displayKey = seller + "#" + display;
+
+            List<CtlConversation> internalList;
+            List<CtlConversation> displayList;
+            map.TryGetValue(internalKey, out internalList);
+            map.TryGetValue(displayKey, out displayList);
+            if ((internalList == null || internalList.Count == 0) && (displayList == null || displayList.Count == 0)) return;
+
+            var merged = new List<CtlConversation>();
+            foreach (var item in (displayList ?? new List<CtlConversation>()).Concat(internalList ?? new List<CtlConversation>()))
+            {
+                if (item != null && !merged.Any(x => ReferenceEquals(x, item))) merged.Add(item);
+            }
+            map[internalKey] = merged;
+            map[displayKey] = merged;
+
+            var signature = seller + "#" + visibleBuyer + "#" + internalNick + "#" + display + "#" + merged.Count;
+            if (string.Equals(signature, _lastSignature, StringComparison.Ordinal)) return;
+            _lastSignature = signature;
+            ctl.ReShowAfterQNChange();
+            Log.Info("Bot消息列表已合并买家昵称别名: seller=" + seller
+                + ", internal=" + internalNick + ", display=" + display + ", cards=" + merged.Count);
         }
     }
 }
