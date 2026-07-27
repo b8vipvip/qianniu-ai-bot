@@ -43,6 +43,20 @@ def test_updater_backs_up_validates_restarts_and_rolls_back():
     assert "Select-Object -Skip 8" in script
 
 
+def test_updaters_keep_locked_install_root_and_retry_only_child_cleanup():
+    auto = read("src/Bot/Update/BotAutoUpdater.ps1")
+    manual = read("scripts/update-bot.ps1")
+
+    for script in (auto, manual):
+        assert "Clear-DirectoryContentsWithRetry" in script
+        assert "Get-InstallProcessIds" in script
+        assert "Get-CimInstance Win32_Process" in script
+        assert "Install files are still busy; retry" in script
+        assert "Get-PossibleDirectoryBlockers" in script
+        assert "Clear-DirectoryContentsWithRetry $InstallDir" in script
+        assert "Remove-Item -LiteralPath $InstallDir -Recurse -Force" not in script
+
+
 def test_settings_page_and_startup_are_wired():
     app = read("src/Bot/App.xaml.cs")
     wnd = read("src/Bot/Options/WndOption.xaml.cs")
