@@ -5,7 +5,6 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
-using System.Threading;
 
 namespace Bot.ChromeNs
 {
@@ -81,25 +80,18 @@ namespace Bot.ChromeNs
             var since = anchor.AddMinutes(-OrderEvidenceWindowMinutes);
             var until = anchor.AddMinutes(5);
 
-            // Usually the visual request has already finished by the time an order is created.
-            // If an image is visibly present in the recent timeline but its semantic row has not
-            // landed yet, give the already-running background vision call a very small grace period.
-            // This does not start a second AI request and does not require the buyer to log in.
-            var attempts = HasRecentImageTurn(seller, buyer, since) ? 5 : 1;
-            for (var attempt = 0; attempt < attempts; attempt++)
+            // This is deliberately a read-only, non-blocking cache lookup. It never starts a
+            // second vision request and never serializes order handling behind a slow AI task.
+            var items = LoadRecent(seller, buyer, since, until, 20)
+                .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
+                .ToList();
+            foreach (var item in items)
             {
-                var items = LoadRecent(seller, buyer, since, until, 20)
-                    .OrderByDescending(x => SafeTime(x.ObservedAtTicks))
-                    .ToList();
-                foreach (var item in items)
-                {
-                    var combined = (item.VisualSummary ?? string.Empty) + " " + (item.VisualTags ?? string.Empty);
-                    if (!HasKugouOfficialAppEvidence(combined)) continue;
-                    evidence = CleanForPrompt(item.VisualSummary, 180);
-                    if (evidence.Length == 0) evidence = CleanForPrompt(item.VisualTags, 180);
-                    return true;
-                }
-                if (attempt + 1 < attempts) Thread.Sleep(300);
+                var combined = (item.VisualSummary ?? string.Empty) + " " + (item.VisualTags ?? string.Empty);
+                if (!HasKugouOfficialAppEvidence(combined)) continue;
+                evidence = CleanForPrompt(item.VisualSummary, 180);
+                if (evidence.Length == 0) evidence = CleanForPrompt(item.VisualTags, 180);
+                return true;
             }
             return false;
         }
@@ -138,23 +130,6 @@ namespace Bot.ChromeNs
             // Login state is deliberately not part of this decision. The purpose is only to
             // identify that the buyer already photographed the official KuGou application UI.
             return explicitOfficial || brandedApplication;
-        }
-
-        private static bool HasRecentImageTurn(string seller, string buyer, DateTime since)
-        {
-            try
-            {
-                return ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24)
-                    .Any(x => x != null
-                        && x.Role == "user"
-                        && (x.Timestamp == DateTime.MinValue || x.Timestamp >= since)
-                        && ((x.Text ?? string.Empty).Contains("[图片]")
-                            || (x.Text ?? string.Empty).Contains("【图片】")));
-            }
-            catch
-            {
-                return false;
-            }
         }
 
         private static List<VisualKnowledgeObservationEntity> LoadRecent(
