@@ -102,7 +102,7 @@ namespace Bot.ChromeNs
 
         private async Task<string> SendExecuteAndWaitAsync(string cmd, string desc)
         {
-            await _executeGate.WaitAsync();
+            await _executeGate.WaitAsync().ConfigureAwait(false);
             try
             {
                 if (IsInvalidated || _webSocketSession == null)
@@ -140,7 +140,7 @@ namespace Bot.ChromeNs
                 }
 
                 var response = string.Empty;
-                var ok = await System.Threading.Tasks.Task.Run(() => requestResetEvent.Wait(InvokeTimeoutMs));
+                var ok = await System.Threading.Tasks.Task.Run(() => requestResetEvent.Wait(InvokeTimeoutMs)).ConfigureAwait(false);
                 if (!ok)
                 {
                     ManualResetEventSlim dropped;
@@ -155,6 +155,19 @@ namespace Bot.ChromeNs
             finally
             {
                 _executeGate.Release();
+            }
+        }
+
+        private string SendExecuteAndWait(string cmd, string desc)
+        {
+            try
+            {
+                return SendExecuteAndWaitAsync(cmd, desc).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Log.Info("CDP同步调用失败: desc=" + desc + ", error=" + ex.Message);
+                return string.Empty;
             }
         }
 
@@ -263,8 +276,7 @@ namespace Bot.ChromeNs
                   httpMethod: 'post',
                   version: '{version}',
                 }})";
-
-            _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+            SendExecuteAndWait(cmd, "InvokeMTop:" + apiName);
         }
 
         public async Task<T> Invoke<T>(string apiName, object param = null)
@@ -280,7 +292,7 @@ namespace Bot.ChromeNs
         {
             param = param ?? new object();
             var cmd = $@"imsdk.invoke('{apiName}',{JsonConvert.SerializeObject(param)})";
-            _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+            SendExecuteAndWait(cmd, "Invoke:" + apiName);
         }
 
         public async Task<QnVersionResponse> GetVersion()
