@@ -88,7 +88,13 @@ namespace Bot.ChromeNs
             foreach (var item in items)
             {
                 var combined = (item.VisualSummary ?? string.Empty) + " " + (item.VisualTags ?? string.Empty);
-                if (!HasKugouOfficialAppEvidence(combined)) continue;
+                if (combined.IndexOf("酷狗", StringComparison.OrdinalIgnoreCase) < 0) continue;
+
+                // The newest KuGou-related visual observation is authoritative. If it explicitly
+                // looks like a TV built-in/third-party/non-official UI, do not fall back to an
+                // older qualifying image from an earlier topic/device.
+                if (!HasKugouOfficialAppEvidence(combined)) return false;
+
                 evidence = CleanForPrompt(item.VisualSummary, 180);
                 if (evidence.Length == 0) evidence = CleanForPrompt(item.VisualTags, 180);
                 return true;
