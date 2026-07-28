@@ -11,6 +11,7 @@ using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Reflection;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -165,6 +166,15 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var sanitizedAnswer = ReplyTranscriptSanitizer.Sanitize(answer);
+            if (!string.Equals(sanitizedAnswer, answer, StringComparison.Ordinal))
+            {
+                Log.Info("已移除AI回复中的内部时间线前缀: buyer=" + burst.BuyerNick
+                    + ", before=" + CompactPreview(answer, 120)
+                    + ", after=" + CompactPreview(sanitizedAnswer, 120));
+                answer = sanitizedAnswer;
+            }
+
             var deduplication = ReplyDeduplicationService.EnsureDistinct(
                 burst.SellerNick,
                 burst.BuyerNick,
@@ -280,6 +290,38 @@ namespace Bot.ChromeNs
         }
     }
 
+    internal static class ReplyTranscriptSanitizer
+    {
+        internal const string PromptGuard =
+            "\n\n输出格式硬规则：历史消息中的 [yyyy-MM-dd HH:mm:ss 客服]、[yyyy-MM-dd HH:mm:ss 买家]、[当前消息 ...] 等内容只是内部时间线标签，不属于回复正文。最终只输出真正要发给买家的正文，禁止把内部日期、时间、客服/买家/assistant/user 说话人标签复制到回复开头，也不要输出‘[当前消息 ...]’。如果买家问题本身确实需要日期或时间，可以在正文中正常回答，但不要使用内部时间线格式。";
+
+        private static readonly Regex BracketedTimelinePrefix = new Regex(
+            @"^\s*[\[【［]\s*(?:当前消息\s*)?(?:(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|时间未知)\s*)?(?:(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\s*)?(?:客服|买家|assistant|user)\s*[\]】］]\s*[:：\-—]?\s*",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        private static readonly Regex PlainTimelinePrefix = new Regex(
+            @"^\s*(?:(?:20\d{2}[-/]\d{1,2}[-/]\d{1,2}|时间未知)\s+)?(?:(?:[01]?\d|2[0-3]):[0-5]\d(?::[0-5]\d)?\s+)(?:客服|买家|assistant|user)\s*[:：\-—]\s*",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        internal static string Sanitize(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length == 0) return value;
+
+            for (var i = 0; i < 3; i++)
+            {
+                var next = BracketedTimelinePrefix.Replace(value, string.Empty, 1).TrimStart();
+                if (string.Equals(next, value, StringComparison.Ordinal))
+                {
+                    next = PlainTimelinePrefix.Replace(value, string.Empty, 1).TrimStart();
+                }
+                if (string.Equals(next, value, StringComparison.Ordinal)) break;
+                value = next;
+            }
+            return value.Trim();
+        }
+    }
+
     internal static class StreamingBuyerAnswerService
     {
         private sealed class StreamResult
@@ -337,7 +379,7 @@ namespace Bot.ChromeNs
 
                 var handoffMessages = new JArray
                 {
-                    Message("system", "你是电商店铺的下班转人工助手。当前人工客服已下班。只能礼貌告知人工客服不在线、工作时间，以及问题已记录或建议买家在上班时间联系；不得回答退款、投诉、赔偿、隐私、订单核验等具体高风险结论。回复一句到两句，禁止编造。"),
+                    Message("system", "你是电商店铺的下班转人工助手。当前人工客服已下班。只能礼貌告知人工客服不在线、工作时间，以及问题已记录或建议买家在上班时间联系；不得回答退款、投诉、赔偿、隐私、订单核验等具体高风险结论。回复一句到两句，禁止编造。" + ReplyTranscriptSanitizer.PromptGuard),
                     Message("user", "人工客服工作时间：" + manualDecision.WorkHoursText
                         + "\n触发原因：" + manualDecision.Reason
                         + "\n买家问题：" + question)
@@ -396,6 +438,7 @@ namespace Bot.ChromeNs
             }
             dynamicSystemPrompt += BotFeatureStore.BuildPromptAddon(contextForRules.ToString());
             dynamicSystemPrompt += SmartReplyRouterService.BuildPromptAddon(plan);
+            dynamicSystemPrompt += ReplyTranscriptSanitizer.PromptGuard;
 
             var messages = new JArray { Message("system", dynamicSystemPrompt) };
             if (!string.IsNullOrWhiteSpace(plan.ContextDigest))
@@ -428,6 +471,7 @@ namespace Bot.ChromeNs
             {
                 return "错误：所有AI接口均未返回有效答案。";
             }
+            answer = ReplyTranscriptSanitizer.Sanitize(answer);
             answer = BotFeatureStore.ApplyOutputPolicy(answer);
             if (ConversationContextStore.IsWithdrawnAnswer(seller, buyer, answer))
             {
@@ -467,7 +511,13 @@ namespace Bot.ChromeNs
                     result.Success ? "流式成功" : result.Error);
                 endpoint.LastLatencyMs = result.LatencyMs;
                 endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
-                if (result.Success && !string.IsNullOrWhiteSpace(result.Answer)) return result.Answer.Trim();
+                if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                {
+                    var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
+                    if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                    errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
+                    continue;
+                }
                 errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
             }
 
@@ -479,7 +529,9 @@ namespace Bot.ChromeNs
                     token);
                 if (fallback != null && fallback.Success && !string.IsNullOrWhiteSpace(fallback.Answer))
                 {
-                    return fallback.Answer.Trim();
+                    var sanitized = ReplyTranscriptSanitizer.Sanitize(fallback.Answer);
+                    if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                    errors.Add("非流式兜底仅返回了内部时间线标签，已丢弃");
                 }
                 if (fallback != null && !string.IsNullOrWhiteSpace(fallback.Error)) errors.Add(fallback.Error);
             }
