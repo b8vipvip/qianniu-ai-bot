@@ -30,9 +30,21 @@ namespace Bot.ChromeNs
         public event EventHandler<ShopRobotReceriveNewMessageEventArgs> EvShopRobotReceriveNewMessage;
         private ConcurrentQueue<ManualResetEventSlim> _requestWaitHandles = new ConcurrentQueue<ManualResetEventSlim>();
         private ConcurrentQueue<string> _responses = new ConcurrentQueue<string>();
+        private readonly SemaphoreSlim _executeGate = new SemaphoreSlim(1, 1);
         private WebSocketSession _webSocketSession;
         private const int InvokeTimeoutMs = 8000;
+        private int _sessionInvalidated;
         public string Nick { get; set; }
+
+        internal string SessionId
+        {
+            get { return _webSocketSession == null ? string.Empty : _webSocketSession.SessionID; }
+        }
+
+        internal bool IsInvalidated
+        {
+            get { return Volatile.Read(ref _sessionInvalidated) != 0; }
+        }
 
         public CDPClient(WebSocketSession session)
         {
@@ -44,7 +56,7 @@ namespace Bot.ChromeNs
         private void OnWSocketRecieveMessage(object sender, WSocketNewMessageEventArgs e)
         {
             var session = sender as WebSocketSession;
-            if (session == null || session.SessionID != _webSocketSession.SessionID) return;
+            if (session == null || _webSocketSession == null || session.SessionID != _webSocketSession.SessionID) return;
 
             var response = e.Value ?? string.Empty;
 
@@ -90,21 +102,88 @@ namespace Bot.ChromeNs
 
         private async Task<string> SendExecuteAndWaitAsync(string cmd, string desc)
         {
-            var requestResetEvent = new ManualResetEventSlim(false);
-            _requestWaitHandles.Enqueue(requestResetEvent);
-            _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
-
-            var response = string.Empty;
-            var ok = await System.Threading.Tasks.Task.Run(() => requestResetEvent.Wait(InvokeTimeoutMs));
-            if (!ok)
+            await _executeGate.WaitAsync().ConfigureAwait(false);
+            try
             {
-                ManualResetEventSlim dropped;
-                _requestWaitHandles.TryDequeue(out dropped);
-                Log.Error("CDP调用超时: " + desc + ", session=" + _webSocketSession.SessionID);
+                if (IsInvalidated || _webSocketSession == null)
+                {
+                    Log.Info("CDP调用已跳过：会话已失效，等待注入脚本重连。desc=" + desc + ", session=" + SessionId);
+                    return string.Empty;
+                }
+
+                // 当前注入协议的 execute 响应没有请求 ID，只能保证同一 WebSocket 会话同时存在
+                // 一个等待请求。旧实现允许多个异步调用并发，慢请求与快请求乱序返回后会互相
+                // 领取错误响应；某次超时还可能让后续 GetCurrentConversationID 永久读到旧结果。
+                string staleResponse;
+                while (_responses.TryDequeue(out staleResponse))
+                {
+                    Log.Info("已丢弃CDP调用前残留响应: desc=" + desc + ", length=" + (staleResponse ?? string.Empty).Length);
+                }
+                ManualResetEventSlim staleWaiter;
+                while (_requestWaitHandles.TryDequeue(out staleWaiter))
+                {
+                    if (staleWaiter != null) staleWaiter.Set();
+                }
+
+                var requestResetEvent = new ManualResetEventSlim(false);
+                _requestWaitHandles.Enqueue(requestResetEvent);
+                try
+                {
+                    _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+                }
+                catch (Exception ex)
+                {
+                    ManualResetEventSlim droppedOnSend;
+                    _requestWaitHandles.TryDequeue(out droppedOnSend);
+                    InvalidateSession("发送execute请求失败: " + ex.Message);
+                    return string.Empty;
+                }
+
+                var response = string.Empty;
+                var ok = await System.Threading.Tasks.Task.Run(() => requestResetEvent.Wait(InvokeTimeoutMs)).ConfigureAwait(false);
+                if (!ok)
+                {
+                    ManualResetEventSlim dropped;
+                    _requestWaitHandles.TryDequeue(out dropped);
+                    Log.Error("CDP调用超时: " + desc + ", session=" + SessionId);
+                    InvalidateSession("调用超时: " + desc);
+                    return string.Empty;
+                }
+                _responses.TryDequeue(out response);
+                return response ?? string.Empty;
+            }
+            finally
+            {
+                _executeGate.Release();
+            }
+        }
+
+        private string SendExecuteAndWait(string cmd, string desc)
+        {
+            try
+            {
+                return SendExecuteAndWaitAsync(cmd, desc).GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                Log.Info("CDP同步调用失败: desc=" + desc + ", error=" + ex.Message);
                 return string.Empty;
             }
-            _responses.TryDequeue(out response);
-            return response ?? string.Empty;
+        }
+
+        private void InvalidateSession(string reason)
+        {
+            if (Interlocked.Exchange(ref _sessionInvalidated, 1) != 0) return;
+            Log.Error("CDP会话已失效并请求WebSocket重连: session=" + SessionId + ", reason=" + (reason ?? string.Empty));
+            BotConnectionDiagnostics.RecordCdpStatus(false, "CDP会话已失效，等待注入重连", Nick, string.Empty);
+            try
+            {
+                if (_webSocketSession != null) _webSocketSession.Close();
+            }
+            catch (Exception ex)
+            {
+                Log.Info("关闭失效CDP WebSocket会话失败: " + ex.Message);
+            }
         }
 
         private void BenchMessageNotify(string response)
@@ -197,8 +276,7 @@ namespace Bot.ChromeNs
                   httpMethod: 'post',
                   version: '{version}',
                 }})";
-
-            _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+            SendExecuteAndWait(cmd, "InvokeMTop:" + apiName);
         }
 
         public async Task<T> Invoke<T>(string apiName, object param = null)
@@ -214,7 +292,7 @@ namespace Bot.ChromeNs
         {
             param = param ?? new object();
             var cmd = $@"imsdk.invoke('{apiName}',{JsonConvert.SerializeObject(param)})";
-            _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
+            SendExecuteAndWait(cmd, "Invoke:" + apiName);
         }
 
         public async Task<QnVersionResponse> GetVersion()
@@ -276,7 +354,7 @@ namespace Bot.ChromeNs
             var user = await Invoke<LocalUserResponse>("im.login.GetCurrentLoginID");
             if (user == null || user.Result == null || string.IsNullOrEmpty(user.Result.Nick))
             {
-                throw new Exception("GetCurrentLoginID 返回为空，可能不是千牛聊天 WebView。session=" + _webSocketSession.SessionID);
+                throw new Exception("GetCurrentLoginID 返回为空，可能不是千牛聊天 WebView。session=" + SessionId);
             }
             Nick = user.Result.Nick;
             return user;
