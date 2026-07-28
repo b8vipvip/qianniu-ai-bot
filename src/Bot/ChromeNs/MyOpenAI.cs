@@ -1,4 +1,4 @@
-﻿using BotLib;
+using BotLib;
 using Newtonsoft.Json.Linq;
 using OpenAI.Chat;
 using System;
@@ -527,6 +527,7 @@ namespace Bot.ChromeNs
                     contextForKnowledge.Append(' ').Append(turn.Text);
                 }
                 var dynamicSystemPrompt = systemPrompt + BotFeatureStore.BuildPromptAddon(contextForKnowledge.ToString());
+                dynamicSystemPrompt += RecentVisualContextService.BuildPromptAddon(seller, buyer, question);
                 if (contextualKnowledge != null)
                 {
                     dynamicSystemPrompt += KnowledgeContextualReplyService.BuildPromptAddon(contextualDecision, contextualKnowledge);
