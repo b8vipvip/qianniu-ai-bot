@@ -127,6 +127,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisualKnowledgeLearningService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\RecentVisualContextService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RecentVisualContextService.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs" />
   </ItemGroup>
