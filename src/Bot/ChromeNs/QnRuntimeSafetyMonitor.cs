@@ -251,28 +251,31 @@ namespace Bot.ChromeNs
                     var buyer = (message.toid.nick ?? string.Empty).Trim();
                     if (!string.Equals(from, seller, StringComparison.Ordinal) || buyer.Length == 0) continue;
 
-                    var text = ExtractMessageText(message);
-                    if (text.Length == 0) continue;
+                    var texts = ExtractMessageTextCandidates(message);
+                    if (texts.Length == 0) continue;
+                    var text = SelectPreferredMessageText(texts);
 
-                    if (SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, text)
-                        || SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, text))
+                    if (TryConfirmBotDelivery(seller, buyer, texts))
                     {
                         continue;
                     }
 
-                    // 卖家回显有时晚于买家的下一条消息到达。此时上一轮发送任务可能已被
-                    // “新消息替代”流程移除，导致 watchdog 状态无法再匹配。Bot 的所有自动
-                    // 对外回复都带结尾 [AI] 署名；该署名是独立于任务生命周期的作者证据，
-                    // 不能把这种迟到的 Bot 回显误判为人工客服介入并取消当前问题的答案。
-                    if (IsExplicitBotAuthoredReply(text))
+                    // 千牛同一条卖家消息可能在 originalData.text 与 summary 中返回不同文本：
+                    // 原始正文有时会去掉末尾 [AI]，而聊天摘要仍保留完整署名。旧逻辑只读取
+                    // originalData.text，因而把上一轮 Bot 的迟到回显误判成人工客服回复。
+                    // 必须检查所有可见文本字段，任一字段带明确 Bot 署名都不能取消当前答案。
+                    var botAuthoredText = texts.FirstOrDefault(IsExplicitBotAuthoredReply);
+                    if (!string.IsNullOrWhiteSpace(botAuthoredText))
                     {
                         ResponseProgressTracker.MarkDeliveryConfirmed(
                             seller,
                             buyer,
-                            text,
-                            "通过[AI]署名确认这是Bot卖家回显");
-                        Log.Info("卖家消息带Bot署名标记，未判定人工介入: seller=" + seller
-                            + ", buyer=" + buyer + ", reply=" + Short(text, 120));
+                            botAuthoredText,
+                            "通过卖家消息多字段中的[AI]署名确认这是Bot回显");
+                        Log.Info("卖家消息多字段命中Bot署名，未判定人工介入: seller=" + seller
+                            + ", buyer=" + buyer
+                            + ", variants=" + texts.Length
+                            + ", reply=" + Short(botAuthoredText, 120));
                         continue;
                     }
 
@@ -286,19 +289,51 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string ExtractMessageText(QNChatMessage message)
+        private static string[] ExtractMessageTextCandidates(QNChatMessage message)
         {
+            var originalText = string.Empty;
             try
             {
-                if (message.originalData != null && !string.IsNullOrWhiteSpace(message.originalData.text))
+                if (message != null && message.originalData != null)
                 {
-                    return message.originalData.text.Trim();
+                    originalText = (message.originalData.text ?? string.Empty).Trim();
                 }
             }
             catch
             {
             }
-            return (message.summary ?? string.Empty).Trim();
+
+            var summaryText = message == null
+                ? string.Empty
+                : (message.summary ?? string.Empty).Trim();
+
+            return new[] { originalText, summaryText }
+                .Where(value => !string.IsNullOrWhiteSpace(value))
+                .Distinct(StringComparer.Ordinal)
+                .ToArray();
+        }
+
+        private static string SelectPreferredMessageText(string[] texts)
+        {
+            if (texts == null || texts.Length == 0) return string.Empty;
+            return texts.FirstOrDefault(IsExplicitBotAuthoredReply)
+                ?? texts.FirstOrDefault()
+                ?? string.Empty;
+        }
+
+        private static bool TryConfirmBotDelivery(string seller, string buyer, string[] texts)
+        {
+            if (texts == null) return false;
+
+            foreach (var candidate in texts)
+            {
+                if (SendDeliveryWatchdog.ConfirmDelivery(seller, buyer, candidate)) return true;
+            }
+            foreach (var candidate in texts)
+            {
+                if (SendDeliveryWatchdog.IsKnownBotAnswer(seller, buyer, candidate)) return true;
+            }
+            return false;
         }
 
         private static bool IsExplicitBotAuthoredReply(string value)
