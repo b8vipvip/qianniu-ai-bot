@@ -7,17 +7,29 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
     internal static class QnRuntimeSafetyMonitor
     {
+        private const int ConversationProbeIntervalMilliseconds = 2500;
+        private const int HeartbeatIntervalSeconds = 60;
+
         private static readonly ConcurrentDictionary<QN, byte> Subscribed =
             new ConcurrentDictionary<QN, byte>();
         private static readonly ConcurrentDictionary<QN, byte> VersionGuardLogged =
             new ConcurrentDictionary<QN, byte>();
+        private static readonly ConcurrentDictionary<QN, DateTime> NextConversationProbeAt =
+            new ConcurrentDictionary<QN, DateTime>();
+        private static readonly ConcurrentDictionary<QN, byte> ConversationProbeRunning =
+            new ConcurrentDictionary<QN, byte>();
+        private static readonly ConcurrentDictionary<QN, int> ConsecutiveProbeFailures =
+            new ConcurrentDictionary<QN, int>();
+
         private static Timer _timer;
         private static int _started;
+        private static long _lastHeartbeatUtcTicks;
 
         public static void Start()
         {
@@ -25,7 +37,7 @@ namespace Bot.ChromeNs
             BuyerIdentityAliasUiBridge.Start();
             OrderNotificationTraceBridge.Start();
             _timer = new Timer(_ => Refresh(), null, 0, 500);
-            Log.Info("千牛发送与人工介入安全监控已启动。");
+            Log.Info("千牛发送、当前买家与人工介入安全监控已启动。");
         }
 
         private static void Refresh()
@@ -40,11 +52,165 @@ namespace Bot.ChromeNs
                     {
                         qn.EvRecieveNewMessage += Qn_EvRecieveNewMessage;
                     }
+                    ScheduleConversationProbe(qn);
                 }
+                WriteHeartbeatIfDue();
             }
             catch (Exception ex)
             {
                 Log.ErrorWithMaxCount("刷新千牛运行时安全监控失败：" + ex.Message, 5);
+            }
+        }
+
+        private static void ScheduleConversationProbe(QN qn)
+        {
+            if (qn == null || qn.CDP == null || qn.Seller == null
+                || string.IsNullOrWhiteSpace(qn.Seller.Nick))
+            {
+                return;
+            }
+
+            var now = DateTime.UtcNow;
+            DateTime next;
+            if (NextConversationProbeAt.TryGetValue(qn, out next) && next > now) return;
+            NextConversationProbeAt[qn] = now.AddMilliseconds(ConversationProbeIntervalMilliseconds);
+            if (!ConversationProbeRunning.TryAdd(qn, 0)) return;
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    await ProbeCurrentConversationAsync(qn);
+                }
+                catch (Exception ex)
+                {
+                    RecordProbeFailure(qn, ex.Message);
+                }
+                finally
+                {
+                    byte ignored;
+                    ConversationProbeRunning.TryRemove(qn, out ignored);
+                }
+            });
+        }
+
+        private static async Task ProbeCurrentConversationAsync(QN qn)
+        {
+            var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+            if (seller.Length == 0 || qn.CDP == null) return;
+
+            var first = await qn.GetCurrentConversationID();
+            var firstNick = ReadConversationNick(first);
+            if (firstNick.Length == 0)
+            {
+                RecordProbeFailure(qn, "im.uiutil.GetCurrentConversationID 返回空值");
+                return;
+            }
+
+            var currentNick = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
+            if (AreSameBuyer(seller, currentNick, firstNick))
+            {
+                RecordProbeSuccess(qn, seller, firstNick, false);
+                return;
+            }
+
+            // 千牛切换会话时内部对象会短暂经过空值或旧值。连续读取两次一致后才修正，
+            // 避免一次瞬态结果改变 Bot 当前买家；真正发送仍会执行独立的严格会话确认。
+            await Task.Delay(220);
+            var second = await qn.GetCurrentConversationID();
+            var secondNick = ReadConversationNick(second);
+            if (secondNick.Length == 0 || !AreSameBuyer(seller, firstNick, secondNick))
+            {
+                RecordProbeFailure(qn, "当前会话连续两次读取不稳定: first=" + firstNick + ", second=" + secondNick);
+                return;
+            }
+
+            var resolved = BuyerIdentityAliasService.ResolveInternalNick(seller, secondNick);
+            qn.SetActiveConversationByNick(seller, resolved, "runtimeConversationProbe");
+            Log.Info("当前买家由主动探测修正: seller=" + seller
+                + ", previous=" + currentNick + ", current=" + resolved);
+            RecordProbeSuccess(qn, seller, resolved, true);
+        }
+
+        private static string ReadConversationNick(ConversationResponse response)
+        {
+            return response == null || response.Result == null
+                ? string.Empty
+                : (response.Result.Nick ?? string.Empty).Trim();
+        }
+
+        private static bool AreSameBuyer(string seller, string left, string right)
+        {
+            left = (left ?? string.Empty).Trim();
+            right = (right ?? string.Empty).Trim();
+            if (left.Length == 0 || right.Length == 0) return false;
+            if (string.Equals(left, right, StringComparison.Ordinal)) return true;
+            return BuyerIdentityAliasService.AreEquivalent(seller, left, right);
+        }
+
+        private static void RecordProbeSuccess(QN qn, string seller, string buyer, bool corrected)
+        {
+            int failures;
+            ConsecutiveProbeFailures.TryRemove(qn, out failures);
+            BotConnectionDiagnostics.RecordCdpStatus(true,
+                corrected ? "主动探测已修正当前买家" : "当前买家主动探测正常",
+                seller,
+                buyer);
+            BotConnectionDiagnostics.RecordBuyerSeller(seller, buyer);
+            if (failures > 0)
+            {
+                Log.Info("当前买家主动探测已恢复: seller=" + seller
+                    + ", buyer=" + buyer + ", previousFailures=" + failures);
+            }
+        }
+
+        private static void RecordProbeFailure(QN qn, string reason)
+        {
+            var failures = ConsecutiveProbeFailures.AddOrUpdate(qn, 1, (_, count) => count + 1);
+            var seller = qn == null || qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+            var buyer = qn == null || qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
+            if (failures >= 2)
+            {
+                BotConnectionDiagnostics.RecordCdpStatus(false,
+                    "当前买家主动探测连续失败" + failures + "次，等待注入/CDP恢复",
+                    seller,
+                    buyer);
+            }
+            if (failures == 1 || failures == 3 || failures % 10 == 0)
+            {
+                Log.Error("当前买家主动探测失败: seller=" + seller
+                    + ", cachedBuyer=" + buyer + ", failures=" + failures
+                    + ", reason=" + (reason ?? string.Empty));
+            }
+        }
+
+        private static void WriteHeartbeatIfDue()
+        {
+            var nowTicks = DateTime.UtcNow.Ticks;
+            var previous = Interlocked.Read(ref _lastHeartbeatUtcTicks);
+            if (previous != 0
+                && new TimeSpan(nowTicks - previous).TotalSeconds < HeartbeatIntervalSeconds)
+            {
+                return;
+            }
+            if (Interlocked.CompareExchange(ref _lastHeartbeatUtcTicks, nowTicks, previous) != previous) return;
+
+            try
+            {
+                var snapshot = BotConnectionDiagnostics.GetSnapshot();
+                var age = snapshot == null || snapshot.LastUpdateTime == DateTime.MinValue
+                    ? -1
+                    : Math.Max(0, (long)(DateTime.Now - snapshot.LastUpdateTime).TotalSeconds);
+                Log.Info("Bot运行心跳: ws=" + (snapshot == null ? string.Empty : snapshot.WebSocketStatus)
+                    + ", injection=" + (snapshot == null ? string.Empty : snapshot.InjectionStatus)
+                    + ", qn=" + (snapshot == null ? string.Empty : snapshot.QnParamStatus)
+                    + ", seller=" + (snapshot == null ? string.Empty : snapshot.Seller)
+                    + ", buyer=" + (snapshot == null ? string.Empty : snapshot.Buyer)
+                    + ", diagnosticsAgeSeconds=" + age);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("Bot运行心跳写入失败: " + ex.Message);
             }
         }
 
