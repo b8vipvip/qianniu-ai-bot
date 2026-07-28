@@ -40,6 +40,10 @@ namespace Bot.ChromeNs
             "推荐|mv|k歌|淘唱会|乐库|全量曲|儿童|宅家|我喜欢|我的歌单|最近播放|已购音乐|超级vip|大屏vip|酷狗账号",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
+        private static readonly Regex HumanOfficialKugouRegex = new Regex(
+            "酷狗.{0,12}(?:官方app|官方应用|官方版|电视版|电视端).{0,18}(?:支持|可以|能用|可用)|(?:官方app|官方应用|酷狗音乐app|酷狗app).{0,18}(?:支持|可以|能用|可用)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         public static string BuildPromptAddon(string seller, string buyer, string currentQuestion)
         {
             var items = LoadRecent(seller, buyer, DateTime.Now.AddMinutes(-PromptWindowMinutes), DateTime.Now.AddMinutes(2), 12)
@@ -79,6 +83,13 @@ namespace Bot.ChromeNs
             if (anchor > DateTime.Now.AddMinutes(5) || anchor < DateTime.Now.AddDays(-7)) anchor = DateTime.Now;
             var since = anchor.AddMinutes(-OrderEvidenceWindowMinutes);
             var until = anchor.AddMinutes(5);
+
+            string humanEvidence;
+            if (TryFindHumanOfficialKugouConfirmation(seller, buyer, since, until, out humanEvidence))
+            {
+                evidence = humanEvidence;
+                return true;
+            }
 
             // This is deliberately a read-only, non-blocking cache lookup. It never starts a
             // second vision request and never serializes order handling behind a slow AI task.
@@ -136,6 +147,60 @@ namespace Bot.ChromeNs
             // Login state is deliberately not part of this decision. The purpose is only to
             // identify that the buyer already photographed the official KuGou application UI.
             return explicitOfficial || brandedApplication;
+        }
+
+        private static bool TryFindHumanOfficialKugouConfirmation(
+            string seller,
+            string buyer,
+            DateTime since,
+            DateTime until,
+            out string evidence)
+        {
+            evidence = string.Empty;
+            try
+            {
+                var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24)
+                    .Where(x => x != null && !x.Withdrawn)
+                    .Where(x => x.Timestamp == DateTime.MinValue || (x.Timestamp >= since && x.Timestamp <= until))
+                    .OrderBy(x => x.Timestamp)
+                    .ToList();
+
+                var imageIndex = -1;
+                for (var i = turns.Count - 1; i >= 0; i--)
+                {
+                    if (turns[i].Role != "user") continue;
+                    var text = turns[i].Text ?? string.Empty;
+                    if (text.Contains("[图片]") || text.Contains("【图片】"))
+                    {
+                        imageIndex = i;
+                        break;
+                    }
+                }
+                if (imageIndex < 0) return false;
+
+                for (var i = turns.Count - 1; i > imageIndex; i--)
+                {
+                    if (turns[i].Role != "assistant") continue;
+                    var text = (turns[i].Text ?? string.Empty).Trim();
+                    if (text.Length == 0 || IsBotMarked(text)) continue;
+                    if (!HumanOfficialKugouRegex.IsMatch(text)) continue;
+                    evidence = "人工客服已确认：" + CleanForPrompt(text, 160);
+                    return true;
+                }
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsBotMarked(string text)
+        {
+            var compact = Regex.Replace((text ?? string.Empty), @"\s+", string.Empty);
+            return compact.EndsWith("[AI]", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("【AI】", StringComparison.OrdinalIgnoreCase)
+                || compact.EndsWith("［AI］", StringComparison.OrdinalIgnoreCase);
         }
 
         private static List<VisualKnowledgeObservationEntity> LoadRecent(
