@@ -253,6 +253,30 @@ namespace Bot.ChromeNs
                     return true;
                 }
 
+                // The configured initial order preset often asks the buyer to photograph the
+                // KuGou account/application screen. If a recent pre-order image has already been
+                // analyzed as the official KuGou TV application, that requirement is satisfied.
+                // Login state is intentionally irrelevant for identifying the official app UI.
+                if (!plan.IsBuyerFollowUp)
+                {
+                    string visualEvidence;
+                    if (RecentVisualContextService.TrySatisfyOrderPhotoRequirement(
+                        plan.Seller,
+                        plan.Buyer,
+                        answer,
+                        plan.EventTime,
+                        out visualEvidence))
+                    {
+                        MarkDeliveredInternal(record, plan, "下单前图片已满足确认要求");
+                        SaveInternal();
+                        reason = "买家下单前已发送可确认的酷狗官方APP界面图片，Bot不再重复索要照片";
+                        Log.Info("下单充值流程发送已取消：近期图片已经满足酷狗官方APP界面确认要求。seller="
+                            + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                            + ", evidence=" + Short(visualEvidence, 160));
+                        return true;
+                    }
+                }
+
                 string matched;
                 var since = plan.IsBuyerFollowUp
                     ? plan.TriggerTime.AddSeconds(-5)
