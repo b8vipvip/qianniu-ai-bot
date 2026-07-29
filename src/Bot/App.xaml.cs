@@ -1,4 +1,4 @@
-﻿using Bot.ChromeNs;
+using Bot.ChromeNs;
 using Bot.Options;
 using Bot.UpdateNs;
 using BotLib;
@@ -40,6 +40,7 @@ namespace Bot
             Bot.Knowledge.KnowledgePolicyProfileUi.Initialize();
             ConversationSessionLearningService.Initialize();
             BuyerStreamingReplyPipeline.Initialize();
+            VisionWithdrawalAwarePipeline.Initialize();
             VisionFollowUpContextPipeline.Initialize();
             Startup += App_Startup;
             SessionEnding += App_SessionEnding;
