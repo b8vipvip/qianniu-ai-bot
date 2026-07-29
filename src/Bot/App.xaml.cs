@@ -39,6 +39,7 @@ namespace Bot
             Bot.Knowledge.StorePromptProfileUi.Initialize();
             Bot.Knowledge.KnowledgePolicyProfileUi.Initialize();
             ConversationSessionLearningService.Initialize();
+            ManualVisualReplyLearningService.Initialize();
             BuyerStreamingReplyPipeline.Initialize();
             VisionWithdrawalAwarePipeline.Initialize();
             VisionFollowUpContextPipeline.Initialize();
