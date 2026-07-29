@@ -15,6 +15,9 @@ namespace Bot.ChromeNs
         public string MimeType { get; set; }
         public long Bytes { get; set; }
         public string Error { get; set; }
+        public string LocalCachePath { get; set; }
+        public bool FromLocalCache { get; set; }
+        public bool CacheComplete { get; set; }
     }
 
     internal sealed class VisionImageResolver
@@ -23,55 +26,18 @@ namespace Bot.ChromeNs
 
         public async Task<VisionImageResult> ResolveAsync(QNChatMessage message, AiEndpointConfig endpoint, CancellationToken cancellationToken)
         {
-            var url = ExtractUrl(message);
-            if (string.IsNullOrWhiteSpace(url)) return Fail("图片 URL 不存在");
+            // Images are cached as soon as the incoming message is observed. Vision always reads
+            // the completed local copy so a buyer withdrawing the remote message cannot interrupt
+            // an analysis that has already started.
+            var cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken);
+            if (cached != null && cached.Success) return cached;
 
-            Uri uri;
-            if (!Uri.TryCreate(url, UriKind.Absolute, out uri)
-                || (uri.Scheme != Uri.UriSchemeHttps && uri.Scheme != Uri.UriSchemeHttp))
-            {
-                return Fail("图片 URL 协议不受支持");
-            }
-
-            var limit = Math.Max(1, Math.Min(20, endpoint.MaxImageSizeMb)) * 1024L * 1024L;
-            using (var http = new HttpClient())
-            {
-                http.Timeout = TimeSpan.FromSeconds(Math.Max(10, Math.Min(180, endpoint.VisionTimeoutSeconds)));
-                using (var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
-                {
-                    if (!response.IsSuccessStatusCode) return Fail("图片下载失败：HTTP " + (int)response.StatusCode);
-                    var length = response.Content.Headers.ContentLength;
-                    if (length.HasValue && length.Value > limit) return Fail("图片超过大小限制");
-
-                    var bytes = await ReadWithLimitAsync(response.Content, limit, cancellationToken);
-                    if (bytes == null) return Fail("图片超过大小限制");
-                    var headerMime = response.Content.Headers.ContentType == null
-                        ? string.Empty
-                        : (response.Content.Headers.ContentType.MediaType ?? string.Empty).ToLowerInvariant();
-                    var detectedMime = DetectMime(bytes);
-                    if (string.IsNullOrWhiteSpace(detectedMime)) return Fail("图片数据损坏或格式不支持");
-                    if (!AllowedMimeTypes.Contains(detectedMime, StringComparer.OrdinalIgnoreCase)) return Fail("MIME 类型不支持");
-                    if (!string.IsNullOrWhiteSpace(headerMime)
-                        && !AllowedMimeTypes.Contains(headerMime, StringComparer.OrdinalIgnoreCase))
-                    {
-                        return Fail("MIME 类型不支持");
-                    }
-                    if (!string.IsNullOrWhiteSpace(headerMime)
-                        && !string.Equals(headerMime, detectedMime, StringComparison.OrdinalIgnoreCase))
-                    {
-                        return Fail("图片 MIME 与实际内容不一致");
-                    }
-
-                    var dataUri = "data:" + detectedMime + ";base64," + Convert.ToBase64String(bytes);
-                    return new VisionImageResult
-                    {
-                        Success = true,
-                        ImageUrl = dataUri,
-                        MimeType = detectedMime,
-                        Bytes = bytes.LongLength
-                    };
-                }
-            }
+            // This fallback is retained for compatibility with callers that reach the resolver
+            // before the incoming-message cache hook has run. Prime still writes the complete file
+            // locally before returning a data URI to the model.
+            VisionImageCacheService.Prime(message, string.Empty);
+            cached = await VisionImageCacheService.ResolveAsync(message, endpoint, cancellationToken);
+            return cached ?? Fail("图片未能完整缓存到本地");
         }
 
         internal static string ExtractUrl(QNChatMessage message)
@@ -99,26 +65,9 @@ namespace Bot.ChromeNs
             return string.Empty;
         }
 
-        private static async Task<byte[]> ReadWithLimitAsync(HttpContent content, long limit, CancellationToken cancellationToken)
-        {
-            using (var input = await content.ReadAsStreamAsync())
-            using (var output = new MemoryStream())
-            {
-                var buffer = new byte[81920];
-                while (true)
-                {
-                    var read = await input.ReadAsync(buffer, 0, buffer.Length, cancellationToken);
-                    if (read <= 0) break;
-                    if (output.Length + read > limit) return null;
-                    output.Write(buffer, 0, read);
-                }
-                return output.ToArray();
-            }
-        }
-
         private static VisionImageResult Fail(string error)
         {
-            return new VisionImageResult { Success = false, Error = error };
+            return new VisionImageResult { Success = false, Error = error, CacheComplete = false };
         }
     }
 }
