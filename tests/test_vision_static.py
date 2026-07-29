@@ -68,7 +68,8 @@ def test_image_resolver_downloads_caches_and_validates_every_image():
     assert 'data:" + detectedMime + ";base64,"' in combined
     assert 'message.originalData.url.Trim()' in resolver
     assert 'message.originalData.fileId.Trim()' in resolver
-    assert 'GetAsync(uri, HttpCompletionOption.ResponseHeadersRead' in cache
+    assert 'http.GetAsync(' in cache
+    assert 'HttpCompletionOption.ResponseHeadersRead' in cache
     assert 'File.WriteAllBytes(temp, bytes)' in cache
     assert 'File.Move(temp, path)' in cache
     assert 'VisionImageCacheService.ResolveAsync' in resolver
