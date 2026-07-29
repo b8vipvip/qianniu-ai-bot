@@ -55,23 +55,29 @@ def test_message_safety_and_cross_buyer_guard_remain_in_path():
     assert '识别完成，但目标买家会话未确认，未发送。' in qn
 
 
-def test_image_resolver_downloads_and_validates_every_image():
+def test_image_resolver_downloads_caches_and_validates_every_image():
     resolver = read('src/Bot/ChromeNs/VisionImageResolver.cs')
+    cache = read('src/Bot/ChromeNs/VisionImageCacheService.cs')
+    combined = resolver + '\n' + cache
     for mime in ['image/jpeg', 'image/png', 'image/webp', 'image/gif']:
-        assert mime in resolver
-    assert 'image/svg' not in resolver
-    assert '图片超过大小限制' in resolver
-    assert 'MIME 类型不支持' in resolver
-    assert '图片数据损坏或格式不支持' in resolver
-    assert 'data:" + detectedMime + ";base64,"' in resolver
+        assert mime in combined
+    assert 'image/svg' not in combined
+    assert '图片超过大小限制' in combined
+    assert 'MIME 类型不支持' in combined
+    assert '图片数据损坏或格式不支持' in combined
+    assert 'data:" + detectedMime + ";base64,"' in combined
     assert 'message.originalData.url.Trim()' in resolver
     assert 'message.originalData.fileId.Trim()' in resolver
-    assert 'GetAsync(uri, HttpCompletionOption.ResponseHeadersRead' in resolver
-    assert 'HasSensitiveQuery' not in resolver
+    assert 'GetAsync(uri, HttpCompletionOption.ResponseHeadersRead' in cache
+    assert 'File.WriteAllBytes(temp, bytes)' in cache
+    assert 'File.Move(temp, path)' in cache
+    assert 'VisionImageCacheService.ResolveAsync' in resolver
+    assert 'HasSensitiveQuery' not in combined
     all_changed = '\n'.join(read(p) for p in [
         'src/Bot/ChromeNs/QN.cs',
         'src/Bot/ChromeNs/VisionRequestService.cs',
-        'src/Bot/ChromeNs/VisionImageResolver.cs'
+        'src/Bot/ChromeNs/VisionImageResolver.cs',
+        'src/Bot/ChromeNs/VisionImageCacheService.cs'
     ])
     assert 'Log.Info(dataUri' not in all_changed
     assert 'Log.Info(image.ImageUrl' not in all_changed
