@@ -12,7 +12,7 @@ namespace Bot.ChromeNs
     internal static class BuyerReplyOutputGuard
     {
         private static readonly Regex InternalReasoningRegex = new Regex(
-            @"(?:^|\s)(?:we\s+need|need\s+to\s+respond|need\s+respond|respond\s+(?:in\s+)?chinese|should\s+respond|likely\s+(?:say|reply)|one\s+sentence|the\s+user\s+(?:asks|said|says)|current\s*[\"'“‘]|analysis\s*:|final\s+answer\s*:|assistant\s*:|system\s*:|developer\s*:|chain\s+of\s+thought|internal\s+reasoning|thinking\s*:)",
+            @"(?:^|\s)(?:we\s+need|need\s+to\s+respond|need\s+respond|respond\s+(?:in\s+)?chinese|should\s+respond|likely\s+(?:say|reply)|one\s+sentence|the\s+user\s+(?:asks|said|says)|current\s*[""'“‘]|analysis\s*:|final\s+answer\s*:|assistant\s*:|system\s*:|developer\s*:|chain\s+of\s+thought|internal\s+reasoning|thinking\s*:)",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly Regex AllowedShortLatinTokenRegex = new Regex(
