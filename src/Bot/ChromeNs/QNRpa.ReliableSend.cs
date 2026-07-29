@@ -137,12 +137,49 @@ namespace Bot.ChromeNs
 
         internal bool HasExpectedDraft(string expected)
         {
+            if (!string.IsNullOrEmpty(expected))
+            {
+                string safeText;
+                string reason;
+                if (!BuyerReplyOutputGuard.TryNormalizeForBuyer(expected, out safeText, out reason))
+                {
+                    ClearBlockedDraftImmediately(reason);
+                    SetSendFailure("发送前内容安全检查", reason);
+                    Log.Error("已阻止异常AI内容发送给买家: reason=" + reason
+                        + ", preview=" + SafePreview(expected, 180));
+                    return false;
+                }
+                if (!string.Equals((expected ?? string.Empty).Trim(), safeText, StringComparison.Ordinal))
+                {
+                    ClearBlockedDraftImmediately("回复仍包含内部时间线标签");
+                    SetSendFailure("发送前内容安全检查", "回复仍包含需要移除的内部时间线标签");
+                    Log.Error("已阻止带内部时间线标签的回复发送给买家: preview=" + SafePreview(expected, 180));
+                    return false;
+                }
+            }
+
             string text;
             if (!TryGetEditorText(out text)) return false;
             // 图片粘贴在 UIA 文本属性中通常表现为对象占位内容，而调用方没有可比较的文本。
             // 对文本消息必须严格逐字匹配；只有图片发送路径（expected 为空）允许以“编辑器存在非空内容”作为草稿存在证明。
             if (string.IsNullOrEmpty(expected)) return !string.IsNullOrWhiteSpace(NormalizeEditorText(text));
             return EditorMatchesExpectedText(text, expected);
+        }
+
+        private void ClearBlockedDraftImmediately(string reason)
+        {
+            try
+            {
+                if (!FocusEditor()) return;
+                PressCtrlA();
+                PressBackspace();
+                LastSetPlainText = string.Empty;
+                Log.Info("已立即清除被内容安全检查阻止的草稿: reason=" + (reason ?? string.Empty));
+            }
+            catch (Exception ex)
+            {
+                Log.Info("清除被阻止的异常草稿失败: " + ex.Message);
+            }
         }
 
         private static string NormalizeEditorText(string value)
@@ -152,6 +189,12 @@ namespace Bot.ChromeNs
                 .Replace("\r\n", "\n")
                 .Replace("\r", "\n")
                 .Trim();
+        }
+
+        private static string SafePreview(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
         private static string SafeAutomationId(AutomationElement element)
