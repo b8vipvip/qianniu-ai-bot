@@ -63,7 +63,11 @@ namespace Bot.ChromeNs
 
             if (ConversationContextStore.IsWithdrawalNotice(message, messageText))
             {
-                return Skip("[撤回提示]", "已跳过：检测到消息撤回提示，未调用AI，也未发送给买家。");
+                // A buyer withdrawal must invalidate only the outgoing reply, not the already
+                // started download/vision analysis. Mark the latest image so the withdrawal-aware
+                // visual pipeline can suppress stale sending while preserving the local cache.
+                VisionImageCacheService.MarkLatestBuyerImageWithdrawn(message, messageText);
+                return Skip("[撤回提示]", "已跳过：检测到消息撤回提示；图片若已收到将继续后台分析，但不会直接回复已撤回内容。");
             }
 
             if (ConversationContextStore.IsPlatformSystemTip(message, messageText))
@@ -85,6 +89,13 @@ namespace Bot.ChromeNs
             }
 
             var unsupportedType = DetectUnsupportedType(message, messageText);
+            if (string.Equals(unsupportedType, "图片", StringComparison.Ordinal))
+            {
+                // Start downloading immediately, before the burst quiet delay. The complete image
+                // is written under the persistent user-data directory and remains available even
+                // if the buyer withdraws the remote message a moment later.
+                VisionImageCacheService.Prime(message, messageText);
+            }
             if (!string.IsNullOrWhiteSpace(unsupportedType))
             {
                 return Skip("[" + unsupportedType + "]", "已跳过：收到" + unsupportedType + "消息，当前版本未启用对应内容理解能力；未调用AI，也未发送给买家。");
