@@ -2,6 +2,7 @@ using Bot.ChromeNs;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
@@ -75,6 +76,8 @@ namespace Bot.Knowledge
     internal sealed class KnowledgePolicyProfileWindow : Window
     {
         private readonly DataGrid _grid;
+        private readonly TextBox _search;
+        private readonly TextBlock _filterStats;
         private readonly ComboBox _mode;
         private readonly TextBox _intent;
         private readonly TextBox _entities;
@@ -117,12 +120,46 @@ namespace Bot.Knowledge
             DockPanel.SetDock(intro, Dock.Top);
             left.Children.Add(intro);
 
+            var searchRow = new DockPanel { Margin = new Thickness(0, 0, 0, 8) };
+            DockPanel.SetDock(searchRow, Dock.Top);
+            left.Children.Add(searchRow);
+
+            var clear = new Button
+            {
+                Content = "清空",
+                Width = 62,
+                Height = 28,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            DockPanel.SetDock(clear, Dock.Right);
+            searchRow.Children.Add(clear);
+
+            _search = new TextBox
+            {
+                Height = 28,
+                ToolTip = "可搜索问题、答案、关键词、分类、来源、意图、业务实体、适用/禁用条件和最近证据。支持按人工修改前的原问题关键词查找。"
+            };
+            searchRow.Children.Add(_search);
+            _search.TextChanged += (s, e) => ApplySearch();
+            clear.Click += (s, e) =>
+            {
+                _search.Text = string.Empty;
+                _search.Focus();
+            };
+
+            _filterStats = new TextBlock
+            {
+                Foreground = Brushes.DimGray,
+                Margin = new Thickness(0, 0, 0, 6)
+            };
+            DockPanel.SetDock(_filterStats, Dock.Top);
+            left.Children.Add(_filterStats);
+
             _grid = new DataGrid
             {
                 AutoGenerateColumns = false,
                 IsReadOnly = true,
-                CanUserAddRows = false,
-                ItemsSource = _profiles
+                CanUserAddRows = false
             };
             _grid.Columns.Add(new DataGridTextColumn { Header = "问题", Binding = new Binding("QuestionSnapshot"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
             _grid.Columns.Add(new DataGridTextColumn { Header = "模式", Binding = new Binding("AnswerModeDisplay"), Width = 110 });
@@ -173,7 +210,7 @@ namespace Bot.Knowledge
             buttons.Children.Add(close);
             form.Children.Add(buttons);
 
-            if (_profiles.Count > 0) _grid.SelectedIndex = 0;
+            ApplySearch();
         }
 
         private static void AddLabel(Panel panel, string text)
@@ -194,6 +231,114 @@ namespace Bot.Knowledge
             };
             panel.Children.Add(box);
             return box;
+        }
+
+        private void ApplySearch()
+        {
+            if (_grid == null || _search == null) return;
+            var selected = _grid.SelectedItem as KnowledgePolicyProfile;
+            var selectedId = selected == null ? string.Empty : selected.KnowledgeId;
+            var query = (_search.Text ?? string.Empty).Trim();
+            var filtered = (_profiles ?? new List<KnowledgePolicyProfile>())
+                .Where(x => MatchesSearch(x, query))
+                .ToList();
+            _grid.ItemsSource = filtered;
+            _filterStats.Text = "共 " + (_profiles == null ? 0 : _profiles.Count)
+                + " 条策略，当前显示 " + filtered.Count + " 条";
+
+            var restore = filtered.FirstOrDefault(x => string.Equals(x.KnowledgeId, selectedId, StringComparison.Ordinal));
+            _grid.SelectedItem = restore ?? filtered.FirstOrDefault();
+            if (_grid.SelectedItem == null)
+            {
+                ClearDetails();
+            }
+        }
+
+        private bool MatchesSearch(KnowledgePolicyProfile profile, string query)
+        {
+            if (profile == null) return false;
+            if (string.IsNullOrWhiteSpace(query)) return true;
+            var entry = FindKnowledge(profile);
+            var haystack = string.Join(" ", new[]
+            {
+                profile.QuestionSnapshot,
+                profile.AnswerModeDisplay,
+                profile.Intent,
+                profile.Entities,
+                profile.ApplyWhen,
+                profile.DoNotApplyWhen,
+                profile.RequiredContext,
+                profile.LastEvidenceType,
+                entry == null ? string.Empty : entry.Title,
+                entry == null ? string.Empty : entry.Answer,
+                entry == null ? string.Empty : entry.Keywords,
+                entry == null ? string.Empty : entry.Category,
+                entry == null ? string.Empty : entry.SourceType
+            }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+            if (haystack.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            var normalizedHaystack = NormalizeSearch(haystack);
+            var normalizedQuery = NormalizeSearch(query);
+            if (normalizedQuery.Length > 0 && normalizedHaystack.Contains(normalizedQuery)) return true;
+
+            var terms = BuildSearchTerms(query);
+            return terms.Count > 0 && terms.All(normalizedHaystack.Contains);
+        }
+
+        private static List<string> BuildSearchTerms(string query)
+        {
+            var value = (query ?? string.Empty).ToLowerInvariant();
+            foreach (var filler in new[]
+            {
+                "可以不可以", "能不能", "可不可以", "是否可以", "能否", "是否", "可以",
+                "请问", "麻烦", "帮我", "一下", "怎么", "如何", "用到", "使用", "支持",
+                "这个", "那个", "上面的", "里面的", "上的", "的吗", "么", "吗", "呢", "亲"
+            })
+            {
+                value = value.Replace(filler, " ");
+            }
+            return Regex.Matches(value, @"[a-z0-9]+|[\u3400-\u9fff]+", RegexOptions.IgnoreCase)
+                .Cast<Match>()
+                .Select(x => NormalizeSearch(x.Value))
+                .Where(x => x.Length >= 2)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(8)
+                .ToList();
+        }
+
+        private static string NormalizeSearch(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty);
+        }
+
+        private KnowledgeBaseEntry FindKnowledge(KnowledgePolicyProfile profile)
+        {
+            if (profile == null) return null;
+            var byId = _knowledge.FirstOrDefault(x => x != null
+                && string.Equals(x.Id ?? string.Empty, profile.KnowledgeId ?? string.Empty, StringComparison.Ordinal));
+            if (byId != null) return byId;
+            return _knowledge.FirstOrDefault(x => x != null
+                && KnowledgeAiService.NormalizeQuestion(x.Title)
+                    == KnowledgeAiService.NormalizeQuestion(profile.QuestionSnapshot));
+        }
+
+        private void ClearDetails()
+        {
+            _loading = true;
+            try
+            {
+                _mode.SelectedIndex = 0;
+                _intent.Text = string.Empty;
+                _entities.Text = string.Empty;
+                _applyWhen.Text = string.Empty;
+                _doNotApplyWhen.Text = string.Empty;
+                _requiredContext.Text = string.Empty;
+                _stats.Text = "没有匹配的知识策略。";
+            }
+            finally
+            {
+                _loading = false;
+            }
         }
 
         private void LoadSelected()
@@ -218,6 +363,8 @@ namespace Bot.Knowledge
                 _applyWhen.Text = profile.ApplyWhen ?? string.Empty;
                 _doNotApplyWhen.Text = profile.DoNotApplyWhen ?? string.Empty;
                 _requiredContext.Text = profile.RequiredContext ?? string.Empty;
+
+                var entry = FindKnowledge(profile);
                 _stats.Text = "可靠度：" + profile.ReliabilityDisplay
                     + "\n直答选择：" + profile.DirectSelectedCount
                     + "；上下文使用：" + profile.ContextualSelectedCount
@@ -225,7 +372,14 @@ namespace Bot.Knowledge
                     + "；人工修正：" + profile.SellerCorrectionCount
                     + "；Bot撤回后修正：" + profile.SellerWithdrawCount
                     + "\n最近证据：" + (string.IsNullOrWhiteSpace(profile.LastEvidenceType) ? "暂无" : profile.LastEvidenceType)
-                    + "；更新时间：" + (profile.UpdatedAt ?? string.Empty);
+                    + "；更新时间：" + (profile.UpdatedAt ?? string.Empty)
+                    + (entry == null
+                        ? "\n对应知识：未找到，请关闭窗口并刷新知识库后重试。"
+                        : "\n知识状态：" + (entry.Enabled ? "已启用" : "已停用")
+                            + "；分类：" + (entry.Category ?? string.Empty)
+                            + "；来源：" + (entry.SourceType ?? string.Empty)
+                            + "；知识更新时间：" + (entry.UpdatedAt ?? string.Empty)
+                            + "\n知识答案：" + (entry.Answer ?? string.Empty));
             }
             finally
             {
@@ -237,13 +391,7 @@ namespace Bot.Knowledge
         {
             var profile = _grid.SelectedItem as KnowledgePolicyProfile;
             if (profile == null) return;
-            var entry = _knowledge.FirstOrDefault(x => x != null
-                && string.Equals(x.Id ?? string.Empty, profile.KnowledgeId ?? string.Empty, StringComparison.Ordinal));
-            if (entry == null)
-            {
-                entry = _knowledge.FirstOrDefault(x => x != null
-                    && KnowledgeAiService.NormalizeQuestion(x.Title) == KnowledgeAiService.NormalizeQuestion(profile.QuestionSnapshot));
-            }
+            var entry = FindKnowledge(profile);
             if (entry == null)
             {
                 MessageBox.Show("未找到对应知识条目，请刷新知识库后重试。", "知识策略", MessageBoxButton.OK, MessageBoxImage.Warning);
@@ -261,8 +409,10 @@ namespace Bot.Knowledge
 
             var selectedId = profile.KnowledgeId;
             _profiles = KnowledgePolicyProfileService.GetProfilesForKnowledge(_knowledge);
-            _grid.ItemsSource = _profiles;
-            _grid.SelectedItem = _profiles.FirstOrDefault(x => x.KnowledgeId == selectedId);
+            ApplySearch();
+            var current = (_grid.ItemsSource as IEnumerable<KnowledgePolicyProfile>)
+                .FirstOrDefault(x => x.KnowledgeId == selectedId);
+            if (current != null) _grid.SelectedItem = current;
             LoadSelected();
         }
     }
