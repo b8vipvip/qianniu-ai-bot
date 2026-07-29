@@ -52,6 +52,8 @@ namespace Bot.ChromeNs
         public const int RecentReferenceWindowSeconds = 90;
         private const int MaxCacheFiles = 300;
         private const long MaxCacheBytes = 512L * 1024L * 1024L;
+        private const int DefaultMaxImageSizeMb = 5;
+        private const int DefaultTimeoutSeconds = 45;
 
         private static readonly string[] AllowedMimeTypes =
         {
@@ -85,13 +87,10 @@ namespace Bot.ChromeNs
 
                 var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
                 var endpoint = endpoints == null ? null : endpoints.FirstOrDefault();
-                if (endpoint == null) return;
-
                 var seller = GetSellerNick(message);
                 var buyer = GetBuyerNick(message, seller);
                 var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
                 var key = BuildKey(messageKey, url);
-                var observedAt = GetObservedAt(message);
 
                 Records.GetOrAdd(key, _ =>
                 {
@@ -103,7 +102,7 @@ namespace Bot.ChromeNs
                         MessageKey = messageKey,
                         Url = url,
                         Message = message,
-                        ObservedAt = observedAt
+                        ObservedAt = GetObservedAt(message)
                     };
                     record.DownloadTask = DownloadAndPersistAsync(record, endpoint);
                     Log.Info("买家图片本地缓存已启动: seller=" + seller
@@ -125,19 +124,16 @@ namespace Bot.ChromeNs
             {
                 var seller = GetSellerNick(notice);
                 var buyer = GetBuyerNick(notice, seller);
-                if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer))
+                var current = QN.CurQN;
+                if (current != null)
                 {
-                    var current = QN.CurQN;
-                    if (current != null)
-                    {
-                        if (string.IsNullOrWhiteSpace(seller) && current.Seller != null) seller = current.Seller.Nick;
-                        if (string.IsNullOrWhiteSpace(buyer) && current.Buyer != null) buyer = current.Buyer.Nick;
-                    }
+                    if (string.IsNullOrWhiteSpace(seller) && current.Seller != null) seller = current.Seller.Nick;
+                    if (string.IsNullOrWhiteSpace(buyer) && current.Buyer != null) buyer = current.Buyer.Nick;
                 }
 
                 var cutoff = DateTime.Now.AddMinutes(-5);
                 var candidate = Records.Values
-                    .Where(x => x != null && x.ObservedAt >= cutoff && !x.Withdrawn)
+                    .Where(x => x != null && !x.Withdrawn && x.ObservedAt >= cutoff)
                     .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
                     .OrderByDescending(x => x.ObservedAt)
                     .FirstOrDefault();
@@ -148,11 +144,10 @@ namespace Bot.ChromeNs
                 }
 
                 candidate.Withdrawn = true;
-                var complete = IsTaskSuccessful(candidate.DownloadTask);
                 Log.Info("已标记买家图片撤回，视觉分析仍将继续: seller=" + seller
                     + ", buyer=" + buyer
                     + ", messageKey=" + Short(candidate.MessageKey, 100)
-                    + ", cacheComplete=" + complete);
+                    + ", cacheComplete=" + IsTaskSuccessful(candidate.DownloadTask));
             }
             catch (Exception ex)
             {
@@ -176,10 +171,7 @@ namespace Bot.ChromeNs
                 Prime(message, string.Empty);
                 record = FindRecord(messageKey, url);
             }
-            if (record == null)
-            {
-                return Fail("图片本地缓存任务未建立");
-            }
+            if (record == null) return Fail("图片本地缓存任务未建立");
 
             CacheDownloadResult cached;
             try
@@ -204,14 +196,8 @@ namespace Bot.ChromeNs
             if (!File.Exists(cached.FilePath)) return Fail("图片本地缓存文件不存在");
 
             byte[] bytes;
-            try
-            {
-                bytes = File.ReadAllBytes(cached.FilePath);
-            }
-            catch (Exception ex)
-            {
-                return Fail("读取图片本地缓存失败：" + ex.Message);
-            }
+            try { bytes = File.ReadAllBytes(cached.FilePath); }
+            catch (Exception ex) { return Fail("读取图片本地缓存失败：" + ex.Message); }
             if (bytes == null || bytes.Length < 12) return Fail("图片本地缓存数据不完整");
 
             var detectedMime = VisionImageResolver.DetectMime(bytes);
@@ -235,10 +221,8 @@ namespace Bot.ChromeNs
 
         public static bool IsWithdrawn(string seller, string buyer, string messageKey, QNChatMessage message)
         {
-            var url = VisionImageResolver.ExtractUrl(message);
-            var record = FindRecord(messageKey, url);
+            var record = FindRecord(messageKey, VisionImageResolver.ExtractUrl(message));
             if (record != null) return record.Withdrawn;
-
             return Records.Values
                 .Where(x => x != null && x.Withdrawn)
                 .Where(x => SameConversation(seller, buyer, x.SellerNick, x.BuyerNick))
@@ -286,14 +270,11 @@ namespace Bot.ChromeNs
             CacheRecord record;
             var key = BuildKey(messageKey, url);
             if (Records.TryGetValue(key, out record)) return record;
-            if (!string.IsNullOrWhiteSpace(url))
-            {
-                return Records.Values
-                    .Where(x => x != null && string.Equals(x.Url, url, StringComparison.Ordinal))
-                    .OrderByDescending(x => x.ObservedAt)
-                    .FirstOrDefault();
-            }
-            return null;
+            if (string.IsNullOrWhiteSpace(url)) return null;
+            return Records.Values
+                .Where(x => x != null && string.Equals(x.Url, url, StringComparison.Ordinal))
+                .OrderByDescending(x => x.ObservedAt)
+                .FirstOrDefault();
         }
 
         private static async Task<CacheDownloadResult> DownloadAndPersistAsync(
@@ -311,11 +292,16 @@ namespace Bot.ChromeNs
                     return result;
                 }
 
-                var maxBytes = Math.Max(1, Math.Min(20, endpoint.MaxImageSizeMb)) * 1024L * 1024L;
+                var configuredMb = endpoint == null ? DefaultMaxImageSizeMb : endpoint.MaxImageSizeMb;
+                var configuredTimeout = endpoint == null ? DefaultTimeoutSeconds : endpoint.VisionTimeoutSeconds;
+                var maxBytes = Math.Max(1, Math.Min(20, configuredMb)) * 1024L * 1024L;
                 using (var http = new HttpClient())
                 using (var timeout = new CancellationTokenSource(
-                    TimeSpan.FromSeconds(Math.Max(10, Math.Min(180, endpoint.VisionTimeoutSeconds))))
-                using (var response = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, timeout.Token))
+                    TimeSpan.FromSeconds(Math.Max(10, Math.Min(180, configuredTimeout)))))
+                using (var response = await http.GetAsync(
+                    uri,
+                    HttpCompletionOption.ResponseHeadersRead,
+                    timeout.Token))
                 {
                     if (!response.IsSuccessStatusCode)
                     {
@@ -360,8 +346,9 @@ namespace Bot.ChromeNs
                     }
 
                     Directory.CreateDirectory(CacheDirectory);
-                    var extension = ExtensionForMime(mime);
-                    var path = Path.Combine(CacheDirectory, Sha256(record.Key + "|" + record.Url) + extension);
+                    var path = Path.Combine(
+                        CacheDirectory,
+                        Sha256(record.Key + "|" + record.Url) + ExtensionForMime(mime));
                     var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
                     File.WriteAllBytes(temp, bytes);
                     if (File.Exists(path)) File.Delete(path);
@@ -391,10 +378,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static async Task<byte[]> ReadWithLimitAsync(
-            HttpContent content,
-            long limit,
-            CancellationToken token)
+        private static async Task<byte[]> ReadWithLimitAsync(HttpContent content, long limit, CancellationToken token)
         {
             using (var input = await content.ReadAsStreamAsync())
             using (var output = new MemoryStream())
@@ -411,9 +395,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static async Task<T> AwaitWithoutCancellingSharedTask<T>(
-            Task<T> task,
-            CancellationToken token)
+        private static async Task<T> AwaitWithoutCancellingSharedTask<T>(Task<T> task, CancellationToken token)
         {
             if (task == null) return default(T);
             if (!token.CanBeCanceled) return await task;
@@ -431,10 +413,7 @@ namespace Bot.ChromeNs
                 var result = task.Result;
                 return result != null && result.Success && File.Exists(result.FilePath);
             }
-            catch
-            {
-                return false;
-            }
+            catch { return false; }
         }
 
         private static void CleanupIfNeeded()
@@ -464,9 +443,11 @@ namespace Bot.ChromeNs
                         {
                             keptCount++;
                             keptBytes += file.Length;
-                            continue;
                         }
-                        try { file.Delete(); } catch { }
+                        else
+                        {
+                            try { file.Delete(); } catch { }
+                        }
                     }
 
                     var recordCutoff = DateTime.Now.AddHours(-CacheRetentionHours);
@@ -569,12 +550,7 @@ namespace Bot.ChromeNs
 
         private static VisionImageResult Fail(string error)
         {
-            return new VisionImageResult
-            {
-                Success = false,
-                Error = error,
-                CacheComplete = false
-            };
+            return new VisionImageResult { Success = false, Error = error, CacheComplete = false };
         }
 
         private static string Short(string value, int max)
