@@ -1,7 +1,11 @@
 using Bot.ChromeNs;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows;
@@ -13,6 +17,8 @@ namespace Bot.Knowledge
 {
     internal static class KnowledgePolicyProfileUi
     {
+        private static readonly ConcurrentDictionary<int, bool> FuzzySearchAttached =
+            new ConcurrentDictionary<int, bool>();
         private static int _initialized;
 
         public static void Initialize()
@@ -29,6 +35,8 @@ namespace Bot.Knowledge
         {
             var manager = sender as KnowledgeManagerControl;
             if (manager == null) return;
+            AttachManagerFuzzySearch(manager);
+
             var top = FindFirst<WrapPanel>(manager);
             if (top == null) return;
             if (top.Children.OfType<Button>().Any(x => Convert.ToString(x.Tag) == "knowledge-policy-profile")) return;
@@ -51,6 +59,107 @@ namespace Bot.Knowledge
                 window.ShowDialog();
             };
             top.Children.Add(button);
+        }
+
+        private static void AttachManagerFuzzySearch(KnowledgeManagerControl manager)
+        {
+            var instanceKey = RuntimeHelpers.GetHashCode(manager);
+            if (!FuzzySearchAttached.TryAdd(instanceKey, true)) return;
+            try
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+                var type = typeof(KnowledgeManagerControl);
+                var searchField = type.GetField("_search", flags);
+                var categoryField = type.GetField("_cat", flags);
+                var allField = type.GetField("_all", flags);
+                var viewField = type.GetField("_view", flags);
+                var countField = type.GetField("_count", flags);
+                var search = searchField == null ? null : searchField.GetValue(manager) as TextBox;
+                var category = categoryField == null ? null : categoryField.GetValue(manager) as ComboBox;
+                if (search == null || category == null || allField == null || viewField == null) return;
+
+                search.ToolTip = "可搜索问题、答案、关键词和来源；原问题被AI改写后，也会按关键业务词进行智能匹配。";
+                Action apply = () =>
+                {
+                    var query = (search.Text ?? string.Empty).Trim();
+                    if (query.Length == 0) return;
+                    var all = allField.GetValue(manager) as List<KnowledgeBaseEntry>;
+                    var view = viewField.GetValue(manager) as ObservableCollection<KnowledgeBaseEntry>;
+                    if (all == null || view == null) return;
+                    var selectedCategory = category.SelectedItem as string ?? "全部分类";
+                    var matches = all
+                        .Where(x => x != null
+                            && (selectedCategory == "全部分类"
+                                || string.Equals(x.Category ?? string.Empty, selectedCategory, StringComparison.Ordinal))
+                            && ManagerMatches(x, query))
+                        .ToList();
+                    view.Clear();
+                    foreach (var item in matches) view.Add(item);
+                    var count = countField == null ? null : countField.GetValue(manager) as TextBlock;
+                    if (count != null)
+                    {
+                        count.Text = "共 " + all.Count + " 条知识，当前显示 " + view.Count
+                            + " 条（已启用原问题/同义关键词智能搜索）";
+                    }
+                };
+
+                search.TextChanged += (s, e) => apply();
+                category.SelectionChanged += (s, e) => apply();
+                var top = FindFirst<WrapPanel>(manager);
+                var searchButton = top == null
+                    ? null
+                    : top.Children.OfType<Button>()
+                        .FirstOrDefault(x => string.Equals(Convert.ToString(x.Content), "搜索", StringComparison.Ordinal));
+                if (searchButton != null) searchButton.Click += (s, e) => apply();
+            }
+            catch
+            {
+                FuzzySearchAttached.TryRemove(instanceKey, out _);
+            }
+        }
+
+        private static bool ManagerMatches(KnowledgeBaseEntry item, string query)
+        {
+            var haystack = string.Join(" ", new[]
+            {
+                item.Category,
+                item.Title,
+                item.Answer,
+                item.Keywords,
+                item.SourceType
+            }.Where(x => !string.IsNullOrWhiteSpace(x)));
+            if (haystack.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            var normalizedHaystack = NormalizeSearch(haystack);
+            var normalizedQuery = NormalizeSearch(query);
+            if (normalizedQuery.Length > 0 && normalizedHaystack.Contains(normalizedQuery)) return true;
+            var terms = BuildSearchTerms(query);
+            return terms.Count > 0 && terms.All(normalizedHaystack.Contains);
+        }
+
+        internal static List<string> BuildSearchTerms(string query)
+        {
+            var value = (query ?? string.Empty).ToLowerInvariant();
+            foreach (var filler in new[]
+            {
+                "可以不可以", "能不能", "可不可以", "是否可以", "能否", "是否", "可以",
+                "请问", "麻烦", "帮我", "一下", "怎么", "如何", "用到", "使用", "支持",
+                "这个", "那个", "上面的", "里面的", "上的", "的吗", "么", "吗", "呢", "亲"
+            })
+            {
+                value = value.Replace(filler, " ");
+            }
+            return Regex.Matches(value, @"[a-z0-9]+|[\u3400-\u9fff]+", RegexOptions.IgnoreCase)
+                .Cast<Match>()
+                .Select(x => NormalizeSearch(x.Value))
+                .Where(x => x.Length >= 2)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(8)
+                .ToList();
+        }
+
+        internal static string NormalizeSearch(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty);
         }
 
         private static T FindFirst<T>(DependencyObject root) where T : DependencyObject
@@ -277,38 +386,12 @@ namespace Bot.Knowledge
             }.Where(x => !string.IsNullOrWhiteSpace(x)));
 
             if (haystack.IndexOf(query, StringComparison.OrdinalIgnoreCase) >= 0) return true;
-            var normalizedHaystack = NormalizeSearch(haystack);
-            var normalizedQuery = NormalizeSearch(query);
+            var normalizedHaystack = KnowledgePolicyProfileUi.NormalizeSearch(haystack);
+            var normalizedQuery = KnowledgePolicyProfileUi.NormalizeSearch(query);
             if (normalizedQuery.Length > 0 && normalizedHaystack.Contains(normalizedQuery)) return true;
 
-            var terms = BuildSearchTerms(query);
+            var terms = KnowledgePolicyProfileUi.BuildSearchTerms(query);
             return terms.Count > 0 && terms.All(normalizedHaystack.Contains);
-        }
-
-        private static List<string> BuildSearchTerms(string query)
-        {
-            var value = (query ?? string.Empty).ToLowerInvariant();
-            foreach (var filler in new[]
-            {
-                "可以不可以", "能不能", "可不可以", "是否可以", "能否", "是否", "可以",
-                "请问", "麻烦", "帮我", "一下", "怎么", "如何", "用到", "使用", "支持",
-                "这个", "那个", "上面的", "里面的", "上的", "的吗", "么", "吗", "呢", "亲"
-            })
-            {
-                value = value.Replace(filler, " ");
-            }
-            return Regex.Matches(value, @"[a-z0-9]+|[\u3400-\u9fff]+", RegexOptions.IgnoreCase)
-                .Cast<Match>()
-                .Select(x => NormalizeSearch(x.Value))
-                .Where(x => x.Length >= 2)
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(8)
-                .ToList();
-        }
-
-        private static string NormalizeSearch(string value)
-        {
-            return Regex.Replace((value ?? string.Empty).ToLowerInvariant(), @"[\s\p{P}\p{S}]+", string.Empty);
         }
 
         private KnowledgeBaseEntry FindKnowledge(KnowledgePolicyProfile profile)
