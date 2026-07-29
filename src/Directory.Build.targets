@@ -130,6 +130,12 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\RecentVisualContextService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RecentVisualContextService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisionImageCacheService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisionImageCacheService.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisionWithdrawalAwarePipeline.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisionWithdrawalAwarePipeline.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs" />
   </ItemGroup>
