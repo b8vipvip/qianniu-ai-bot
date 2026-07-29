@@ -65,6 +65,17 @@ def test_follow_up_can_reuse_withdrawn_cached_image_and_only_requests_resend_on_
     assert "可以充" in source or "充吗" in source
 
 
+def test_rebound_lease_uses_original_lease_and_cannot_recurse_into_itself():
+    source = read("src/Bot/ChromeNs/VisionWithdrawalAwarePipeline.cs")
+
+    capture = source.index("var sourceLease = lease;")
+    rebound = source.index("lease = new BuyerMessageBurstLease(burst, () => sourceLease.IsCurrent);")
+    assert capture < rebound
+    assert "new BuyerMessageBurstLease(burst, () => lease.IsCurrent)" not in source
+    assert "CtlConversation ctl" in source
+    assert "dynamic ctl" not in source
+
+
 def test_pipeline_is_initialized_between_streaming_and_existing_visual_followup_wrapper():
     app = read("src/Bot/App.xaml.cs")
     targets = read("src/Directory.Build.targets")

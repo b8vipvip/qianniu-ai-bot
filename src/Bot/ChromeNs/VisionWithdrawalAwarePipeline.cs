@@ -1,3 +1,4 @@
+using Bot.AssistWindow.Widget.Robot;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
@@ -99,8 +100,12 @@ namespace Bot.ChromeNs
                     await next(lease);
                     return;
                 }
+
+                // Capture the original lease before replacing the local variable. Referencing the
+                // reassigned local from the delegate would make IsCurrent call itself recursively.
+                var sourceLease = lease;
                 burst = rebound;
-                lease = new BuyerMessageBurstLease(burst, () => lease.IsCurrent);
+                lease = new BuyerMessageBurstLease(burst, () => sourceLease.IsCurrent);
                 visionItem = burst.LatestVisionItem;
             }
             if (visionItem == null)
@@ -286,7 +291,7 @@ namespace Bot.ChromeNs
         private static async Task SendCacheMissFallbackAsync(
             QN qn,
             BuyerMessageBurstLease lease,
-            dynamic ctl,
+            CtlConversation ctl,
             DateTime detectedAt)
         {
             var burst = lease.Burst;
@@ -305,6 +310,7 @@ namespace Bot.ChromeNs
             if (!Params.Robot.GetIsAutoReply())
             {
                 if (ctl != null) ctl.SetStatus("仅生成答案", true);
+                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
             }
 
