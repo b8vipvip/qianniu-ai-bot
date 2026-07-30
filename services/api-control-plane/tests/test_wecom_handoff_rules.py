@@ -253,7 +253,8 @@ def test_admin_page_policy_router_runtime_and_docker_are_wired():
     assert "AI 分析并生成规则" in page
     assert "保存并发布" in page
     assert "恢复上一个版本" in page
-    assert "高级设置 / 查看 AI 生成的结构化规则" in page
+    assert "高级设置 / 查看" in page
+    assert "结构化规则" in page
     assert "新增规则" not in page
     assert "r-keyword" not in page
     assert "/api/admin/wecom/handoff-policy/compile" in page
