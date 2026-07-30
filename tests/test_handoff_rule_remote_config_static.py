@@ -64,7 +64,9 @@ def test_wecom_page_uses_one_ai_policy_instead_of_per_keyword_rows():
     assert "AI 分析并生成规则" in page
     assert "保存并发布" in page
     assert "恢复上一个版本" in page
-    assert "高级设置 / 查看 AI 生成的结构化规则" in page
+    assert "高级设置 / 查看" in page
+    assert "手动修改结构化规则" in page
+    assert '<textarea id="advancedRules"' in page
     assert "新增规则" not in page
     assert "保存转人工规则" not in page
     assert "r-keyword" not in page
