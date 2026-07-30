@@ -30,7 +30,8 @@
     .policy-help strong{color:#173d64}.policy-editor{min-height:250px;font-size:15px}
     .preview-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:18px}.preview-card{border:1px solid #dce4ef;border-radius:12px;padding:16px;background:#fbfcff;min-height:150px}.preview-card h3{margin:0 0 8px;font-size:16px}.preview-count{font-size:26px;font-weight:800;margin-bottom:10px}.chip-list{display:flex;flex-wrap:wrap;gap:7px}.chip{display:inline-flex;padding:5px 9px;border-radius:999px;background:#edf3ff;color:#315f9b;font-size:12px}.chip.safe{background:#e8f8ef;color:#14734c}.chip.confirm{background:#fff4de;color:#8a5a00}.empty{color:#8591a3;font-size:13px;line-height:1.7}
     .validation{margin-top:18px;border:1px solid #dfe6f0;border-radius:12px;overflow:hidden}.validation-head{display:flex;justify-content:space-between;gap:12px;padding:13px 15px;background:#f7f9fc;font-weight:700}.validation-list{display:grid}.validation-row{display:grid;grid-template-columns:80px minmax(180px,1fr) 130px 130px;gap:10px;padding:12px 15px;border-top:1px solid #e7ecf3;align-items:center;font-size:13px}.badge{display:inline-flex;justify-content:center;padding:5px 8px;border-radius:999px;font-weight:700}.badge.pass{background:#e8f8ef;color:#14734c}.badge.fail{background:#fff0f1;color:#b42331}.badge.info{background:#edf3ff;color:#315f9b}
-    details{margin-top:18px;border:1px solid #dde5ef;border-radius:11px;background:#fafcff}summary{cursor:pointer;padding:14px 16px;font-weight:700;color:#40516b}pre{margin:0;padding:0 16px 16px;max-height:430px;overflow:auto;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.6;color:#33435c}
+    details{margin-top:18px;border:1px solid #dde5ef;border-radius:11px;background:#fafcff}summary{cursor:pointer;padding:14px 16px;font-weight:700;color:#40516b}
+    .advanced-editor{padding:0 16px 16px}.advanced-editor textarea{min-height:430px;max-height:70vh;font-family:Consolas,"SFMono-Regular",monospace;font-size:12px;line-height:1.55;tab-size:2;white-space:pre;overflow:auto;resize:vertical}.advanced-note{margin:0 0 10px;color:#66758a;font-size:13px;line-height:1.65}.advanced-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:10px}.advanced-actions .hint{margin-right:auto}
     .status-line{margin-right:auto;color:#66758a;font-size:13px}.status-line.busy{color:#2552a5}.status-line.good{color:#087b50}.status-line.warn{color:#9a6800}
     #message{position:fixed;right:24px;bottom:24px;max-width:520px;padding:13px 16px;border-radius:10px;background:#17243a;color:white;box-shadow:0 10px 35px #0003;display:none;white-space:pre-wrap;z-index:10}.error{background:#a82935!important}
     code{background:#eef2f7;padding:2px 5px;border-radius:5px}
@@ -85,7 +86,7 @@
       </div>
       <div class="policy-help">
         <strong>运行方式：</strong>这里只在管理员点击“AI 分析并生成规则”时调用一次 AI。发布后，Windows Bot 下载结构化规则并在本机内存中快速判断，不会为每条买家消息额外请求 AI。<br>
-        <strong>发布保护：</strong>AI 生成后必须先通过账号安全、正常代充和售后等自动测试，再由管理员点击“保存并发布”。
+        <strong>发布保护：</strong>AI 生成后必须先通过账号安全、正常代充和售后等自动测试，再由管理员点击“保存并发布”。高级设置中的结构化 JSON 也可手动修改，发布时服务端会再次规范化并执行安全测试。
       </div>
       <label>自然语言业务策略
         <textarea id="policyText" class="policy-editor" maxlength="12000" placeholder="例如：退款、投诉和账号安全问题转人工；给朋友或其他账号充值属于正常购买，可以自动回复……"></textarea>
@@ -110,9 +111,18 @@
         <div id="validationList" class="validation-list"><div class="empty" style="padding:16px">AI 生成后会自动测试典型买家消息。</div></div>
       </div>
 
-      <details>
-        <summary>高级设置 / 查看 AI 生成的结构化规则</summary>
-        <pre id="advancedRules">尚未读取规则。</pre>
+      <details id="advancedDetails">
+        <summary>高级设置 / 查看并手动修改结构化规则</summary>
+        <div class="advanced-editor">
+          <p class="advanced-note">这里显示当前已发布规则或最近一次 AI 生成结果。可直接修改 JSON 数组；也兼容 <code>{"rules":[...]}</code> 对象。修改后必须点击“应用手动修改”，再点击页面上方“保存并发布”。服务端发布时仍会执行字段规范化、去重和必要安全测试。</p>
+          <textarea id="advancedRules" spellcheck="false" aria-label="结构化转人工规则 JSON">[]</textarea>
+          <div class="advanced-actions">
+            <span id="advancedStatus" class="hint">尚未读取规则。</span>
+            <button id="formatRules" class="ghost" type="button">格式化 JSON</button>
+            <button id="resetRules" class="ghost" type="button">恢复当前草稿</button>
+            <button id="applyRules" class="secondary" type="button">应用手动修改</button>
+          </div>
+        </div>
       </details>
     </section>
   </main>
@@ -124,6 +134,8 @@ let current=null;
 let policyState=null;
 let policyDraft=null;
 let compiledSourceText='';
+let validatedRulesSignature='';
+let displayedRules=[];
 
 function notify(text,error=false){
   const el=$('message');
@@ -169,6 +181,37 @@ function esc(value){
   return String(value??'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 }
 
+function splitTerms(value){
+  const raw=Array.isArray(value)?value:String(value??'').split(/[|｜,，;；\n\r]+/);
+  const seen=new Set();
+  const output=[];
+  for(const item of raw){
+    const text=String(item??'').replace(/\s+/g,' ').replace(/^[ ，,；;|｜]+|[ ，,；;|｜]+$/g,'').trim();
+    if(!text)continue;
+    const key=text.toLocaleLowerCase();
+    if(seen.has(key))continue;
+    seen.add(key);output.push(text);
+  }
+  return output;
+}
+
+function summarizeRulesLocally(rules){
+  const manual=[],confirm=[],safe=[];
+  for(const rule of Array.isArray(rules)?rules:[]){
+    if(rule?.enabled===false)continue;
+    const keyword=String(rule?.keyword??'').trim();
+    const target=String(rule?.rule_type??'confirm')==='manual'?manual:confirm;
+    if(keyword&&!target.includes(keyword))target.push(keyword);
+    for(const item of splitTerms(rule?.exceptions))if(!safe.includes(item))safe.push(item);
+  }
+  return{
+    manual:manual.slice(0,60),confirm:confirm.slice(0,60),safe_exceptions:safe.slice(0,80),
+    manual_count:manual.length,confirm_count:confirm.length,safe_exception_count:safe.length,
+    enabled_rule_count:(Array.isArray(rules)?rules:[]).filter(x=>x?.enabled!==false).length,
+    total_rule_count:Array.isArray(rules)?rules.length:0
+  };
+}
+
 function renderChips(id,items,kind){
   const el=$(id);
   const values=Array.isArray(items)?items:[];
@@ -195,9 +238,16 @@ function labelResult(value){
 
 function renderValidation(validation){
   const list=$('validationList');
+  if(validation?.manual_pending_server_validation){
+    $('validationSummary').textContent='手动修改已应用；发布时服务端会重新执行安全测试';
+    $('validationSummary').className='warn';
+    list.innerHTML='<div class="validation-row"><span class="badge info">待发布</span><span><strong>结构化规则已由管理员手动修改</strong><br><span class="hint">点击“保存并发布”后，服务端会重新规范化规则并执行必要安全测试；不通过则拒绝发布，线上规则不变。</span></span><span>预期：安全校验</span><span>实际：等待发布</span></div>';
+    return;
+  }
   const tests=validation?.tests||[];
   if(!tests.length){
     $('validationSummary').textContent='尚未运行 AI 分析';
+    $('validationSummary').className='hint';
     list.innerHTML='<div class="empty" style="padding:16px">AI 生成后会自动测试典型买家消息。</div>';
     return;
   }
@@ -217,6 +267,33 @@ function setPolicyStatus(text,kind=''){
   el.className=`status-line ${kind}`.trim();
 }
 
+function canonicalRules(rules){return JSON.stringify(Array.isArray(rules)?rules:[])}
+
+function setAdvancedRules(rules,label){
+  displayedRules=Array.isArray(rules)?rules:[];
+  $('advancedRules').value=JSON.stringify(displayedRules,null,2);
+  validatedRulesSignature=canonicalRules(displayedRules);
+  $('advancedStatus').textContent=label||`已载入 ${displayedRules.length} 条规则，可直接修改。`;
+}
+
+function parseAdvancedRules(){
+  let payload;
+  try{payload=JSON.parse($('advancedRules').value)}catch(error){throw new Error(`JSON 格式错误：${error.message}`)}
+  const rules=Array.isArray(payload)?payload:payload?.rules;
+  if(!Array.isArray(rules))throw new Error('结构化规则必须是 JSON 数组，或包含 rules 数组的 JSON 对象');
+  if(!rules.length)throw new Error('结构化规则不能为空');
+  if(rules.length>300)throw new Error('结构化规则不能超过 300 条');
+  rules.forEach((rule,index)=>{
+    if(!rule||typeof rule!=='object'||Array.isArray(rule))throw new Error(`第 ${index+1} 条规则必须是 JSON 对象`);
+    if(!String(rule.keyword??'').trim())throw new Error(`第 ${index+1} 条规则缺少 keyword`);
+  });
+  return rules;
+}
+
+function editorSignature(){
+  try{return canonicalRules(parseAdvancedRules())}catch{return ''}
+}
+
 function renderPolicyState(state){
   policyState=state;
   policyDraft=null;
@@ -224,7 +301,7 @@ function renderPolicyState(state){
   $('policyText').value=state.policy_text||'';
   renderSummary(state.summary||{});
   renderValidation(null);
-  $('advancedRules').textContent=JSON.stringify(state.rules||[],null,2);
+  setAdvancedRules(state.rules||[],'当前显示已发布结构化规则；修改后点击“应用手动修改”。');
   $('policyRevision').textContent=state.revision?`已发布版本：${state.revision}`:'';
   $('rollbackPolicy').disabled=!state.can_rollback;
   $('publishPolicy').disabled=true;
@@ -237,10 +314,14 @@ function renderPolicyDraft(draft){
   compiledSourceText=$('policyText').value.trim();
   renderSummary(draft.summary||{});
   renderValidation(draft.validation||null);
-  $('advancedRules').textContent=JSON.stringify(draft.rules||[],null,2);
+  setAdvancedRules(draft.rules||[],draft.validation?.manual_pending_server_validation?'手动规则已应用，发布时由服务端进行最终安全校验。':'当前显示最近一次 AI 生成结果；可继续手动修改。');
   $('publishPolicy').disabled=!(draft.validation?.ok);
   const source=[draft.provider,draft.model].filter(Boolean).join(' / ');
-  setPolicyStatus(draft.validation?.ok?`AI 分析完成${source?`（${source}）`:''}，确认后可发布`:'AI 分析完成，但安全测试未通过，不能发布',draft.validation?.ok?'good':'warn');
+  if(draft.validation?.manual_pending_server_validation){
+    setPolicyStatus('手动结构化规则已应用，确认后可保存并发布','warn');
+  }else{
+    setPolicyStatus(draft.validation?.ok?`AI 分析完成${source?`（${source}）`:''}，确认后可发布`:'AI 分析完成，但安全测试未通过，不能发布',draft.validation?.ok?'good':'warn');
+  }
 }
 
 function settingsPayload(){
@@ -285,9 +366,50 @@ $('policyText').addEventListener('input',()=>{
   if(!policyDraft)return;
   if($('policyText').value.trim()!==compiledSourceText){
     $('publishPolicy').disabled=true;
-    setPolicyStatus('策略文字已修改，请重新点击“AI 分析并生成规则”','warn');
+    setPolicyStatus('策略文字已修改，请重新点击“AI 分析并生成规则”，或在高级设置应用手动规则','warn');
   }
 });
+
+$('advancedRules').addEventListener('input',()=>{
+  const signature=editorSignature();
+  if(signature&&signature===validatedRulesSignature)return;
+  $('publishPolicy').disabled=true;
+  $('advancedStatus').textContent=signature?'规则 JSON 已修改，点击“应用手动修改”后才能发布。':'规则 JSON 当前无法解析，请修正格式。';
+  if(policyDraft)setPolicyStatus('结构化规则已修改但尚未应用','warn');
+});
+
+$('formatRules').onclick=()=>{
+  try{
+    const rules=parseAdvancedRules();
+    $('advancedRules').value=JSON.stringify(rules,null,2);
+    $('advancedStatus').textContent=`JSON 格式化完成，共 ${rules.length} 条；如有内容修改请点击“应用手动修改”。`;
+  }catch(error){notify(error.message,true)}
+};
+
+$('resetRules').onclick=()=>{
+  const rules=policyDraft?.rules||policyState?.rules||displayedRules||[];
+  setAdvancedRules(rules,policyDraft?'已恢复当前草稿规则。':'已恢复当前已发布规则。');
+  $('publishPolicy').disabled=!(policyDraft?.validation?.ok);
+  notify('已恢复当前规则内容');
+};
+
+$('applyRules').onclick=()=>{
+  try{
+    const rules=parseAdvancedRules();
+    const summary=summarizeRulesLocally(rules);
+    const draft={
+      policy_text:$('policyText').value.trim(),
+      rules,
+      summary,
+      tests:[],
+      validation:{ok:true,manual_pending_server_validation:true,tests:[],passed_count:0,total_count:0,required_failure_count:0},
+      provider:'',model:'',manual_edit:true
+    };
+    renderPolicyDraft(draft);
+    $('advancedDetails').open=true;
+    notify(`已应用 ${rules.length} 条手动规则；点击“保存并发布”后服务端会重新执行安全校验`);
+  }catch(error){$('publishPolicy').disabled=true;notify(error.message,true)}
+};
 
 $('compilePolicy').onclick=async()=>{
   const policyText=$('policyText').value.trim();
@@ -296,21 +418,23 @@ $('compilePolicy').onclick=async()=>{
   setPolicyStatus('AI 正在分析场景、同义词、风险语境和例外，请稍候……','busy');
   try{
     renderPolicyDraft(await api('/api/admin/wecom/handoff-policy/compile',{method:'POST',body:JSON.stringify({policy_text:policyText})}));
-    notify('AI 已生成结构化规则，请查看摘要和测试结果后发布');
+    notify('AI 已生成结构化规则，可在高级设置中继续手动修改');
   }catch(error){policyDraft=null;setPolicyStatus('AI 分析失败，已保留当前已发布策略','warn');notify(error.message,true)}finally{$('compilePolicy').disabled=false}
 };
 
 $('publishPolicy').onclick=async()=>{
   const policyText=$('policyText').value.trim();
-  if(!policyDraft||policyText!==compiledSourceText){notify('策略已变化，请重新运行 AI 分析',true);return}
+  if(!policyDraft||policyText!==compiledSourceText){notify('策略文字已变化，请重新生成或重新应用手动规则',true);return}
+  const currentSignature=editorSignature();
+  if(!currentSignature||currentSignature!==validatedRulesSignature){notify('结构化规则已变化，请先点击“应用手动修改”',true);return}
   if(!policyDraft.validation?.ok){notify('安全测试未通过，不能发布',true);return}
-  $('publishPolicy').disabled=true;$('compilePolicy').disabled=true;
-  setPolicyStatus('正在保存并发布策略……','busy');
+  $('publishPolicy').disabled=true;$('compilePolicy').disabled=true;$('applyRules').disabled=true;
+  setPolicyStatus(policyDraft.manual_edit?'正在校验并发布手动结构化规则……':'正在保存并发布策略……','busy');
   try{
     const saved=await api('/api/admin/wecom/handoff-policy/publish',{method:'PUT',body:JSON.stringify({policy_text:policyText,rules:policyDraft.rules,summary:policyDraft.summary,tests:policyDraft.tests||[]})});
     renderPolicyState(saved);
     notify('AI 转人工策略已发布；在线 Bot 将在约1分钟内同步');
-  }catch(error){setPolicyStatus('发布失败，当前线上规则未改变','warn');notify(error.message,true)}finally{$('compilePolicy').disabled=false}
+  }catch(error){setPolicyStatus('发布失败，当前线上规则未改变','warn');notify(error.message,true)}finally{$('compilePolicy').disabled=false;$('applyRules').disabled=false}
 };
 
 $('rollbackPolicy').onclick=async()=>{
