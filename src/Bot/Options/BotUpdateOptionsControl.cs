@@ -509,17 +509,34 @@ namespace Bot.Options
 
         private static Button CreateButton(string text, bool primary)
         {
-            return new Button
+            var background = primary
+                ? new SolidColorBrush(Color.FromRgb(37, 99, 235))
+                : new SolidColorBrush(Color.FromRgb(248, 250, 252));
+            var foreground = primary
+                ? Brushes.White
+                : new SolidColorBrush(Color.FromRgb(15, 23, 42));
+            var border = primary
+                ? new SolidColorBrush(Color.FromRgb(37, 99, 235))
+                : new SolidColorBrush(Color.FromRgb(148, 163, 184));
+
+            var button = new Button
             {
                 Content = text,
                 MinWidth = 100,
                 Height = 32,
                 Padding = new Thickness(12, 5, 12, 5),
                 Margin = new Thickness(0, 3, 8, 3),
-                Background = primary ? new SolidColorBrush(Color.FromRgb(37, 99, 235)) : null,
-                Foreground = primary ? Brushes.White : null,
-                BorderBrush = primary ? new SolidColorBrush(Color.FromRgb(37, 99, 235)) : null
+                Background = background,
+                Foreground = foreground,
+                BorderBrush = border,
+                BorderThickness = new Thickness(1),
+                Opacity = 1.0
             };
+            button.IsEnabledChanged += (sender, args) =>
+            {
+                button.Opacity = button.IsEnabled ? 1.0 : 0.62;
+            };
+            return button;
         }
     }
 
