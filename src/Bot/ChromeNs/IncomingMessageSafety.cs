@@ -55,6 +55,18 @@ namespace Bot.ChromeNs
             // recent manual-agent questions as well as buyer replies such as phone/model/account IDs.
             ConversationContextStore.RefreshAndRecord(message, messageText);
 
+            // EvRecieveNewMessage subscribers run before the ordinary buyer-message loop. The
+            // recharge service claims only explicit progress questions with a same-conversation
+            // seller message containing “兑换码：...”. Once claimed, do not also start Smart Reply.
+            string rechargeQueryNote;
+            if (RechargeStatusAutoQueryService.TryConsumeHandled(
+                message,
+                messageText,
+                out rechargeQueryNote))
+            {
+                return Skip("[充值进度查询]", rechargeQueryNote);
+            }
+
             DateTime messageTime;
             if (TryGetMessageTime(message, out messageTime) && messageTime < safetyStartedAt.AddSeconds(-8))
             {
