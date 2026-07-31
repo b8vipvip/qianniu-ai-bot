@@ -4,7 +4,8 @@
     <ReferencePath>$(MSBuildThisFileDirectory)Bin;$(ReferencePath)</ReferencePath>
   </PropertyGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateTradeDetailBridge.cs')">
-    <!-- Include the order-template trade enrichment bridge in Bot and generated WPF temporary projects. -->
+    <!-- Include the order-template trade enrichment bridges in Bot and generated WPF temporary projects. -->
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateTradeDetailBridge.cs" />
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateReceiveNewMessageTradeDetailBridge.cs" />
   </ItemGroup>
 </Project>
