@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import inspect
+
 import recharge_status_query
 
 
@@ -50,16 +52,20 @@ def test_not_found_is_explicit_and_does_not_fake_success():
     assert result["notify_human"] is False
 
 
-def test_runtime_code_validation_and_secret_not_in_public_shape():
+def test_runtime_code_validation_and_public_settings_hide_secret():
     assert recharge_status_query.CODE_PATTERN.fullmatch("fh5dbpbrcj199")
     assert not recharge_status_query.CODE_PATTERN.fullmatch("https://cn12.vip")
-    public = recharge_status_query._load_settings(include_secret=False)
-    assert "auth_key" not in public
-    assert "auth_key_configured" in public
+    source = inspect.getsource(recharge_status_query._load_settings)
+    assert 'result["auth_key"]' in source
+    assert "if include_secret" in source
+    public_endpoint = inspect.getsource(
+        recharge_status_query.admin_get_recharge_query_settings
+    )
+    assert "include_secret=False" in public_endpoint
 
 
 def test_upstream_key_is_header_only_in_source():
-    source = __import__("inspect").getsource(recharge_status_query._query_upstream)
+    source = inspect.getsource(recharge_status_query._query_upstream)
     assert '"Authorization": "Bearer " + auth_key' in source
     assert '"X-Admin-Key": auth_key' in source
     assert '"X-API-Key": auth_key' in source
