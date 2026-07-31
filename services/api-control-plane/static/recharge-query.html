@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>充值结果自动查询 - 千牛 AI</title>
+  <style>
+    :root{font-family:Inter,"Microsoft YaHei",sans-serif;color:#14213a;background:#f3f6fb}
+    *{box-sizing:border-box}body{margin:0}.shell{display:grid;grid-template-columns:242px minmax(0,1fr);min-height:100vh}
+    aside{background:#111d31;color:#fff;padding:28px 20px;display:flex;flex-direction:column}.brand{padding:0 8px 24px;border-bottom:1px solid #2a3649;font-size:20px;font-weight:800}.brand small{display:block;color:#9fb0ca;font-size:12px;margin-top:5px;font-weight:400}
+    nav{display:grid;gap:8px;margin-top:22px}.nav{color:#b7c6dc;text-decoration:none;padding:12px 14px;border-radius:9px}.nav:hover,.nav.active{background:#213451;color:#fff}.foot{margin-top:auto;color:#91a4c0;font-size:12px;line-height:1.7;padding:12px}
+    main{padding:32px;max-width:980px;width:100%;margin:0 auto}h1{margin:0;font-size:28px}.sub{color:#68758a;line-height:1.75;margin:8px 0 22px}.panel{background:#fff;border:1px solid #e1e7f0;border-radius:15px;box-shadow:0 7px 24px rgba(32,52,84,.05);padding:24px;margin-bottom:18px}.panel h2{margin:0 0 6px;font-size:19px}.hint{color:#748198;font-size:13px;line-height:1.7;margin-bottom:18px}
+    .grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.span2{grid-column:1/-1}label{display:grid;gap:7px;font-size:14px;font-weight:700;color:#33435c}input{width:100%;border:1px solid #cfd8e6;border-radius:9px;padding:11px 12px;font:inherit}input:focus{outline:2px solid #b9d0ff;border-color:#4d82ff}.switch{display:flex;align-items:center;gap:9px;font-weight:700}.switch input,.clear input{width:auto}.clear{display:flex!important;align-items:center;gap:7px;font-weight:500;margin-top:10px}.secret-note{background:#f7f9fd;border:1px solid #dde5f2;border-radius:10px;padding:13px;color:#58667b;line-height:1.7;font-size:13px}.actions{display:flex;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:20px}button{border:0;border-radius:9px;padding:10px 16px;font:inherit;font-weight:700;cursor:pointer}.primary{background:#2563eb;color:#fff}.secondary{background:#edf3ff;color:#2552a5}.ghost{background:#f1f4f8;color:#34445c}button:disabled{opacity:.55;cursor:not-allowed}
+    #message{position:fixed;right:24px;bottom:24px;max-width:520px;padding:13px 16px;border-radius:10px;background:#17243a;color:#fff;display:none;white-space:pre-wrap;box-shadow:0 10px 35px #0003}.error{background:#a82935!important}.result{white-space:pre-wrap;background:#0f172a;color:#dbeafe;border-radius:10px;padding:14px;min-height:72px;font-family:Consolas,monospace;font-size:13px;line-height:1.65}
+    @media(max-width:780px){.shell{display:block}aside{display:none}main{padding:18px}.grid{grid-template-columns:1fr}.span2{grid-column:auto}}
+  </style>
+</head>
+<body>
+<div class="shell">
+  <aside>
+    <div class="brand">千牛 AI<small>API 控制台</small></div>
+    <nav>
+      <a class="nav" href="/">控制面总览</a>
+      <a class="nav" href="/static/wecom.html">企业微信</a>
+      <a class="nav active" href="/static/recharge-query.html">充值结果自动查询</a>
+    </nav>
+    <div class="foot">鉴权密钥仅以 Fernet 密文保存在 aboter 服务端，不会下发到 Windows Bot，也不会从页面回显。</div>
+  </aside>
+  <main>
+    <h1>充值结果自动查询</h1>
+    <p class="sub">买家询问充值进度时，Windows Bot 从同一会话里查找客服曾发送的“兑换码：……”；随后通过 aboter 服务端查询 ka.k2n.cn，并按充值状态自动答复。超时或失败状态会同时创建企业微信人工提醒。</p>
+
+    <section class="panel">
+      <h2>接口与鉴权</h2>
+      <div class="hint">建议填写实际返回 <code>r_status</code> 的接口，例如 <code>https://ka.k2n.cn/get_recharge_status</code>。密钥会通过 Authorization、X-Admin-Key 和 X-API-Key 请求头发送，不会拼入 URL。</div>
+      <div class="grid">
+        <label class="span2 switch"><input id="enabled" type="checkbox">启用自动查询充值结果</label>
+        <label class="span2">充值查询接口
+          <input id="queryUrl" type="url" placeholder="https://ka.k2n.cn/get_recharge_status">
+        </label>
+        <label class="span2">admin/index.html 鉴权密钥 key
+          <input id="authKey" type="password" autocomplete="new-password" placeholder="已配置时留空表示不修改">
+          <span id="keyHint" class="hint" style="margin:0"></span>
+        </label>
+        <label>超时时间（秒）
+          <input id="timeout" type="number" min="3" max="60" value="15">
+        </label>
+        <label class="clear"><input id="clearKey" type="checkbox">清除已保存密钥</label>
+      </div>
+      <div class="secret-note" style="margin-top:16px">Windows Bot 只调用 aboter 的运行时接口，永远不会收到 ka.k2n.cn 的鉴权密钥。接口返回给 Bot 的内容也只包含状态分类、耗时和回复文案，不包含手机号、账号昵称或验证码。</div>
+      <div class="actions"><button id="reload" class="ghost" type="button">重新读取</button><button id="save" class="primary" type="button">保存设置</button></div>
+    </section>
+
+    <section class="panel">
+      <h2>连接测试</h2>
+      <div class="hint">输入一个真实兑换码，仅用于即时测试，不会保存。测试结果按 Bot 实际规则分类。</div>
+      <div class="grid">
+        <label class="span2">测试兑换码
+          <input id="testCode" type="text" maxlength="64" placeholder="例如 fh5dbpbrcj199">
+        </label>
+      </div>
+      <div class="actions"><button id="test" class="secondary" type="button">查询并测试分类</button></div>
+      <div id="result" class="result">尚未测试</div>
+    </section>
+  </main>
+</div>
+<div id="message"></div>
+<script>
+const $=id=>document.getElementById(id);
+function notify(text,error=false){const el=$('message');el.textContent=text;el.className=error?'error':'';el.style.display='block';clearTimeout(el.timer);el.timer=setTimeout(()=>el.style.display='none',5200)}
+async function api(url,options={}){const response=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});let body=null;try{body=await response.json()}catch{}if(response.status===401){location.href='/';throw new Error('登录已失效')}if(!response.ok)throw new Error(body?.detail||`请求失败：${response.status}`);return body}
+function render(s){$('enabled').checked=!!s.enabled;$('queryUrl').value=s.query_url||'https://ka.k2n.cn/get_recharge_status';$('authKey').value='';$('timeout').value=s.timeout_seconds||15;$('clearKey').checked=false;$('keyHint').textContent=s.auth_key_configured?'密钥已加密保存；留空表示不修改':'尚未配置密钥';}
+async function load(){try{render(await api('/api/admin/recharge-query/settings'))}catch(e){notify('读取失败：'+e.message,true)}}
+$('reload').onclick=load;
+$('save').onclick=async()=>{const btn=$('save');btn.disabled=true;try{const payload={enabled:$('enabled').checked,query_url:$('queryUrl').value.trim(),auth_key:$('authKey').value.trim(),timeout_seconds:Number($('timeout').value||15),clear_auth_key:$('clearKey').checked};render(await api('/api/admin/recharge-query/settings',{method:'PUT',body:JSON.stringify(payload)}));notify('充值查询设置已保存')}catch(e){notify('保存失败：'+e.message,true)}finally{btn.disabled=false}};
+$('test').onclick=async()=>{const btn=$('test');btn.disabled=true;$('result').textContent='查询中...';try{const code=$('testCode').value.trim();const data=await api('/api/admin/recharge-query/test',{method:'POST',body:JSON.stringify({code})});$('result').textContent=JSON.stringify(data,null,2);notify('查询测试完成')}catch(e){$('result').textContent='测试失败：'+e.message;notify('测试失败：'+e.message,true)}finally{btn.disabled=false}};
+load();
+</script>
+</body>
+</html>
