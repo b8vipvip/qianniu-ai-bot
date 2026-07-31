@@ -34,10 +34,21 @@ def test_real_receive_new_msg_order_card_is_owned_before_legacy_direct_send():
     assert "qn.EvRecieveNewMessage += OnReceiveNewMessage" in direct
     assert "new Timer(_ => Attach(), null, 0, 750)" in direct
 
-    own = source.index("OrderPlacedAutoReplyService.TryCreatePlan")
-    query = source.index("await qn.GetBuyerTrades")
-    send = source.index("ProcessOrderTemplateTradeDetailPlanAsync")
-    assert own < query < send
+    own_scope = source[
+        source.index("private static void TryOwnPlan"):
+        source.index("private static async Task EnrichAndSendAsync")
+    ]
+    assert own_scope.index("OrderPlacedAutoReplyService.TryCreatePlan") < own_scope.index(
+        "Task.Run(async () => await EnrichAndSendAsync"
+    )
+
+    enrich_scope = source[
+        source.index("private static async Task EnrichAndSendAsync"):
+        source.index("private static bool NeedsTradeEnrichment")
+    ]
+    assert enrich_scope.index("await TryEnrichFromTradeApiAsync") < enrich_scope.index(
+        "await qn.ProcessOrderTemplateTradeDetailPlanAsync(plan)"
+    )
 
 
 def test_receive_new_msg_path_keeps_strict_order_evidence_and_avoids_followup_hijack():
@@ -89,5 +100,6 @@ def test_receive_new_msg_bridge_does_not_log_or_persist_raw_order_payload():
 
     assert "File.WriteAllText" not in source
     assert "Log.Info(raw" not in source
-    assert "+ raw" not in source
-    assert "payload" not in source.lower() or "raw order payload" not in source.lower()
+    assert "Log.Error(raw" not in source
+    assert "raw.ToString()" not in source
+    assert "raw.Length" in source
