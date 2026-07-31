@@ -7,5 +7,6 @@
     <!-- Include the order-template trade enrichment bridges in Bot and generated WPF temporary projects. -->
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateTradeDetailBridge.cs" />
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateReceiveNewMessageTradeDetailBridge.cs" />
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RechargeStatusAutoQueryService.cs" />
   </ItemGroup>
 </Project>
