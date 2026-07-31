@@ -108,5 +108,6 @@ def test_sensitive_values_are_not_logged_verbatim():
     assert "codeHash=" in source
     assert "兑换码尾号=" in source
     assert 'Log.Info("充值进度问题已接管' in source
-    assert "+ code" not in source
+    assert '" + code + "' not in source
     assert "question=" not in source
+    assert '"****" + code.Substring(code.Length - 4)' in source
