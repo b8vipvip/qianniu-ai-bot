@@ -343,6 +343,7 @@ namespace Bot.ChromeNs
                 .Replace("{订单号}", plan == null ? string.Empty : plan.OrderId ?? string.Empty)
                 .Replace("{时间}", plan == null ? string.Empty : plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"))
                 .Replace("{商品}", snapshot == null ? string.Empty : snapshot.ItemTitle ?? string.Empty)
+                .Replace("{sku}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)
                 .Replace("{规格}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)
                 .Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())
                 .Replace("{金额}", snapshot == null || !snapshot.TotalAmount.HasValue ? string.Empty : snapshot.TotalAmount.Value.ToString("0.00"))

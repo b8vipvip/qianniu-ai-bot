@@ -66,10 +66,14 @@ def test_recovered_snapshot_keeps_working_quantity_and_paid_fields():
     assert "订单SKU结构恢复成功" in source
 
 
-def test_template_still_renders_sku_from_snapshot():
+def test_template_renders_sku_placeholder_and_keeps_legacy_alias():
     template = read(TEMPLATE)
 
-    assert '.Replace("{规格}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)' in template
+    primary = '.Replace("{sku}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)'
+    legacy = '.Replace("{规格}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)'
+    assert primary in template
+    assert legacy in template
+    assert template.index(primary) < template.index(legacy)
     assert '.Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())' in template
     assert '.Replace("{实付}", snapshot == null || !snapshot.PaidAmount.HasValue ? string.Empty : snapshot.PaidAmount.Value.ToString("0.00"))' in template
 
