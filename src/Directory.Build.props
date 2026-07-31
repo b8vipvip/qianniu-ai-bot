@@ -3,4 +3,8 @@
     <!-- Legacy .NET Framework projects in this repo reference several vendor DLLs stored in src\Bin. -->
     <ReferencePath>$(MSBuildThisFileDirectory)Bin;$(ReferencePath)</ReferencePath>
   </PropertyGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateTradeDetailBridge.cs')">
+    <!-- Include the order-template trade enrichment bridge in Bot and generated WPF temporary projects. -->
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateTradeDetailBridge.cs" />
+  </ItemGroup>
 </Project>
