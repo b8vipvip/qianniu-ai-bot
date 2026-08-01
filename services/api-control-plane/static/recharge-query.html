@@ -28,15 +28,15 @@
   </aside>
   <main>
     <h1>充值结果自动查询</h1>
-    <p class="sub">买家询问充值进度时，Windows Bot 从同一会话里查找客服曾发送的“兑换码：……”；随后通过 aboter 服务端登录 ka.k2n.cn、查询充值结果，并按状态自动答复。超时或失败状态会同时创建企业微信人工提醒。</p>
+    <p class="sub">买家询问充值进度时，Windows Bot 从同一会话里查找客服曾发送的“兑换码：……”；随后由 aboter 登录 ka.k2n.cn，通过后台搜索接口查询该兑换码的最新记录，并按状态自动答复。超时或失败状态会同时创建企业微信人工提醒。</p>
 
     <section class="panel">
       <h2>接口与后台登录</h2>
-      <div class="hint">当前查询接口未登录时会跳转到“后台 Key 登录”页面。aboter 会先使用后台访问 Key 建立同一站点的临时登录会话，再调用返回 <code>r_status</code> 的接口，例如 <code>https://ka.k2n.cn/get_recharge_status</code>。</div>
+      <div class="hint">aboter 会先使用后台访问 Key 建立临时登录会话，再调用 <code>https://ka.k2n.cn/api.php</code>，使用 <code>action=search</code>、<code>tel=兑换码</code>、<code>page=1</code> 查询记录。旧的 <code>/get_recharge_status</code> 地址会自动迁移。</div>
       <div class="grid">
         <label class="span2 switch"><input id="enabled" type="checkbox">启用自动查询充值结果</label>
         <label class="span2">充值查询接口
-          <input id="queryUrl" type="url" placeholder="https://ka.k2n.cn/get_recharge_status">
+          <input id="queryUrl" type="url" placeholder="https://ka.k2n.cn/api.php">
         </label>
         <label class="span2">后台访问 Key
           <input id="authKey" type="password" autocomplete="new-password" placeholder="与“后台 Key 登录”页面使用的 Key 相同；已配置时留空表示不修改">
@@ -47,13 +47,13 @@
         </label>
         <label class="clear"><input id="clearKey" type="checkbox">清除已保存 Key</label>
       </div>
-      <div class="secret-note" style="margin-top:16px">Windows Bot 只调用 aboter 的运行时接口，永远不会收到后台访问 Key 或 ka.k2n.cn 的登录 Cookie。Key 仅由 aboter 通过 HTTPS 发给 ka.k2n.cn 的官方登录入口；运行时响应也只包含状态分类、耗时和回复文案，不包含手机号、账号昵称或验证码。</div>
+      <div class="secret-note" style="margin-top:16px">若同一兑换码存在多条记录，aboter 只采用兑换码完全一致且 ID 最大的最新记录。Windows Bot 只收到状态分类、耗时和回复文案，不会收到后台访问 Key、登录 Cookie、手机号、账号昵称或验证码。</div>
       <div class="actions"><button id="reload" class="ghost" type="button">重新读取</button><button id="save" class="primary" type="button">保存设置</button></div>
     </section>
 
     <section class="panel">
       <h2>连接测试</h2>
-      <div class="hint">输入一个真实兑换码，仅用于即时测试，不会保存。测试会先验证后台 Key 登录，再按 Bot 实际规则查询和分类。</div>
+      <div class="hint">输入一个真实兑换码，仅用于即时测试，不会保存。测试会先验证后台 Key 登录，再查询最新的完全匹配记录并按 Bot 实际规则分类。</div>
       <div class="grid">
         <label class="span2">测试兑换码
           <input id="testCode" type="text" maxlength="64" placeholder="例如 fh5dbpbrcj199">
@@ -69,7 +69,7 @@
 const $=id=>document.getElementById(id);
 function notify(text,error=false){const el=$('message');el.textContent=text;el.className=error?'error':'';el.style.display='block';clearTimeout(el.timer);el.timer=setTimeout(()=>el.style.display='none',5200)}
 async function api(url,options={}){const response=await fetch(url,{credentials:'same-origin',headers:{'Content-Type':'application/json',...(options.headers||{})},...options});let body=null;try{body=await response.json()}catch{}if(response.status===401){location.href='/';throw new Error('登录已失效')}if(!response.ok)throw new Error(body?.detail||`请求失败：${response.status}`);return body}
-function render(s){$('enabled').checked=!!s.enabled;$('queryUrl').value=s.query_url||'https://ka.k2n.cn/get_recharge_status';$('authKey').value='';$('timeout').value=s.timeout_seconds||15;$('clearKey').checked=false;$('keyHint').textContent=s.auth_key_configured?'后台访问 Key 已加密保存；留空表示不修改':'尚未配置后台访问 Key';}
+function render(s){$('enabled').checked=!!s.enabled;$('queryUrl').value=s.query_url||'https://ka.k2n.cn/api.php';$('authKey').value='';$('timeout').value=s.timeout_seconds||15;$('clearKey').checked=false;$('keyHint').textContent=s.auth_key_configured?'后台访问 Key 已加密保存；留空表示不修改':'尚未配置后台访问 Key';}
 async function load(){try{render(await api('/api/admin/recharge-query/settings'))}catch(e){notify('读取失败：'+e.message,true)}}
 $('reload').onclick=load;
 $('save').onclick=async()=>{const btn=$('save');btn.disabled=true;try{const payload={enabled:$('enabled').checked,query_url:$('queryUrl').value.trim(),auth_key:$('authKey').value.trim(),timeout_seconds:Number($('timeout').value||15),clear_auth_key:$('clearKey').checked};render(await api('/api/admin/recharge-query/settings',{method:'PUT',body:JSON.stringify(payload)}));notify('充值查询设置已保存')}catch(e){notify('保存失败：'+e.message,true)}finally{btn.disabled=false}};
