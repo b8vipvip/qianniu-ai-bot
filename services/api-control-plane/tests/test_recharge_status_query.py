@@ -191,6 +191,7 @@ def test_search_api_selects_newest_exact_record_and_reuses_session(monkeypatch):
     login_url, login_kwargs = session.calls[0]
     assert login_url == "https://ka.k2n.cn/auth_key"
     assert login_kwargs["params"] == {"key": "server-side-secret"}
+    assert "Mozilla/5.0" in login_kwargs["headers"]["User-Agent"]
 
     query_url, query_kwargs = session.calls[1]
     assert query_url == "https://ka.k2n.cn/api.php"
@@ -200,43 +201,38 @@ def test_search_api_selects_newest_exact_record_and_reuses_session(monkeypatch):
         "page": 1,
     }
     assert query_kwargs["headers"]["Referer"] == "https://ka.k2n.cn/"
+    assert "Mozilla/5.0" in query_kwargs["headers"]["User-Agent"]
     assert "Authorization" not in query_kwargs["headers"]
     assert "X-Admin-Key" not in query_kwargs["headers"]
     assert "X-API-Key" not in query_kwargs["headers"]
 
 
-def test_search_api_returns_not_found_when_no_exact_code_matches(monkeypatch):
-    session = FakeSession(
-        [
-            FakeResponse(
-                url="https://ka.k2n.cn/",
-                text="<html><title>后台管理</title></html>",
-            ),
-            FakeResponse(
-                url="https://ka.k2n.cn/api.php?action=search&page=1",
-                payload={
-                    "records": [
-                        {"id": 1, "tel": "different-code", "r_status": "充值成功"}
-                    ]
-                },
-                content_type="application/json",
-            ),
+def test_search_api_uses_newest_filtered_record_when_tel_is_not_echoed():
+    payload = {
+        "records": [
+            {"id": 1396, "tel": "***", "r_status": "已发送"},
+            {"id": 1397, "tel": "***", "r_status": "失败"},
         ]
-    )
-    monkeypatch.setattr(
-        recharge_status_query.curl_requests,
-        "Session",
-        lambda **kwargs: session,
-    )
+    }
 
-    payload = recharge_status_query._query_upstream(
-        "fh5dbpbrcj199",
-        {
-            "query_url": "https://ka.k2n.cn/api.php",
-            "auth_key": "server-side-secret",
-            "timeout_seconds": 15,
-        },
-    )
+    record = recharge_status_query._select_record(payload, "fh5dbpbrcj199")
+    assert record["id"] == 1397
+    assert record["r_status"] == "失败"
+
+
+def test_search_api_normalizes_formatted_echoed_code():
+    payload = {
+        "records": [
+            {"id": 8, "tel": "FH5D-BPBR-CJ199", "r_status": "充值成功"}
+        ]
+    }
+
+    record = recharge_status_query._select_record(payload, "fh5dbpbrcj199")
+    assert record["id"] == 8
+
+
+def test_search_api_returns_not_found_only_when_records_are_empty():
+    payload = recharge_status_query._select_record({"records": []}, "fh5dbpbrcj199")
     assert payload == {}
     assert recharge_status_query._classify(payload)["category"] == "not_found"
 
