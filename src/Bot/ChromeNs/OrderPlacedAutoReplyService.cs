@@ -190,6 +190,7 @@ namespace Bot.ChromeNs
             if (template.Contains("{客服}") && (plan == null || string.IsNullOrWhiteSpace(plan.Seller))) missing.Add("seller");
             if (template.Contains("{买家}") && (plan == null || string.IsNullOrWhiteSpace(plan.Buyer))) missing.Add("buyer");
             if (template.Contains("{订单号}") && (plan == null || string.IsNullOrWhiteSpace(plan.OrderId))) missing.Add("order_id");
+            if (template.Contains("{时间}") && (plan == null || plan.EventTime == DateTime.MinValue)) missing.Add("event_time");
             if ((template.Contains("{sku}") || template.Contains("{规格}"))
                 && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.SkuText))) missing.Add("sku");
             if (template.Contains("{数量}") && (snapshot == null || snapshot.Quantity <= 0)) missing.Add("quantity");
@@ -208,6 +209,7 @@ namespace Bot.ChromeNs
             if (template.Contains("{客服}") && plan != null && !string.IsNullOrWhiteSpace(plan.Seller)) present.Add("seller");
             if (template.Contains("{买家}") && plan != null && !string.IsNullOrWhiteSpace(plan.Buyer)) present.Add("buyer");
             if (template.Contains("{订单号}") && plan != null && !string.IsNullOrWhiteSpace(plan.OrderId)) present.Add("order_id");
+            if (template.Contains("{时间}") && plan != null && plan.EventTime != DateTime.MinValue) present.Add("event_time");
             if ((template.Contains("{sku}") || template.Contains("{规格}"))
                 && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
             if (template.Contains("{数量}") && snapshot != null && snapshot.Quantity > 0) present.Add("quantity");
@@ -228,7 +230,7 @@ namespace Bot.ChromeNs
             {
                 string reason;
                 if (plan == null) reason = "plan_null";
-                else if (snapshot == null && field != "seller" && field != "buyer" && field != "order_id") reason = "snapshot_null";
+                else if (snapshot == null && field != "seller" && field != "buyer" && field != "order_id" && field != "event_time") reason = "snapshot_null";
                 else
                 {
                     switch (field)
@@ -236,6 +238,7 @@ namespace Bot.ChromeNs
                         case "seller": reason = "seller_empty"; break;
                         case "buyer": reason = "buyer_empty"; break;
                         case "order_id": reason = "order_id_empty"; break;
+                        case "event_time": reason = "event_time_min_value"; break;
                         case "sku": reason = "snapshot_sku_empty"; break;
                         case "quantity": reason = "snapshot_quantity_zero"; break;
                         case "total": reason = "snapshot_total_amount_null"; break;

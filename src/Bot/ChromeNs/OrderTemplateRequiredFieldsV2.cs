@@ -23,8 +23,9 @@ using System.Windows.Threading;
 namespace Bot
 {
     /// <summary>
-    /// 统一接管需要订单字段的下单模板。字段未补齐时绝不发送空模板，并释放发送占位，
-    /// 让后续付款事件有机会再次查询。新模板统一使用 {sku}，旧 {规格} 只作为兼容别名。
+    /// 统一接管需要订单字段的下单模板。先尽力查询交易详情；部分字段缺失时保留并发送
+    /// 已取得的其他字段，只有模板所需动态字段全部缺失时才阻止空壳消息并释放发送占位。
+    /// 新模板统一使用 {sku}，旧 {规格} 只作为兼容别名。
     /// </summary>
     public partial class App
     {
@@ -109,7 +110,7 @@ namespace Bot.ChromeNs
                 OrderTemplateSkuUiMigration.Initialize();
                 // 本桥接替代旧的两个 10ms 补全桥接；1ms 仅用于尽早绑定，不在回调中忙等。
                 _timer = new Timer(_ => Attach(), null, 0, 1);
-                Log.Info("订单模板字段完整性 V2 已启动：新占位符={sku}，空字段模板禁止发送。");
+                Log.Info("订单模板字段完整性 V2 已启动：新占位符={sku}，部分字段保留发送，全部缺失时禁止空壳消息。");
             }
             return new object();
         }
@@ -290,6 +291,11 @@ namespace Bot.ChromeNs
                     // 才阻止只剩“订单：”之类的空壳消息；绝不发送“订单：”空模板。
                     // 此时释放占位，后续付款通知可重新创建计划并再次查询。
                     blocked = missing.Count > 0 && present.Count == 0;
+                    if (blocked && HasKnownNonOrderTemplateField(plan.Config, plan))
+                    {
+                        // 订单号、买家、客服或时间等其他模板字段有值时，也属于可发送的部分结果。
+                        blocked = false;
+                    }
                     LogProbe(plan, probe, blocked, missing, present, missingReasons, source);
 
                     if (blocked)
@@ -435,6 +441,18 @@ namespace Bot.ChromeNs
             return present;
         }
 
+        private static bool HasKnownNonOrderTemplateField(
+            AutoReplyRuleConfig cfg,
+            OrderPlacedReplyPlan plan)
+        {
+            if (cfg == null || plan == null) return false;
+            var template = cfg.OrderPlacedReplyText ?? string.Empty;
+            return (template.Contains("{客服}") && !string.IsNullOrWhiteSpace(plan.Seller))
+                || (template.Contains("{买家}") && !string.IsNullOrWhiteSpace(plan.Buyer))
+                || (template.Contains("{订单号}") && !string.IsNullOrWhiteSpace(plan.OrderId))
+                || (template.Contains("{时间}") && plan.EventTime != DateTime.MinValue);
+        }
+
         private static List<string> BuildMissingReasons(
             AutoReplyRuleConfig cfg,
             OrderSnapshot snapshot,
@@ -449,17 +467,7 @@ namespace Bot.ChromeNs
                 {
                     reason = "snapshot_null";
                 }
-                else if (!string.IsNullOrWhiteSpace(probe.Error))
-                {
-                    reason = "trade_query_error";
-                }
-                else if (!probe.TradeFound)
-                {
-                    reason = probe.BuyerSearchAttempted && !probe.BuyerSecurityIdFound
-                        ? "buyer_security_id_not_found_trade_not_found"
-                        : "trade_not_found_after_" + probe.TradeQueryAttempts + "_attempts";
-                }
-                else
+                else if (probe.TradeFound)
                 {
                     switch (field)
                     {
@@ -471,6 +479,16 @@ namespace Bot.ChromeNs
                         case "status": reason = "trade_found_but_status_empty"; break;
                         default: reason = "field_unavailable"; break;
                     }
+                }
+                else if (!string.IsNullOrWhiteSpace(probe.Error))
+                {
+                    reason = "trade_query_error_after_" + probe.TradeQueryAttempts + "_attempts";
+                }
+                else
+                {
+                    reason = probe.BuyerSearchAttempted && !probe.BuyerSecurityIdFound
+                        ? "buyer_security_id_not_found_trade_not_found"
+                        : "trade_not_found_after_" + probe.TradeQueryAttempts + "_attempts";
                 }
                 reasons.Add(field + ":" + reason);
             }

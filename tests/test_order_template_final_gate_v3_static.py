@@ -60,3 +60,20 @@ def test_http_response_and_fallback_have_the_same_diagnostics():
     source = read(SERVICE)
     assert 'RenderTemplate(reply, plan, "http-response")' in source
     assert 'RenderTemplate(cfg.OrderPlacedReplyText, plan, "http-fallback")' in source
+
+
+
+def test_other_known_placeholders_are_preserved_when_order_details_are_missing():
+    v2 = read(V2)
+    service = read(SERVICE)
+    assert "HasKnownNonOrderTemplateField(plan.Config, plan)" in v2
+    assert 'template.Contains("{订单号}") && !string.IsNullOrWhiteSpace(plan.OrderId)' in v2
+    assert 'template.Contains("{时间}") && plan.EventTime != DateTime.MinValue' in v2
+    assert 'present.Add("event_time")' in service
+
+
+def test_trade_found_reason_has_priority_over_an_earlier_transient_error():
+    source = read(V2)
+    trade_found = source.index("else if (probe.TradeFound)")
+    query_error = source.index("trade_query_error_after_", trade_found)
+    assert trade_found < query_error
