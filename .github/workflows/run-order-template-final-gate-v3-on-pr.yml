@@ -22,14 +22,15 @@ jobs:
       - name: Apply verified source patch
         run: python .github/scripts/apply_order_template_final_gate_v3.py
 
-      - name: Preserve empty-shell safety assertion
+      - name: Preserve empty-shell safety assertions
         shell: python
         run: |
           from pathlib import Path
           path = Path('src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs')
           source = path.read_text(encoding='utf-8-sig')
           marker = '                    // 才阻止只剩“订单：”之类的空壳消息。'
-          replacement = '                    // 才阻止只剩“订单：”之类的空壳消息；绝不发送“订单：”空模板。'
+          replacement = ('                    // 才阻止只剩“订单：”之类的空壳消息；绝不发送“订单：”空模板。\n'
+                         '                    // 此时释放占位，后续付款通知可重新创建计划并再次查询。')
           if marker not in source:
               raise RuntimeError('empty-shell comment marker changed')
           path.write_text(source.replace(marker, replacement, 1), encoding='utf-8-sig')
