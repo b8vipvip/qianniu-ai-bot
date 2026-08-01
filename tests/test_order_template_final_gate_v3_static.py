@@ -30,6 +30,7 @@ def test_partial_fields_are_sent_instead_of_blocking_every_missing_field():
     assert "blocked = missing.Count > 0 && present.Count == 0" in source
     assert "order_template_partial_send=true" in source
     assert "PresentRequiredFields" in source
+    assert 'present=" + string.Join(",", present)' in source
 
 
 def test_missing_field_causes_and_self_check_are_structured_in_logs():
@@ -39,6 +40,7 @@ def test_missing_field_causes_and_self_check_are_structured_in_logs():
     assert "missing_reason=" in source
     assert "trade_found_but_sku_empty" in source
     assert "trade_not_found_after_" in source
+    assert "trade_query_error_after_" in source
 
 
 def test_final_renderer_keeps_present_fields_and_cleans_spacing():
@@ -60,7 +62,6 @@ def test_http_response_and_fallback_have_the_same_diagnostics():
     source = read(SERVICE)
     assert 'RenderTemplate(reply, plan, "http-response")' in source
     assert 'RenderTemplate(cfg.OrderPlacedReplyText, plan, "http-fallback")' in source
-
 
 
 def test_other_known_placeholders_are_preserved_when_order_details_are_missing():
