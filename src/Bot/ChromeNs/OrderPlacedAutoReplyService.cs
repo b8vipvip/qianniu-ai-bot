@@ -1,10 +1,11 @@
-using Bot.Automation.ChatDeskNs;
+﻿using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -181,6 +182,77 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        private static List<string> MissingTemplateFields(string template, OrderPlacedReplyPlan plan)
+        {
+            var missing = new List<string>();
+            var snapshot = plan == null ? null : plan.Snapshot;
+            template = template ?? string.Empty;
+            if (template.Contains("{客服}") && (plan == null || string.IsNullOrWhiteSpace(plan.Seller))) missing.Add("seller");
+            if (template.Contains("{买家}") && (plan == null || string.IsNullOrWhiteSpace(plan.Buyer))) missing.Add("buyer");
+            if (template.Contains("{订单号}") && (plan == null || string.IsNullOrWhiteSpace(plan.OrderId))) missing.Add("order_id");
+            if (template.Contains("{时间}") && (plan == null || plan.EventTime == DateTime.MinValue)) missing.Add("event_time");
+            if ((template.Contains("{sku}") || template.Contains("{规格}"))
+                && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.SkuText))) missing.Add("sku");
+            if (template.Contains("{数量}") && (snapshot == null || snapshot.Quantity <= 0)) missing.Add("quantity");
+            if (template.Contains("{金额}") && (snapshot == null || !snapshot.TotalAmount.HasValue)) missing.Add("total");
+            if (template.Contains("{实付}") && (snapshot == null || !snapshot.PaidAmount.HasValue)) missing.Add("paid");
+            if (template.Contains("{商品}") && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.ItemTitle))) missing.Add("item");
+            if (template.Contains("{订单状态}") && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.TradeStatus))) missing.Add("status");
+            return missing;
+        }
+
+        private static List<string> PresentTemplateFields(string template, OrderPlacedReplyPlan plan)
+        {
+            var present = new List<string>();
+            var snapshot = plan == null ? null : plan.Snapshot;
+            template = template ?? string.Empty;
+            if (template.Contains("{客服}") && plan != null && !string.IsNullOrWhiteSpace(plan.Seller)) present.Add("seller");
+            if (template.Contains("{买家}") && plan != null && !string.IsNullOrWhiteSpace(plan.Buyer)) present.Add("buyer");
+            if (template.Contains("{订单号}") && plan != null && !string.IsNullOrWhiteSpace(plan.OrderId)) present.Add("order_id");
+            if (template.Contains("{时间}") && plan != null && plan.EventTime != DateTime.MinValue) present.Add("event_time");
+            if ((template.Contains("{sku}") || template.Contains("{规格}"))
+                && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
+            if (template.Contains("{数量}") && snapshot != null && snapshot.Quantity > 0) present.Add("quantity");
+            if (template.Contains("{金额}") && snapshot != null && snapshot.TotalAmount.HasValue) present.Add("total");
+            if (template.Contains("{实付}") && snapshot != null && snapshot.PaidAmount.HasValue) present.Add("paid");
+            if (template.Contains("{商品}") && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.ItemTitle)) present.Add("item");
+            if (template.Contains("{订单状态}") && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.TradeStatus)) present.Add("status");
+            return present;
+        }
+
+        private static List<string> BuildRenderMissingReasons(
+            IList<string> missing,
+            OrderPlacedReplyPlan plan)
+        {
+            var reasons = new List<string>();
+            var snapshot = plan == null ? null : plan.Snapshot;
+            foreach (var field in missing ?? new List<string>())
+            {
+                string reason;
+                if (plan == null) reason = "plan_null";
+                else if (snapshot == null && field != "seller" && field != "buyer" && field != "order_id" && field != "event_time") reason = "snapshot_null";
+                else
+                {
+                    switch (field)
+                    {
+                        case "seller": reason = "seller_empty"; break;
+                        case "buyer": reason = "buyer_empty"; break;
+                        case "order_id": reason = "order_id_empty"; break;
+                        case "event_time": reason = "event_time_min_value"; break;
+                        case "sku": reason = "snapshot_sku_empty"; break;
+                        case "quantity": reason = "snapshot_quantity_zero"; break;
+                        case "total": reason = "snapshot_total_amount_null"; break;
+                        case "paid": reason = "snapshot_paid_amount_null"; break;
+                        case "item": reason = "snapshot_item_title_empty"; break;
+                        case "status": reason = "snapshot_trade_status_empty"; break;
+                        default: reason = "field_unavailable"; break;
+                    }
+                }
+                reasons.Add(field + ":" + reason);
+            }
+            return reasons;
+        }
+
         public static async Task<OrderPlacedReplyResolution> ResolveAsync(OrderPlacedReplyPlan plan)
         {
             if (plan == null || plan.Config == null)
@@ -200,7 +272,7 @@ namespace Bot.ChromeNs
                     if (plan.IsBuyerFollowUp) api.Source += "（买家明确续问）";
                     return api;
                 }
-                var fallback = RenderTemplate(cfg.OrderPlacedReplyText, plan);
+                var fallback = RenderTemplate(cfg.OrderPlacedReplyText, plan, "http-fallback");
                 if (!string.IsNullOrWhiteSpace(fallback))
                 {
                     Log.Info("下单回复接口失败，使用固定预设兜底: orderId=" + plan.OrderId + ", error=" + api.Error);
@@ -216,7 +288,7 @@ namespace Bot.ChromeNs
                 return api;
             }
 
-            var reply = RenderTemplate(cfg.OrderPlacedReplyText, plan);
+            var reply = RenderTemplate(cfg.OrderPlacedReplyText, plan, "fixed-preset");
             if (string.IsNullOrWhiteSpace(reply)) return Fail("下单固定预设答案为空");
             return new OrderPlacedReplyResolution
             {
@@ -305,7 +377,7 @@ namespace Bot.ChromeNs
                         return new OrderPlacedReplyResolution
                         {
                             Success = true,
-                            Reply = RenderTemplate(reply, plan),
+                            Reply = RenderTemplate(reply, plan, "http-response"),
                             Source = "下单自动回复-HTTP接口"
                         };
                     }
@@ -334,10 +406,17 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string RenderTemplate(string template, OrderPlacedReplyPlan plan)
+        private static string RenderTemplate(
+            string template,
+            OrderPlacedReplyPlan plan,
+            string source)
         {
             var snapshot = plan == null ? null : plan.Snapshot;
-            return (template ?? string.Empty)
+            var missing = MissingTemplateFields(template, plan);
+            var present = PresentTemplateFields(template, plan);
+            var missingReasons = BuildRenderMissingReasons(missing, plan);
+
+            var rendered = (template ?? string.Empty)
                 .Replace("{客服}", plan == null ? string.Empty : plan.Seller ?? string.Empty)
                 .Replace("{买家}", plan == null ? string.Empty : plan.Buyer ?? string.Empty)
                 .Replace("{订单号}", plan == null ? string.Empty : plan.OrderId ?? string.Empty)
@@ -348,8 +427,28 @@ namespace Bot.ChromeNs
                 .Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())
                 .Replace("{金额}", snapshot == null || !snapshot.TotalAmount.HasValue ? string.Empty : snapshot.TotalAmount.Value.ToString("0.00"))
                 .Replace("{实付}", snapshot == null || !snapshot.PaidAmount.HasValue ? string.Empty : snapshot.PaidAmount.Value.ToString("0.00"))
-                .Replace("{订单状态}", snapshot == null ? string.Empty : snapshot.TradeStatus ?? string.Empty)
-                .Trim();
+                .Replace("{订单状态}", snapshot == null ? string.Empty : snapshot.TradeStatus ?? string.Empty);
+
+            // 保留已有字段，同时清理缺失占位符造成的双空格、冒号后空格和行尾空白。
+            rendered = Regex.Replace(rendered, @"[ \t]{2,}", " ");
+            rendered = Regex.Replace(rendered, @"([：:])\s+", "$1");
+            rendered = Regex.Replace(rendered, @"\s+([，。；、])", "$1");
+            rendered = Regex.Replace(rendered, @"(?m)[ \t]+$", string.Empty).Trim();
+
+            var allRequestedFieldsMissing = missing.Count > 0 && present.Count == 0;
+            Log.Info("order_template_render"
+                + " source=" + source
+                + " orderId=" + (plan == null ? string.Empty : plan.OrderId)
+                + " partial=" + (missing.Count > 0 && present.Count > 0).ToString().ToLowerInvariant()
+                + " all_requested_fields_missing=" + allRequestedFieldsMissing.ToString().ToLowerInvariant()
+                + " present=" + string.Join(",", present)
+                + " missing=" + string.Join(",", missing)
+                + " missing_reason=" + string.Join("|", missingReasons)
+                + " snapshot_source=" + Short(snapshot == null ? string.Empty : snapshot.Source, 100)
+                + " rendered_length=" + rendered.Length);
+
+            // 若模板引用的所有动态字段都缺失，禁止发送仅剩静态标点的空壳消息。
+            return allRequestedFieldsMissing ? string.Empty : rendered;
         }
 
         private static OrderPlacedReplyResolution Fail(string error)

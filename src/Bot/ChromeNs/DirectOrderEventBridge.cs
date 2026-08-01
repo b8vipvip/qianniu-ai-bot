@@ -1,4 +1,4 @@
-using Bot.ChatRecord;
+﻿using Bot.ChatRecord;
 using BotLib;
 using DbEntity;
 using Newtonsoft.Json;
@@ -501,6 +501,10 @@ namespace Bot.ChromeNs
 
             Log.Info("优先识别到直接下单系统事件: source=" + source
                 + ", seller=" + seller + ", buyer=" + buyer + ", orderId=" + plan.OrderId);
+            // 展开诊断桥接能够解析嵌套 messageCenterNotify，但不得绕过统一字段补全。
+            // 计划已包含准确 seller、buyer 和 orderId，交给 V2 查询交易详情后再发送。
+            if (OrderTemplateRequiredFieldsV2.TryOwnExistingPlan(this, plan, source)) return;
+
             await ProcessOrderPlacedReplyAsync(plan);
         }
     }
