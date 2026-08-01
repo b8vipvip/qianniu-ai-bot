@@ -1,4 +1,4 @@
-using Bot.ChatRecord;
+﻿using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
 using DbEntity;
@@ -52,6 +52,8 @@ namespace Bot.ChromeNs
             public bool QuantityFound;
             public bool PaidFound;
             public bool TotalFound;
+            public bool BuyerSearchAttempted;
+            public int TradeQueryAttempts;
             public string Error;
         }
 
@@ -221,6 +223,28 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal static bool TryOwnExistingPlan(
+            QN qn,
+            OrderPlacedReplyPlan plan,
+            string source)
+        {
+            if (qn == null || plan == null || plan.Config == null || plan.Snapshot == null)
+            {
+                return false;
+            }
+            if (plan.IsBuyerFollowUp || !ShouldOwnConfiguredTemplate(plan.Config))
+            {
+                return false;
+            }
+
+            Log.Info("订单模板字段 V2 接收已解析计划: source=" + source
+                + ", seller=" + plan.Seller
+                + ", buyer=" + plan.Buyer
+                + ", orderId=" + plan.OrderId);
+            StartOwnedPlan(qn, plan, source + "->requiredFieldsV2");
+            return true;
+        }
+
         private static void StartOwnedPlan(QN qn, OrderPlacedReplyPlan plan, string source)
         {
             if (qn == null || plan == null || plan.Config == null || plan.Snapshot == null) return;
@@ -259,16 +283,30 @@ namespace Bot.ChromeNs
                     }
 
                     var missing = MissingRequiredFields(plan.Config, snapshot);
-                    blocked = missing.Count > 0;
-                    LogProbe(plan, probe, blocked, missing, source);
+                    var present = PresentRequiredFields(plan.Config, snapshot);
+                    var missingReasons = BuildMissingReasons(plan.Config, snapshot, probe);
+
+                    // 部分字段缺失时仍发送已经取得的字段；只有模板要求的订单字段全部缺失时，
+                    // 才阻止只剩“订单：”之类的空壳消息；绝不发送“订单：”空模板。
+                    // 此时释放占位，后续付款通知可重新创建计划并再次查询。
+                    blocked = missing.Count > 0 && present.Count == 0;
+                    LogProbe(plan, probe, blocked, missing, present, missingReasons, source);
 
                     if (blocked)
                     {
-                        // 释放占位，后续付款通知可重新创建计划并再次查询；绝不发送“订单：”空模板。
                         OrderPlacedAutoReplyService.Complete(plan, false);
                         Log.Info("blocked_blank_template=true, orderId=" + plan.OrderId
-                            + ", missing=" + string.Join(",", missing));
+                            + ", missing=" + string.Join(",", missing)
+                            + ", missing_reason=" + string.Join("|", missingReasons));
                         return;
+                    }
+
+                    if (missing.Count > 0)
+                    {
+                        Log.Info("order_template_partial_send=true, orderId=" + plan.OrderId
+                            + ", present=" + string.Join(",", present)
+                            + ", missing=" + string.Join(",", missing)
+                            + ", missing_reason=" + string.Join("|", missingReasons));
                     }
 
                     if (snapshot != null)
@@ -307,6 +345,7 @@ namespace Bot.ChromeNs
             for (var attempt = 0; attempt < delays.Length; attempt++)
             {
                 if (delays[attempt] > 0) await Task.Delay(delays[attempt]);
+                probe.TradeQueryAttempts++;
                 try
                 {
                     var response = await qn.GetBuyerTrades(securityBuyerUid ?? string.Empty, plan.OrderId);
@@ -314,6 +353,7 @@ namespace Bot.ChromeNs
 
                     if (trade == null && string.IsNullOrWhiteSpace(securityBuyerUid))
                     {
+                        probe.BuyerSearchAttempted = true;
                         securityBuyerUid = await ResolveBuyerSecurityIdAsync(qn, plan.Seller, plan.Buyer);
                         probe.BuyerSecurityIdFound = !string.IsNullOrWhiteSpace(securityBuyerUid);
                         if (probe.BuyerSecurityIdFound)
@@ -353,6 +393,8 @@ namespace Bot.ChromeNs
             EnrichmentProbe probe,
             bool blocked,
             IList<string> missing,
+            IList<string> present,
+            IList<string> missingReasons,
             string source)
         {
             probe = probe ?? new EnrichmentProbe();
@@ -365,9 +407,74 @@ namespace Bot.ChromeNs
                 + " quantity_found=" + probe.QuantityFound.ToString().ToLowerInvariant()
                 + " paid_found=" + probe.PaidFound.ToString().ToLowerInvariant()
                 + " total_found=" + probe.TotalFound.ToString().ToLowerInvariant()
+                + " buyer_search_attempted=" + probe.BuyerSearchAttempted.ToString().ToLowerInvariant()
+                + " trade_query_attempts=" + probe.TradeQueryAttempts
                 + " blocked_blank_template=" + blocked.ToString().ToLowerInvariant()
+                + " present=" + string.Join(",", present ?? new List<string>())
                 + " missing=" + string.Join(",", missing ?? new List<string>())
+                + " missing_reason=" + string.Join("|", missingReasons ?? new List<string>())
+                + " snapshot_source=" + Safe(plan == null || plan.Snapshot == null ? string.Empty : plan.Snapshot.Source, 100)
+                + " event_type=" + (plan == null || plan.Snapshot == null ? string.Empty : plan.Snapshot.EventType.ToString())
                 + (string.IsNullOrWhiteSpace(probe.Error) ? string.Empty : " error=" + probe.Error));
+        }
+
+        private static List<string> PresentRequiredFields(
+            AutoReplyRuleConfig cfg,
+            OrderSnapshot snapshot)
+        {
+            var present = new List<string>();
+            if (cfg == null || snapshot == null) return present;
+            var template = cfg.OrderPlacedReplyText ?? string.Empty;
+            if ((template.Contains("{sku}") || template.Contains("{规格}"))
+                && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
+            if (template.Contains("{数量}") && snapshot.Quantity > 0) present.Add("quantity");
+            if (template.Contains("{实付}") && snapshot.PaidAmount.HasValue) present.Add("paid");
+            if (template.Contains("{金额}") && snapshot.TotalAmount.HasValue) present.Add("total");
+            if (template.Contains("{商品}") && !string.IsNullOrWhiteSpace(snapshot.ItemTitle)) present.Add("item");
+            if (template.Contains("{订单状态}") && !string.IsNullOrWhiteSpace(snapshot.TradeStatus)) present.Add("status");
+            return present;
+        }
+
+        private static List<string> BuildMissingReasons(
+            AutoReplyRuleConfig cfg,
+            OrderSnapshot snapshot,
+            EnrichmentProbe probe)
+        {
+            var reasons = new List<string>();
+            probe = probe ?? new EnrichmentProbe();
+            foreach (var field in MissingRequiredFields(cfg, snapshot))
+            {
+                string reason;
+                if (snapshot == null)
+                {
+                    reason = "snapshot_null";
+                }
+                else if (!string.IsNullOrWhiteSpace(probe.Error))
+                {
+                    reason = "trade_query_error";
+                }
+                else if (!probe.TradeFound)
+                {
+                    reason = probe.BuyerSearchAttempted && !probe.BuyerSecurityIdFound
+                        ? "buyer_security_id_not_found_trade_not_found"
+                        : "trade_not_found_after_" + probe.TradeQueryAttempts + "_attempts";
+                }
+                else
+                {
+                    switch (field)
+                    {
+                        case "sku": reason = "trade_found_but_sku_empty"; break;
+                        case "quantity": reason = "trade_found_but_quantity_zero"; break;
+                        case "paid": reason = "trade_found_but_paid_amount_null"; break;
+                        case "total": reason = "trade_found_but_total_amount_null"; break;
+                        case "item": reason = "trade_found_but_item_title_empty"; break;
+                        case "status": reason = "trade_found_but_status_empty"; break;
+                        default: reason = "field_unavailable"; break;
+                    }
+                }
+                reasons.Add(field + ":" + reason);
+            }
+            return reasons;
         }
 
         private static bool ShouldOwnConfiguredTemplate(AutoReplyRuleConfig cfg)
