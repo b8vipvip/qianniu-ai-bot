@@ -8,6 +8,7 @@ TRADE_MODEL = ROOT / "src" / "DbEntity" / "Response" / "ZnkfTradeQueryResponse.c
 PROPS = ROOT / "src" / "Directory.Build.props"
 BOOTSTRAP = ROOT / "services" / "api-control-plane" / "bootstrap.py"
 DOCKERFILE = ROOT / "services" / "api-control-plane" / "Dockerfile"
+INDEX = ROOT / "services" / "api-control-plane" / "static" / "index.html"
 PAGE = ROOT / "services" / "api-control-plane" / "static" / "recharge-query.html"
 
 
@@ -90,6 +91,7 @@ def test_recharge_module_is_packaged_and_settings_page_exists():
     props = read(PROPS)
     bootstrap = read(BOOTSTRAP)
     dockerfile = read(DOCKERFILE)
+    index = read(INDEX)
     page = read(PAGE)
 
     assert "RechargeStatusAutoQueryService.cs" in props
@@ -101,6 +103,8 @@ def test_recharge_module_is_packaged_and_settings_page_exists():
     assert "后台 Key 登录" in page
     assert "/api/admin/recharge-query/settings" in page
     assert "/api/admin/recharge-query/test" in page
+    assert '<a class="nav" href="/static/wecom.html">企业微信</a>' in index
+    assert '<a class="nav" href="/static/recharge-query.html">充值结果自动查询</a>' in index
 
 
 def test_sensitive_values_are_not_logged_verbatim():
