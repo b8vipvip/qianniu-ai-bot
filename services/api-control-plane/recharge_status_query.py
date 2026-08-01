@@ -24,6 +24,11 @@ router = APIRouter()
 DEFAULT_QUERY_URL = "https://ka.k2n.cn/api.php"
 LEGACY_QUERY_PATHS = {"/get_recharge_status"}
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
+CHROME_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/150.0.0.0 Safari/537.36"
+)
 CHARGING = {"等待", "已发送", "准备登录", "webdl", "appdl", "登录成功"}
 SUCCESS = {"充值成功", "成功", "已成功", "手动成功"}
 FAILED = {"失败", "已拦截", "无效订单", "重复订单"}
@@ -276,7 +281,7 @@ def _authenticate_upstream(
     auth_url = _upstream_origin(query_url) + "/auth_key"
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-        "User-Agent": "aboter-recharge-status/1.2",
+        "User-Agent": CHROME_USER_AGENT,
     }
     try:
         response = session.get(
@@ -308,6 +313,10 @@ def _record_id(record: Dict[str, Any]) -> int:
         return 0
 
 
+def _normalize_lookup_value(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").strip().lower())
+
+
 def _select_record(payload: Dict[str, Any], code: str) -> Dict[str, Any]:
     records = payload.get("records")
     if records is None:
@@ -318,14 +327,21 @@ def _select_record(payload: Dict[str, Any], code: str) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail="充值查询接口 records 格式无效")
 
     valid: List[Dict[str, Any]] = [item for item in records if isinstance(item, dict)]
+    if not valid:
+        return {}
+
+    normalized_code = _normalize_lookup_value(code)
     exact = [
         item
         for item in valid
-        if str(item.get("tel") or "").strip().lower() == code.strip().lower()
+        if _normalize_lookup_value(item.get("tel")) == normalized_code
     ]
-    if not exact:
-        return {}
-    return max(exact, key=_record_id)
+    if exact:
+        return max(exact, key=_record_id)
+
+    # 上游 search 接口已经使用完整兑换码作为 tel 条件过滤；部分部署不会在
+    # records 中原样回显 tel，因此在没有可比对值时采用搜索结果中 ID 最大的最新记录。
+    return max(valid, key=_record_id)
 
 
 def _query_upstream(code: str, settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -349,8 +365,8 @@ def _query_upstream(code: str, settings: Dict[str, Any]) -> Dict[str, Any]:
                 query_url,
                 params={"action": "search", "tel": code, "page": 1},
                 headers={
-                    "Accept": "application/json",
-                    "User-Agent": "aboter-recharge-status/1.2",
+                    "Accept": "application/json,*/*;q=0.8",
+                    "User-Agent": CHROME_USER_AGENT,
                     "Referer": _upstream_origin(query_url) + "/",
                 },
                 timeout=timeout,
