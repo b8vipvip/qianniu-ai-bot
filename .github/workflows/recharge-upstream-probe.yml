@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Probe recharge endpoint authentication contract
+      - name: Inspect public login contract without credentials
         shell: bash
         run: |
           set -euo pipefail
@@ -27,86 +27,53 @@ jobs:
           import urllib.request
           from html.parser import HTMLParser
           from http.cookiejar import CookieJar
-          from urllib.parse import urljoin, urlsplit
+          from urllib.parse import urlsplit
 
-          class FormParser(HTMLParser):
+          class LoginParser(HTMLParser):
               def __init__(self):
                   super().__init__()
                   self.title = ''
                   self._in_title = False
+                  self._in_script = False
+                  self.script_chunks = []
+                  self.inputs = []
+                  self.buttons = []
                   self.forms = []
-                  self.current = None
               def handle_starttag(self, tag, attrs):
                   attrs = dict(attrs)
-                  if tag == 'title':
-                      self._in_title = True
+                  if tag == 'title': self._in_title = True
+                  elif tag == 'script': self._in_script = True
+                  elif tag == 'input':
+                      self.inputs.append({k: attrs.get(k, '') for k in ('id','name','type','placeholder','autocomplete')})
+                  elif tag == 'button':
+                      self.buttons.append({k: attrs.get(k, '') for k in ('id','type','onclick')})
                   elif tag == 'form':
-                      self.current = {
-                          'action': attrs.get('action', ''),
-                          'method': attrs.get('method', 'get').lower(),
-                          'inputs': [],
-                      }
-                      self.forms.append(self.current)
-                  elif tag == 'input' and self.current is not None:
-                      self.current['inputs'].append({
-                          'name': attrs.get('name', ''),
-                          'type': attrs.get('type', 'text').lower(),
-                      })
+                      self.forms.append({k: attrs.get(k, '') for k in ('id','method','action')})
               def handle_endtag(self, tag):
-                  if tag == 'title':
-                      self._in_title = False
-                  elif tag == 'form':
-                      self.current = None
+                  if tag == 'title': self._in_title = False
+                  elif tag == 'script': self._in_script = False
               def handle_data(self, data):
-                  if self._in_title:
-                      self.title += data
+                  if self._in_title: self.title += data
+                  if self._in_script: self.script_chunks.append(data)
 
-          for label, url in [
-              ('query', 'https://ka.k2n.cn/get_recharge_status?q=probe123456'),
-              ('admin', 'https://ka.k2n.cn/admin/index.html'),
-              ('login', 'https://ka.k2n.cn/login.php'),
-          ]:
-              jar = CookieJar()
-              opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
-              request = urllib.request.Request(
-                  url,
-                  headers={
-                      'Accept': 'application/json,text/html;q=0.9,*/*;q=0.8',
-                      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36',
-                  },
-              )
-              with opener.open(request, timeout=30) as response:
-                  raw = response.read()
-                  final = urlsplit(response.geturl())
-                  print(f'[{label}] http_code={response.status}')
-                  print(f'[{label}] content_type={response.headers.get("Content-Type", "")}')
-                  print(f'[{label}] safe_effective_url={final.scheme}://{final.netloc}{final.path}')
-                  print(f'[{label}] body_bytes={len(raw)}')
-                  print(f'[{label}] body_sha256={hashlib.sha256(raw).hexdigest()}')
-                  print(f'[{label}] cookie_names={",".join(sorted(cookie.name for cookie in jar))}')
-                  try:
-                      payload = json.loads(raw.decode('utf-8-sig'))
-                  except Exception:
-                      print(f'[{label}] json_valid=false')
-                      text = raw.decode('utf-8', errors='replace')
-                      parser = FormParser()
-                      parser.feed(text)
-                      print(f'[{label}] html_title={parser.title.strip()[:100]}')
-                      for index, form in enumerate(parser.forms):
-                          action = urlsplit(urljoin(response.geturl(), form['action']))
-                          safe_action = action.scheme + '://' + action.netloc + action.path if action.netloc else action.path
-                          print(f'[{label}] form_{index}_method={form["method"]}')
-                          print(f'[{label}] form_{index}_action={safe_action}')
-                          safe_inputs = [
-                              item for item in form['inputs']
-                              if item['type'] not in {'hidden'} or item['name']
-                          ]
-                          print(f'[{label}] form_{index}_inputs=' + ','.join(
-                              f'{item["name"]}:{item["type"]}' for item in safe_inputs
-                          ))
-                  else:
-                      print(f'[{label}] json_valid=true')
-                      print(f'[{label}] json_type={type(payload).__name__}')
-                      if isinstance(payload, dict):
-                          print(f'[{label}] json_keys=' + ','.join(sorted(str(k) for k in payload)))
+          url = 'https://ka.k2n.cn/login.php'
+          jar = CookieJar()
+          opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+          request = urllib.request.Request(url, headers={'User-Agent':'Mozilla/5.0','Accept':'text/html'})
+          with opener.open(request, timeout=30) as response:
+              raw = response.read()
+              text = raw.decode('utf-8', errors='replace')
+          parser = LoginParser(); parser.feed(text)
+          print('title=' + parser.title.strip())
+          print('inputs=' + json.dumps(parser.inputs, ensure_ascii=False, sort_keys=True))
+          print('buttons=' + json.dumps(parser.buttons, ensure_ascii=False, sort_keys=True))
+          print('forms=' + json.dumps(parser.forms, ensure_ascii=False, sort_keys=True))
+          script = '\n'.join(parser.script_chunks)
+          interesting = []
+          for line in script.splitlines():
+              compact = re.sub(r'\s+', ' ', line).strip()
+              if any(token in compact for token in ('fetch(', 'XMLHttpRequest', '$.ajax', 'login.php', 'location', 'session', 'key')):
+                  interesting.append(compact[:500])
+          print('script_hints=' + json.dumps(interesting[:30], ensure_ascii=False))
+          print('body_sha256=' + hashlib.sha256(raw).hexdigest())
           PY
