@@ -22,6 +22,9 @@ jobs:
       - name: Apply verified source patch
         run: python .github/scripts/apply_order_template_final_gate_v3.py
 
+      - name: Install focused test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+
       - name: Run focused regression tests
         run: python -m pytest -q tests/test_order_template_required_fields_v2_static.py tests/test_order_template_final_gate_v3_static.py
 
@@ -34,5 +37,5 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "fix: route sparse order plans through required-field gate"
+          git commit -m "fix: preserve available order fields and log missing causes"
           git push origin HEAD:fix/order-template-final-gate-v3
