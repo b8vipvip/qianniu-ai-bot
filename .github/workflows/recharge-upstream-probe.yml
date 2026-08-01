@@ -1,0 +1,59 @@
+name: Recharge upstream public probe
+
+on:
+  push:
+    branches:
+      - fix/recharge-query-public-endpoint
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe public recharge status endpoint without credentials
+        shell: bash
+        run: |
+          set -euo pipefail
+          url='https://ka.k2n.cn/get_recharge_status?q=probe123456'
+          curl --silent --show-error --location \
+            --connect-timeout 15 --max-time 30 \
+            --user-agent 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/150 Safari/537.36' \
+            --header 'Accept: application/json' \
+            --dump-header headers.txt \
+            --output body.bin \
+            --write-out 'http_code=%{http_code}\ncontent_type=%{content_type}\nredirects=%{num_redirects}\nurl_effective=%{url_effective}\n' \
+            "$url" | tee curl-meta.txt
+
+          python - <<'PY'
+          import hashlib
+          import json
+          from pathlib import Path
+          from urllib.parse import urlsplit
+
+          raw = Path('body.bin').read_bytes()
+          meta = dict(
+              line.split('=', 1)
+              for line in Path('curl-meta.txt').read_text().splitlines()
+              if '=' in line
+          )
+          effective = urlsplit(meta.get('url_effective', ''))
+          print('safe_effective_url=' + effective.scheme + '://' + effective.netloc + effective.path)
+          print('body_bytes=' + str(len(raw)))
+          print('body_sha256=' + hashlib.sha256(raw).hexdigest())
+          try:
+              payload = json.loads(raw.decode('utf-8-sig'))
+          except Exception as exc:
+              print('json_valid=false')
+              print('json_error=' + type(exc).__name__)
+              stripped = raw.lstrip().lower()
+              print('looks_like_html=' + str(stripped.startswith(b'<!doctype html') or stripped.startswith(b'<html')).lower())
+          else:
+              print('json_valid=true')
+              print('json_type=' + type(payload).__name__)
+              if isinstance(payload, dict):
+                  print('json_keys=' + ','.join(sorted(str(k) for k in payload.keys())))
+                  print('api_status=' + str(payload.get('status', ''))[:80])
+          PY
