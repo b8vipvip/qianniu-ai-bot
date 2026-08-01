@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
-from typing import Any, Dict
-from urllib.parse import urlparse
+from datetime import datetime, timedelta
+from typing import Any, Dict, List
+from urllib.parse import urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 from curl_cffi import requests as curl_requests
@@ -21,9 +21,10 @@ from wecom_settings import (
 
 
 router = APIRouter()
-DEFAULT_QUERY_URL = "https://ka.k2n.cn/get_recharge_status"
+DEFAULT_QUERY_URL = "https://ka.k2n.cn/api.php"
+LEGACY_QUERY_PATHS = {"/get_recharge_status"}
 CODE_PATTERN = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
-CHARGING = {"等待", "准备登录", "webdl", "appdl", "登录成功"}
+CHARGING = {"等待", "已发送", "准备登录", "webdl", "appdl", "登录成功"}
 SUCCESS = {"充值成功", "成功", "已成功", "手动成功"}
 FAILED = {"失败", "已拦截", "无效订单", "重复订单"}
 MANUAL = {"需手动", "卡了", "超时", "异常", "正在充值", "充值中", "无元素", "滑块验证"}
@@ -68,6 +69,15 @@ def _valid_url(value: str) -> bool:
         return False
 
 
+def _normalize_query_url(value: str) -> str:
+    raw = (value or DEFAULT_QUERY_URL).strip()
+    parsed = urlparse(raw)
+    path = parsed.path or "/api.php"
+    if path.rstrip("/").lower() in LEGACY_QUERY_PATHS:
+        path = "/api.php"
+    return urlunparse((parsed.scheme, parsed.netloc, path, "", "", ""))
+
+
 def _load_settings(include_secret: bool = False) -> Dict[str, Any]:
     init_recharge_query_db()
     with db() as conn:
@@ -89,7 +99,7 @@ def _load_settings(include_secret: bool = False) -> Dict[str, Any]:
     result = {
         "exists": True,
         "enabled": bool(row["enabled"]),
-        "query_url": str(row["query_url"] or DEFAULT_QUERY_URL).strip(),
+        "query_url": _normalize_query_url(str(row["query_url"] or DEFAULT_QUERY_URL)),
         "auth_key_configured": bool(cipher),
         "timeout_seconds": max(3, min(60, int(row["timeout_seconds"] or 15))),
         "updated_at": row["updated_at"],
@@ -101,7 +111,7 @@ def _load_settings(include_secret: bool = False) -> Dict[str, Any]:
 
 def _save_settings(data: RechargeQuerySettingsInput) -> Dict[str, Any]:
     current = _load_settings(include_secret=True)
-    query_url = (data.query_url or DEFAULT_QUERY_URL).strip()
+    query_url = _normalize_query_url(data.query_url or DEFAULT_QUERY_URL)
     if not _valid_url(query_url):
         raise HTTPException(status_code=400, detail="充值查询接口地址无效")
 
@@ -139,6 +149,27 @@ def _save_settings(data: RechargeQuerySettingsInput) -> Dict[str, Any]:
     return _load_settings(include_secret=False)
 
 
+def _create_date_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not re.fullmatch(r"\d{8}", text):
+        return None
+
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    try:
+        candidate = datetime.strptime(f"{now.year}{text}", "%Y%m%d%H%M").replace(
+            tzinfo=ZoneInfo("Asia/Shanghai")
+        )
+    except Exception:
+        return None
+
+    if candidate > now + timedelta(minutes=5):
+        try:
+            candidate = candidate.replace(year=candidate.year - 1)
+        except ValueError:
+            return None
+    return candidate
+
+
 def _elapsed_minutes(payload: Dict[str, Any]) -> int:
     raw = payload.get("elapsed_minutes")
     try:
@@ -148,16 +179,22 @@ def _elapsed_minutes(payload: Dict[str, Any]) -> int:
         pass
 
     text = str(payload.get("recharge_time") or "").strip()
-    if not text:
+    submitted: datetime | None = None
+    if text:
+        try:
+            submitted = datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(
+                tzinfo=ZoneInfo("Asia/Shanghai")
+            )
+        except Exception:
+            submitted = None
+
+    if submitted is None:
+        submitted = _create_date_datetime(payload.get("create_date"))
+    if submitted is None:
         return 0
-    try:
-        submitted = datetime.strptime(text, "%Y-%m-%d %H:%M:%S").replace(
-            tzinfo=ZoneInfo("Asia/Shanghai")
-        )
-        now = datetime.now(ZoneInfo("Asia/Shanghai"))
-        return max(0, int((now - submitted).total_seconds() // 60))
-    except Exception:
-        return 0
+
+    now = datetime.now(ZoneInfo("Asia/Shanghai"))
+    return max(0, int((now - submitted).total_seconds() // 60))
 
 
 def _classify(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -239,7 +276,7 @@ def _authenticate_upstream(
     auth_url = _upstream_origin(query_url) + "/auth_key"
     headers = {
         "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-        "User-Agent": "aboter-recharge-status/1.1",
+        "User-Agent": "aboter-recharge-status/1.2",
     }
     try:
         response = session.get(
@@ -264,8 +301,37 @@ def _authenticate_upstream(
         raise HTTPException(status_code=502, detail="充值查询后台访问 Key 无效或登录失败")
 
 
+def _record_id(record: Dict[str, Any]) -> int:
+    try:
+        return int(record.get("id") or 0)
+    except Exception:
+        return 0
+
+
+def _select_record(payload: Dict[str, Any], code: str) -> Dict[str, Any]:
+    records = payload.get("records")
+    if records is None:
+        if "r_status" in payload:
+            return payload
+        return {}
+    if not isinstance(records, list):
+        raise HTTPException(status_code=502, detail="充值查询接口 records 格式无效")
+
+    valid: List[Dict[str, Any]] = [item for item in records if isinstance(item, dict)]
+    exact = [
+        item
+        for item in valid
+        if str(item.get("tel") or "").strip().lower() == code.strip().lower()
+    ]
+    if not exact:
+        return {}
+    return max(exact, key=_record_id)
+
+
 def _query_upstream(code: str, settings: Dict[str, Any]) -> Dict[str, Any]:
-    query_url = str(settings.get("query_url") or DEFAULT_QUERY_URL).strip()
+    query_url = _normalize_query_url(
+        str(settings.get("query_url") or DEFAULT_QUERY_URL).strip()
+    )
     auth_key = str(settings.get("auth_key") or "").strip()
     timeout = max(3, min(60, int(settings.get("timeout_seconds") or 15)))
     if not auth_key:
@@ -281,11 +347,11 @@ def _query_upstream(code: str, settings: Dict[str, Any]) -> Dict[str, Any]:
         try:
             response = session.get(
                 query_url,
-                params={"q": code},
+                params={"action": "search", "tel": code, "page": 1},
                 headers={
                     "Accept": "application/json",
-                    "User-Agent": "aboter-recharge-status/1.1",
-                    "Referer": _upstream_origin(query_url) + "/admin/index.html",
+                    "User-Agent": "aboter-recharge-status/1.2",
+                    "Referer": _upstream_origin(query_url) + "/",
                 },
                 timeout=timeout,
                 allow_redirects=True,
@@ -318,7 +384,7 @@ def _query_upstream(code: str, settings: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=502, detail="充值查询接口返回格式无效")
     if str(payload.get("status") or "").lower() == "error":
         raise HTTPException(status_code=502, detail="充值查询接口返回错误")
-    return payload
+    return _select_record(payload, code)
 
 
 @router.get("/api/admin/recharge-query/settings")
