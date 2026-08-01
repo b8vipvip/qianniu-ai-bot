@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -112,7 +112,7 @@ def _save_settings(data: RechargeQuerySettingsInput) -> Dict[str, Any]:
         auth_key = str(current.get("auth_key") or "")
 
     if data.enabled and not auth_key:
-        raise HTTPException(status_code=400, detail="启用自动查询前必须配置鉴权密钥 key")
+        raise HTTPException(status_code=400, detail="启用自动查询前必须配置后台访问 Key")
 
     now = iso_now()
     with db() as conn:
@@ -201,41 +201,119 @@ def _classify(payload: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+def _upstream_origin(query_url: str) -> str:
+    parsed = urlparse(query_url)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+def _response_path(response: Any) -> str:
+    try:
+        return (urlparse(str(response.url or "")).path or "").lower()
+    except Exception:
+        return ""
+
+
+def _response_text_prefix(response: Any, limit: int = 4096) -> str:
+    try:
+        return str(response.text or "")[:limit].lower()
+    except Exception:
+        return ""
+
+
+def _looks_like_key_login(response: Any) -> bool:
+    if _response_path(response).endswith("/login.php"):
+        return True
+    content_type = str(getattr(response, "headers", {}).get("content-type", "")).lower()
+    if "text/html" not in content_type:
+        return False
+    text = _response_text_prefix(response)
+    return "后台 key 登录".lower() in text or "请输入后台访问 key".lower() in text
+
+
+def _authenticate_upstream(
+    session: Any,
+    query_url: str,
+    auth_key: str,
+    timeout: int,
+) -> None:
+    auth_url = _upstream_origin(query_url) + "/auth_key"
+    headers = {
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "User-Agent": "aboter-recharge-status/1.1",
+    }
+    try:
+        response = session.get(
+            auth_url,
+            params={"key": auth_key},
+            headers=headers,
+            timeout=timeout,
+            allow_redirects=True,
+        )
+    except Exception as exc:
+        raise HTTPException(
+            status_code=502,
+            detail="充值查询上游鉴权连接失败（" + type(exc).__name__ + "）",
+        )
+
+    if response.status_code < 200 or response.status_code >= 300:
+        raise HTTPException(
+            status_code=502,
+            detail="充值查询上游鉴权返回 HTTP " + str(response.status_code),
+        )
+    if _looks_like_key_login(response):
+        raise HTTPException(status_code=502, detail="充值查询后台访问 Key 无效或登录失败")
+
+
 def _query_upstream(code: str, settings: Dict[str, Any]) -> Dict[str, Any]:
     query_url = str(settings.get("query_url") or DEFAULT_QUERY_URL).strip()
     auth_key = str(settings.get("auth_key") or "").strip()
     timeout = max(3, min(60, int(settings.get("timeout_seconds") or 15)))
+    if not auth_key:
+        raise HTTPException(status_code=503, detail="服务端未配置充值查询后台访问 Key")
 
-    # 同时发送常见的服务端鉴权头，兼容 ka.k2n.cn 当前反向代理/后台实现。
-    # key 不进入 URL、日志或 Windows 客户端；即使浏览器开发者工具也无法看到它。
-    headers = {
-        "Accept": "application/json",
-        "Authorization": "Bearer " + auth_key,
-        "X-Admin-Key": auth_key,
-        "X-API-Key": auth_key,
-        "User-Agent": "aboter-recharge-status/1.0",
-    }
+    session = curl_requests.Session(
+        impersonate="chrome",
+        timeout=timeout,
+        allow_redirects=True,
+    )
     try:
-        response = curl_requests.get(
-            query_url,
-            params={"q": code},
-            headers=headers,
-            timeout=timeout,
-            impersonate="chrome",
-            allow_redirects=True,
-        )
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail="充值查询接口连接失败：" + str(exc)[:240])
+        _authenticate_upstream(session, query_url, auth_key, timeout)
+        try:
+            response = session.get(
+                query_url,
+                params={"q": code},
+                headers={
+                    "Accept": "application/json",
+                    "User-Agent": "aboter-recharge-status/1.1",
+                    "Referer": _upstream_origin(query_url) + "/admin/index.html",
+                },
+                timeout=timeout,
+                allow_redirects=True,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail="充值查询接口连接失败（" + type(exc).__name__ + "）",
+            )
+    finally:
+        try:
+            session.close()
+        except Exception:
+            pass
 
     if response.status_code < 200 or response.status_code >= 300:
         raise HTTPException(
             status_code=502,
             detail="充值查询接口返回 HTTP " + str(response.status_code),
         )
+    if _looks_like_key_login(response):
+        raise HTTPException(status_code=502, detail="充值查询上游登录状态失效")
     try:
         payload = response.json()
     except Exception:
-        raise HTTPException(status_code=502, detail="充值查询接口未返回 JSON")
+        content_type = str(response.headers.get("content-type", "")).split(";", 1)[0]
+        suffix = "（" + content_type[:80] + "）" if content_type else ""
+        raise HTTPException(status_code=502, detail="充值查询接口未返回 JSON" + suffix)
     if not isinstance(payload, dict):
         raise HTTPException(status_code=502, detail="充值查询接口返回格式无效")
     if str(payload.get("status") or "").lower() == "error":
@@ -266,7 +344,7 @@ def admin_test_recharge_query(
         raise HTTPException(status_code=400, detail="测试兑换码格式无效")
     settings = _load_settings(include_secret=True)
     if not settings.get("auth_key"):
-        raise HTTPException(status_code=400, detail="请先保存鉴权密钥 key")
+        raise HTTPException(status_code=400, detail="请先保存后台访问 Key")
     return _classify(_query_upstream(code, settings))
 
 
@@ -294,7 +372,7 @@ def runtime_recharge_query_status(
     if not settings.get("enabled"):
         return {"handled": False, "reason": "disabled"}
     if not settings.get("auth_key"):
-        raise HTTPException(status_code=503, detail="服务端未配置充值查询鉴权密钥")
+        raise HTTPException(status_code=503, detail="服务端未配置充值查询后台访问 Key")
 
     result = _classify(_query_upstream(code, settings))
     # 只向 Windows Bot 返回处理所需的状态，不返回手机号、账号昵称、验证码等个人信息。
