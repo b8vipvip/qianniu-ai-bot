@@ -60,6 +60,16 @@ def test_charging_status_under_eight_minutes_waits_without_handoff():
     assert result["notify_human"] is False
 
 
+def test_sent_status_is_charging_and_obeys_eight_minute_threshold():
+    waiting = classify("已发送", 6)
+    assert waiting["category"] == "charging"
+    assert waiting["notify_human"] is False
+
+    overdue = classify("已发送", 9)
+    assert overdue["category"] == "charging"
+    assert overdue["notify_human"] is True
+
+
 def test_charging_status_over_eight_minutes_hands_off():
     result = classify("登录成功", 9)
     assert result["category"] == "charging"
@@ -106,16 +116,109 @@ def test_runtime_code_validation_and_public_settings_hide_secret():
     assert "include_secret=False" in public_endpoint
 
 
-def test_upstream_logs_in_with_key_then_reuses_cookie_session(monkeypatch):
+def test_legacy_query_url_is_migrated_to_real_api_path():
+    assert (
+        recharge_status_query._normalize_query_url(
+            "https://ka.k2n.cn/get_recharge_status"
+        )
+        == "https://ka.k2n.cn/api.php"
+    )
+    assert (
+        recharge_status_query._normalize_query_url(
+            "https://ka.k2n.cn/api.php?action=search&page=1"
+        )
+        == "https://ka.k2n.cn/api.php"
+    )
+
+
+def test_search_api_selects_newest_exact_record_and_reuses_session(monkeypatch):
+    code = "fh5dbpbrcj199"
     session = FakeSession(
         [
             FakeResponse(
-                url="https://ka.k2n.cn/admin/index.html",
+                url="https://ka.k2n.cn/",
                 text="<html><title>后台管理</title></html>",
             ),
             FakeResponse(
-                url="https://ka.k2n.cn/get_recharge_status?q=fh5dbpbrcj199",
-                payload={"status": "ok", "r_status": "充值成功"},
+                url="https://ka.k2n.cn/api.php?action=search&page=1",
+                payload={
+                    "records": [
+                        {
+                            "id": 1396,
+                            "tel": code,
+                            "create_date": "08011111",
+                            "r_status": "已发送",
+                        },
+                        {
+                            "id": 1397,
+                            "tel": code,
+                            "create_date": "08011118",
+                            "r_status": "失败",
+                        },
+                        {
+                            "id": 2000,
+                            "tel": code + "x",
+                            "r_status": "充值成功",
+                        },
+                    ],
+                    "current_page": 1,
+                    "total_pages": 0,
+                },
+                content_type="application/json; charset=utf-8",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        recharge_status_query.curl_requests,
+        "Session",
+        lambda **kwargs: session,
+    )
+
+    payload = recharge_status_query._query_upstream(
+        code,
+        {
+            "query_url": "https://ka.k2n.cn/get_recharge_status",
+            "auth_key": "server-side-secret",
+            "timeout_seconds": 15,
+        },
+    )
+
+    assert payload["id"] == 1397
+    assert payload["r_status"] == "失败"
+    assert session.closed is True
+    assert len(session.calls) == 2
+
+    login_url, login_kwargs = session.calls[0]
+    assert login_url == "https://ka.k2n.cn/auth_key"
+    assert login_kwargs["params"] == {"key": "server-side-secret"}
+
+    query_url, query_kwargs = session.calls[1]
+    assert query_url == "https://ka.k2n.cn/api.php"
+    assert query_kwargs["params"] == {
+        "action": "search",
+        "tel": code,
+        "page": 1,
+    }
+    assert query_kwargs["headers"]["Referer"] == "https://ka.k2n.cn/"
+    assert "Authorization" not in query_kwargs["headers"]
+    assert "X-Admin-Key" not in query_kwargs["headers"]
+    assert "X-API-Key" not in query_kwargs["headers"]
+
+
+def test_search_api_returns_not_found_when_no_exact_code_matches(monkeypatch):
+    session = FakeSession(
+        [
+            FakeResponse(
+                url="https://ka.k2n.cn/",
+                text="<html><title>后台管理</title></html>",
+            ),
+            FakeResponse(
+                url="https://ka.k2n.cn/api.php?action=search&page=1",
+                payload={
+                    "records": [
+                        {"id": 1, "tel": "different-code", "r_status": "充值成功"}
+                    ]
+                },
                 content_type="application/json",
             ),
         ]
@@ -129,26 +232,47 @@ def test_upstream_logs_in_with_key_then_reuses_cookie_session(monkeypatch):
     payload = recharge_status_query._query_upstream(
         "fh5dbpbrcj199",
         {
-            "query_url": "https://ka.k2n.cn/get_recharge_status",
+            "query_url": "https://ka.k2n.cn/api.php",
             "auth_key": "server-side-secret",
             "timeout_seconds": 15,
         },
     )
+    assert payload == {}
+    assert recharge_status_query._classify(payload)["category"] == "not_found"
 
-    assert payload["r_status"] == "充值成功"
-    assert session.closed is True
-    assert len(session.calls) == 2
 
-    login_url, login_kwargs = session.calls[0]
-    assert login_url == "https://ka.k2n.cn/auth_key"
-    assert login_kwargs["params"] == {"key": "server-side-secret"}
+def test_invalid_records_shape_is_reported(monkeypatch):
+    session = FakeSession(
+        [
+            FakeResponse(
+                url="https://ka.k2n.cn/",
+                text="<html><title>后台管理</title></html>",
+            ),
+            FakeResponse(
+                url="https://ka.k2n.cn/api.php?action=search&page=1",
+                payload={"records": {}},
+                content_type="application/json",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        recharge_status_query.curl_requests,
+        "Session",
+        lambda **kwargs: session,
+    )
 
-    query_url, query_kwargs = session.calls[1]
-    assert query_url == "https://ka.k2n.cn/get_recharge_status"
-    assert query_kwargs["params"] == {"q": "fh5dbpbrcj199"}
-    assert "Authorization" not in query_kwargs["headers"]
-    assert "X-Admin-Key" not in query_kwargs["headers"]
-    assert "X-API-Key" not in query_kwargs["headers"]
+    with pytest.raises(HTTPException) as exc_info:
+        recharge_status_query._query_upstream(
+            "fh5dbpbrcj199",
+            {
+                "query_url": "https://ka.k2n.cn/api.php",
+                "auth_key": "server-side-secret",
+                "timeout_seconds": 15,
+            },
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "records 格式无效" in str(exc_info.value.detail)
 
 
 def test_invalid_key_login_is_reported_before_query(monkeypatch):
@@ -170,7 +294,7 @@ def test_invalid_key_login_is_reported_before_query(monkeypatch):
         recharge_status_query._query_upstream(
             "fh5dbpbrcj199",
             {
-                "query_url": "https://ka.k2n.cn/get_recharge_status",
+                "query_url": "https://ka.k2n.cn/api.php",
                 "auth_key": "wrong-key",
                 "timeout_seconds": 15,
             },
@@ -186,7 +310,7 @@ def test_expired_session_redirect_is_reported_as_auth_failure(monkeypatch):
     session = FakeSession(
         [
             FakeResponse(
-                url="https://ka.k2n.cn/admin/index.html",
+                url="https://ka.k2n.cn/",
                 text="<html><title>后台管理</title></html>",
             ),
             FakeResponse(
@@ -205,7 +329,7 @@ def test_expired_session_redirect_is_reported_as_auth_failure(monkeypatch):
         recharge_status_query._query_upstream(
             "fh5dbpbrcj199",
             {
-                "query_url": "https://ka.k2n.cn/get_recharge_status",
+                "query_url": "https://ka.k2n.cn/api.php",
                 "auth_key": "server-side-secret",
                 "timeout_seconds": 15,
             },
@@ -229,7 +353,7 @@ def test_connection_errors_do_not_echo_key_or_recharge_code(monkeypatch):
         recharge_status_query._query_upstream(
             "private-code-123",
             {
-                "query_url": "https://ka.k2n.cn/get_recharge_status",
+                "query_url": "https://ka.k2n.cn/api.php",
                 "auth_key": "do-not-leak",
                 "timeout_seconds": 15,
             },
@@ -241,12 +365,14 @@ def test_connection_errors_do_not_echo_key_or_recharge_code(monkeypatch):
     assert "RuntimeError" in detail
 
 
-def test_upstream_auth_contract_is_session_login_not_custom_headers():
+def test_upstream_contract_is_key_session_plus_search_api():
     auth_source = inspect.getsource(recharge_status_query._authenticate_upstream)
     query_source = inspect.getsource(recharge_status_query._query_upstream)
     assert '"/auth_key"' in auth_source
     assert 'params={"key": auth_key}' in auth_source
-    assert 'params={"q": code}' in query_source
+    assert '"action": "search"' in query_source
+    assert '"tel": code' in query_source
+    assert '"page": 1' in query_source
     assert '"Authorization": "Bearer " + auth_key' not in query_source
     assert '"X-Admin-Key": auth_key' not in query_source
     assert '"X-API-Key": auth_key' not in query_source
