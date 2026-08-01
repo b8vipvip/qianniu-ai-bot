@@ -28,6 +28,7 @@
       <button class="nav" data-page="tests">测试中心</button>
       <button class="nav" data-page="clients">Bot 客户端</button>
       <a class="nav" href="/static/wecom.html">企业微信</a>
+      <a class="nav" href="/static/recharge-query.html">充值结果自动查询</a>
       <button class="nav" data-page="deploy">部署与安全</button>
     </nav>
     <div class="sidebar-foot"><span id="adminName"></span><button id="logoutBtn" class="ghost">退出</button></div>
@@ -72,7 +73,7 @@
     <div class="form-grid">
       <label class="span-2">指定模型（普通测试可留空使用主模型；多个用逗号分隔）<input id="testModels"></label>
       <fieldset class="span-2"><legend>模型与地址发现</legend><label class="check"><input id="testDiscover" type="checkbox" checked>调用 /models 自动发现模型</label><label class="check"><input id="testAllModels" type="checkbox" checked>测试全部发现模型</label><label class="check"><input id="testV1Root" type="checkbox" checked>测试 /v1 根地址</label><label class="check"><input id="testPlainRoot" type="checkbox" checked>同时测试无 /v1 根地址</label></fieldset>
-      <fieldset class="span-2"><legend>文本请求方式</legend><label class="check"><input id="testResponses" type="checkbox" checked>OpenAI Responses API</label><label class="check"><input id="testChat" type="checkbox" checked>OpenAI Chat Completions</label><label class="check"><input id="testLegacy" type="checkbox" checked>Legacy Completions</label></fieldset>
+      <fieldset class="span-2"><legend>文本请求方式</legend><label class="check"><input id="testResponses" type="checkbox" checked>OpenAI Responses API</label><label class="check"><input id="testChat" type="checkbox" checked>Chat Completions</label><label class="check"><input id="testLegacy" type="checkbox" checked>Legacy Completions</label></fieldset>
       <fieldset class="span-2"><legend>视觉理解</legend><label class="check"><input id="testResponsesVision" type="checkbox" checked>Responses Vision</label><label class="check"><input id="testChatVision" type="checkbox" checked>Chat Vision</label><label class="check"><input id="testRequireVision" type="checkbox">只有文本和视觉都通过才算完全可用</label></fieldset>
       <label>单请求超时秒<input id="testTimeout" type="number" min="5" max="300" value="45"></label><label class="check"><input id="testAutoApply" type="checkbox" checked>深测后自动更新主模型、备用模型和协议能力</label>
     </div>
