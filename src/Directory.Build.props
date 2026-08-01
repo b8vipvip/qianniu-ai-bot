@@ -3,10 +3,14 @@
     <!-- Legacy .NET Framework projects in this repo reference several vendor DLLs stored in src\Bin. -->
     <ReferencePath>$(MSBuildThisFileDirectory)Bin;$(ReferencePath)</ReferencePath>
   </PropertyGroup>
-  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateTradeDetailBridge.cs')">
-    <!-- Include the order-template trade enrichment bridges in Bot and generated WPF temporary projects. -->
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateTradeDetailBridge.cs" />
-    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateReceiveNewMessageTradeDetailBridge.cs" />
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRequiredFieldsV2.cs')">
+    <!--
+      OrderTemplateRequiredFieldsV2.cs supersedes the runtime bootstraps previously supplied by
+      OrderTemplateTradeDetailBridge.cs and OrderTemplateReceiveNewMessageTradeDetailBridge.cs.
+      The legacy source files remain in the repository for history/regression reference, but are no
+      longer compiled, preventing two enrichment pipelines from racing to send the same order reply.
+    -->
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRequiredFieldsV2.cs" />
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RechargeStatusAutoQueryService.cs" />
   </ItemGroup>
 </Project>
