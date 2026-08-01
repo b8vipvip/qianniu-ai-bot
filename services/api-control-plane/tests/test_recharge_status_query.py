@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import inspect
 
+import pytest
+from fastapi import HTTPException
+
 import recharge_status_query
 
 
@@ -9,6 +12,45 @@ def classify(status: str, elapsed: int = 0):
     return recharge_status_query._classify(
         {"r_status": status, "elapsed_minutes": elapsed}
     )
+
+
+class FakeResponse:
+    def __init__(
+        self,
+        *,
+        url: str,
+        status_code: int = 200,
+        payload=None,
+        text: str = "",
+        content_type: str = "text/html; charset=UTF-8",
+    ):
+        self.url = url
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+        self.headers = {"content-type": content_type}
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("not json")
+        return self._payload
+
+
+class FakeSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+        self.closed = False
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    def close(self):
+        self.closed = True
 
 
 def test_charging_status_under_eight_minutes_waits_without_handoff():
@@ -64,10 +106,147 @@ def test_runtime_code_validation_and_public_settings_hide_secret():
     assert "include_secret=False" in public_endpoint
 
 
-def test_upstream_key_is_header_only_in_source():
-    source = inspect.getsource(recharge_status_query._query_upstream)
-    assert '"Authorization": "Bearer " + auth_key' in source
-    assert '"X-Admin-Key": auth_key' in source
-    assert '"X-API-Key": auth_key' in source
-    assert 'params={"q": code}' in source
-    assert 'params={"q": code, "key": auth_key}' not in source
+def test_upstream_logs_in_with_key_then_reuses_cookie_session(monkeypatch):
+    session = FakeSession(
+        [
+            FakeResponse(
+                url="https://ka.k2n.cn/admin/index.html",
+                text="<html><title>后台管理</title></html>",
+            ),
+            FakeResponse(
+                url="https://ka.k2n.cn/get_recharge_status?q=fh5dbpbrcj199",
+                payload={"status": "ok", "r_status": "充值成功"},
+                content_type="application/json",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        recharge_status_query.curl_requests,
+        "Session",
+        lambda **kwargs: session,
+    )
+
+    payload = recharge_status_query._query_upstream(
+        "fh5dbpbrcj199",
+        {
+            "query_url": "https://ka.k2n.cn/get_recharge_status",
+            "auth_key": "server-side-secret",
+            "timeout_seconds": 15,
+        },
+    )
+
+    assert payload["r_status"] == "充值成功"
+    assert session.closed is True
+    assert len(session.calls) == 2
+
+    login_url, login_kwargs = session.calls[0]
+    assert login_url == "https://ka.k2n.cn/auth_key"
+    assert login_kwargs["params"] == {"key": "server-side-secret"}
+
+    query_url, query_kwargs = session.calls[1]
+    assert query_url == "https://ka.k2n.cn/get_recharge_status"
+    assert query_kwargs["params"] == {"q": "fh5dbpbrcj199"}
+    assert "Authorization" not in query_kwargs["headers"]
+    assert "X-Admin-Key" not in query_kwargs["headers"]
+    assert "X-API-Key" not in query_kwargs["headers"]
+
+
+def test_invalid_key_login_is_reported_before_query(monkeypatch):
+    session = FakeSession(
+        [
+            FakeResponse(
+                url="https://ka.k2n.cn/login.php",
+                text="<html><title>后台 Key 登录</title>请输入后台访问 Key</html>",
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        recharge_status_query.curl_requests,
+        "Session",
+        lambda **kwargs: session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        recharge_status_query._query_upstream(
+            "fh5dbpbrcj199",
+            {
+                "query_url": "https://ka.k2n.cn/get_recharge_status",
+                "auth_key": "wrong-key",
+                "timeout_seconds": 15,
+            },
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "Key 无效或登录失败" in str(exc_info.value.detail)
+    assert len(session.calls) == 1
+    assert session.closed is True
+
+
+def test_expired_session_redirect_is_reported_as_auth_failure(monkeypatch):
+    session = FakeSession(
+        [
+            FakeResponse(
+                url="https://ka.k2n.cn/admin/index.html",
+                text="<html><title>后台管理</title></html>",
+            ),
+            FakeResponse(
+                url="https://ka.k2n.cn/login.php",
+                text="<html><title>后台 Key 登录</title></html>",
+            ),
+        ]
+    )
+    monkeypatch.setattr(
+        recharge_status_query.curl_requests,
+        "Session",
+        lambda **kwargs: session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        recharge_status_query._query_upstream(
+            "fh5dbpbrcj199",
+            {
+                "query_url": "https://ka.k2n.cn/get_recharge_status",
+                "auth_key": "server-side-secret",
+                "timeout_seconds": 15,
+            },
+        )
+
+    assert exc_info.value.status_code == 502
+    assert "登录状态失效" in str(exc_info.value.detail)
+
+
+def test_connection_errors_do_not_echo_key_or_recharge_code(monkeypatch):
+    session = FakeSession(
+        [RuntimeError("https://ka.k2n.cn/auth_key?key=do-not-leak")]
+    )
+    monkeypatch.setattr(
+        recharge_status_query.curl_requests,
+        "Session",
+        lambda **kwargs: session,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        recharge_status_query._query_upstream(
+            "private-code-123",
+            {
+                "query_url": "https://ka.k2n.cn/get_recharge_status",
+                "auth_key": "do-not-leak",
+                "timeout_seconds": 15,
+            },
+        )
+
+    detail = str(exc_info.value.detail)
+    assert "do-not-leak" not in detail
+    assert "private-code-123" not in detail
+    assert "RuntimeError" in detail
+
+
+def test_upstream_auth_contract_is_session_login_not_custom_headers():
+    auth_source = inspect.getsource(recharge_status_query._authenticate_upstream)
+    query_source = inspect.getsource(recharge_status_query._query_upstream)
+    assert '"/auth_key"' in auth_source
+    assert 'params={"key": auth_key}' in auth_source
+    assert 'params={"q": code}' in query_source
+    assert '"Authorization": "Bearer " + auth_key' not in query_source
+    assert '"X-Admin-Key": auth_key' not in query_source
+    assert '"X-API-Key": auth_key' not in query_source

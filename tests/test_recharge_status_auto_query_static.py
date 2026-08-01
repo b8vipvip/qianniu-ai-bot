@@ -97,7 +97,8 @@ def test_recharge_module_is_packaged_and_settings_page_exists():
     assert "include_router(recharge_status_query.router)" in bootstrap
     assert "recharge_status_query.py" in dockerfile
     assert "启用自动查询充值结果" in page
-    assert "admin/index.html 鉴权密钥 key" in page
+    assert "后台访问 Key" in page
+    assert "后台 Key 登录" in page
     assert "/api/admin/recharge-query/settings" in page
     assert "/api/admin/recharge-query/test" in page
 
