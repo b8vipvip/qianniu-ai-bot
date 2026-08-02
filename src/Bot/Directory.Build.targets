@@ -1,9 +1,0 @@
-<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-  <!-- Keep all existing repository-wide Bot extension includes for both Bot.csproj and WPF *_wpftmp projects. -->
-  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.targets"
-          Condition="Exists('$(MSBuildThisFileDirectory)..\Directory.Build.targets')" />
-
-  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\RulePolicyImportExportUi.cs')">
-    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\RulePolicyImportExportUi.cs" />
-  </ItemGroup>
-</Project>
