@@ -9,7 +9,7 @@ CONTROL = ROOT / "services" / "api-control-plane"
 if str(CONTROL) not in sys.path:
     sys.path.insert(0, str(CONTROL))
 
-import bot_web_bot_qa
+import bot_web_bot_qa_logic
 
 
 def message(
@@ -45,7 +45,7 @@ def test_only_bot_qa_is_returned_and_echo_duplicates_are_collapsed():
         message(8, "user", "ok", "2026-08-02T04:36:08+00:00"),
     ]
 
-    result = bot_web_bot_qa.build_bot_qa_messages(rows)
+    result = bot_web_bot_qa_logic.build_bot_qa_messages(rows)
 
     assert [item["message_type"] for item in result] == ["bot_question", "bot_answer"]
     assert result[0]["text"] == "https://item.taobao.com/item.htm?id=1057505313937"
@@ -62,7 +62,7 @@ def test_distinct_question_burst_is_kept_for_one_bot_answer():
         message(12, "assistant", "请按雷鸟电视教程绑定酷狗账号。 [AI]", "2026-08-02T04:40:15+00:00"),
     ]
 
-    result = bot_web_bot_qa.build_bot_qa_messages(rows)
+    result = bot_web_bot_qa_logic.build_bot_qa_messages(rows)
 
     assert [item["text"] for item in result] == [
         "电视端怎么绑定？",
@@ -79,7 +79,7 @@ def test_identical_bot_qa_after_duplicate_window_is_not_lost():
         message(23, "assistant", "一般八分钟左右到账。 [AI]", "2026-08-02T04:05:05+00:00"),
     ]
 
-    result = bot_web_bot_qa.build_bot_qa_messages(rows)
+    result = bot_web_bot_qa_logic.build_bot_qa_messages(rows)
 
     assert len(result) == 4
     assert [item["message_type"] for item in result] == [
@@ -96,7 +96,7 @@ def test_bot_answer_message_type_is_supported_without_ai_suffix():
         message(31, "assistant", "请发设备酷狗账号界面确认。", "2026-08-02T05:00:03+00:00", "bot_answer"),
     ]
 
-    result = bot_web_bot_qa.build_bot_qa_messages(rows)
+    result = bot_web_bot_qa_logic.build_bot_qa_messages(rows)
 
     assert len(result) == 2
     assert result[-1]["text"] == "请发设备酷狗账号界面确认。"
@@ -109,6 +109,7 @@ def test_bootstrap_registers_bot_qa_routes_before_legacy_conversation_routes():
     )
     dockerfile = (CONTROL / "Dockerfile").read_text(encoding="utf-8-sig")
     assert "bot_web_bot_qa.py" in dockerfile
+    assert "bot_web_bot_qa_logic.py" in dockerfile
 
 
 def test_web_page_explicitly_labels_records_as_bot_qa_only():
