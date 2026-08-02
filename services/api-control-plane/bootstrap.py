@@ -5,6 +5,7 @@ import os
 import uvicorn
 
 import app as control_plane
+import bot_web_admin
 import bot_web_console
 import recharge_status_query
 import runtime_embedding_guard
@@ -25,6 +26,7 @@ control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(wecom_handoff_policy.router)
 control_plane.app.include_router(recharge_status_query.router)
 bot_web_console.install(control_plane)
+bot_web_admin.install(control_plane)
 
 
 @control_plane.app.on_event("startup")
