@@ -102,6 +102,9 @@ namespace Bot.ChromeNs
             }
 
             AddIntentCoverageIssue(question, answer, state, result.Issues);
+            var recentTurns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16);
+            ConversationProgressGuardService.AddValidationIssues(
+                question, answer, state, recentTurns, result.Issues);
 
             var unsupportedNumbers = ConcreteNumberRegex.Matches(answer)
                 .Cast<Match>()

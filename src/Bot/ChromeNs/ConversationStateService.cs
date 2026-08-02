@@ -16,6 +16,7 @@ namespace Bot.ChromeNs
         public string ConversationStage { get; set; }
         public List<string> ConfirmedFacts { get; set; }
         public List<string> Entities { get; set; }
+        public ConversationProgressSnapshot Progress { get; set; }
 
         // Compatibility aliases keep policy/validator modules decoupled from the original Phase 1 naming.
         public string PendingSellerQuestion
@@ -93,6 +94,8 @@ namespace Bot.ChromeNs
                     "买家对客服问题“" + Safe(state.PendingQuestion, 180) + "”的回答是“" + Safe(currentQuestion, 60) + "”");
             }
 
+            ConversationProgressGuardService.EnrichState(
+                state, seller, buyer, currentQuestion, ordered);
             return state;
         }
 
@@ -117,6 +120,8 @@ namespace Bot.ChromeNs
                     .Append(string.Join("；", state.ConfirmedFacts.Take(3).Select(x => Safe(x, 220))))
                     .Append("\n");
             }
+
+            sb.Append(ConversationProgressGuardService.BuildPromptAddon(state));
 
             // 详细店铺规则不再作为每次都携带的固定提示词；这里按当前会话状态本地选择Top 3。
             sb.Append(StorePromptProfileService.BuildTextRulesAddon(state));
