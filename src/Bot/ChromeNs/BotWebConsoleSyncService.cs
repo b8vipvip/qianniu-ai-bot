@@ -56,6 +56,8 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<long, JObject>();
         private static readonly ConcurrentDictionary<int, Func<BuyerMessageBurstLease, Task>> InstalledWrappers =
             new ConcurrentDictionary<int, Func<BuyerMessageBurstLease, Task>>();
+        private static readonly ConcurrentDictionary<int, byte> HandlerReplacementWarnings =
+            new ConcurrentDictionary<int, byte>();
         private static readonly object ProcessedSync = new object();
         private static readonly HashSet<long> ProcessedCommands = new HashSet<long>();
         private static readonly DateTime ProcessStartedAt = SafeProcessStart();
@@ -144,8 +146,20 @@ namespace Bot.ChromeNs
                     if (current == null) continue;
 
                     Func<BuyerMessageBurstLease, Task> installed;
-                    if (InstalledWrappers.TryGetValue(key, out installed) && ReferenceEquals(current, installed))
+                    if (InstalledWrappers.TryGetValue(key, out installed))
+                    {
+                        // Another observer may wrap our installed handler later. Re-wrapping that
+                        // outer delegate every 700 ms creates an ever-growing closure chain. The
+                        // next buyer message then walks the whole chain and can terminate clr.dll
+                        // with 0xc00000fd (stack overflow). One coordinator must be wrapped at most
+                        // once by this service for the lifetime of the process.
+                        if (!ReferenceEquals(current, installed)
+                            && HandlerReplacementWarnings.TryAdd(key, 0))
+                        {
+                            Log.Info("Bot Web端消息处理器已被其他模块继续包装；已保持单次安装，避免递归栈溢出。" );
+                        }
                         continue;
+                    }
 
                     var next = current;
                     Func<BuyerMessageBurstLease, Task> wrapped = lease => HandleBurstAsync(next, lease);
