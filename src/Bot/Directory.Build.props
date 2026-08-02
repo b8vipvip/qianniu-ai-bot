@@ -1,0 +1,9 @@
+<Project>
+  <!-- Preserve repository-wide reference paths and order-template compile items for Bot and WPF *_wpftmp projects. -->
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\Directory.Build.props')" />
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\RulePolicyImportExportUi.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\RulePolicyImportExportUi.cs" />
+  </ItemGroup>
+</Project>
