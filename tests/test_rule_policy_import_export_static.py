@@ -2,7 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "src" / "Bot" / "Knowledge" / "RulePolicyImportExportUi.cs"
-TARGETS = ROOT / "src" / "Bot" / "Directory.Build.targets"
+PROPS = ROOT / "src" / "Bot" / "Directory.Build.props"
 
 
 def read(path: Path) -> str:
@@ -61,9 +61,10 @@ def test_import_validates_schema_and_version_and_reports_counts():
 
 
 def test_ui_extension_is_compiled_for_bot_and_wpf_temp_projects():
-    targets = read(TARGETS)
-    assert "..\\Directory.Build.targets" in targets
-    assert "Knowledge\\RulePolicyImportExportUi.cs" in targets
+    props = read(PROPS)
+    assert "..\\Directory.Build.props" in props
+    assert "Knowledge\\RulePolicyImportExportUi.cs" in props
+    assert not (ROOT / "src" / "Bot" / "Directory.Build.targets").exists()
     source = read(SOURCE)
     assert "RulePolicyImportExportBootstrap" in source
     assert "EventManager.RegisterClassHandler" in source
