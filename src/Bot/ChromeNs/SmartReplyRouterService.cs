@@ -120,6 +120,15 @@ namespace Bot.ChromeNs
             }
 
             var best = plan.BestCandidate;
+            if (ConversationProgressGuardService.RequiresContextualHandling(state))
+            {
+                plan.Route = best == null
+                    ? SmartReplyRouteKind.AiGeneral
+                    : SmartReplyRouteKind.ContextualKnowledge;
+                plan.Reason = "当前消息属于订单/代充流程中的结构化承接，必须结合已完成步骤继续处理，禁止固定知识直答";
+                if (best != null) KnowledgePolicyProfileService.RecordRouteSelection(best.Entry, false);
+                return plan;
+            }
             if (best == null) return plan;
 
             var second = plan.Candidates.Count > 1 ? plan.Candidates[1] : null;
@@ -328,6 +337,7 @@ namespace Bot.ChromeNs
                 .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Answer))
                 .Select(x => ScoreCandidate(x, question, resolvedText, originalQuery, resolvedQuery, queryIntent, state, context))
                 .Where(x => x.PolicyEvaluation == null || !x.PolicyEvaluation.Excluded)
+                .Where(x => ConversationProgressGuardService.AllowKnowledge(x.Entry, state, question))
                 .Where(x => x.RetrievalScore >= 0.20
                     || x.ResolvedQueryScore >= 0.24
                     || x.EntityScore >= 0.35
