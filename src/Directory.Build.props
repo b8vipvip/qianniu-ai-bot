@@ -13,4 +13,7 @@
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRequiredFieldsV2.cs" />
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RechargeStatusAutoQueryService.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotWebConsoleSyncService.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BotWebConsoleSyncService.cs" />
+  </ItemGroup>
 </Project>
