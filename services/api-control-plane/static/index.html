@@ -27,6 +27,7 @@
       <button class="nav" data-page="providers">供应商与模型</button>
       <button class="nav" data-page="tests">测试中心</button>
       <button class="nav" data-page="clients">Bot 客户端</button>
+      <a class="nav" href="/bot/" target="_blank" rel="noopener">Bot Web端</a>
       <a class="nav" href="/static/wecom.html">企业微信</a>
       <a class="nav" href="/static/recharge-query.html">充值结果自动查询</a>
       <button class="nav" data-page="deploy">部署与安全</button>
@@ -45,8 +46,8 @@
     </section>
     <section id="page-providers" class="page"><section class="panel"><div class="panel-head"><div><h2>供应商与模型池</h2><p>上游 ApiKey 加密保存在服务端；Bot 不会收到上游密钥。</p></div><button class="primary" onclick="openProviderDialog()">新增供应商</button></div><div id="providersTable"></div></section></section>
     <section id="page-tests" class="page"><section class="panel"><div class="panel-head"><div><h2>测试记录</h2><p>普通测试只调用设定模型；深度测试可发现模型并验证多种协议和视觉能力。</p></div></div><div id="testsTable"></div></section><section id="testDetail" class="panel hidden"></section></section>
-    <section id="page-clients" class="page"><section class="panel"><div class="panel-head"><div><h2>Bot 客户端令牌</h2><p>每台电脑使用独立令牌。令牌只在创建时完整显示一次。</p></div><button class="primary" onclick="createClient()">新建客户端</button></div><div id="clientsTable"></div></section></section>
-    <section id="page-deploy" class="page"><div class="two-col"><section class="panel"><h2>Bot 连接参数</h2><p class="muted">在 Bot 的“API 服务连接”中填写本控制台地址和客户端令牌。</p><div class="code-card"><code id="runtimeUrl"></code></div><p class="hint">文本路由：<code>text-default</code>　视觉路由：<code>vision-default</code></p></section><section class="panel"><h2>安全建议</h2><ul class="clean-list"><li>使用 Caddy/Nginx 和 HTTPS，对外只开放 80/443。</li><li>修改默认管理员密码和 APP_SECRET。</li><li>固定 API_KEY_ENCRYPTION_KEY，迁移服务器时一并备份。</li><li>为每台 Bot 创建独立令牌，停用丢失设备的令牌。</li><li>定期备份 <code>/data/api-control-plane.db</code>。</li></ul></section></div></section>
+    <section id="page-clients" class="page"><section class="panel"><div class="panel-head"><div><h2>Bot 客户端令牌</h2><p>每台电脑使用独立令牌。新版 Bot 在线同步后，管理员可复制对应令牌并使用同一令牌登录手机 Web 端。</p></div><button class="primary" onclick="createClient()">新建客户端</button></div><div id="clientsTable"></div></section></section>
+    <section id="page-deploy" class="page"><div class="two-col"><section class="panel"><h2>Bot 连接参数</h2><p class="muted">在 Bot 的“API 服务连接”中填写本控制台地址和客户端令牌。</p><div class="code-card"><code id="runtimeUrl"></code></div><p class="hint">文本路由：<code>text-default</code>　视觉路由：<code>vision-default</code></p><p class="hint">手机 Web 端：<code>/bot/</code>，可使用对应 Bot 客户端令牌登录。</p></section><section class="panel"><h2>安全建议</h2><ul class="clean-list"><li>使用 Caddy/Nginx 和 HTTPS，对外只开放 80/443。</li><li>修改默认管理员密码和 APP_SECRET。</li><li>固定 API_KEY_ENCRYPTION_KEY，迁移服务器时一并备份。</li><li>为每台 Bot 创建独立令牌，停用丢失设备的令牌。</li><li>定期备份 <code>/data/api-control-plane.db</code>。</li></ul></section></div></section>
   </main>
 </div>
 
@@ -73,13 +74,15 @@
     <div class="form-grid">
       <label class="span-2">指定模型（普通测试可留空使用主模型；多个用逗号分隔）<input id="testModels"></label>
       <fieldset class="span-2"><legend>模型与地址发现</legend><label class="check"><input id="testDiscover" type="checkbox" checked>调用 /models 自动发现模型</label><label class="check"><input id="testAllModels" type="checkbox" checked>测试全部发现模型</label><label class="check"><input id="testV1Root" type="checkbox" checked>测试 /v1 根地址</label><label class="check"><input id="testPlainRoot" type="checkbox" checked>同时测试无 /v1 根地址</label></fieldset>
-      <fieldset class="span-2"><legend>文本请求方式</legend><label class="check"><input id="testResponses" type="checkbox" checked>OpenAI Responses API</label><label class="check"><input id="testChat" type="checkbox" checked>OpenAI Chat Completions</label><label class="check"><input id="testLegacy" type="checkbox" checked>Legacy Completions</label></fieldset>
+      <fieldset class="span-2"><legend>文本请求方式</legend><label class="check"><input id="testResponses" type="checkbox" checked>OpenAI Responses API</label><label class="check"><input id="testChat" type="checkbox" checked>Chat Completions</label><label class="check"><input id="testLegacy" type="checkbox" checked>Legacy Completions</label></fieldset>
       <fieldset class="span-2"><legend>视觉理解</legend><label class="check"><input id="testResponsesVision" type="checkbox" checked>Responses Vision</label><label class="check"><input id="testChatVision" type="checkbox" checked>Chat Vision</label><label class="check"><input id="testRequireVision" type="checkbox">只有文本和视觉都通过才算完全可用</label></fieldset>
       <label>单请求超时秒<input id="testTimeout" type="number" min="5" max="300" value="45"></label><label class="check"><input id="testAutoApply" type="checkbox" checked>深测后自动更新主模型、备用模型和协议能力</label>
     </div>
     <div class="modal-actions"><button value="cancel" class="secondary">取消</button><button type="button" class="primary" onclick="startTest()">开始测试</button></div>
   </form>
 </dialog>
-<div id="toast" class="toast hidden"></div><script src="/static/app.js"></script>
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+<script src="/static/client-token-copy.js"></script>
 </body>
 </html>
