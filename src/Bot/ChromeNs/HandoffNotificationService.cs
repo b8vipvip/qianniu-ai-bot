@@ -1,4 +1,4 @@
-﻿using Bot.Options;
+using Bot.Options;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -27,9 +27,21 @@ namespace Bot.ChromeNs
         {
             if (decision == null || !decision.Matched) return;
 
+            // Client JSON is authoritative for business-specific exceptions such as normal
+            // “can this TV log in to my own account?” questions. Strong account-security
+            // terms remain manual. This runs before the server-cache compatibility layer.
+            string overrideDetail;
+            if (BusinessPolicyProfileService.TryOverrideHandoff(question, decision, out overrideDetail))
+            {
+                Log.Info("转人工规则已按客户端JSON业务例外改为自动答复: seller=" + seller
+                    + ", buyer=" + buyer
+                    + ", keyword=" + decision.HitKeyword
+                    + ", detail=" + overrideDetail);
+                return;
+            }
+
             // 本方法在调用方检查 AllowAutoReply 之前同步执行。服务端规则可把
             // “给朋友/另一个账号充值”等明确安全例外改为固定答复，并且不创建人工工单。
-            string overrideDetail;
             if (HandoffRuleRemoteConfigService.TryApplySafeAutoReply(
                 question,
                 decision,
