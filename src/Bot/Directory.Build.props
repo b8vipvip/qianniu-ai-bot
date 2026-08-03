@@ -23,6 +23,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BulkListManagementUi.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Options\HandoffPolicyUi.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)Options\HandoffPolicyUi.cs" />
   </ItemGroup>
