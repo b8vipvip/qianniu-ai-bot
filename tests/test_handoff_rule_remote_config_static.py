@@ -57,6 +57,7 @@ def test_local_rule_service_is_initialized_and_compiled():
     assert "ChromeNs\\HandoffRuleRemoteConfigService.cs" in targets
     assert "Options\\HandoffPolicyUi.cs" in props
     assert "Knowledge\\BulkListManagementUi.cs" in props
+    assert "ChromeNs\\HandoffPolicyLegacyMigrationService.cs" in props
 
 
 def test_wecom_page_policy_is_retired_and_migrated_to_windows_client():
@@ -64,6 +65,7 @@ def test_wecom_page_policy_is_retired_and_migrated_to_windows_client():
     migration = read("services/api-control-plane/wecom_policy_migration.py")
     bootstrap = read("services/api-control-plane/bootstrap.py")
     dockerfile = read("services/api-control-plane/Dockerfile")
+    client_migration = read("src/Bot/ChromeNs/HandoffPolicyLegacyMigrationService.cs")
 
     # Keep the old HTML nodes temporarily so the transition middleware can hide
     # them without breaking the existing inline script during staged rollout.
@@ -71,8 +73,11 @@ def test_wecom_page_policy_is_retired_and_migrated_to_windows_client():
     assert ".panel:has(#policyText)" in migration
     assert "handoffPolicyMigrationNotice" in migration
     assert "功能设置 → 消息通知 → 转人工通知 → 通知策略" in migration
-    assert 'path == "/api/runtime/v1/handoff/rules"' in migration
+    assert 'path == "/api/runtime/v1/handoff/rules" and method == "GET"' in migration
+    assert "return await call_next(request)" in migration
     assert "status_code=410" in migration
+    assert "/api/runtime/v1/handoff/rules" in client_migration
+    assert "handoff-policy-migration.json" in client_migration
     assert "wecom_policy_migration.install(control_plane)" in bootstrap
     assert "include_router(wecom_handoff_policy.router)" not in bootstrap
     assert "init_handoff_policy_db" not in bootstrap

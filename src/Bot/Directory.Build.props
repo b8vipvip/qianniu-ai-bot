@@ -27,6 +27,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BulkListManagementUiBridge.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\HandoffPolicyLegacyMigrationService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\HandoffPolicyLegacyMigrationService.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Options\HandoffPolicyUi.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)Options\HandoffPolicyUi.cs" />
   </ItemGroup>

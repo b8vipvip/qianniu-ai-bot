@@ -66,12 +66,13 @@ def transform_wecom_html(html: str) -> str:
       <div class="panel-head">
         <div>
           <h2>AI 转人工策略已迁移</h2>
-          <p>企业微信服务端现在只管理应用消息、加密回调和人工回复权限，不再保存或向客户端下发 AI 转人工规则。</p>
+          <p>企业微信服务端不再编辑、编译或执行 AI 转人工规则，只保留旧规则的受令牌保护只读迁移接口。</p>
         </div>
       </div>
       <div class="policy-help">
         请在 Windows Bot 中打开：<strong>功能设置 → 消息通知 → 转人工通知 → 通知策略</strong>。<br>
-        策略保存在每台电脑的本地 JSON，可导入、导出、覆盖、合并、追加、勾选删除和清空。
+        新版 Windows Bot 首次启动会自动读取一次旧服务端规则并保存为本机 JSON，之后不再轮询。<br>
+        本机策略支持导入、导出、覆盖、合并、追加、勾选删除和清空。
       </div>
     </section>
 """
@@ -93,8 +94,11 @@ class WeComPolicyMigrationMiddleware(BaseHTTPMiddleware):
                 return JSONResponse({"detail": "企业微信配置页不存在"}, status_code=404)
             return HTMLResponse(transform_wecom_html(source.read_text(encoding="utf-8-sig")))
 
-        if path == "/api/runtime/v1/handoff/rules":
-            return JSONResponse({"detail": MIGRATION_MESSAGE}, status_code=410)
+        # Keep the existing authenticated runtime GET route reachable only for
+        # one-time migration by upgraded Windows clients. The client writes a
+        # local marker after success and never polls this endpoint again.
+        if path == "/api/runtime/v1/handoff/rules" and method == "GET":
+            return await call_next(request)
 
         if path == "/api/admin/wecom/handoff-rules":
             if method == "GET":
