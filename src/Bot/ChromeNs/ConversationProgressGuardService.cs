@@ -20,6 +20,7 @@ namespace Bot.ChromeNs
         public bool RechargeSubmitted { get; set; }
         public bool ExplicitCompatibilityQuestion { get; set; }
         public bool AsksScreenshotTarget { get; set; }
+        public bool AsksPurchaseTarget { get; set; }
         public bool NormalAccountInquiry { get; set; }
         public string CurrentInputKind { get; set; }
         public string Stage { get; set; }
@@ -72,6 +73,11 @@ namespace Bot.ChromeNs
             try { visual = RecentVisualContextService.BuildPromptAddon(seller, buyer, currentQuestion); }
             catch { visual = string.Empty; }
 
+            // “拍”必须按宾语消歧：页面/界面优先表示拍照，链接/商品/SKU表示下单。
+            // 两个正则均由客户端 JSON 管理；页面语义优先，避免“拍哪个页面”被当成购买。
+            var asksScreenshotTarget = R("screenshotTargetQuestion").IsMatch(current);
+            var asksPurchaseTarget = !asksScreenshotTarget && R("purchaseTargetQuestion").IsMatch(current);
+
             var progress = new ConversationProgressSnapshot
             {
                 HasOrderEvidence = R("orderEvidence").IsMatch(allText),
@@ -81,7 +87,8 @@ namespace Bot.ChromeNs
                 ManualRechargeOffered = R("manualRecharge").IsMatch(sellerText),
                 RechargeSubmitted = R("rechargeSubmitted").IsMatch(sellerText),
                 ExplicitCompatibilityQuestion = R("compatibilityQuestion").IsMatch(current),
-                AsksScreenshotTarget = R("screenshotTargetQuestion").IsMatch(current),
+                AsksScreenshotTarget = asksScreenshotTarget,
+                AsksPurchaseTarget = asksPurchaseTarget,
                 NormalAccountInquiry = R("normalAccountInquiry").IsMatch(current)
             };
 
@@ -101,6 +108,7 @@ namespace Bot.ChromeNs
             else if (R("image").IsMatch(current)) progress.CurrentInputKind = "image";
             else if (R("linkRefusal").IsMatch(current)) progress.CurrentInputKind = "exchange_link_refusal";
             else if (progress.AsksScreenshotTarget) progress.CurrentInputKind = "screenshot_target_question";
+            else if (progress.AsksPurchaseTarget) progress.CurrentInputKind = "purchase_target_question";
             else if (progress.NormalAccountInquiry) progress.CurrentInputKind = "normal_account_inquiry";
 
             if (progress.RechargeSubmitted) ApplyStage(progress, "rechargeSubmitted");
@@ -112,6 +120,8 @@ namespace Bot.ChromeNs
                 ApplyStage(progress, "awaitPhone");
             else if (progress.AsksScreenshotTarget)
                 ApplyStage(progress, "screenshotTarget");
+            else if (progress.AsksPurchaseTarget)
+                ApplyStage(progress, "purchaseTarget");
             else if (progress.HasOrderEvidence && progress.DeviceAccountConfirmed)
                 ApplyStage(progress, "deviceConfirmed");
             else if (progress.HasOrderEvidence)
@@ -145,11 +155,13 @@ namespace Bot.ChromeNs
             AddFact(state, progress.ManualRechargeOffered, T("facts.manualRecharge"));
             AddFact(state, progress.RechargeSubmitted, T("facts.submitted"));
             AddFact(state, progress.AsksScreenshotTarget, T("facts.screenshotTarget"));
+            AddFact(state, progress.AsksPurchaseTarget, T("facts.purchaseTarget"));
 
             if (progress.CurrentInputKind == "phone_number") state.BuyerGoal = T("buyerGoals.phone");
             else if (progress.CurrentInputKind == "verification_code") state.BuyerGoal = T("buyerGoals.code");
             else if (progress.CurrentInputKind == "exchange_link_refusal") state.BuyerGoal = T("buyerGoals.linkRefusal");
             else if (progress.CurrentInputKind == "screenshot_target_question") state.BuyerGoal = T("buyerGoals.screenshotTarget");
+            else if (progress.CurrentInputKind == "purchase_target_question") state.BuyerGoal = T("buyerGoals.purchaseTarget");
             else if (progress.CurrentInputKind == "normal_account_inquiry") state.BuyerGoal = T("buyerGoals.normalAccount");
         }
 
@@ -168,10 +180,17 @@ namespace Bot.ChromeNs
             AppendIf(sb, progress.HasPhoneNumber, "prompts.phone");
             AppendIf(sb, progress.HasVerificationCode, "prompts.code");
             AppendIf(sb, progress.BuyerRefusedExchangeLink, "prompts.linkRefusal");
-            AppendIf(sb, !progress.HasOrderEvidence && !progress.ExplicitCompatibilityQuestion, "prompts.preSaleGeneral");
+            AppendIf(
+                sb,
+                !progress.HasOrderEvidence
+                    && !progress.ExplicitCompatibilityQuestion
+                    && !progress.AsksScreenshotTarget
+                    && !progress.AsksPurchaseTarget,
+                "prompts.preSaleGeneral");
             AppendIf(sb, progress.CurrentInputKind == "phone_number", "prompts.phoneInput");
             AppendIf(sb, progress.CurrentInputKind == "verification_code", "prompts.codeInput");
             AppendIf(sb, progress.AsksScreenshotTarget, "prompts.screenshotTarget");
+            AppendIf(sb, progress.AsksPurchaseTarget, "prompts.purchaseTarget");
             AppendIf(sb, progress.NormalAccountInquiry, "prompts.normalAccount");
             return sb.ToString();
         }
@@ -185,6 +204,7 @@ namespace Bot.ChromeNs
                 || p.CurrentInputKind == "image"
                 || p.CurrentInputKind == "exchange_link_refusal"
                 || p.CurrentInputKind == "screenshot_target_question"
+                || p.CurrentInputKind == "purchase_target_question"
                 || p.CurrentInputKind == "normal_account_inquiry"
                 || p.ManualRechargeOffered
                 || p.RechargeSubmitted;
@@ -205,6 +225,13 @@ namespace Bot.ChromeNs
                 if (!R("screenshotTargetKnowledge").IsMatch(combined)) return false;
             }
 
+            if (p.AsksPurchaseTarget)
+            {
+                if (!R("purchaseTargetKnowledge").IsMatch(combined)) return false;
+                if (R("badPurchaseTargetKnowledge").IsMatch(combined)
+                    && !R("purchaseTargetKnowledgeStrong").IsMatch(combined)) return false;
+            }
+
             if (p.CurrentInputKind == "phone_number" || p.CurrentInputKind == "verification_code")
             {
                 if (RequestsScreenshot(answer) || R("preRechargeKnowledge").IsMatch(combined)) return false;
@@ -214,7 +241,11 @@ namespace Bot.ChromeNs
             if (p.HasOrderEvidence
                 && R("orderInstruction").IsMatch(combined)
                 && !R("explicitOrderQuestion").IsMatch(currentQuestion ?? string.Empty)) return false;
-            if (!p.HasOrderEvidence && !p.ExplicitCompatibilityQuestion && !p.AsksScreenshotTarget && RequestsScreenshot(answer)) return false;
+            if (!p.HasOrderEvidence
+                && !p.ExplicitCompatibilityQuestion
+                && !p.AsksScreenshotTarget
+                && !p.AsksPurchaseTarget
+                && RequestsScreenshot(answer)) return false;
             return true;
         }
 
@@ -234,12 +265,20 @@ namespace Bot.ChromeNs
             if (p.HasPhoneNumber && R("phoneRequest").IsMatch(answer)) AddIssue(issues, T("validationIssues.repeatPhone"));
             if (p.HasVerificationCode && R("codeRequest").IsMatch(answer)) AddIssue(issues, T("validationIssues.repeatCode"));
             if (p.BuyerRefusedExchangeLink && R("linkInstruction").IsMatch(answer)) AddIssue(issues, T("validationIssues.linkRefusal"));
-            if (!p.HasOrderEvidence && !p.ExplicitCompatibilityQuestion && !p.AsksScreenshotTarget && RequestsScreenshot(answer))
+            if (!p.HasOrderEvidence
+                && !p.ExplicitCompatibilityQuestion
+                && !p.AsksScreenshotTarget
+                && !p.AsksPurchaseTarget
+                && RequestsScreenshot(answer))
                 AddIssue(issues, T("validationIssues.preSaleScreenshot"));
             if ((p.CurrentInputKind == "phone_number" || p.CurrentInputKind == "verification_code") && RequestsScreenshot(answer))
                 AddIssue(issues, T("validationIssues.flowRegression"));
             if (p.AsksScreenshotTarget && (R("orderInstruction").IsMatch(answer) || R("badScreenshotTargetAnswer").IsMatch(answer)))
                 AddIssue(issues, T("validationIssues.screenshotTargetPurchase"));
+            if (p.AsksPurchaseTarget && R("badPurchaseTargetAnswer").IsMatch(answer))
+                AddIssue(issues, T("validationIssues.purchaseTargetScreenshot"));
+            if (p.AsksPurchaseTarget && !R("purchaseTargetAnswer").IsMatch(answer))
+                AddIssue(issues, T("validationIssues.purchaseTargetMissingSelection"));
         }
 
         internal static bool RequestsScreenshot(string answer)
