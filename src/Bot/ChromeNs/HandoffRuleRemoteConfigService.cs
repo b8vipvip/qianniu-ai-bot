@@ -4,13 +4,11 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
-using System.Net;
-using System.Net.Http;
-using System.Net.Http.Headers;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -45,43 +43,123 @@ namespace Bot.ChromeNs
 
         [JsonProperty("sort_order")]
         public int SortOrder { get; set; }
+
+        [JsonIgnore]
+        public bool IsSelected { get; set; }
+
+        public RemoteHandoffRule()
+        {
+            Enabled = true;
+            RuleType = "confirm";
+            MatchMode = "contains";
+            Keyword = string.Empty;
+            RiskTerms = string.Empty;
+            Exceptions = string.Empty;
+            SafeReply = string.Empty;
+            Note = string.Empty;
+        }
     }
 
     /// <summary>
-    /// 从统一 API 服务读取企业微信页面维护的转人工规则，并同步到本机规则关键词。
-    /// 消息处理本身只读内存缓存，不在买家等待期间访问网络。
+    /// Compatibility class name retained so existing callers keep working.
+    /// The authoritative AI handoff policy is now a local JSON file; this class
+    /// no longer downloads rules from the enterprise-WeCom server.
     /// </summary>
     internal static class HandoffRuleRemoteConfigService
     {
-        private const string Scope = "ai-control-plane";
-        private const string UrlKey = "ControlPlaneUrl";
-        private const string TokenKey = "ControlPlaneClientToken";
-        private const string CacheKey = "HandoffRemoteRulesJson";
+        private const string Schema = "qianniu-ai-bot.handoff-policy";
+        private const int CurrentVersion = 1;
         private const string DefaultAccountSafeReply =
             "可以的，月卡可以给朋友或其他账号充值，您再拍对应月卡即可；下单后按页面提示提供需要充值的账号。";
-        private const string BuiltInAccountRiskTerms =
-            "密码|验证码|登录|登陆|找回|被盗|冻结|封禁|绑定|解绑|实名|身份证|泄露|安全|申诉|修改账号|换绑";
-        private const string BuiltInAccountPurchaseExceptions =
-            "另一个账号|其他账号|别的账号|朋友账号|好友账号|给朋友|给别人|帮朋友|帮别人|再拍|再买|购买|充值|充到|月卡";
 
         private static readonly object Sync = new object();
         private static List<RemoteHandoffRule> _rules = new List<RemoteHandoffRule>();
-        private static string _revision = string.Empty;
-        private static bool _hasAuthoritativeSnapshot;
         private static int _initialized;
 
         public static void Initialize()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            LoadCachedRules();
-            Task.Run(PollLoopAsync);
-            Log.Info("服务端转人工规则同步已启动：本机消息判断只使用内存缓存，后台定时刷新。" );
+            LoadLocalRules();
+            HandoffPolicyUiBridge.Initialize();
+            BulkListManagementUi.Initialize();
+            Log.Info("本机AI转人工通知策略已启动：只读取本机 handoff-policy.json，不再访问服务端规则接口。");
         }
 
-        /// <summary>
-        /// 调用发生在旧本地规则已经命中之后。若服务端规则把该命中定义为安全例外，
-        /// 将决策改成固定安全答复并阻止创建企业微信工单。
-        /// </summary>
+        public static string GetPath()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "QianniuAiBot",
+                "data",
+                "handoff-policy.json");
+        }
+
+        public static List<RemoteHandoffRule> GetRules()
+        {
+            EnsureInitialized();
+            lock (Sync)
+            {
+                return _rules.Select(Clone).ToList();
+            }
+        }
+
+        public static string ExportJson(IEnumerable<RemoteHandoffRule> rules)
+        {
+            var normalized = NormalizeRules(rules);
+            return new JObject
+            {
+                ["schema"] = Schema,
+                ["version"] = CurrentVersion,
+                ["exportedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["rules"] = JArray.FromObject(normalized)
+            }.ToString(Formatting.Indented);
+        }
+
+        public static List<RemoteHandoffRule> ParseImport(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) throw new Exception("转人工策略JSON不能为空。");
+            var token = JToken.Parse(json);
+            var array = token as JArray;
+            var root = token as JObject;
+            if (array == null && root != null)
+            {
+                var schema = Convert.ToString(root["schema"]);
+                if (!string.IsNullOrWhiteSpace(schema)
+                    && !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new Exception("文件类型不匹配：" + schema);
+                }
+                array = root["rules"] as JArray ?? root["Rules"] as JArray;
+            }
+            if (array == null) throw new Exception("文件中没有 rules 规则数组。");
+            return NormalizeRules(array.ToObject<List<RemoteHandoffRule>>());
+        }
+
+        public static void SaveRules(IEnumerable<RemoteHandoffRule> rules)
+        {
+            EnsureInitialized();
+            var normalized = NormalizeRules(rules);
+            var path = GetPath();
+            var directory = Path.GetDirectoryName(path);
+            if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+            BackupCurrentFile("handoff-policy-before-save");
+            AtomicWrite(path, ExportJson(normalized));
+            lock (Sync)
+            {
+                _rules = normalized.Select(Clone).ToList();
+            }
+            SyncKeywordsToLocalConfig(normalized);
+            Log.Info("本机AI转人工通知策略已保存: enabled=" + normalized.Count(x => x.Enabled)
+                + ", total=" + normalized.Count + ", file=" + Path.GetFileName(path));
+        }
+
+        public static List<RemoteHandoffRule> ResetDefaults()
+        {
+            var defaults = DefaultRules();
+            SaveRules(defaults);
+            return GetRules();
+        }
+
         public static bool TryApplySafeAutoReply(
             string question,
             AutoReplyRuleDecision decision,
@@ -89,16 +167,13 @@ namespace Bot.ChromeNs
         {
             detail = string.Empty;
             if (decision == null || !decision.Matched || string.IsNullOrWhiteSpace(decision.HitKeyword))
-            {
                 return false;
-            }
 
+            EnsureInitialized();
             List<RemoteHandoffRule> snapshot;
-            bool authoritative;
             lock (Sync)
             {
                 snapshot = _rules.Select(Clone).ToList();
-                authoritative = _hasAuthoritativeSnapshot;
             }
 
             var rule = snapshot
@@ -106,184 +181,167 @@ namespace Bot.ChromeNs
                 .OrderBy(x => x.SortOrder)
                 .ThenBy(x => x.Id)
                 .FirstOrDefault(x => Same(x.Keyword, decision.HitKeyword));
+            if (rule == null) return false;
 
-            if (rule != null)
+            string riskHit;
+            string exceptionHit;
+            var hasRisk = ContainsAny(question, rule.RiskTerms, out riskHit);
+            var hasException = ContainsAny(question, rule.Exceptions, out exceptionHit);
+            var contextual = string.Equals(rule.MatchMode, "sensitive_context", StringComparison.OrdinalIgnoreCase);
+
+            if (contextual && hasRisk)
             {
-                string riskHit;
-                string exceptionHit;
-                var hasRisk = ContainsAny(question, rule.RiskTerms, out riskHit);
-                var hasException = ContainsAny(question, rule.Exceptions, out exceptionHit);
-                var contextual = string.Equals(rule.MatchMode, "sensitive_context", StringComparison.OrdinalIgnoreCase);
-
-                // 明确的密码、验证码、登录安全等风险语境始终优先，不允许被“给朋友”等词绕过。
-                if (contextual && hasRisk)
-                {
-                    UpdateReason(decision, rule);
-                    detail = "服务端敏感语境成立：" + riskHit;
-                    return false;
-                }
-
-                if (hasException)
-                {
-                    ApplySafeReply(decision, rule.SafeReply, rule.Keyword, exceptionHit);
-                    detail = "服务端规则例外：" + exceptionHit;
-                    return true;
-                }
-
-                // sensitive_context 在没有风险词时仍保持保守：只有配置了明确例外才自动回答。
                 UpdateReason(decision, rule);
-                detail = contextual
-                    ? "服务端敏感语境未充分确认，保持人工确认"
-                    : "服务端包含规则命中";
+                detail = "本机策略敏感语境成立：" + riskHit;
                 return false;
             }
-
-            // 服务端尚未连通时仍保护已确认的常见业务场景，防止“另一个账号充值”被单词“账号”误伤。
-            if (!authoritative && Same(decision.HitKeyword, "账号"))
+            if (hasException)
             {
-                string riskHit;
-                string exceptionHit;
-                var hasRisk = ContainsAny(question, BuiltInAccountRiskTerms, out riskHit);
-                var hasPurchaseException = ContainsAny(question, BuiltInAccountPurchaseExceptions, out exceptionHit);
-                if (!hasRisk && hasPurchaseException)
-                {
-                    ApplySafeReply(decision, DefaultAccountSafeReply, "账号", exceptionHit);
-                    detail = "内置账号购买例外：" + exceptionHit;
-                    return true;
-                }
+                ApplySafeReply(decision, rule.SafeReply, rule.Keyword, exceptionHit);
+                detail = "本机策略安全例外：" + exceptionHit;
+                return true;
             }
 
+            UpdateReason(decision, rule);
+            detail = contextual
+                ? "本机策略敏感语境未充分确认，保持人工确认"
+                : "本机策略包含规则命中";
             return false;
         }
 
-        private static async Task PollLoopAsync()
+        private static void EnsureInitialized()
         {
-            while (true)
-            {
-                try
-                {
-                    string serverUrl;
-                    string token;
-                    ReadConnection(out serverUrl, out token);
-                    if (!string.IsNullOrWhiteSpace(serverUrl) && !string.IsNullOrWhiteSpace(token))
-                    {
-                        await PollOnceAsync(serverUrl, token);
-                        await Task.Delay(TimeSpan.FromMinutes(1));
-                    }
-                    else
-                    {
-                        await Task.Delay(TimeSpan.FromSeconds(15));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    Log.ErrorWithMaxCount("刷新服务端转人工规则失败，继续使用最近缓存：" + Safe(ex.Message), 20);
-                    await Task.Delay(TimeSpan.FromSeconds(30));
-                }
-            }
+            if (_initialized == 0) Initialize();
         }
 
-        private static async Task PollOnceAsync(string serverUrl, string token)
-        {
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            using (var handler = new HttpClientHandler
-            {
-                UseProxy = true,
-                Proxy = WebRequest.DefaultWebProxy
-            })
-            using (var http = new HttpClient(handler))
-            using (var request = new HttpRequestMessage(
-                HttpMethod.Get,
-                serverUrl.TrimEnd('/') + "/api/runtime/v1/handoff/rules"))
-            {
-                http.Timeout = TimeSpan.FromSeconds(20);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-handoff-rules/1.0");
-                using (var response = await http.SendAsync(request))
-                {
-                    var body = await response.Content.ReadAsStringAsync();
-                    if (!response.IsSuccessStatusCode)
-                    {
-                        throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body));
-                    }
-                    var root = JObject.Parse(body);
-                    var rules = root["rules"] == null
-                        ? new List<RemoteHandoffRule>()
-                        : root["rules"].ToObject<List<RemoteHandoffRule>>();
-                    SetRules(
-                        rules ?? new List<RemoteHandoffRule>(),
-                        Convert.ToString(root["revision"]),
-                        body,
-                        "服务端");
-                }
-            }
-        }
-
-        private static void LoadCachedRules()
+        private static void LoadLocalRules()
         {
             try
             {
-                var json = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(CacheKey, Scope, string.Empty);
-                if (string.IsNullOrWhiteSpace(json)) return;
-                var root = JObject.Parse(json);
-                var rules = root["rules"] == null
-                    ? new List<RemoteHandoffRule>()
-                    : root["rules"].ToObject<List<RemoteHandoffRule>>();
-                SetRules(
-                    rules ?? new List<RemoteHandoffRule>(),
-                    Convert.ToString(root["revision"]),
-                    json,
-                    "本地缓存");
+                var path = GetPath();
+                List<RemoteHandoffRule> loaded;
+                if (!File.Exists(path))
+                {
+                    loaded = DefaultRules();
+                    var directory = Path.GetDirectoryName(path);
+                    if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+                    AtomicWrite(path, ExportJson(loaded));
+                }
+                else
+                {
+                    loaded = ParseImport(File.ReadAllText(path, Encoding.UTF8));
+                }
+                lock (Sync)
+                {
+                    _rules = loaded.Select(Clone).ToList();
+                }
+                SyncKeywordsToLocalConfig(loaded);
             }
             catch (Exception ex)
             {
-                Log.Info("读取服务端转人工规则缓存失败，等待联网刷新：" + Safe(ex.Message));
+                var fallback = DefaultRules();
+                lock (Sync)
+                {
+                    _rules = fallback.Select(Clone).ToList();
+                }
+                SyncKeywordsToLocalConfig(fallback);
+                Log.ErrorWithMaxCount("读取本机AI转人工通知策略失败，已使用默认规则：" + Safe(ex.Message), 10);
             }
         }
 
-        private static void SetRules(
-            List<RemoteHandoffRule> rules,
-            string revision,
-            string rawJson,
-            string source)
+        private static List<RemoteHandoffRule> DefaultRules()
         {
-            rules = (rules ?? new List<RemoteHandoffRule>())
-                .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Keyword))
+            var result = new List<RemoteHandoffRule>();
+            var manual = new[]
+            {
+                "退款", "退货", "投诉", "差评", "赔偿", "发票", "税票",
+                "订单隐私", "身份证", "银行卡", "法律", "维权", "平台介入"
+            };
+            var confirm = new[]
+            {
+                "手机号", "地址", "隐私", "密码", "验证码", "转账", "补偿", "客服主管"
+            };
+            var order = 10;
+            foreach (var keyword in manual)
+            {
+                result.Add(new RemoteHandoffRule
+                {
+                    Enabled = true,
+                    RuleType = "manual",
+                    Keyword = keyword,
+                    MatchMode = "contains",
+                    Note = "命中后转人工，不自动回答具体结论。",
+                    SortOrder = order
+                });
+                order += 10;
+            }
+            foreach (var keyword in confirm)
+            {
+                result.Add(new RemoteHandoffRule
+                {
+                    Enabled = true,
+                    RuleType = "confirm",
+                    Keyword = keyword,
+                    MatchMode = "contains",
+                    Note = "命中后仅由人工确认。",
+                    SortOrder = order
+                });
+                order += 10;
+            }
+            result.Add(new RemoteHandoffRule
+            {
+                Enabled = true,
+                RuleType = "confirm",
+                Keyword = "账号",
+                MatchMode = "sensitive_context",
+                RiskTerms = "密码|验证码|找回|被盗|盗号|冻结|解冻|封禁|实名|身份证|银行卡|泄露|安全|申诉|换绑|修改绑定",
+                Exceptions = "电视端能登自己账号|电视能登录自己账号|大屏能绑定我的账号|另一个账号|其他账号|别的账号|朋友账号|好友账号|给朋友|给别人|帮朋友|帮别人|再拍|再买|购买|充值|充到|月卡",
+                SafeReply = DefaultAccountSafeReply,
+                Note = "账号安全问题转人工；本人设备登录能力和为其他账号购买属于正常业务。",
+                SortOrder = order
+            });
+            return NormalizeRules(result);
+        }
+
+        private static List<RemoteHandoffRule> NormalizeRules(IEnumerable<RemoteHandoffRule> rules)
+        {
+            var output = new List<RemoteHandoffRule>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var nextId = 1;
+            foreach (var source in (rules ?? Enumerable.Empty<RemoteHandoffRule>()).Where(x => x != null).Take(300))
+            {
+                var keyword = Clean(source.Keyword, 120);
+                if (keyword.Length == 0 || !seen.Add(keyword)) continue;
+                var item = Clone(source);
+                item.Id = source.Id > 0 ? source.Id : nextId;
+                nextId = Math.Max(nextId, item.Id + 1);
+                item.Enabled = source.Enabled;
+                item.RuleType = string.Equals(source.RuleType, "manual", StringComparison.OrdinalIgnoreCase)
+                    ? "manual"
+                    : "confirm";
+                item.MatchMode = string.Equals(source.MatchMode, "sensitive_context", StringComparison.OrdinalIgnoreCase)
+                    ? "sensitive_context"
+                    : "contains";
+                item.Keyword = keyword;
+                item.RiskTerms = CleanTerms(source.RiskTerms, 3000);
+                item.Exceptions = CleanTerms(source.Exceptions, 3000);
+                item.SafeReply = Clean(source.SafeReply, 1200);
+                item.Note = Clean(source.Note, 1000);
+                item.SortOrder = source.SortOrder < 0 ? 0 : Math.Min(100000, source.SortOrder);
+                item.IsSelected = false;
+                output.Add(item);
+            }
+            return output
                 .OrderBy(x => x.SortOrder)
                 .ThenBy(x => x.Id)
-                .Take(300)
-                .Select(Clone)
                 .ToList();
-
-            var changed = false;
-            lock (Sync)
-            {
-                changed = !string.Equals(_revision, revision ?? string.Empty, StringComparison.Ordinal)
-                    || JsonConvert.SerializeObject(_rules) != JsonConvert.SerializeObject(rules);
-                _rules = rules;
-                _revision = (revision ?? string.Empty).Trim();
-                _hasAuthoritativeSnapshot = true;
-            }
-
-            if (!string.IsNullOrWhiteSpace(rawJson))
-            {
-                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(CacheKey, Scope, rawJson);
-            }
-            SyncKeywordsToLocalConfig(rules);
-            if (changed)
-            {
-                Log.Info("服务端转人工规则已应用: source=" + source
-                    + ", revision=" + _revision
-                    + ", enabled=" + rules.Count(x => x.Enabled));
-            }
         }
 
         private static void SyncKeywordsToLocalConfig(IEnumerable<RemoteHandoffRule> rules)
         {
             try
             {
-                var enabled = (rules ?? new List<RemoteHandoffRule>())
+                var enabled = (rules ?? Enumerable.Empty<RemoteHandoffRule>())
                     .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Keyword))
                     .ToList();
                 var manual = string.Join(",", enabled
@@ -307,12 +365,12 @@ namespace Bot.ChromeNs
                 cfg.ManualKeywords = manual;
                 cfg.NoAutoReplyKeywords = confirm;
                 BotFeatureStore.SaveAutoReplyRules(cfg);
-                Log.Info("服务端转人工关键词已同步到本机规则：强制=" + CountWords(manual)
-                    + "，仅人工确认=" + CountWords(confirm));
+                Log.Info("本机AI转人工通知关键词已同步：强制=" + Split(manual).Count()
+                    + "，人工确认=" + Split(confirm).Count());
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("同步服务端转人工关键词到本机失败：" + Safe(ex.Message), 10);
+                Log.ErrorWithMaxCount("同步本机AI转人工通知关键词失败：" + Safe(ex.Message), 10);
             }
         }
 
@@ -325,16 +383,16 @@ namespace Bot.ChromeNs
             decision.AllowAutoReply = true;
             decision.UseAiReply = false;
             decision.IsOffHours = false;
-            decision.ReplyText = string.IsNullOrWhiteSpace(reply)
-                ? DefaultAccountSafeReply
-                : reply.Trim();
+            decision.ReplyText = string.IsNullOrWhiteSpace(reply) ? DefaultAccountSafeReply : reply.Trim();
             decision.Reason = "命中可自动回答的转人工规则例外：" + keyword
                 + (string.IsNullOrWhiteSpace(exceptionHit) ? string.Empty : "（" + exceptionHit + "）");
         }
 
         private static void UpdateReason(AutoReplyRuleDecision decision, RemoteHandoffRule rule)
         {
-            decision.HitKeyword = rule.Keyword == null ? decision.HitKeyword : rule.Keyword.Trim();
+            decision.HitKeyword = string.IsNullOrWhiteSpace(rule.Keyword)
+                ? decision.HitKeyword
+                : rule.Keyword.Trim();
             decision.Reason = string.Equals(rule.RuleType, "manual", StringComparison.OrdinalIgnoreCase)
                 ? "命中强制转人工关键词：" + decision.HitKeyword
                 : "命中仅人工确认关键词：" + decision.HitKeyword;
@@ -362,9 +420,9 @@ namespace Bot.ChromeNs
                 .Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
-        private static int CountWords(string values)
+        private static string CleanTerms(string value, int max)
         {
-            return Split(values).Count();
+            return Clean(string.Join("|", Split(value)), max);
         }
 
         private static bool Same(string left, string right)
@@ -389,26 +447,46 @@ namespace Bot.ChromeNs
                 Exceptions = rule.Exceptions ?? string.Empty,
                 SafeReply = rule.SafeReply ?? string.Empty,
                 Note = rule.Note ?? string.Empty,
-                SortOrder = rule.SortOrder
+                SortOrder = rule.SortOrder,
+                IsSelected = rule.IsSelected
             };
         }
 
-        private static void ReadConnection(out string serverUrl, out string token)
+        private static void BackupCurrentFile(string prefix)
         {
-            serverUrl = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(UrlKey, Scope, string.Empty);
-            token = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(TokenKey, Scope, string.Empty);
-            serverUrl = (serverUrl ?? string.Empty).Trim().TrimEnd('/');
-            if (serverUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-            {
-                serverUrl = serverUrl.Substring(0, serverUrl.Length - 3).TrimEnd('/');
-            }
-            token = (token ?? string.Empty).Trim();
+            var source = GetPath();
+            if (!File.Exists(source)) return;
+            var directory = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "QianniuAiBot",
+                "data",
+                "backups");
+            Directory.CreateDirectory(directory);
+            var target = Path.Combine(directory,
+                prefix + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff") + ".json");
+            File.Copy(source, target, true);
+        }
+
+        private static void AtomicWrite(string path, string content)
+        {
+            var temp = path + ".tmp";
+            File.WriteAllText(temp, content ?? string.Empty, new UTF8Encoding(false));
+            if (File.Exists(path)) File.Delete(path);
+            File.Move(temp, path);
+        }
+
+        private static string Clean(string value, int max)
+        {
+            value = Regex.Replace(
+                (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim(),
+                @"\s+",
+                " ");
+            return value.Length <= max ? value : value.Substring(0, max).Trim();
         }
 
         private static string Safe(string value)
         {
-            value = Regex.Replace((value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim(), @"\s+", " ");
-            return value.Length <= 300 ? value : value.Substring(0, 300) + "...";
+            return Clean(value, 300);
         }
     }
 }
