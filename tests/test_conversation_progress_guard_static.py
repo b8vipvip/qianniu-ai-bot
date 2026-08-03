@@ -53,7 +53,10 @@ def test_validator_blocks_repeated_screenshot_and_order_requests():
 def test_preorder_general_question_does_not_force_device_photo():
     guard = read("src/Bot/ChromeNs/ConversationProgressGuardService.cs")
     config = policy()
-    assert "!p.HasOrderEvidence && !p.ExplicitCompatibilityQuestion" in guard
+    assert "!p.HasOrderEvidence" in guard
+    assert "!p.ExplicitCompatibilityQuestion" in guard
+    assert "!p.AsksScreenshotTarget" in guard
+    assert "!p.AsksPurchaseTarget" in guard
     assert "一般售前咨询未询问设备兼容性" in config["validationIssues"]["preSaleScreenshot"]
     assert "不要主动强制先发设备截图" in config["prompts"]["preSaleGeneral"]
     assert "不要无关地要求先下单" in config["prompts"]["preSaleGeneral"]
