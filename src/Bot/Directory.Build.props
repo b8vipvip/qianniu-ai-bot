@@ -1,5 +1,5 @@
 <Project>
-  <!-- Preserve repository-wide reference paths and order-template compile items for Bot and WPF *_wpftmp projects. -->
+  <!-- Preserve repository-wide reference paths and compile items for Bot and WPF *_wpftmp projects. -->
   <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props"
           Condition="Exists('$(MSBuildThisFileDirectory)..\Directory.Build.props')" />
 
@@ -9,5 +9,20 @@
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeCloudSyncService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCloudSyncService.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BusinessPolicyProfileService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BusinessPolicyProfileService.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\BusinessPolicyProfileUi.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BusinessPolicyProfileUi.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)default-business-policy.json')">
+    <Content Include="$(MSBuildThisFileDirectory)default-business-policy.json">
+      <Link>default-business-policy.json</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 </Project>
