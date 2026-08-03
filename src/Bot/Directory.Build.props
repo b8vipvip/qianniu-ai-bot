@@ -19,6 +19,14 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BusinessPolicyProfileUi.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\BulkListManagementUi.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\BulkListManagementUi.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Options\HandoffPolicyUi.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Options\HandoffPolicyUi.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)default-business-policy.json')">
     <Content Include="$(MSBuildThisFileDirectory)default-business-policy.json">
       <Link>default-business-policy.json</Link>
