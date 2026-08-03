@@ -14,7 +14,7 @@ import runtime_embedding_guard
 import runtime_routing_guard
 import runtime_streaming_guard
 import wecom_bridge
-import wecom_handoff_policy
+import wecom_policy_migration
 import wecom_settings
 from wecom_crypto import install_on_bridge
 
@@ -22,10 +22,10 @@ from wecom_crypto import install_on_bridge
 runtime_routing_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
 runtime_embedding_guard.install(control_plane)
+wecom_policy_migration.install(control_plane)
 install_on_bridge(wecom_bridge)
 control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
-control_plane.app.include_router(wecom_handoff_policy.router)
 control_plane.app.include_router(recharge_status_query.router)
 bot_web_console.install(control_plane)
 bot_web_admin.install(control_plane)
@@ -40,7 +40,6 @@ bot_web_conversation_knowledge.install(control_plane)
 def initialize_control_plane_extensions() -> None:
     wecom_bridge.init_wecom_db()
     wecom_settings.init_wecom_settings_db()
-    wecom_handoff_policy.init_handoff_policy_db()
     recharge_status_query.init_recharge_query_db()
     bot_web_console.init_bot_web_db()
     bot_web_conversation_knowledge.init_db()
