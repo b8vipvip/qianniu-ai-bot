@@ -19,6 +19,20 @@ def test_handoff_policy_is_local_and_no_longer_polls_server():
     assert "不再访问服务端规则接口" in source
 
 
+def test_legacy_server_rules_are_migrated_once_then_marked_complete():
+    migration = read("src/Bot/ChromeNs/HandoffPolicyLegacyMigrationService.cs")
+    bridge = read("src/Bot/ChromeNs/BulkListManagementUiBridge.cs")
+    props = read("src/Bot/Directory.Build.props")
+    assert "HandoffPolicyLegacyMigrationService.StartOnce" in bridge
+    assert "/api/runtime/v1/handoff/rules" in migration
+    assert "handoff-policy-migration.json" in migration
+    assert "HandoffRuleRemoteConfigService.SaveRules(rules)" in migration
+    assert "Task.Run" in migration
+    assert "while (true)" not in migration
+    assert "PollLoopAsync" not in migration
+    assert "ChromeNs\\HandoffPolicyLegacyMigrationService.cs" in props
+
+
 def test_notification_tab_gets_local_policy_button_and_manager():
     source = read("src/Bot/Options/HandoffPolicyUi.cs")
     assert 'FindText(window, "转人工通知")' in source
@@ -53,6 +67,7 @@ def test_new_windows_files_are_included_in_all_wpf_builds():
     props = read("src/Bot/Directory.Build.props")
     assert "Knowledge\\BulkListManagementUi.cs" in props
     assert "Options\\HandoffPolicyUi.cs" in props
+    assert "ChromeNs\\HandoffPolicyLegacyMigrationService.cs" in props
 
 
 def test_handoff_notification_still_applies_local_safe_exceptions():
@@ -63,9 +78,12 @@ def test_handoff_notification_still_applies_local_safe_exceptions():
 def test_server_no_longer_registers_or_packages_handoff_policy_engine():
     bootstrap = read("services/api-control-plane/bootstrap.py")
     dockerfile = read("services/api-control-plane/Dockerfile")
+    migration = read("services/api-control-plane/wecom_policy_migration.py")
     assert "wecom_policy_migration.install(control_plane)" in bootstrap
     assert "import wecom_handoff_policy" not in bootstrap
     assert "wecom_handoff_policy.router" not in bootstrap
     assert "init_handoff_policy_db" not in bootstrap
     assert "wecom_policy_migration.py" in dockerfile
     assert "wecom_handoff_policy.py" not in dockerfile
+    assert 'path == "/api/runtime/v1/handoff/rules" and method == "GET"' in migration
+    assert "return await call_next(request)" in migration
