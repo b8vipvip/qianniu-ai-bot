@@ -42,10 +42,22 @@ The default policy requires:
 
 This is a normal own-account capability question unless it also mentions password, verification code, recovery, theft, freeze, ban, real-name identity or other account-security risk.
 
-For:
+The verb `拍` is resolved by its object and nearby wording:
 
 ```text
 那拍哪个链接啊
+拍哪个商品
+选哪个 SKU 下单
 ```
 
-when the prior seller turn requested a photo or screenshot, the intent is the TV-page target. The answer must clarify that the buyer should not photograph a product link, and should instead photograph the TV's Kugou account/binding page or, if unavailable, the membership purchase page.
+These are order-selection questions. `拍` means to purchase/place the order. The reply should identify the matching product link and SKU/specification from the buyer's device and membership requirement. When the visible context does not contain enough product choices, ask for the candidate product links or a screenshot of the product list; do not ask the buyer to photograph the TV account page.
+
+By contrast:
+
+```text
+拍哪个页面
+要拍哪个界面
+拍照哪个页面
+```
+
+These are screenshot/photo target questions. The reply should identify the TV page or interface that needs to be photographed, and must not be turned into a product-link or SKU recommendation.
