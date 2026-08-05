@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
@@ -168,6 +169,7 @@ namespace Bot.ChromeNs
             public BotActivityLease ActivityLease;
         }
 
+        private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
         private readonly Func<BuyerMessageBurstLease, Task> _handler;
@@ -314,7 +316,7 @@ namespace Bot.ChromeNs
 
                 try
                 {
-                    await _handler(lease);
+                    await DispatchScopedAsync(burst, lease);
                 }
                 catch (Exception ex)
                 {
@@ -333,6 +335,41 @@ namespace Bot.ChromeNs
                     }
                 }
                 return;
+            }
+        }
+
+        private async Task DispatchScopedAsync(BuyerMessageBurst burst, BuyerMessageBurstLease lease)
+        {
+            ShopContext shop = null;
+            try
+            {
+                shop = ShopContextLocator.ResolveRuntimeBySellerNick(
+                    burst == null ? string.Empty : burst.SellerNick);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount(
+                    "买家回复未能解析店铺身份，使用旧全局 AI 配置兼容模式：" + Safe(ex.Message, 220),
+                    20);
+            }
+
+            if (shop == null)
+            {
+                await _handler(lease);
+                return;
+            }
+
+            await LegacyAiConfigurationGate.WaitAsync();
+            try
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    await _handler(lease);
+                }
+            }
+            finally
+            {
+                LegacyAiConfigurationGate.Release();
             }
         }
 
@@ -429,6 +466,13 @@ namespace Bot.ChromeNs
         private static string Key(string seller, string buyer)
         {
             return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+        }
+
+        private static string Safe(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            while (value.Contains("  ")) value = value.Replace("  ", " ");
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
     }
 }
