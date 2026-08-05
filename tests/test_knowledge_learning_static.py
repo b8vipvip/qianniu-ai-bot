@@ -21,19 +21,23 @@ def test_local_first_and_source_labels():
     assert '"AI生成"' in source
 
 
-def test_manual_reply_guard_and_learning():
+def test_manual_reply_guard_and_learning_are_shop_scoped():
     rpa = text("src/Bot/ChromeNs/QNRpa.cs")
     service = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     assert "TryBlockForManualReply" in rpa
     assert "客服已人工回复" in service
     assert "人工回复" in service
     assert "AllowNextManualSend" in service
+    assert "ScopeKey()" in service
+    assert "ShopSettingsScope.Enter(shop)" in service
 
 
-def test_learning_dedup_and_sensitive_redaction():
+def test_learning_dedup_sensitive_redaction_and_per_shop_save_lock():
     source = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     assert "ContentHash" in source
-    assert "人工确认答案更新知识库" in source
+    assert "已用人工确认答案更新本店知识库" in source
+    assert "SaveLocks.GetOrAdd(ScopeKey()" in source
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick" in source
     assert "[手机号]" in source
     assert "[API_KEY]" in source
 
