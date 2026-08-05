@@ -1,8 +1,11 @@
 using Bot.Options;
+using Bot.ShopScope;
 using BotLib;
+using BotLib.Extensions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -10,33 +13,37 @@ using System.Text.RegularExpressions;
 
 namespace Bot.ChromeNs
 {
-    /// <summary>
-    /// Client-side JSON business policy. Business phrases, workflow stages, prompt boundaries,
-    /// answer validation messages and handoff exceptions live in business-policy.json instead of C#.
-    /// </summary>
     internal static class BusinessPolicyProfileService
     {
         private const string Schema = "qianniu-ai-bot.business-policy";
-        private static readonly object Sync = new object();
         private static readonly Regex NeverRegex = new Regex("(?!)", RegexOptions.Compiled);
-        private static JObject _policy = new JObject();
-        private static Dictionary<string, Regex> _regexes = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
-        private static DateTime _loadedWriteUtc = DateTime.MinValue;
-        private static long _loadedLength = -1;
-        private static DateTime _nextCheckUtc = DateTime.MinValue;
-        private static bool _loaded;
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
+        private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
+        private static readonly ConcurrentDictionary<string, PolicyState> States =
+            new ConcurrentDictionary<string, PolicyState>(StringComparer.OrdinalIgnoreCase);
+
+        private sealed class PolicyState
+        {
+            public readonly object Sync = new object();
+            public JObject Policy = new JObject();
+            public Dictionary<string, Regex> Regexes = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+            public DateTime LoadedWriteUtc = DateTime.MinValue;
+            public long LoadedLength = -1;
+            public DateTime NextCheckUtc = DateTime.MinValue;
+            public bool Loaded;
+        }
 
         public static Regex GetRegex(string path)
         {
-            EnsureLoaded();
-            lock (Sync)
+            var state = EnsureLoaded();
+            lock (state.Sync)
             {
                 Regex value;
-                if (_regexes.TryGetValue(path ?? string.Empty, out value)) return value;
-                var pattern = ReadString(_policy, path);
+                if (state.Regexes.TryGetValue(path ?? string.Empty, out value)) return value;
+                var pattern = ReadString(state.Policy, path);
                 if (string.IsNullOrWhiteSpace(pattern))
                 {
-                    _regexes[path ?? string.Empty] = NeverRegex;
+                    state.Regexes[path ?? string.Empty] = NeverRegex;
                     return NeverRegex;
                 }
                 try
@@ -48,21 +55,21 @@ namespace Bot.ChromeNs
                     Log.ErrorWithMaxCount("运行策略正则无效: path=" + Safe(path) + ", error=" + Safe(ex.Message), 10);
                     value = NeverRegex;
                 }
-                _regexes[path ?? string.Empty] = value;
+                state.Regexes[path ?? string.Empty] = value;
                 return value;
             }
         }
 
         public static string GetString(string path)
         {
-            EnsureLoaded();
-            lock (Sync) return ReadString(_policy, path);
+            var state = EnsureLoaded();
+            lock (state.Sync) return ReadString(state.Policy, path);
         }
 
         public static string GetJson()
         {
-            EnsureLoaded();
-            lock (Sync) return _policy.ToString(Formatting.Indented);
+            var state = EnsureLoaded();
+            lock (state.Sync) return state.Policy.ToString(Formatting.Indented);
         }
 
         public static string GetDefaultJson()
@@ -83,13 +90,14 @@ namespace Bot.ChromeNs
             var backup = string.Empty;
             if (File.Exists(path))
             {
-                var backupDirectory = Path.Combine(directory, "backups");
+                var backupDirectory = CurrentBackupRoot(directory);
                 Directory.CreateDirectory(backupDirectory);
-                backup = Path.Combine(backupDirectory, "business-policy-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json");
+                backup = Path.Combine(backupDirectory,
+                    "business-policy-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff") + ".json");
                 File.Copy(path, backup, true);
             }
             AtomicWrite(path, normalized);
-            Invalidate();
+            Invalidate(path);
             EnsureLoaded();
             Log.Info("客户端运行策略JSON已保存: file=" + Path.GetFileName(path)
                 + (string.IsNullOrWhiteSpace(backup) ? string.Empty : ", backup=" + Path.GetFileName(backup)));
@@ -103,11 +111,9 @@ namespace Bot.ChromeNs
 
         public static string GetUserPath()
         {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "QianniuAiBot",
-                "data",
-                "business-policy.json");
+            var shop = ShopSettingsScope.Current;
+            if (shop != null) return Path.Combine(Paths.GetRulesRoot(shop), "business-policy.json");
+            return Path.Combine(PathEx.GlobalDataDir, "business-policy.json");
         }
 
         public static bool TryOverrideHandoff(
@@ -117,12 +123,12 @@ namespace Bot.ChromeNs
         {
             detail = string.Empty;
             if (decision == null || !decision.Matched || string.IsNullOrWhiteSpace(decision.HitKeyword)) return false;
-            EnsureLoaded();
+            var state = EnsureLoaded();
 
             JArray rules;
-            lock (Sync)
+            lock (state.Sync)
             {
-                rules = _policy["handoffOverrides"] as JArray;
+                rules = state.Policy["handoffOverrides"] as JArray;
                 if (rules == null) return false;
                 rules = (JArray)rules.DeepClone();
             }
@@ -169,20 +175,21 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private static void EnsureLoaded()
+        private static PolicyState EnsureLoaded()
         {
-            lock (Sync)
+            var userPath = GetUserPath();
+            var state = States.GetOrAdd(userPath, _ => new PolicyState());
+            lock (state.Sync)
             {
                 var now = DateTime.UtcNow;
-                if (_loaded && now < _nextCheckUtc) return;
-                _nextCheckUtc = now.AddSeconds(2);
+                if (state.Loaded && now < state.NextCheckUtc) return state;
+                state.NextCheckUtc = now.AddSeconds(2);
 
-                var userPath = GetUserPath();
                 EnsureUserFile(userPath);
                 var info = new FileInfo(userPath);
-                if (_loaded && info.Exists
-                    && info.LastWriteTimeUtc == _loadedWriteUtc
-                    && info.Length == _loadedLength) return;
+                if (state.Loaded && info.Exists
+                    && info.LastWriteTimeUtc == state.LoadedWriteUtc
+                    && info.Length == state.LoadedLength) return state;
 
                 JObject loaded;
                 try
@@ -194,14 +201,15 @@ namespace Bot.ChromeNs
                     Log.ErrorWithMaxCount("读取客户端运行策略失败，回退安装包默认策略: " + Safe(ex.Message), 10);
                     loaded = Validate(GetDefaultJson());
                 }
-                _policy = loaded;
-                _regexes = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
+                state.Policy = loaded;
+                state.Regexes = new Dictionary<string, Regex>(StringComparer.OrdinalIgnoreCase);
                 info.Refresh();
-                _loadedWriteUtc = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue;
-                _loadedLength = info.Exists ? info.Length : -1;
-                _loaded = true;
-                Log.Info("客户端运行策略已加载: version=" + Convert.ToString(_policy["version"])
-                    + ", file=" + Path.GetFileName(userPath));
+                state.LoadedWriteUtc = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue;
+                state.LoadedLength = info.Exists ? info.Length : -1;
+                state.Loaded = true;
+                Log.Info("客户端运行策略已加载: version=" + Convert.ToString(state.Policy["version"])
+                    + ", file=" + userPath);
+                return state;
             }
         }
 
@@ -210,9 +218,19 @@ namespace Bot.ChromeNs
             if (File.Exists(userPath)) return;
             var directory = Path.GetDirectoryName(userPath);
             if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+
             var source = GetDefaultPath();
+            var shop = ShopSettingsScope.Current;
+            var legacy = Path.Combine(PathEx.GlobalDataDir, "business-policy.json");
+            if (shop != null && CanAutoAdoptLegacy() && File.Exists(legacy)) source = legacy;
             if (!File.Exists(source)) throw new FileNotFoundException("安装包缺少默认运行策略文件。", source);
             AtomicWrite(userPath, File.ReadAllText(source, Encoding.UTF8));
+        }
+
+        private static bool CanAutoAdoptLegacy()
+        {
+            try { return Profiles.GetAll().Count == 1; }
+            catch { return false; }
         }
 
         private static JObject Validate(string json)
@@ -275,23 +293,47 @@ namespace Bot.ChromeNs
             return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "default-business-policy.json");
         }
 
-        private static void AtomicWrite(string path, string content)
+        private static string CurrentBackupRoot(string fallbackDirectory)
         {
-            var temp = path + ".tmp";
-            File.WriteAllText(temp, content, new UTF8Encoding(false));
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(temp, path);
+            var shop = ShopSettingsScope.Current;
+            return shop == null ? Path.Combine(fallbackDirectory, "backups") : Paths.GetBackupRoot(shop);
         }
 
-        private static void Invalidate()
+        private static void AtomicWrite(string path, string content)
         {
-            lock (Sync)
+            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+            File.WriteAllText(temp, content, new UTF8Encoding(false));
+            try
             {
-                _loaded = false;
-                _nextCheckUtc = DateTime.MinValue;
-                _loadedWriteUtc = DateTime.MinValue;
-                _loadedLength = -1;
-                _regexes.Clear();
+                if (File.Exists(path))
+                {
+                    var backup = path + ".bak";
+                    try { File.Replace(temp, path, backup, true); return; }
+                    catch (PlatformNotSupportedException) { }
+                    catch (IOException) { }
+                    File.Copy(temp, path, true);
+                    File.Delete(temp);
+                    return;
+                }
+                File.Move(temp, path);
+            }
+            finally
+            {
+                if (File.Exists(temp)) File.Delete(temp);
+            }
+        }
+
+        private static void Invalidate(string path)
+        {
+            PolicyState state;
+            if (!States.TryGetValue(path, out state)) return;
+            lock (state.Sync)
+            {
+                state.Loaded = false;
+                state.NextCheckUtc = DateTime.MinValue;
+                state.LoadedWriteUtc = DateTime.MinValue;
+                state.LoadedLength = -1;
+                state.Regexes.Clear();
             }
         }
 
