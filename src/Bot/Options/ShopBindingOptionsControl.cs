@@ -69,19 +69,18 @@ namespace Bot.Options
             if (_shop == null || _connection == null) return;
             try
             {
-                _connection.SetServerUrl(_serverUrl.Text);
                 var candidate = (_token.Password ?? string.Empty).Trim();
+                if (candidate.Length > 0
+                    && !_shop.HasStableSellerId
+                    && _allowNicknameFallback.IsChecked != true)
+                {
+                    throw new InvalidOperationException(
+                        "当前千牛身份没有 TargetId。若必须临时使用，请勾选昵称回退确认后再保存。" );
+                }
+
+                _connection.SetServerUrl(_serverUrl.Text);
                 if (candidate.Length > 0)
                 {
-                    if (!_shop.HasStableSellerId && _allowNicknameFallback.IsChecked != true)
-                    {
-                        MessageBox.Show(
-                            "当前千牛身份没有 TargetId，不能安全确认长期店铺身份。若必须临时使用，请勾选昵称回退确认后重新保存。",
-                            "店铺身份不稳定",
-                            MessageBoxButton.OK,
-                            MessageBoxImage.Warning);
-                        return;
-                    }
                     _connection.SaveToken(candidate);
                     _token.Password = string.Empty;
                 }
@@ -95,7 +94,7 @@ namespace Bot.Options
             catch (Exception ex)
             {
                 Log.Exception(ex);
-                MessageBox.Show("保存店铺绑定失败：" + ex.Message, "保存失败", MessageBoxButton.OK, MessageBoxImage.Error);
+                throw;
             }
         }
 
