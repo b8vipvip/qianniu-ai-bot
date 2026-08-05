@@ -31,19 +31,24 @@ def test_web_page_exposes_independent_bot_master_switch():
     assert "Windows 当前实际状态" in script
 
 
-def test_server_persists_desired_and_current_bot_state_per_client_token():
+def test_server_uses_dedicated_per_client_state_without_json_sync_races():
     source = read(SERVER)
+    assert "CREATE TABLE IF NOT EXISTS bot_client_bot_enabled" in source
+    assert "client_id INTEGER PRIMARY KEY" in source
+    assert "desired_enabled INTEGER" in source
+    assert "current_enabled INTEGER" in source
     assert '@router.get("/api/bot-web/bot-enabled")' in source
     assert '@router.put("/api/bot-web/bot-enabled")' in source
     assert '@router.post("/api/runtime/v1/bot-web/bot-enabled-sync")' in source
     assert "Depends(bot_web_console._web_client)" in source
     assert "Depends(bot_web_console._runtime_client)" in source
     assert 'request.headers.get("x-shop-key")' in source
-    assert 'desired["bot_enabled"] = bool(data.enabled)' in source
-    assert 'current["bot_enabled"] = current_enabled' in source
-    assert 'if "bot_enabled" not in desired' in source
-    assert 'desired["bot_enabled"] = current_enabled' in source
-    assert "last_seen_at" in source
+    assert "ON CONFLICT(client_id) DO UPDATE SET" in source
+    assert "desired_enabled=COALESCE(" in source
+    assert "excluded.current_enabled" in source
+    assert "last_seen_at=excluded.last_seen_at" in source
+    assert "current_settings_json" not in source
+    assert "desired_settings_json" not in source
 
 
 def test_windows_sync_applies_web_value_in_shop_scope_and_reports_current_value():
@@ -68,6 +73,7 @@ def test_server_bootstrap_container_and_ci_package_new_bridge():
     workflow = read(WORKFLOW)
     assert "import bot_web_bot_enabled" in bootstrap
     assert "bot_web_bot_enabled.install(control_plane)" in bootstrap
+    assert "bot_web_bot_enabled.init_db()" in bootstrap
     assert "bot_web_bot_enabled.py" in dockerfile
     assert "python -m py_compile app.py bootstrap.py bot_web_bot_enabled.py" in workflow
     assert "node --check static/bot-web-bot-enabled.js" in workflow
