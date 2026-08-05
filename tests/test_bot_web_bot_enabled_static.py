@@ -51,6 +51,14 @@ def test_server_uses_dedicated_per_client_state_without_json_sync_races():
     assert "desired_settings_json" not in source
 
 
+def test_server_binds_each_client_token_to_one_shop_key():
+    source = read(SERVER)
+    assert 'SELECT shop_key FROM bot_client_bot_enabled WHERE client_id=?' in source
+    assert "bound_shop_key and bound_shop_key != shop_key" in source
+    assert "该客户端令牌已绑定其他 ShopKey" in source
+    assert "status_code=409" in source
+
+
 def test_windows_sync_applies_web_value_in_shop_scope_and_reports_current_value():
     source = read(WINDOWS)
     props = read(PROPS)
