@@ -8,32 +8,39 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_windows_bridge_uses_existing_control_plane_token_only():
+def test_windows_bridge_uses_each_shop_control_plane_token_only():
     source = read("src/Bot/ChromeNs/WeComAppBridgeClient.cs")
-    assert "ControlPlaneUrl" in source
-    assert "ControlPlaneClientToken" in source
+    assert "ShopControlPlaneConnectionStore" in source
+    assert "SnapshotOnlineShops" in source
+    assert '"X-Shop-Key"' in source
+    assert "ControlPlaneClientToken" not in source
     assert "WECOM_APP_SECRET" not in source
     assert "WECOM_CALLBACK_AES_KEY" not in source
     assert "/api/runtime/v1/handoff/replies/next" in source
     assert "/complete" in source
 
 
-def test_handoff_reply_is_sent_to_exact_seller_and_buyer_then_learned():
+def test_handoff_reply_is_sent_to_exact_shop_seller_and_buyer_then_learned():
     source = read("src/Bot/ChromeNs/WeComAppBridgeClient.cs")
-    locate = source.index("QN.FindExistingBySellerNick(seller)")
-    send = source.index("SendTextWithRetryAsync(buyer, reply", locate)
+    locate = source.index("FindQn(shop, seller)")
+    scope = source.index("ShopSettingsScope.Enter(shop)", locate)
+    send = source.index("SendTextWithRetryAsync(buyer, reply", scope)
     learn = source.index("KnowledgeLearningService.QueueLearn", send)
-    complete = source.index("CompleteAsync", learn)
-    assert locate < send < learn < complete
+    complete = source.index("CompleteAsync(shop", learn)
+    assert locate < scope < send < learn < complete
     assert '"人工回复-企业微信应用"' in source
     assert "ReplyDeduplicationService.RememberDelivered" in source
+    assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in source
+    assert "QN.CurQN" not in source
 
 
-def test_notification_channel_creates_server_ticket():
+def test_notification_channel_creates_shop_bound_server_ticket():
     source = read("src/Bot/ChromeNs/HandoffNotificationService.cs")
     assert "企业微信应用消息=" in source
     assert "WeComAppBridgeClient.SendNotificationAsync" in source
     assert "BuildMessage" in source
+    assert "ShopKey" in source
+    assert "ShopSettingsScope.Enter(shop)" in source
 
 
 def test_server_uses_ticket_bound_reply_queue_and_encrypted_callback():
