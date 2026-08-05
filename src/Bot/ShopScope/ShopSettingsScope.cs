@@ -4,8 +4,8 @@ using System.Threading;
 namespace Bot.ShopScope
 {
     /// <summary>
-    /// Short-lived explicit scope for settings load/save operations. It must not be used as the
-    /// message-runtime ownership mechanism; message processing will carry ShopContext directly.
+    /// Short-lived explicit operation scope. Settings windows and the buyer-burst dispatcher enter
+    /// it with a resolved ShopContext; it is never populated from QN.CurQN inside asynchronous work.
     /// </summary>
     internal static class ShopSettingsScope
     {
