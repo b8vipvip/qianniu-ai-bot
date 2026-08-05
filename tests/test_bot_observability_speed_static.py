@@ -46,7 +46,9 @@ def test_speed_optimizations_are_guarded():
     assert "Clamp(adjusted, 300, 950)" in timing
     assert "Clamp(adjusted, 650, 1550)" in timing
     assert "TimeSpan.FromSeconds(4)" in burst
-    assert "Task.Run(() => RefreshRemoteHistory" in context
+    assert "Task.Run" in context
+    assert "RefreshRemoteHistory(state, shop, seller, buyer, ccode)" in context
+    assert "ShopSettingsScope.Enter(shop)" in context
     assert "ConfirmStableAsync(220)" in qn
     assert "SharedHttp" in ai
     assert "Timeout.InfiniteTimeSpan" in ai
