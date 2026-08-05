@@ -12,6 +12,25 @@ namespace Bot.ShopScope
 
         public static ShopContext ResolveBySellerNick(string sellerNick)
         {
+            return Profiles.GetOrCreate(ResolveBySellerNickCore(sellerNick)).ToContext();
+        }
+
+        public static ShopContext ResolveRuntimeBySellerNick(string sellerNick)
+        {
+            return ResolveBySellerNickCore(sellerNick);
+        }
+
+        public static ShopContext ResolveCurrentForUi()
+        {
+            var current = QN.CurQN;
+            if (current == null || current.Seller == null)
+                throw new InvalidOperationException("当前没有可用的千牛卖家会话。" );
+            var context = ShopIdentityResolver.Resolve(current.Seller);
+            return Profiles.GetOrCreate(context).ToContext();
+        }
+
+        private static ShopContext ResolveBySellerNickCore(string sellerNick)
+        {
             sellerNick = (sellerNick ?? string.Empty).Trim();
             if (sellerNick.Length == 0)
                 throw new ArgumentException("卖家昵称不能为空。", nameof(sellerNick));
@@ -47,16 +66,7 @@ namespace Bot.ShopScope
             if (matches.Count > 1)
                 throw new InvalidOperationException("同一卖家昵称匹配到多个不同店铺身份，已阻止自动绑定。" );
 
-            return Profiles.GetOrCreate(matches[0]).ToContext();
-        }
-
-        public static ShopContext ResolveCurrentForUi()
-        {
-            var current = QN.CurQN;
-            if (current == null || current.Seller == null)
-                throw new InvalidOperationException("当前没有可用的千牛卖家会话。" );
-            var context = ShopIdentityResolver.Resolve(current.Seller);
-            return Profiles.GetOrCreate(context).ToContext();
+            return matches[0];
         }
 
         private static IList<QN> SnapshotQns()
