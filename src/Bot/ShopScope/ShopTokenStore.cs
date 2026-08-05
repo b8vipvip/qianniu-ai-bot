@@ -134,7 +134,16 @@ namespace Bot.ShopScope
         {
             lock (Sync)
             {
-                if (File.Exists(_path)) File.Delete(_path);
+                DeleteIfExists(_path);
+                DeleteIfExists(_path + ".bak");
+
+                var directory = Path.GetDirectoryName(_path);
+                if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return;
+                var pattern = Path.GetFileName(_path) + ".tmp-*";
+                foreach (var temp in Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly))
+                {
+                    DeleteIfExists(temp);
+                }
             }
         }
 
@@ -206,6 +215,17 @@ namespace Bot.ShopScope
             finally
             {
                 if (File.Exists(temp)) File.Delete(temp);
+            }
+        }
+
+        private static void DeleteIfExists(string path)
+        {
+            try
+            {
+                if (File.Exists(path)) File.Delete(path);
+            }
+            catch
+            {
             }
         }
 
