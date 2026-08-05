@@ -1,4 +1,5 @@
 ﻿using Bot.ChatRecord;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -34,7 +35,8 @@ namespace Bot.ChromeNs
         {
             public readonly object Sync = new object();
             public readonly List<ConversationContextTurn> Turns = new List<ConversationContextTurn>();
-            public readonly Dictionary<string, DateTime> WithdrawnAnswers = new Dictionary<string, DateTime>(StringComparer.Ordinal);
+            public readonly Dictionary<string, DateTime> WithdrawnAnswers =
+                new Dictionary<string, DateTime>(StringComparer.Ordinal);
             public DateTime LastRemoteRefresh = DateTime.MinValue;
             public PendingPresetReply PendingPreset;
         }
@@ -57,12 +59,35 @@ namespace Bot.ChromeNs
             var buyer = GetBuyerNick(message, seller);
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
 
-            var state = GetState(seller, buyer);
-            RecordMessage(state, seller, buyer, message, messageText);
-            var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
-            if (!string.IsNullOrWhiteSpace(ccode))
+            var shop = ResolveShop(seller);
+            IDisposable scope = null;
+            try
             {
-                Task.Run(() => RefreshRemoteHistory(state, seller, buyer, ccode));
+                if (shop != null && ShopSettingsScope.Current == null)
+                    scope = ShopSettingsScope.Enter(shop);
+                var state = GetState(seller, buyer);
+                RecordMessage(state, seller, buyer, message, messageText);
+                var ccode = message.cid == null ? string.Empty : (message.cid.ccode ?? string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(ccode))
+                {
+                    Task.Run(() =>
+                    {
+                        IDisposable asyncScope = null;
+                        try
+                        {
+                            if (shop != null) asyncScope = ShopSettingsScope.Enter(shop);
+                            RefreshRemoteHistory(state, shop, seller, buyer, ccode);
+                        }
+                        finally
+                        {
+                            if (asyncScope != null) asyncScope.Dispose();
+                        }
+                    });
+                }
+            }
+            finally
+            {
+                if (scope != null) scope.Dispose();
             }
         }
 
@@ -116,7 +141,7 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
 
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
-            var seed = StableHash(messageKey + "|" + messageText);
+            var seed = StableHash(ScopeKey(seller) + "|" + messageKey + "|" + messageText);
             var reply = ProductLinkReplies[Math.Abs(seed % ProductLinkReplies.Length)];
             var state = GetState(seller, buyer);
             lock (state.Sync)
@@ -156,7 +181,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static List<ConversationContextTurn> GetRecentTurns(string seller, string buyer, string currentQuestion, int maxTurns)
+        public static List<ConversationContextTurn> GetRecentTurns(
+            string seller,
+            string buyer,
+            string currentQuestion,
+            int maxTurns)
         {
             TimelineState state;
             if (!States.TryGetValue(Key(seller, buyer), out state)) return new List<ConversationContextTurn>();
@@ -201,7 +230,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        public static bool TryGetLatestBuyerQuestion(string seller, string buyer, out string question, out DateTime timestamp)
+        public static bool TryGetLatestBuyerQuestion(
+            string seller,
+            string buyer,
+            out string question,
+            out DateTime timestamp)
         {
             question = string.Empty;
             timestamp = DateTime.MinValue;
@@ -229,7 +262,9 @@ namespace Bot.ChromeNs
             foreach (var turn in turns)
             {
                 var speaker = turn.Role == "assistant" ? "客服" : "买家";
-                var time = turn.Timestamp == DateTime.MinValue ? "时间未知" : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
+                var time = turn.Timestamp == DateTime.MinValue
+                    ? "时间未知"
+                    : turn.Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
                 var text = (turn.Text ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
                 if (text.Length > 500) text = text.Substring(0, 500) + "...";
                 sb.Append('[').Append(time).Append(' ').Append(speaker).Append("] ").AppendLine(text);
@@ -250,7 +285,12 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void RefreshRemoteHistory(TimelineState state, string seller, string buyer, string ccode)
+        private static void RefreshRemoteHistory(
+            TimelineState state,
+            ShopContext shop,
+            string seller,
+            string buyer,
+            string ccode)
         {
             lock (state.Sync)
             {
@@ -260,7 +300,7 @@ namespace Bot.ChromeNs
 
             try
             {
-                var qn = QN.FindExistingBySellerNick(seller) ?? QN.CurQN;
+                var qn = FindQn(shop, seller);
                 if (qn == null || qn.CDP == null) return;
                 var response = qn.CDP.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
@@ -270,7 +310,9 @@ namespace Bot.ChromeNs
                     msgid = "-1",
                     msgtime = "-1"
                 }).GetAwaiter().GetResult();
-                var messages = response == null ? null : response["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
+                var messages = response == null
+                    ? null
+                    : response["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
                 if (messages == null) return;
                 foreach (var item in messages.Where(m => m != null).OrderBy(GetSortValue))
                 {
@@ -279,11 +321,40 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.Info("读取会话上下文失败: seller=" + seller + ", buyer=" + buyer + ", error=" + SafeLog(ex.Message));
+                Log.Info("读取本店会话上下文失败: shop=" + (shop == null ? "unknown" : shop.ShopKey)
+                    + ", seller=" + seller + ", buyer=" + buyer + ", error=" + SafeLog(ex.Message));
             }
         }
 
-        private static void RecordMessage(TimelineState state, string seller, string buyer, QNChatMessage message, string text)
+        private static QN FindQn(ShopContext shop, string seller)
+        {
+            if (shop == null) return null;
+            try
+            {
+                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                foreach (var qn in qns)
+                {
+                    if (qn == null || qn.Seller == null) continue;
+                    if (!string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                        (seller ?? string.Empty).Trim(), StringComparison.Ordinal)) continue;
+                    try
+                    {
+                        if (string.Equals(ShopIdentityResolver.Resolve(qn.Seller).ShopKey,
+                            shop.ShopKey, StringComparison.Ordinal)) return qn;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return null;
+        }
+
+        private static void RecordMessage(
+            TimelineState state,
+            string seller,
+            string buyer,
+            QNChatMessage message,
+            string text)
         {
             if (message == null) return;
             var timestamp = GetMessageTime(message);
@@ -307,10 +378,11 @@ namespace Bot.ChromeNs
             {
                 return;
             }
-            var messageKey = IncomingMessageSafety.BuildMessageKey(message, cleanText);
+            var messageKey = ScopeKey(seller) + "|" + IncomingMessageSafety.BuildMessageKey(message, cleanText);
             lock (state.Sync)
             {
-                if (!string.IsNullOrWhiteSpace(messageKey) && state.Turns.Any(t => t.MessageKey == messageKey)) return;
+                if (!string.IsNullOrWhiteSpace(messageKey)
+                    && state.Turns.Any(t => t.MessageKey == messageKey)) return;
                 state.Turns.Add(new ConversationContextTurn
                 {
                     Role = role,
@@ -329,34 +401,42 @@ namespace Bot.ChromeNs
             {
                 var candidate = state.Turns
                     .Where(t => t != null && t.Role == "assistant" && !t.Withdrawn)
-                    .Where(t => withdrawalTime == DateTime.MinValue || t.Timestamp == DateTime.MinValue || t.Timestamp <= withdrawalTime.AddSeconds(3))
+                    .Where(t => withdrawalTime == DateTime.MinValue
+                        || t.Timestamp == DateTime.MinValue
+                        || t.Timestamp <= withdrawalTime.AddSeconds(3))
                     .OrderByDescending(t => t.Timestamp)
                     .FirstOrDefault();
                 if (candidate == null) return;
                 candidate.Withdrawn = true;
                 var normalized = NormalizeText(candidate.Text);
                 if (!string.IsNullOrWhiteSpace(normalized)) state.WithdrawnAnswers[normalized] = DateTime.Now;
-                Log.Info("已记录客服撤回回复: answerHash=" + StableHash(normalized).ToString(CultureInfo.InvariantCulture));
+                Log.Info("已记录本店客服撤回回复: answerHash="
+                    + StableHash(normalized).ToString(CultureInfo.InvariantCulture));
             }
         }
 
         private static bool IsSellerWithdrawal(QNChatMessage message, string text, string seller)
         {
-            var from = message == null || message.fromid == null ? string.Empty : (message.fromid.nick ?? string.Empty).Trim();
+            var from = message == null || message.fromid == null
+                ? string.Empty
+                : (message.fromid.nick ?? string.Empty).Trim();
             if (!string.IsNullOrWhiteSpace(seller) && from == seller) return true;
             var compact = Compact(CollectVisibleText(message, text));
-            if (compact.StartsWith("你撤回", StringComparison.Ordinal)
+            return compact.StartsWith("你撤回", StringComparison.Ordinal)
                 || compact.StartsWith("您撤回", StringComparison.Ordinal)
                 || compact.StartsWith("客服撤回", StringComparison.Ordinal)
-                || compact.StartsWith("卖家撤回", StringComparison.Ordinal)) return true;
-            return false;
+                || compact.StartsWith("卖家撤回", StringComparison.Ordinal);
         }
 
         private static void Cleanup(TimelineState state, DateTime now)
         {
-            state.Turns.RemoveAll(t => t == null || (t.Timestamp != DateTime.MinValue && t.Timestamp < now.AddDays(-7)));
+            state.Turns.RemoveAll(t => t == null
+                || (t.Timestamp != DateTime.MinValue && t.Timestamp < now.AddDays(-7)));
             if (state.Turns.Count > 100) state.Turns.RemoveRange(0, state.Turns.Count - 100);
-            var expired = state.WithdrawnAnswers.Where(x => x.Value < now.AddDays(-7)).Select(x => x.Key).ToList();
+            var expired = state.WithdrawnAnswers
+                .Where(x => x.Value < now.AddDays(-7))
+                .Select(x => x.Key)
+                .ToList();
             foreach (var key in expired) state.WithdrawnAnswers.Remove(key);
             if (state.PendingPreset != null && state.PendingPreset.ExpiresAt < now) state.PendingPreset = null;
         }
@@ -368,15 +448,37 @@ namespace Bot.ChromeNs
 
         private static string Key(string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim() + "#" + (buyer ?? string.Empty).Trim();
+            return ScopeKey(seller) + "#" + (seller ?? string.Empty).Trim()
+                + "#" + (buyer ?? string.Empty).Trim();
+        }
+
+        private static string ScopeKey(string seller)
+        {
+            var current = ShopSettingsScope.Current;
+            if (current != null) return current.ShopKey;
+            var resolved = ResolveShop(seller);
+            return resolved == null
+                ? "legacy-" + StableHash((seller ?? string.Empty).Trim()).ToString(CultureInfo.InvariantCulture)
+                : resolved.ShopKey;
+        }
+
+        private static ShopContext ResolveShop(string seller)
+        {
+            var current = ShopSettingsScope.Current;
+            if (current != null) return current;
+            if (string.IsNullOrWhiteSpace(seller)) return null;
+            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch { return null; }
         }
 
         private static string GetSellerNick(QNChatMessage message)
         {
             if (message == null) return string.Empty;
-            if (message.loginid != null && !string.IsNullOrWhiteSpace(message.loginid.nick)) return message.loginid.nick.Trim();
-            var qn = QN.CurQN;
-            if (qn != null && qn.Seller != null && !string.IsNullOrWhiteSpace(qn.Seller.Nick)) return qn.Seller.Nick.Trim();
+            if (message.loginid != null && !string.IsNullOrWhiteSpace(message.loginid.nick))
+                return message.loginid.nick.Trim();
+            var current = ShopSettingsScope.Current;
+            if (current != null && !string.IsNullOrWhiteSpace(current.DisplayName))
+                return current.DisplayName.Trim();
             return message.toid == null ? string.Empty : (message.toid.nick ?? string.Empty).Trim();
         }
 
@@ -396,8 +498,10 @@ namespace Bot.ChromeNs
             var sb = new StringBuilder();
             if (message.originalData != null)
             {
-                if (!string.IsNullOrWhiteSpace(message.originalData.text)) sb.Append(message.originalData.text.Trim());
-                if (message.originalData.header != null && !string.IsNullOrWhiteSpace(message.originalData.header.summary))
+                if (!string.IsNullOrWhiteSpace(message.originalData.text))
+                    sb.Append(message.originalData.text.Trim());
+                if (message.originalData.header != null
+                    && !string.IsNullOrWhiteSpace(message.originalData.header.summary))
                 {
                     if (sb.Length > 0) sb.Append(' ');
                     sb.Append(message.originalData.header.summary.Trim());
@@ -419,8 +523,10 @@ namespace Bot.ChromeNs
                     if (!string.IsNullOrWhiteSpace(message.originalData.text)) parts.Add(message.originalData.text);
                     if (message.originalData.header != null)
                     {
-                        if (!string.IsNullOrWhiteSpace(message.originalData.header.summary)) parts.Add(message.originalData.header.summary);
-                        if (!string.IsNullOrWhiteSpace(message.originalData.header.title)) parts.Add(message.originalData.header.title);
+                        if (!string.IsNullOrWhiteSpace(message.originalData.header.summary))
+                            parts.Add(message.originalData.header.summary);
+                        if (!string.IsNullOrWhiteSpace(message.originalData.header.title))
+                            parts.Add(message.originalData.header.title);
                     }
                 }
             }
@@ -453,9 +559,12 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    if (raw > 1000000000000000L) localTime = DateTimeOffset.FromUnixTimeMilliseconds(raw / 1000L).LocalDateTime;
-                    else if (raw > 100000000000L) localTime = DateTimeOffset.FromUnixTimeMilliseconds(raw).LocalDateTime;
-                    else if (raw > 1000000000L) localTime = DateTimeOffset.FromUnixTimeSeconds(raw).LocalDateTime;
+                    if (raw > 1000000000000000L)
+                        localTime = DateTimeOffset.FromUnixTimeMilliseconds(raw / 1000L).LocalDateTime;
+                    else if (raw > 100000000000L)
+                        localTime = DateTimeOffset.FromUnixTimeMilliseconds(raw).LocalDateTime;
+                    else if (raw > 1000000000L)
+                        localTime = DateTimeOffset.FromUnixTimeSeconds(raw).LocalDateTime;
                     if (localTime != DateTime.MinValue) return true;
                 }
                 catch { }
