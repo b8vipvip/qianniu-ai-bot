@@ -18,8 +18,7 @@ namespace Bot.ShopScope
         private static readonly HashSet<string> AllowedSubKeys =
             new HashSet<string>(StringComparer.Ordinal)
             {
-                "ai",
-                "feature"
+                "ai"
             };
 
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
