@@ -179,21 +179,24 @@ namespace Bot.Options
 
             _allowNicknameFallback = new CheckBox
             {
-                Content = "我确认当前版本未提供稳定 TargetId，临时按规范化昵称绑定（店铺改名后需要重新处理）",
+                Content = new TextBlock
+                {
+                    Text = "我确认当前版本未提供稳定 TargetId，临时按规范化昵称绑定（店铺改名后需要重新处理）",
+                    TextWrapping = TextWrapping.Wrap
+                },
                 Foreground = Brushes.DarkOrange,
-                TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 10)
             };
             panel.Children.Add(_allowNicknameFallback);
 
             var buttons = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
-            _importLegacy = Button("导入旧全局令牌", 132);
+            _importLegacy = MakeButton("导入旧全局令牌", 132);
             _importLegacy.Click += ImportLegacy_Click;
             buttons.Children.Add(_importLegacy);
-            _clearToken = Button("清除本店令牌", 118);
+            _clearToken = MakeButton("清除本店令牌", 118);
             _clearToken.Click += ClearToken_Click;
             buttons.Children.Add(_clearToken);
-            _openFolder = Button("打开本店配置目录", 142);
+            _openFolder = MakeButton("打开本店配置目录", 142);
             _openFolder.Click += OpenFolder_Click;
             buttons.Children.Add(_openFolder);
             panel.Children.Add(buttons);
@@ -298,7 +301,7 @@ namespace Bot.Options
             return new TextBlock { Text = text, FontWeight = FontWeights.SemiBold };
         }
 
-        private static Button Button(string text, double width)
+        private static Button MakeButton(string text, double width)
         {
             return new Button
             {
