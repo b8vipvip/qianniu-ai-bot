@@ -85,7 +85,7 @@ namespace Bot.Options
                     _token.Password = string.Empty;
                 }
                 RefreshTokenStatus();
-                _status.Text = "本店绑定已保存。AI/功能设置将写入该 ShopKey 的独立配置目录。";
+                _status.Text = "本店绑定已保存。AI 模型/API 设置将写入该 ShopKey 的独立配置目录。";
                 _status.Foreground = Brushes.SeaGreen;
                 Log.Info("店铺绑定已保存: shopKey=" + _shop.ShopKey
                     + ", stable=" + _shop.HasStableSellerId
@@ -111,7 +111,7 @@ namespace Bot.Options
         public void NavHelp()
         {
             MessageBox.Show(
-                "每个店铺使用独立 ShopKey 和独立 Bot 客户端令牌。令牌使用 Windows DPAPI CurrentUser 加密，只能由当前 Windows 用户在本机解密。统一 API 地址仍属于全局共享设置。旧全局令牌不会自动复制，必须点击“导入旧全局令牌”并保存。",
+                "每个店铺使用独立 ShopKey 和独立 Bot 客户端令牌。令牌使用 Windows DPAPI CurrentUser 加密，只能由当前 Windows 用户在本机解密。统一 API 地址仍属于全局共享设置。旧全局令牌不会自动复制，必须点击“导入旧全局令牌”并保存。本阶段已隔离令牌与 AI 模型/API 设置；知识库、规则、Web 同步和云备份仍由后续阶段改造。",
                 "店铺绑定帮助",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -136,7 +136,7 @@ namespace Bot.Options
             });
             panel.Children.Add(new TextBlock
             {
-                Text = "令牌按店铺独立加密保存。店铺显示名仅用于展示，不参与目录或授权。",
+                Text = "令牌按店铺独立加密保存。店铺显示名仅用于展示，不参与目录或授权。当前阶段同时隔离 AI 模型/API 设置。",
                 Foreground = Brushes.DimGray,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 12)
@@ -235,7 +235,7 @@ namespace Bot.Options
                 _connection.ClearToken();
                 _token.Password = string.Empty;
                 RefreshTokenStatus();
-                _status.Text = "本店令牌已清除。";
+                _status.Text = "本店令牌及其加密备份副本已清除。";
                 _status.Foreground = Brushes.DarkOrange;
             }
             catch (Exception ex)
