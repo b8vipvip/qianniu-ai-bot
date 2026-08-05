@@ -46,6 +46,7 @@ def initialize_control_plane_extensions() -> None:
     wecom_settings.init_wecom_settings_db()
     recharge_status_query.init_recharge_query_db()
     bot_web_console.init_bot_web_db()
+    bot_web_bot_enabled.init_db()
     bot_web_conversation_knowledge.init_db()
     client_data_backup.init_db()
     wecom_settings.apply_to_bridge(wecom_bridge)
