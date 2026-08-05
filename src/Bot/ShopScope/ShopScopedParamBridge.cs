@@ -18,7 +18,10 @@ namespace Bot.ShopScope
         private static readonly HashSet<string> AllowedSubKeys =
             new HashSet<string>(StringComparer.Ordinal)
             {
-                "ai"
+                "ai",
+                "feature",
+                "shop-cloud",
+                "shop-runtime"
             };
 
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -38,18 +41,14 @@ namespace Bot.ShopScope
             value = null;
             var shop = ShopSettingsScope.Current;
             if (shop == null || !AllowedSubKeys.Contains(subKey ?? string.Empty)) return false;
-
-            var store = new ShopScopedSettingsStore(shop, Paths);
-            return store.TryGetString(masterKey, out value);
+            return new ShopScopedSettingsStore(shop, Paths).TryGetString(masterKey, out value);
         }
 
         private static bool TryWrite(string masterKey, string subKey, string value)
         {
             var shop = ShopSettingsScope.Current;
             if (shop == null || !AllowedSubKeys.Contains(subKey ?? string.Empty)) return false;
-
-            var store = new ShopScopedSettingsStore(shop, Paths);
-            store.SetString(masterKey, value ?? string.Empty);
+            new ShopScopedSettingsStore(shop, Paths).SetString(masterKey, value ?? string.Empty);
             return true;
         }
     }
