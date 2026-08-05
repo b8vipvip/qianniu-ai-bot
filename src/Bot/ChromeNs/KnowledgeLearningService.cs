@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -35,7 +36,8 @@ namespace Bot.ChromeNs
             public DateTime ExpiresAt;
         }
 
-        private static readonly object SaveLock = new object();
+        private static readonly ConcurrentDictionary<string, object> SaveLocks =
+            new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, SourceStamp> Sources =
             new ConcurrentDictionary<string, SourceStamp>();
         private static readonly ConcurrentDictionary<string, BlockStamp> Blocks =
@@ -53,11 +55,7 @@ namespace Bot.ChromeNs
             string source)
         {
             if (string.IsNullOrWhiteSpace(answer) || string.IsNullOrWhiteSpace(source)) return;
-            var stamp = new SourceStamp
-            {
-                Source = source,
-                ExpiresAt = DateTime.Now.AddMinutes(30)
-            };
+            var stamp = new SourceStamp { Source = source, ExpiresAt = DateTime.Now.AddMinutes(30) };
             Sources[AnswerKey(seller, buyer, question, answer)] = stamp;
             Sources[QuestionSourceKey(seller, buyer, question)] = stamp;
         }
@@ -71,15 +69,9 @@ namespace Bot.ChromeNs
             Cleanup();
             SourceStamp stamp;
             if (Sources.TryGetValue(AnswerKey(seller, buyer, question, answer), out stamp)
-                && stamp.ExpiresAt >= DateTime.Now)
-            {
-                return stamp.Source;
-            }
+                && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
             if (Sources.TryGetValue(QuestionSourceKey(seller, buyer, question), out stamp)
-                && stamp.ExpiresAt >= DateTime.Now)
-            {
-                return stamp.Source;
-            }
+                && stamp.ExpiresAt >= DateTime.Now) return stamp.Source;
             return string.Empty;
         }
 
@@ -93,17 +85,13 @@ namespace Bot.ChromeNs
             matched = null;
             score = 0;
             var policy = BotFeatureStore.GetMessagePolicy();
-            if (policy == null || !policy.EnableKnowledgeBase || string.IsNullOrWhiteSpace(question))
-            {
-                return false;
-            }
+            if (policy == null || !policy.EnableKnowledgeBase || string.IsNullOrWhiteSpace(question)) return false;
 
             ConversationContextTurn latestAgentPrompt = null;
             if (IsShortContextReply(question))
             {
                 var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 8);
-                latestAgentPrompt = turns
-                    .LastOrDefault(x => x.Role == "assistant" && !string.IsNullOrWhiteSpace(x.Text));
+                latestAgentPrompt = turns.LastOrDefault(x => x.Role == "assistant" && !string.IsNullOrWhiteSpace(x.Text));
             }
 
             foreach (var item in BotFeatureStore.GetKnowledgeBase()
@@ -111,9 +99,7 @@ namespace Bot.ChromeNs
             {
                 var currentScore = Score(item, question, false);
                 if (latestAgentPrompt != null)
-                {
                     currentScore = Math.Max(currentScore, Score(item, latestAgentPrompt.Text, true));
-                }
                 if (currentScore > score)
                 {
                     score = currentScore;
@@ -139,18 +125,13 @@ namespace Bot.ChromeNs
             var title = KnowledgeAiService.NormalizeQuestion(item.Title);
             if (string.IsNullOrWhiteSpace(q) || string.IsNullOrWhiteSpace(title)) return 0;
             if (q == title) return contextOnly ? 0.91 : 1.0;
-            if (Math.Min(q.Length, title.Length) >= 4
-                && (q.Contains(title) || title.Contains(q)))
-            {
+            if (Math.Min(q.Length, title.Length) >= 4 && (q.Contains(title) || title.Contains(q)))
                 return contextOnly ? 0.87 : 0.95;
-            }
             foreach (var keyword in SplitKeywords(item.Keywords))
             {
                 var normalizedKeyword = KnowledgeAiService.NormalizeQuestion(keyword);
                 if (normalizedKeyword.Length >= 2 && q.Contains(normalizedKeyword))
-                {
                     return contextOnly ? 0.85 : 0.90;
-                }
             }
             var similarity = BigramSimilarity(q, title);
             if (similarity >= 0.68) return contextOnly ? 0.84 : 0.86;
@@ -160,8 +141,7 @@ namespace Bot.ChromeNs
         private static IEnumerable<string> SplitKeywords(string value)
         {
             return (value ?? string.Empty)
-                .Split(new[] { ',', '，', ';', '；', '|', ' ', '\r', '\n' },
-                    StringSplitOptions.RemoveEmptyEntries)
+                .Split(new[] { ',', '，', ';', '；', '|', ' ', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(x => x.Trim());
         }
 
@@ -177,10 +157,7 @@ namespace Bot.ChromeNs
         private static HashSet<string> Bigrams(string value)
         {
             var set = new HashSet<string>(StringComparer.Ordinal);
-            for (var i = 0; i + 1 < (value ?? string.Empty).Length; i++)
-            {
-                set.Add(value.Substring(i, 2));
-            }
+            for (var i = 0; i + 1 < (value ?? string.Empty).Length; i++) set.Add(value.Substring(i, 2));
             return set;
         }
 
@@ -199,26 +176,13 @@ namespace Bot.ChromeNs
             question = string.Empty;
             manualAnswer = string.Empty;
             if (qn == null || qn.Seller == null) return false;
-
             var seller = qn.Seller.Nick ?? string.Empty;
             DateTime bypassUntil;
             var sendKey = SendKey(seller, buyer, candidateAnswer);
-            if (ManualBypass.TryRemove(sendKey, out bypassUntil)
-                && bypassUntil >= DateTime.Now)
-            {
-                return false;
-            }
+            if (ManualBypass.TryRemove(sendKey, out bypassUntil) && bypassUntil >= DateTime.Now) return false;
 
             DateTime questionTime;
-            if (!ConversationContextStore.TryGetLatestBuyerQuestion(
-                seller,
-                buyer,
-                out question,
-                out questionTime))
-            {
-                return false;
-            }
-
+            if (!ConversationContextStore.TryGetLatestBuyerQuestion(seller, buyer, out question, out questionTime)) return false;
             try
             {
                 var flags = BindingFlags.Instance | BindingFlags.NonPublic;
@@ -227,27 +191,12 @@ namespace Bot.ChromeNs
                 var textField = type.GetField("_lastSellerEchoText", flags);
                 var timeField = type.GetField("_lastSellerEchoTime", flags);
                 if (buyerField == null || textField == null || timeField == null) return false;
-
                 var echoBuyer = Convert.ToString(buyerField.GetValue(qn));
                 var echoText = Convert.ToString(textField.GetValue(qn));
                 var echoTime = (DateTime)timeField.GetValue(qn);
-                if (!string.Equals(
-                    (echoBuyer ?? string.Empty).Trim(),
-                    (buyer ?? string.Empty).Trim(),
-                    StringComparison.Ordinal))
-                {
-                    return false;
-                }
-                if (echoTime < questionTime.AddMilliseconds(-500)
-                    || echoTime < DateTime.Now.AddMinutes(-20))
-                {
-                    return false;
-                }
-                if (string.IsNullOrWhiteSpace(echoText)
-                    || Normalize(echoText) == Normalize(candidateAnswer))
-                {
-                    return false;
-                }
+                if (!string.Equals((echoBuyer ?? string.Empty).Trim(), (buyer ?? string.Empty).Trim(), StringComparison.Ordinal)) return false;
+                if (echoTime < questionTime.AddMilliseconds(-500) || echoTime < DateTime.Now.AddMinutes(-20)) return false;
+                if (string.IsNullOrWhiteSpace(echoText) || Normalize(echoText) == Normalize(candidateAnswer)) return false;
 
                 manualAnswer = echoText.Trim();
                 Blocks[sendKey] = new BlockStamp
@@ -258,13 +207,12 @@ namespace Bot.ChromeNs
                 };
                 RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
                 QueueLearn(question, manualAnswer, "人工回复", seller, buyer);
-                Log.Info("自动发送已取消：检测到客服人工回复。seller="
-                    + seller + ", buyer=" + buyer);
+                Log.Info("自动发送已取消：检测到本店客服人工回复。seller=" + seller + ", buyer=" + buyer);
                 return true;
             }
             catch (Exception ex)
             {
-                Log.Info("检测客服人工回复失败，继续原发送流程：" + ex.Message);
+                Log.Info("检测本店客服人工回复失败，继续原发送流程：" + ex.Message);
                 return false;
             }
         }
@@ -279,11 +227,7 @@ namespace Bot.ChromeNs
             reason = string.Empty;
             manualAnswer = string.Empty;
             BlockStamp stamp;
-            if (!Blocks.TryRemove(SendKey(seller, buyer, answer), out stamp)
-                || stamp.ExpiresAt < DateTime.Now)
-            {
-                return false;
-            }
+            if (!Blocks.TryRemove(SendKey(seller, buyer, answer), out stamp) || stamp.ExpiresAt < DateTime.Now) return false;
             reason = stamp.Reason;
             manualAnswer = stamp.ManualAnswer;
             return true;
@@ -297,15 +241,22 @@ namespace Bot.ChromeNs
             string buyer)
         {
             if (!CanLearn(question, answer)) return;
+            var shop = ResolveShop(seller);
             Task.Run(async () =>
             {
+                IDisposable scope = null;
                 try
                 {
+                    if (shop != null) scope = ShopSettingsScope.Enter(shop);
                     await LearnAsync(question, answer, sourceType, seller, buyer);
                 }
                 catch (Exception ex)
                 {
-                    Log.Info("知识自动学习失败：" + ex.Message);
+                    Log.Info("本店知识自动学习失败：" + ex.Message);
+                }
+                finally
+                {
+                    if (scope != null) scope.Dispose();
                 }
             });
         }
@@ -317,13 +268,25 @@ namespace Bot.ChromeNs
             string seller,
             string buyer)
         {
+            var resolvedShop = ResolveShop(seller);
+            if (resolvedShop != null && ShopSettingsScope.Current == null)
+            {
+                using (ShopSettingsScope.Enter(resolvedShop))
+                    return await LearnCoreAsync(question, answer, sourceType, seller, buyer);
+            }
+            return await LearnCoreAsync(question, answer, sourceType, seller, buyer);
+        }
+
+        private static async Task<KnowledgeLearningResult> LearnCoreAsync(
+            string question,
+            string answer,
+            string sourceType,
+            string seller,
+            string buyer)
+        {
             if (!CanLearn(question, answer))
             {
-                return new KnowledgeLearningResult
-                {
-                    Success = false,
-                    Message = "问题或答案为空，未写入知识库"
-                };
+                return new KnowledgeLearningResult { Success = false, Message = "问题或答案为空，未写入知识库" };
             }
 
             var context = ConversationContextStore.BuildTimelineText(seller, buyer, question, 10);
@@ -339,12 +302,8 @@ namespace Bot.ChromeNs
                 new JObject
                 {
                     ["role"] = "user",
-                    ["content"] = "来源：" + sourceType
-                        + "\n原始问题：" + safeQuestion
-                        + "\n原始答案：" + safeAnswer
-                        + (string.IsNullOrWhiteSpace(context)
-                            ? string.Empty
-                            : "\n同一买家最近时间线：\n" + RedactSensitive(context))
+                    ["content"] = "来源：" + sourceType + "\n原始问题：" + safeQuestion + "\n原始答案：" + safeAnswer
+                        + (string.IsNullOrWhiteSpace(context) ? string.Empty : "\n同一买家最近时间线：\n" + RedactSensitive(context))
                 }
             };
 
@@ -355,11 +314,7 @@ namespace Bot.ChromeNs
             try
             {
                 var result = await Task.Run(() => MyOpenAI.CallStructuredChat(
-                    messages,
-                    500,
-                    0.05,
-                    90,
-                    CancellationToken.None));
+                    messages, 500, 0.05, 90, CancellationToken.None));
                 if (result.Success)
                 {
                     var parsed = ParseObject(result.Answer);
@@ -369,24 +324,17 @@ namespace Bot.ChromeNs
                     var arr = parsed["keywords"] as JArray;
                     keywords = arr == null
                         ? Convert.ToString(parsed["keywords"])
-                        : string.Join(",", arr.Select(x => x.ToString().Trim())
-                            .Where(x => x.Length > 0));
+                        : string.Join(",", arr.Select(x => x.ToString().Trim()).Where(x => x.Length > 0));
                 }
             }
             catch (Exception ex)
             {
-                Log.Info("AI整理知识失败，使用安全兜底内容：" + ex.Message);
+                Log.Info("AI整理本店知识失败，使用安全兜底内容：" + ex.Message);
             }
-
             if (string.IsNullOrWhiteSpace(learnedQuestion)) learnedQuestion = safeQuestion;
             if (string.IsNullOrWhiteSpace(learnedAnswer)) learnedAnswer = safeAnswer;
             if (string.IsNullOrWhiteSpace(category)) category = "自动学习";
-            return SaveLearned(
-                learnedQuestion,
-                learnedAnswer,
-                category,
-                keywords,
-                sourceType);
+            return SaveLearned(learnedQuestion, learnedAnswer, category, keywords, sourceType);
         }
 
         private static KnowledgeLearningResult SaveLearned(
@@ -396,22 +344,16 @@ namespace Bot.ChromeNs
             string keywords,
             string sourceType)
         {
-            lock (SaveLock)
+            lock (SaveLocks.GetOrAdd(ScopeKey(), _ => new object()))
             {
                 var list = BotFeatureStore.GetKnowledgeBase();
                 var qKey = KnowledgeAiService.NormalizeQuestion(question);
-                var manualPreferred = (sourceType ?? string.Empty)
-                    .StartsWith("人工", StringComparison.Ordinal);
-                var existing = list.FirstOrDefault(
-                    x => KnowledgeAiService.NormalizeQuestion(x.Title) == qKey);
+                var manualPreferred = (sourceType ?? string.Empty).StartsWith("人工", StringComparison.Ordinal);
+                var existing = list.FirstOrDefault(x => KnowledgeAiService.NormalizeQuestion(x.Title) == qKey);
                 var now = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
                 if (existing != null)
                 {
-                    if (manualPreferred
-                        && !string.Equals(
-                            (existing.Answer ?? string.Empty).Trim(),
-                            answer.Trim(),
-                            StringComparison.Ordinal))
+                    if (manualPreferred && !string.Equals((existing.Answer ?? string.Empty).Trim(), answer.Trim(), StringComparison.Ordinal))
                     {
                         existing.Answer = answer.Trim();
                         existing.Category = category;
@@ -421,29 +363,13 @@ namespace Bot.ChromeNs
                         existing.AiGenerated = false;
                         BotFeatureStore.SaveKnowledgeBase(list);
                         RaiseKnowledgeChanged();
-                        return new KnowledgeLearningResult
-                        {
-                            Success = true,
-                            Updated = true,
-                            Message = "已用人工确认答案更新知识库"
-                        };
+                        return new KnowledgeLearningResult { Success = true, Updated = true, Message = "已用人工确认答案更新本店知识库" };
                     }
-                    return new KnowledgeLearningResult
-                    {
-                        Success = true,
-                        Message = "知识库已存在相同问题，未重复添加"
-                    };
+                    return new KnowledgeLearningResult { Success = true, Message = "本店知识库已存在相同问题，未重复添加" };
                 }
-
                 var contentHash = KnowledgeAiService.ContentHash(question, answer);
                 if (list.Any(x => KnowledgeAiService.ContentHash(x.Title, x.Answer) == contentHash))
-                {
-                    return new KnowledgeLearningResult
-                    {
-                        Success = true,
-                        Message = "知识库已存在相同内容，未重复添加"
-                    };
-                }
+                    return new KnowledgeLearningResult { Success = true, Message = "本店知识库已存在相同内容，未重复添加" };
 
                 list.Add(new KnowledgeBaseEntry
                 {
@@ -460,13 +386,16 @@ namespace Bot.ChromeNs
                 });
                 BotFeatureStore.SaveKnowledgeBase(list);
                 RaiseKnowledgeChanged();
-                return new KnowledgeLearningResult
-                {
-                    Success = true,
-                    Added = true,
-                    Message = "已整理并加入知识库"
-                };
+                return new KnowledgeLearningResult { Success = true, Added = true, Message = "已整理并加入本店知识库" };
             }
+        }
+
+        private static ShopContext ResolveShop(string seller)
+        {
+            if (ShopSettingsScope.Current != null) return ShopSettingsScope.Current;
+            if (string.IsNullOrWhiteSpace(seller)) return null;
+            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller); }
+            catch { return null; }
         }
 
         private static JObject ParseObject(string text)
@@ -497,49 +426,45 @@ namespace Bot.ChromeNs
 
         private static string Normalize(string value)
         {
-            return Regex.Replace(
-                (value ?? string.Empty).Trim().ToLowerInvariant(),
-                @"\s+",
-                string.Empty);
+            return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty);
         }
 
-        private static string AnswerKey(
-            string seller,
-            string buyer,
-            string question,
-            string answer)
+        private static string ScopeKey()
+        {
+            var shop = ShopSettingsScope.Current;
+            return shop == null ? "legacy" : shop.ShopKey;
+        }
+
+        private static string AnswerKey(string seller, string buyer, string question, string answer)
         {
             return QuestionSourceKey(seller, buyer, question) + "|" + Normalize(answer);
         }
 
         private static string QuestionSourceKey(string seller, string buyer, string question)
         {
-            return Normalize(seller) + "|" + Normalize(buyer) + "|"
+            return ScopeKey() + "|" + Normalize(seller) + "|" + Normalize(buyer) + "|"
                 + KnowledgeAiService.NormalizeQuestion(question);
         }
 
         private static string SendKey(string seller, string buyer, string answer)
         {
-            return Normalize(seller) + "|" + Normalize(buyer) + "|" + Normalize(answer);
+            return ScopeKey() + "|" + Normalize(seller) + "|" + Normalize(buyer) + "|" + Normalize(answer);
         }
 
         private static void Cleanup()
         {
             var now = DateTime.Now;
-            foreach (var key in Sources.Where(x => x.Value.ExpiresAt < now)
-                .Select(x => x.Key).ToList())
+            foreach (var key in Sources.Where(x => x.Value.ExpiresAt < now).Select(x => x.Key).ToList())
             {
                 SourceStamp ignored;
                 Sources.TryRemove(key, out ignored);
             }
-            foreach (var key in Blocks.Where(x => x.Value.ExpiresAt < now)
-                .Select(x => x.Key).ToList())
+            foreach (var key in Blocks.Where(x => x.Value.ExpiresAt < now).Select(x => x.Key).ToList())
             {
                 BlockStamp ignored;
                 Blocks.TryRemove(key, out ignored);
             }
-            foreach (var key in ManualBypass.Where(x => x.Value < now)
-                .Select(x => x.Key).ToList())
+            foreach (var key in ManualBypass.Where(x => x.Value < now).Select(x => x.Key).ToList())
             {
                 DateTime ignored;
                 ManualBypass.TryRemove(key, out ignored);

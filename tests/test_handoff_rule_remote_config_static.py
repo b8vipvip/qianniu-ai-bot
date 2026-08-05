@@ -33,15 +33,19 @@ def test_account_security_terms_still_take_priority_over_purchase_exceptions():
     assert "UpdateReason(decision, rule)" in service[risk:exception]
 
 
-def test_local_rules_replace_server_polling_and_sync_local_keywords():
+def test_local_rules_replace_server_polling_sync_keywords_and_use_shop_path_cache():
     service = read("src/Bot/ChromeNs/HandoffRuleRemoteConfigService.cs")
 
     assert "handoff-policy.json" in service
-    assert "LoadLocalRules" in service
+    assert "GetState(true)" in service
+    assert "EnsurePolicyFile(path)" in service
     assert "SyncKeywordsToLocalConfig" in service
     assert "cfg.ManualKeywords = manual" in service
     assert "cfg.NoAutoReplyKeywords = confirm" in service
     assert "BotFeatureStore.SaveAutoReplyRules(cfg)" in service
+    assert "Paths.GetRulesRoot(shop)" in service
+    assert "ConcurrentDictionary<string, RuleState>" in service
+    assert "CanAutoAdoptLegacy" in service
     assert "/api/runtime/v1/handoff/rules" not in service
     assert "HandoffRemoteRulesJson" not in service
     assert "PollLoopAsync" not in service
@@ -60,15 +64,13 @@ def test_local_rule_service_is_initialized_and_compiled():
     assert "ChromeNs\\HandoffPolicyLegacyMigrationService.cs" in props
 
 
-def test_wecom_page_policy_is_retired_and_migrated_to_windows_client():
+def test_wecom_page_policy_is_retired_and_migrated_to_shop_scoped_windows_client():
     page = read("services/api-control-plane/static/wecom.html")
     migration = read("services/api-control-plane/wecom_policy_migration.py")
     bootstrap = read("services/api-control-plane/bootstrap.py")
     dockerfile = read("services/api-control-plane/Dockerfile")
     client_migration = read("src/Bot/ChromeNs/HandoffPolicyLegacyMigrationService.cs")
 
-    # Keep the old HTML nodes temporarily so the transition middleware can hide
-    # them without breaking the existing inline script during staged rollout.
     assert "AI 转人工策略" in page
     assert ".panel:has(#policyText)" in migration
     assert "handoffPolicyMigrationNotice" in migration
@@ -77,7 +79,9 @@ def test_wecom_page_policy_is_retired_and_migrated_to_windows_client():
     assert "return await call_next(request)" in migration
     assert "status_code=410" in migration
     assert "/api/runtime/v1/handoff/rules" in client_migration
-    assert "handoff-policy-migration.json" in client_migration
+    assert "handoff-policy-server-migration.json" in client_migration
+    assert "ShopControlPlaneConnectionStore" in client_migration
+    assert '"X-Shop-Key"' in client_migration
     assert "wecom_policy_migration.install(control_plane)" in bootstrap
     assert "include_router(wecom_handoff_policy.router)" not in bootstrap
     assert "init_handoff_policy_db" not in bootstrap

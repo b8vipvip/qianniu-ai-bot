@@ -1,10 +1,9 @@
+using Bot.ShopScope;
 using BotLib;
-using BotLib.Db.Sqlite;
 using BotLib.Extensions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -37,13 +36,11 @@ namespace Bot.Knowledge
 {
     internal static class ClientDataCloudBackupService
     {
-        private const string Scope = "ai-control-plane";
-        private const string UrlKey = "ControlPlaneUrl";
-        private const string TokenKey = "ControlPlaneClientToken";
-        private const string Magic = "QABK1";
+        private const string Magic = "QABK2";
         private const long MaxDataBytes = 48L * 1024 * 1024;
         private const long MaxSingleFileBytes = 32L * 1024 * 1024;
 
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ConditionalWeakTable<KnowledgeManagerControl, object> Attached =
             new ConditionalWeakTable<KnowledgeManagerControl, object>();
         private static int _initialized;
@@ -69,47 +66,48 @@ namespace Bot.Knowledge
             if (Attached.TryGetValue(control, out marker)) return;
             try { Attached.Add(control, new object()); } catch { return; }
 
+            var window = Window.GetWindow(control);
+            var shop = ShopSettingsScope.Current ?? ShopScopedUiBridge.Get(window);
+            if (shop == null) return;
             control.Dispatcher.BeginInvoke(
                 DispatcherPriority.ContextIdle,
-                new Action(() => AttachButton(control)));
+                new Action(() => AttachButton(control, shop)));
         }
 
-        private static void AttachButton(KnowledgeManagerControl control)
+        private static void AttachButton(KnowledgeManagerControl control, ShopContext shop)
         {
             var root = control.Content as DockPanel;
             var top = root == null ? null : root.Children.OfType<WrapPanel>().FirstOrDefault();
             if (top == null) return;
-            if (top.Children.OfType<Button>().Any(x => Convert.ToString(x.Tag) == "client-data-cloud-backup"))
-                return;
+            if (top.Children.OfType<Button>().Any(x => Convert.ToString(x.Tag) == "client-data-cloud-backup")) return;
 
             var button = new Button
             {
-                Content = "云备份/换机",
+                Content = "本店云备份/换机",
                 Tag = "client-data-cloud-backup",
-                Width = 104,
+                Width = 126,
                 Height = 28,
                 Margin = new Thickness(0, 0, 8, 6),
-                ToolTip = "使用当前 Bot 客户端令牌加密上传业务数据；新电脑配置相同令牌后可一键恢复。"
+                ToolTip = "只备份当前 ShopKey；使用本店 Bot 客户端令牌加密上传。"
             };
             button.Click += (s, e) =>
             {
-                var window = new ClientDataBackupWindow
+                using (ShopSettingsScope.Enter(shop))
                 {
-                    Owner = Window.GetWindow(control)
-                };
-                window.ShowDialog();
+                    var window = new ClientDataBackupWindow(shop) { Owner = Window.GetWindow(control) };
+                    ShopScopedUiBridge.Attach(window, shop);
+                    window.ShowDialog();
+                }
             };
             top.Children.Add(button);
         }
 
-        internal static async Task<JObject> GetStatusAsync()
+        internal static async Task<JObject> GetStatusAsync(ShopContext shop)
         {
             string serverUrl;
             string token;
-            ReadConnection(out serverUrl, out token);
-            EnsureConnection(serverUrl, token);
-
-            using (var http = CreateHttp(token))
+            GetConnection(shop, out serverUrl, out token);
+            using (var http = CreateHttp(token, shop))
             using (var response = await http.GetAsync(
                 serverUrl.TrimEnd('/') + "/api/runtime/v1/client-data-backup/status"))
             {
@@ -120,42 +118,40 @@ namespace Bot.Knowledge
             }
         }
 
-        internal static async Task<JObject> UploadAsync(Action<string> status)
+        internal static async Task<JObject> UploadAsync(ShopContext shop, Action<string> status)
         {
             string serverUrl;
             string token;
-            ReadConnection(out serverUrl, out token);
-            EnsureConnection(serverUrl, token);
-
-            status("正在整理本机业务数据...");
+            GetConnection(shop, out serverUrl, out token);
+            status("正在整理本店业务数据...");
             BackupBuildResult build = null;
             try
             {
-                build = BuildEncryptedBackup(token);
-                status("正在上传加密备份 " + FormatBytes(build.EncryptedBytes.Length) + "...");
-
-                using (var http = CreateHttp(token))
+                build = BuildEncryptedBackup(shop, token);
+                status("正在上传本店加密备份 " + FormatBytes(build.EncryptedBytes.Length) + "...");
+                using (var http = CreateHttp(token, shop))
                 using (var request = new HttpRequestMessage(
                     HttpMethod.Put,
                     serverUrl.TrimEnd('/') + "/api/runtime/v1/client-data-backup"))
                 {
                     request.Content = new ByteArrayContent(build.EncryptedBytes);
                     request.Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                    request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
                     request.Headers.TryAddWithoutValidation("X-Backup-Sha256", Sha256(build.EncryptedBytes));
                     request.Headers.TryAddWithoutValidation("X-Backup-Created-At", build.CreatedAt);
                     request.Headers.TryAddWithoutValidation("X-Backup-Device", Safe(Environment.MachineName, 100));
                     request.Headers.TryAddWithoutValidation("X-Backup-App-Version", AppVersion());
                     request.Headers.TryAddWithoutValidation("X-Backup-File-Count", build.FileCount.ToString());
                     request.Headers.TryAddWithoutValidation("X-Backup-Data-Bytes", build.DataBytes.ToString());
-
                     using (var response = await http.SendAsync(request))
                     {
                         var body = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)
                             throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
-                        Log.Info("整机业务数据云备份已上传: files=" + build.FileCount
-                            + ", dataBytes=" + build.DataBytes
-                            + ", encryptedBytes=" + build.EncryptedBytes.Length);
+                        using (ShopSettingsScope.Enter(shop))
+                            Log.Info("本店业务数据云备份已上传: shop=" + shop.ShopKey
+                                + ", files=" + build.FileCount + ", dataBytes=" + build.DataBytes
+                                + ", encryptedBytes=" + build.EncryptedBytes.Length);
                         return JObject.Parse(body);
                     }
                 }
@@ -166,16 +162,14 @@ namespace Bot.Knowledge
             }
         }
 
-        internal static async Task<RestoreResult> DownloadAndRestoreAsync(Action<string> status)
+        internal static async Task<RestoreResult> DownloadAndRestoreAsync(ShopContext shop, Action<string> status)
         {
             string serverUrl;
             string token;
-            ReadConnection(out serverUrl, out token);
-            EnsureConnection(serverUrl, token);
-
-            status("正在下载云端加密备份...");
+            GetConnection(shop, out serverUrl, out token);
+            status("正在下载本店云端加密备份...");
             byte[] encrypted;
-            using (var http = CreateHttp(token))
+            using (var http = CreateHttp(token, shop))
             using (var response = await http.GetAsync(
                 serverUrl.TrimEnd('/') + "/api/runtime/v1/client-data-backup"))
             {
@@ -185,168 +179,155 @@ namespace Bot.Knowledge
                 encrypted = body;
             }
 
-            status("正在使用当前 Bot 令牌解密并校验...");
-            var zipBytes = Decrypt(encrypted, token);
-            status("正在备份当前电脑数据...");
-            var rollback = CreateRollbackBackup();
-            status("正在恢复业务数据...");
-            var restored = RestoreZip(zipBytes);
-            restored.RollbackPath = rollback;
-            Log.Info("云端业务数据已恢复: params=" + restored.ParamCount
-                + ", files=" + restored.FileCount
-                + ", rollback=" + rollback);
-            return restored;
+            byte[] zipBytes = null;
+            try
+            {
+                status("正在使用本店 Bot 令牌和 ShopKey 解密并校验...");
+                zipBytes = Decrypt(encrypted, token, shop.ShopKey);
+                status("正在生成本店回滚备份...");
+                var rollback = CreateRollbackBackup(shop, token);
+                status("正在恢复本店业务数据...");
+                var restored = RestoreZip(shop, zipBytes);
+                restored.RollbackPath = rollback;
+                using (ShopSettingsScope.Enter(shop))
+                    Log.Info("本店云端业务数据已恢复: shop=" + shop.ShopKey
+                        + ", settings=" + restored.ParamCount + ", files=" + restored.FileCount
+                        + ", rollback=" + rollback);
+                return restored;
+            }
+            finally
+            {
+                if (encrypted != null) Array.Clear(encrypted, 0, encrypted.Length);
+                if (zipBytes != null) Array.Clear(zipBytes, 0, zipBytes.Length);
+            }
         }
 
-        internal static string DataFolder
+        internal static string GetDataFolder(ShopContext shop)
         {
-            get { return PathEx.DataDir; }
+            return Paths.GetShopRoot(shop);
         }
 
-        private static BackupBuildResult BuildEncryptedBackup(string token)
+        private static BackupBuildResult BuildEncryptedBackup(ShopContext shop, string token)
         {
             var createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-            var skipped = new List<string>();
-            var parameters = ExportParameters();
-            var tempZip = Path.Combine(Path.GetTempPath(), "qianniu-client-backup-" + Guid.NewGuid().ToString("N") + ".zip");
-            var count = 0;
-            long totalBytes = 0;
-
-            using (var file = new FileStream(tempZip, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
-            using (var zip = new ZipArchive(file, ZipArchiveMode.Create, true, Encoding.UTF8))
+            int fileCount;
+            long dataBytes;
+            var plain = BuildPlainBackup(shop, createdAt, out fileCount, out dataBytes);
+            try
             {
-                WriteTextEntry(zip, "params.json", JsonConvert.SerializeObject(parameters, Formatting.Indented));
-
-                foreach (var source in EnumerateDataFiles())
+                return new BackupBuildResult
                 {
-                    var relative = RelativeDataPath(source);
-                    if (ShouldExclude(relative)) continue;
-                    long length;
-                    try { length = new FileInfo(source).Length; }
-                    catch
-                    {
-                        skipped.Add(relative + "（无法读取大小）");
-                        continue;
-                    }
-                    if (length > MaxSingleFileBytes)
-                    {
-                        skipped.Add(relative + "（单文件超过32MB）");
-                        continue;
-                    }
-                    if (totalBytes + length > MaxDataBytes)
-                    {
-                        skipped.Add(relative + "（总数据超过48MB）");
-                        continue;
-                    }
-                    try
-                    {
-                        var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Optimal);
-                        using (var input = new FileStream(
-                            source,
-                            FileMode.Open,
-                            FileAccess.Read,
-                            FileShare.ReadWrite | FileShare.Delete))
-                        using (var output = entry.Open())
-                        {
-                            input.CopyTo(output);
-                        }
-                        totalBytes += length;
-                        count++;
-                    }
-                    catch (Exception ex)
-                    {
-                        skipped.Add(relative + "（" + Safe(ex.Message, 80) + "）");
-                    }
-                }
-
-                var manifest = new JObject
-                {
-                    ["schema"] = "qianniu-ai-bot.client-data-backup",
-                    ["version"] = 1,
-                    ["createdAt"] = createdAt,
-                    ["deviceName"] = Environment.MachineName,
-                    ["appVersion"] = AppVersion(),
-                    ["fileCount"] = count,
-                    ["dataBytes"] = totalBytes,
-                    ["parameterCount"] = parameters.Count,
-                    ["excluded"] = new JArray(
-                        "运行日志和崩溃文件",
-                        "backups/tmp/cache/update 等临时目录",
-                        "params.db（改为结构化参数导出）",
-                        "统一 API 地址和 Bot 客户端令牌",
-                        "云同步修订号、哈希和设备迁移状态"),
-                    ["skippedFiles"] = JArray.FromObject(skipped.Take(200).ToList())
+                    EncryptedBytes = Encrypt(plain, token, shop.ShopKey),
+                    FileCount = fileCount,
+                    DataBytes = dataBytes,
+                    CreatedAt = createdAt
                 };
-                WriteTextEntry(zip, "manifest.json", manifest.ToString(Formatting.Indented));
             }
-
-            var plain = File.ReadAllBytes(tempZip);
-            var encrypted = Encrypt(plain, token);
-            return new BackupBuildResult
-            {
-                TempPath = tempZip,
-                EncryptedBytes = encrypted,
-                FileCount = count,
-                DataBytes = totalBytes,
-                CreatedAt = createdAt
-            };
+            finally { Array.Clear(plain, 0, plain.Length); }
         }
 
-        private static Dictionary<string, string> ExportParameters()
+        private static byte[] BuildPlainBackup(
+            ShopContext shop,
+            string createdAt,
+            out int fileCount,
+            out long dataBytes)
         {
-            var field = typeof(PersistentParams).GetField(
-                "_cache",
-                BindingFlags.Static | BindingFlags.NonPublic);
-            var dictionary = field == null ? null : field.GetValue(null) as IEnumerable;
-            var result = new Dictionary<string, string>(StringComparer.Ordinal);
-            if (dictionary == null) return result;
-
-            foreach (var raw in dictionary)
+            var skipped = new List<string>();
+            var settings = ExportPortableSettings(shop);
+            fileCount = 0;
+            dataBytes = 0;
+            using (var memory = new MemoryStream())
             {
-                var type = raw.GetType();
-                var key = Convert.ToString(type.GetProperty("Key").GetValue(raw, null));
-                var value = Convert.ToString(type.GetProperty("Value").GetValue(raw, null));
-                if (string.IsNullOrWhiteSpace(key) || IsProtectedParameter(key)) continue;
-                result[key] = value ?? string.Empty;
+                using (var zip = new ZipArchive(memory, ZipArchiveMode.Create, true, Encoding.UTF8))
+                {
+                    WriteTextEntry(zip, "settings.json", JsonConvert.SerializeObject(settings, Formatting.Indented));
+                    foreach (var source in EnumerateShopFiles(shop))
+                    {
+                        var relative = RelativeShopPath(shop, source);
+                        if (ShouldExclude(relative)) continue;
+                        long length;
+                        try { length = new FileInfo(source).Length; }
+                        catch { skipped.Add(relative + "（无法读取大小）"); continue; }
+                        if (length > MaxSingleFileBytes)
+                        {
+                            skipped.Add(relative + "（单文件超过32MB）");
+                            continue;
+                        }
+                        if (dataBytes + length > MaxDataBytes)
+                        {
+                            skipped.Add(relative + "（总数据超过48MB）");
+                            continue;
+                        }
+                        try
+                        {
+                            var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Optimal);
+                            using (var input = new FileStream(source, FileMode.Open, FileAccess.Read,
+                                FileShare.ReadWrite | FileShare.Delete))
+                            using (var output = entry.Open()) input.CopyTo(output);
+                            dataBytes += length;
+                            fileCount++;
+                        }
+                        catch (Exception ex) { skipped.Add(relative + "（" + Safe(ex.Message, 80) + "）"); }
+                    }
+                    var manifest = new JObject
+                    {
+                        ["schema"] = "qianniu-ai-bot.shop-data-backup",
+                        ["version"] = 2,
+                        ["shopKey"] = shop.ShopKey,
+                        ["platform"] = shop.Platform,
+                        ["sellerId"] = shop.SellerId,
+                        ["createdAt"] = createdAt,
+                        ["deviceName"] = Environment.MachineName,
+                        ["appVersion"] = AppVersion(),
+                        ["fileCount"] = fileCount,
+                        ["dataBytes"] = dataBytes,
+                        ["settingCount"] = settings.Count,
+                        ["excluded"] = new JArray(
+                            "本店 Bot 客户端令牌",
+                            "DPAPI settings.json（改为逻辑设置导出）",
+                            "profile.json 和全局 shops.json",
+                            "logs/backup/cache 与临时文件",
+                            "云同步 revision/hash、远程暂停和已处理命令"),
+                        ["skippedFiles"] = JArray.FromObject(skipped.Take(200).ToList())
+                    };
+                    WriteTextEntry(zip, "manifest.json", manifest.ToString(Formatting.Indented));
+                }
+                return memory.ToArray();
+            }
+        }
+
+        private static Dictionary<string, string> ExportPortableSettings(ShopContext shop)
+        {
+            var source = new ShopScopedSettingsStore(shop, Paths).ExportValues();
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            foreach (var pair in source)
+            {
+                if (IsTransientSetting(pair.Key)) continue;
+                result[pair.Key] = pair.Value ?? string.Empty;
             }
             return result;
         }
 
-        private static bool IsProtectedParameter(string key)
+        private static bool IsTransientSetting(string key)
         {
             key = key ?? string.Empty;
-            var exact = new[]
-            {
-                UrlKey + "#-#" + Scope,
-                TokenKey + "#-#" + Scope,
-                "KnowledgeCloudRevision#-#" + Scope,
-                "KnowledgeCloudLastHash#-#" + Scope,
-                "ClientDataBackupRevision#-#" + Scope,
-                "ClientDataBackupLastHash#-#" + Scope,
-                "HandoffRemoteRulesJson#-#" + Scope
-            };
-            if (exact.Any(x => string.Equals(x, key, StringComparison.OrdinalIgnoreCase))) return true;
-            return key.IndexOf("cloud-backup-session", StringComparison.OrdinalIgnoreCase) >= 0
-                || key.IndexOf("machine-id", StringComparison.OrdinalIgnoreCase) >= 0
-                || key.IndexOf("device-id", StringComparison.OrdinalIgnoreCase) >= 0;
+            return key.IndexOf("Revision", StringComparison.OrdinalIgnoreCase) >= 0
+                || key.IndexOf("LastHash", StringComparison.OrdinalIgnoreCase) >= 0
+                || key.IndexOf("ProcessedCommand", StringComparison.OrdinalIgnoreCase) >= 0
+                || string.Equals(key, "BotWebRemotePause", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static IEnumerable<string> EnumerateDataFiles()
+        private static IEnumerable<string> EnumerateShopFiles(ShopContext shop)
         {
-            if (!Directory.Exists(PathEx.DataDir)) return Enumerable.Empty<string>();
-            try
-            {
-                return Directory.EnumerateFiles(PathEx.DataDir, "*", SearchOption.AllDirectories).ToList();
-            }
-            catch
-            {
-                return Enumerable.Empty<string>();
-            }
+            var root = Paths.GetShopRoot(shop);
+            if (!Directory.Exists(root)) return Enumerable.Empty<string>();
+            try { return Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories).ToList(); }
+            catch { return Enumerable.Empty<string>(); }
         }
 
-        private static string RelativeDataPath(string fullPath)
+        private static string RelativeShopPath(ShopContext shop, string fullPath)
         {
-            var root = Path.GetFullPath(PathEx.DataDir);
+            var root = EnsureTrailing(Path.GetFullPath(Paths.GetShopRoot(shop)));
             var full = Path.GetFullPath(fullPath);
             return full.StartsWith(root, StringComparison.OrdinalIgnoreCase)
                 ? full.Substring(root.Length).TrimStart('\\', '/')
@@ -357,62 +338,46 @@ namespace Bot.Knowledge
         {
             relative = (relative ?? string.Empty).Replace('/', '\\').TrimStart('\\');
             var parts = relative.Split(new[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
-            var excludedFolders = new[]
-            {
-                "log", "logs", "backup", "backups", "tmp", "temp",
-                "cache", "caches", "crash", "crashes", "update", "updates"
-            };
-            if (parts.Any(x => excludedFolders.Contains(x, StringComparer.OrdinalIgnoreCase))) return true;
-
+            if (parts.Length == 0) return true;
+            if (new[] { "logs", "backup", "cache" }.Contains(parts[0], StringComparer.OrdinalIgnoreCase)) return true;
             var name = Path.GetFileName(relative);
+            if (string.Equals(relative, "profile.json", StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.Equals(relative, "config\\settings.json", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(relative, "config\\control-plane-token.json", StringComparison.OrdinalIgnoreCase)) return true;
+            if (name.StartsWith("settings.json.", StringComparison.OrdinalIgnoreCase)
+                || name.StartsWith("control-plane-token.json.", StringComparison.OrdinalIgnoreCase)) return true;
             var extension = Path.GetExtension(relative);
-            if (string.Equals(name, "params.db", StringComparison.OrdinalIgnoreCase)
-                || name.StartsWith("params.db-", StringComparison.OrdinalIgnoreCase)) return true;
-            if (string.Equals(extension, ".log", StringComparison.OrdinalIgnoreCase)
+            return string.Equals(extension, ".log", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(extension, ".tmp", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(extension, ".bak", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(extension, ".dmp", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(extension, ".trace", StringComparison.OrdinalIgnoreCase)
                 || string.Equals(extension, ".etl", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(extension, ".qab", StringComparison.OrdinalIgnoreCase)) return true;
-            return false;
+                || string.Equals(extension, ".qab", StringComparison.OrdinalIgnoreCase);
         }
 
-        private static string CreateRollbackBackup()
+        private static string CreateRollbackBackup(ShopContext shop, string token)
         {
-            var directory = Path.Combine(PathEx.UserDataRoot, "restore-backups");
-            Directory.CreateDirectory(directory);
-            var path = Path.Combine(directory,
-                "before-cloud-restore-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".zip");
-            var parameters = ExportParameters();
-            using (var file = new FileStream(path, FileMode.CreateNew, FileAccess.ReadWrite, FileShare.None))
-            using (var zip = new ZipArchive(file, ZipArchiveMode.Create, true, Encoding.UTF8))
+            int fileCount;
+            long dataBytes;
+            var plain = BuildPlainBackup(shop, DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"), out fileCount, out dataBytes);
+            byte[] encrypted = null;
+            try
             {
-                WriteTextEntry(zip, "params.json", JsonConvert.SerializeObject(parameters, Formatting.Indented));
-                foreach (var source in EnumerateDataFiles())
-                {
-                    var relative = RelativeDataPath(source);
-                    if (ShouldExclude(relative)) continue;
-                    try
-                    {
-                        var entry = zip.CreateEntry("files/" + relative.Replace('\\', '/'), CompressionLevel.Fastest);
-                        using (var input = new FileStream(
-                            source,
-                            FileMode.Open,
-                            FileAccess.Read,
-                            FileShare.ReadWrite | FileShare.Delete))
-                        using (var output = entry.Open())
-                        {
-                            input.CopyTo(output);
-                        }
-                    }
-                    catch { }
-                }
+                encrypted = Encrypt(plain, token, shop.ShopKey);
+                var path = Path.Combine(Paths.GetBackupRoot(shop),
+                    "before-cloud-restore-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".qab");
+                File.WriteAllBytes(path, encrypted);
+                return path;
             }
-            return path;
+            finally
+            {
+                Array.Clear(plain, 0, plain.Length);
+                if (encrypted != null) Array.Clear(encrypted, 0, encrypted.Length);
+            }
         }
 
-        private static RestoreResult RestoreZip(byte[] zipBytes)
+        private static RestoreResult RestoreZip(ShopContext shop, byte[] zipBytes)
         {
             var result = new RestoreResult();
             using (var stream = new MemoryStream(zipBytes, false))
@@ -421,24 +386,22 @@ namespace Bot.Knowledge
                 var manifestEntry = zip.GetEntry("manifest.json");
                 if (manifestEntry == null) throw new Exception("备份缺少 manifest.json");
                 var manifest = JObject.Parse(ReadTextEntry(manifestEntry));
-                if (!string.Equals(
-                    Convert.ToString(manifest["schema"]),
-                    "qianniu-ai-bot.client-data-backup",
-                    StringComparison.Ordinal))
-                    throw new Exception("云端文件不是千牛 Bot 数据备份");
+                if (!string.Equals(Convert.ToString(manifest["schema"]),
+                    "qianniu-ai-bot.shop-data-backup", StringComparison.Ordinal))
+                    throw new Exception("云端文件不是店铺隔离版千牛 Bot 数据备份");
+                if (!string.Equals(Convert.ToString(manifest["shopKey"]), shop.ShopKey, StringComparison.Ordinal))
+                    throw new Exception("云备份 ShopKey 与当前店铺不匹配，已阻止跨店恢复");
 
-                var paramsEntry = zip.GetEntry("params.json");
-                if (paramsEntry == null) throw new Exception("备份缺少 params.json");
-                var parameters = JsonConvert.DeserializeObject<Dictionary<string, string>>(
-                    ReadTextEntry(paramsEntry)) ?? new Dictionary<string, string>();
-                foreach (var item in parameters)
-                {
-                    if (IsProtectedParameter(item.Key)) continue;
-                    PersistentParams.TrySaveParam(item.Key, item.Value ?? string.Empty);
-                    result.ParamCount++;
-                }
+                var settingsEntry = zip.GetEntry("settings.json");
+                if (settingsEntry == null) throw new Exception("备份缺少 settings.json");
+                var settings = JsonConvert.DeserializeObject<Dictionary<string, string>>(
+                    ReadTextEntry(settingsEntry)) ?? new Dictionary<string, string>();
+                var current = new ShopScopedSettingsStore(shop, Paths).ExportValues();
+                foreach (var pair in settings) current[pair.Key] = pair.Value ?? string.Empty;
+                new ShopScopedSettingsStore(shop, Paths).ReplaceValues(current);
+                result.ParamCount = settings.Count;
 
-                var root = Path.GetFullPath(PathEx.DataDir);
+                var root = EnsureTrailing(Path.GetFullPath(Paths.GetShopRoot(shop)));
                 foreach (var entry in zip.Entries.Where(x => x.FullName.StartsWith("files/", StringComparison.Ordinal)))
                 {
                     var relative = entry.FullName.Substring("files/".Length).Replace('/', '\\');
@@ -450,9 +413,7 @@ namespace Bot.Knowledge
                     if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
                     using (var input = entry.Open())
                     using (var output = new FileStream(target, FileMode.Create, FileAccess.Write, FileShare.None))
-                    {
                         input.CopyTo(output);
-                    }
                     result.FileCount++;
                 }
                 result.CreatedAt = Convert.ToString(manifest["createdAt"] ?? string.Empty);
@@ -461,44 +422,43 @@ namespace Bot.Knowledge
             return result;
         }
 
-        private static byte[] Encrypt(byte[] plain, string token)
+        private static byte[] Encrypt(byte[] plain, string token, string shopKey)
         {
             var salt = RandomBytes(16);
             var iv = RandomBytes(16);
-            byte[] encryptionKey;
-            byte[] macKey;
-            DeriveKeys(token, salt, out encryptionKey, out macKey);
-
-            byte[] cipher;
-            using (var aes = Aes.Create())
+            byte[] encryptionKey = null;
+            byte[] macKey = null;
+            byte[] cipher = null;
+            byte[] prefix = null;
+            byte[] mac = null;
+            try
             {
-                aes.KeySize = 256;
-                aes.Mode = CipherMode.CBC;
-                aes.Padding = PaddingMode.PKCS7;
-                aes.Key = encryptionKey;
-                aes.IV = iv;
-                using (var encryptor = aes.CreateEncryptor())
+                DeriveKeys(token, shopKey, salt, out encryptionKey, out macKey);
+                using (var aes = Aes.Create())
                 {
-                    cipher = encryptor.TransformFinalBlock(plain, 0, plain.Length);
+                    aes.KeySize = 256;
+                    aes.Mode = CipherMode.CBC;
+                    aes.Padding = PaddingMode.PKCS7;
+                    aes.Key = encryptionKey;
+                    aes.IV = iv;
+                    using (var encryptor = aes.CreateEncryptor())
+                        cipher = encryptor.TransformFinalBlock(plain, 0, plain.Length);
                 }
+                prefix = Encoding.ASCII.GetBytes(Magic).Concat(salt).Concat(iv).Concat(cipher).ToArray();
+                using (var hmac = new HMACSHA256(macKey)) mac = hmac.ComputeHash(prefix);
+                return prefix.Concat(mac).ToArray();
             }
-
-            var prefix = Encoding.ASCII.GetBytes(Magic)
-                .Concat(salt)
-                .Concat(iv)
-                .Concat(cipher)
-                .ToArray();
-            byte[] mac;
-            using (var hmac = new HMACSHA256(macKey)) mac = hmac.ComputeHash(prefix);
-            return prefix.Concat(mac).ToArray();
+            finally
+            {
+                Clear(salt); Clear(iv); Clear(encryptionKey); Clear(macKey); Clear(cipher); Clear(prefix); Clear(mac);
+            }
         }
 
-        private static byte[] Decrypt(byte[] encrypted, string token)
+        private static byte[] Decrypt(byte[] encrypted, string token, string shopKey)
         {
             if (encrypted == null || encrypted.Length < Magic.Length + 16 + 16 + 32 + 1)
                 throw new Exception("云备份文件不完整");
-            var magic = Encoding.ASCII.GetString(encrypted, 0, Magic.Length);
-            if (!string.Equals(magic, Magic, StringComparison.Ordinal))
+            if (!string.Equals(Encoding.ASCII.GetString(encrypted, 0, Magic.Length), Magic, StringComparison.Ordinal))
                 throw new Exception("云备份文件版本不受支持");
 
             var salt = encrypted.Skip(Magic.Length).Take(16).ToArray();
@@ -506,18 +466,16 @@ namespace Bot.Knowledge
             var cipherLength = encrypted.Length - Magic.Length - 16 - 16 - 32;
             var cipher = encrypted.Skip(Magic.Length + 32).Take(cipherLength).ToArray();
             var suppliedMac = encrypted.Skip(encrypted.Length - 32).Take(32).ToArray();
-            byte[] encryptionKey;
-            byte[] macKey;
-            DeriveKeys(token, salt, out encryptionKey, out macKey);
-
             var signed = encrypted.Take(encrypted.Length - 32).ToArray();
-            byte[] expectedMac;
-            using (var hmac = new HMACSHA256(macKey)) expectedMac = hmac.ComputeHash(signed);
-            if (!ConstantTimeEquals(suppliedMac, expectedMac))
-                throw new Exception("解密失败：Bot 令牌不一致或云备份已损坏");
-
+            byte[] encryptionKey = null;
+            byte[] macKey = null;
+            byte[] expectedMac = null;
             try
             {
+                DeriveKeys(token, shopKey, salt, out encryptionKey, out macKey);
+                using (var hmac = new HMACSHA256(macKey)) expectedMac = hmac.ComputeHash(signed);
+                if (!ConstantTimeEquals(suppliedMac, expectedMac))
+                    throw new Exception("解密失败：本店 Bot 令牌/ShopKey 不一致或云备份已损坏");
                 using (var aes = Aes.Create())
                 {
                     aes.KeySize = 256;
@@ -526,24 +484,34 @@ namespace Bot.Knowledge
                     aes.Key = encryptionKey;
                     aes.IV = iv;
                     using (var decryptor = aes.CreateDecryptor())
-                    {
                         return decryptor.TransformFinalBlock(cipher, 0, cipher.Length);
-                    }
                 }
             }
             catch (CryptographicException)
             {
-                throw new Exception("解密失败：Bot 令牌不一致或云备份已损坏");
+                throw new Exception("解密失败：本店 Bot 令牌/ShopKey 不一致或云备份已损坏");
+            }
+            finally
+            {
+                Clear(salt); Clear(iv); Clear(cipher); Clear(suppliedMac); Clear(signed);
+                Clear(encryptionKey); Clear(macKey); Clear(expectedMac);
             }
         }
 
-        private static void DeriveKeys(string token, byte[] salt, out byte[] encryptionKey, out byte[] macKey)
+        private static void DeriveKeys(string token, string shopKey, byte[] salt, out byte[] encryptionKey, out byte[] macKey)
         {
-            using (var derive = new Rfc2898DeriveBytes(token ?? string.Empty, salt, 120000))
+            using (var derive = new Rfc2898DeriveBytes(
+                (token ?? string.Empty) + "|qianniu-shop-backup|" + (shopKey ?? string.Empty),
+                salt,
+                120000))
             {
                 var material = derive.GetBytes(64);
-                encryptionKey = material.Take(32).ToArray();
-                macKey = material.Skip(32).Take(32).ToArray();
+                try
+                {
+                    encryptionKey = material.Take(32).ToArray();
+                    macKey = material.Skip(32).Take(32).ToArray();
+                }
+                finally { Clear(material); }
             }
         }
 
@@ -562,53 +530,46 @@ namespace Bot.Knowledge
             return bytes;
         }
 
+        private static void Clear(byte[] value)
+        {
+            if (value != null) Array.Clear(value, 0, value.Length);
+        }
+
         private static void WriteTextEntry(ZipArchive zip, string name, string text)
         {
             var entry = zip.CreateEntry(name, CompressionLevel.Optimal);
-            using (var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false)))
-                writer.Write(text ?? string.Empty);
+            using (var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false))) writer.Write(text ?? string.Empty);
         }
 
         private static string ReadTextEntry(ZipArchiveEntry entry)
         {
-            using (var reader = new StreamReader(entry.Open(), Encoding.UTF8, true))
-                return reader.ReadToEnd();
+            using (var reader = new StreamReader(entry.Open(), Encoding.UTF8, true)) return reader.ReadToEnd();
         }
 
-        private static HttpClient CreateHttp(string token)
+        private static HttpClient CreateHttp(string token, ShopContext shop)
         {
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            var handler = new HttpClientHandler
-            {
-                UseProxy = true,
-                Proxy = WebRequest.DefaultWebProxy
-            };
-            var http = new HttpClient(handler)
+            var http = new HttpClient(new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
             {
                 Timeout = TimeSpan.FromMinutes(5)
             };
             http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
             http.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "application/json");
-            http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot-client-data-backup/1.0");
+            http.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", "qianniu-bot-shop-data-backup/2.0");
+            http.DefaultRequestHeaders.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
             return http;
         }
 
-        private static void ReadConnection(out string serverUrl, out string token)
+        private static void GetConnection(ShopContext shop, out string serverUrl, out string token)
         {
-            serverUrl = PersistentParams.GetParam2Key(UrlKey, Scope, string.Empty);
-            token = PersistentParams.GetParam2Key(TokenKey, Scope, string.Empty);
-            serverUrl = (serverUrl ?? string.Empty).Trim().TrimEnd('/');
-            if (serverUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-                serverUrl = serverUrl.Substring(0, serverUrl.Length - 3).TrimEnd('/');
-            token = (token ?? string.Empty).Trim();
-        }
-
-        private static void EnsureConnection(string serverUrl, string token)
-        {
-            if (string.IsNullOrWhiteSpace(serverUrl))
-                throw new Exception("请先配置统一 API 服务地址。");
-            if (string.IsNullOrWhiteSpace(token))
-                throw new Exception("请先配置 Bot 客户端令牌；新电脑必须使用与旧电脑相同的令牌。");
+            if (shop == null) throw new Exception("当前没有店铺作用域。");
+            var connection = new ShopControlPlaneConnectionStore(shop, Paths);
+            serverUrl = connection.GetServerUrl();
+            string error;
+            if (!connection.TryGetToken(out token, out error))
+                throw new Exception(string.IsNullOrWhiteSpace(error) ? "请先配置本店 Bot 客户端令牌。" : error);
+            if (string.IsNullOrWhiteSpace(serverUrl)) throw new Exception("请先配置统一 API 服务地址。");
+            if (string.IsNullOrWhiteSpace(token)) throw new Exception("请先配置本店 Bot 客户端令牌。");
         }
 
         internal static void RestartApplication()
@@ -636,8 +597,7 @@ namespace Bot.Knowledge
         {
             using (var sha = SHA256.Create())
                 return BitConverter.ToString(sha.ComputeHash(value ?? new byte[0]))
-                    .Replace("-", string.Empty)
-                    .ToLowerInvariant();
+                    .Replace("-", string.Empty).ToLowerInvariant();
         }
 
         internal static string FormatBytes(long bytes)
@@ -646,6 +606,11 @@ namespace Bot.Knowledge
             if (bytes < 1024 * 1024) return (bytes / 1024d).ToString("0.0") + " KB";
             if (bytes < 1024L * 1024 * 1024) return (bytes / 1024d / 1024d).ToString("0.0") + " MB";
             return (bytes / 1024d / 1024d / 1024d).ToString("0.00") + " GB";
+        }
+
+        private static string EnsureTrailing(string path)
+        {
+            return path.EndsWith("\\") ? path : path + "\\";
         }
 
         private static string Safe(string value, int max)
@@ -657,19 +622,13 @@ namespace Bot.Knowledge
 
         private sealed class BackupBuildResult : IDisposable
         {
-            public string TempPath { get; set; }
             public byte[] EncryptedBytes { get; set; }
             public int FileCount { get; set; }
             public long DataBytes { get; set; }
             public string CreatedAt { get; set; }
-
             public void Dispose()
             {
-                try
-                {
-                    if (!string.IsNullOrWhiteSpace(TempPath) && File.Exists(TempPath)) File.Delete(TempPath);
-                }
-                catch { }
+                if (EncryptedBytes != null) Array.Clear(EncryptedBytes, 0, EncryptedBytes.Length);
             }
         }
     }
@@ -685,6 +644,7 @@ namespace Bot.Knowledge
 
     internal sealed class ClientDataBackupWindow : Window
     {
+        private readonly ShopContext _shop;
         private readonly TextBlock _cloudStatus;
         private readonly TextBlock _operationStatus;
         private readonly Button _upload;
@@ -692,20 +652,20 @@ namespace Bot.Knowledge
         private readonly Button _refresh;
         private bool _busy;
 
-        public ClientDataBackupWindow()
+        public ClientDataBackupWindow(ShopContext shop)
         {
-            Title = "云备份与更换电脑";
+            _shop = shop ?? throw new ArgumentNullException(nameof(shop));
+            Title = "本店云备份与更换电脑";
             Width = 680;
-            Height = 510;
+            Height = 530;
             MinWidth = 620;
-            MinHeight = 460;
+            MinHeight = 470;
             ResizeMode = ResizeMode.CanResize;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
             ShowInTaskbar = false;
 
             var root = new DockPanel { Margin = new Thickness(20) };
             Content = root;
-
             var footer = new StackPanel
             {
                 Orientation = Orientation.Horizontal,
@@ -714,10 +674,11 @@ namespace Bot.Knowledge
             };
             DockPanel.SetDock(footer, Dock.Bottom);
             root.Children.Add(footer);
-            AddButton(footer, "打开本机数据目录", 132, (s, e) =>
+            AddButton(footer, "打开本店数据目录", 132, (s, e) =>
             {
-                Directory.CreateDirectory(ClientDataCloudBackupService.DataFolder);
-                PathEx.OpenFolder(ClientDataCloudBackupService.DataFolder);
+                var folder = ClientDataCloudBackupService.GetDataFolder(_shop);
+                Directory.CreateDirectory(folder);
+                PathEx.OpenFolder(folder);
             });
             AddButton(footer, "关闭", 82, (s, e) => Close());
 
@@ -725,14 +686,15 @@ namespace Bot.Knowledge
             root.Children.Add(content);
             content.Children.Add(new TextBlock
             {
-                Text = "云备份与更换电脑",
+                Text = "本店云备份与更换电脑",
                 FontSize = 21,
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 0, 0, 10)
             });
             content.Children.Add(new TextBlock
             {
-                Text = "备份包含知识库、知识策略与可靠度、店铺资料和场景规则、AI转人工策略、自动回复与通知配置、模型/API等业务参数，以及 data 目录中的其他业务文件。不会上传运行日志、崩溃文件、缓存、临时文件、本机备份目录、统一API地址和Bot客户端令牌。",
+                Text = "当前店铺：" + (_shop.DisplayName ?? _shop.ShopKey) + "\nShopKey：" + _shop.ShopKey
+                    + "\n\n只备份本店知识库、规则、策略、AI设置和业务状态。不会包含其他店铺、令牌、日志、缓存或店铺身份文件。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.DimGray,
                 LineHeight = 22,
@@ -746,15 +708,14 @@ namespace Bot.Knowledge
                 Padding = new Thickness(12),
                 Child = new TextBlock
                 {
-                    Text = "安全说明：备份在 Windows 客户端内使用当前 Bot 令牌派生密钥加密后再上传。新电脑必须配置相同的统一 API 地址和同一个 Bot 令牌才能下载并解密。若轮换令牌，请先用新令牌重新上传一次备份。",
+                    Text = "备份使用本店 Bot 令牌和 ShopKey 派生密钥加密。新电脑必须登录同一店铺并配置相同令牌；跨 ShopKey 恢复会被拒绝。",
                     TextWrapping = TextWrapping.Wrap,
                     LineHeight = 21
                 }
             });
-
             content.Children.Add(new TextBlock
             {
-                Text = "云端备份状态",
+                Text = "本店云端备份状态",
                 FontWeight = FontWeights.Bold,
                 Margin = new Thickness(0, 18, 0, 6)
             });
@@ -766,35 +727,37 @@ namespace Bot.Knowledge
                 Margin = new Thickness(0, 0, 0, 12)
             };
             content.Children.Add(_cloudStatus);
-
             var actions = new WrapPanel();
             content.Children.Add(actions);
-            _upload = AddButton(actions, "上传当前电脑数据", 150, async (s, e) => await UploadAsync());
-            _restore = AddButton(actions, "从云端一键恢复", 150, async (s, e) => await RestoreAsync());
+            _upload = AddButton(actions, "上传本店数据", 140, async (s, e) => await UploadAsync());
+            _restore = AddButton(actions, "恢复本店云备份", 150, async (s, e) => await RestoreAsync());
             _refresh = AddButton(actions, "刷新状态", 96, async (s, e) => await RefreshAsync());
-
             _operationStatus = new TextBlock
             {
-                Text = "",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = Brushes.SteelBlue,
                 Margin = new Thickness(0, 16, 0, 0)
             };
             content.Children.Add(_operationStatus);
-            Loaded += async (s, e) => await RefreshAsync();
+            Loaded += async (s, e) => await RunScopedAsync(RefreshAsync);
+        }
+
+        private async Task RunScopedAsync(Func<Task> action)
+        {
+            using (ShopSettingsScope.Enter(_shop)) await action();
         }
 
         private async Task RefreshAsync()
         {
             if (_busy) return;
-            SetBusy(true, "正在读取云端备份状态...");
+            SetBusy(true, "正在读取本店云备份状态...");
             try
             {
-                var state = await ClientDataCloudBackupService.GetStatusAsync();
+                var state = await ClientDataCloudBackupService.GetStatusAsync(_shop);
                 var exists = state.Value<bool?>("exists") == true;
                 if (!exists)
                 {
-                    _cloudStatus.Text = "当前 Bot 令牌还没有云端整机数据备份。请先在旧电脑点击“上传当前电脑数据”。";
+                    _cloudStatus.Text = "本店令牌尚无云端备份。请先在旧电脑上传本店数据。";
                     _cloudStatus.Foreground = Brushes.DarkOrange;
                     _restore.IsEnabled = false;
                 }
@@ -805,7 +768,7 @@ namespace Bot.Knowledge
                         + "\n来源电脑：" + Convert.ToString(state["device_name"] ?? "未知")
                         + " · 程序版本：" + Convert.ToString(state["app_version"] ?? "未知")
                         + "\n加密包：" + ClientDataCloudBackupService.FormatBytes(state.Value<long?>("size_bytes") ?? 0)
-                        + " · 业务文件：" + (state.Value<int?>("file_count") ?? 0)
+                        + " · 本店文件：" + (state.Value<int?>("file_count") ?? 0)
                         + " · 原始数据：" + ClientDataCloudBackupService.FormatBytes(state.Value<long?>("data_bytes") ?? 0);
                     _cloudStatus.Foreground = Brushes.SeaGreen;
                     _restore.IsEnabled = true;
@@ -824,65 +787,56 @@ namespace Bot.Knowledge
         private async Task UploadAsync()
         {
             if (_busy) return;
-            var answer = MessageBox.Show(
-                "将使用当前 Bot 令牌加密并覆盖该令牌现有的云端备份。\n\n不会上传运行日志、缓存、临时文件和 Bot 令牌本身。是否继续？",
-                "上传当前电脑数据",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-            if (answer != MessageBoxResult.Yes) return;
-
+            if (MessageBox.Show(
+                "将使用本店令牌加密并覆盖本店现有云备份。不会包含其他店铺或令牌本身。是否继续？",
+                "上传本店数据", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
             SetBusy(true, "正在准备上传...");
             try
             {
-                var result = await ClientDataCloudBackupService.UploadAsync(SetOperation);
-                MessageBox.Show(
-                    "云备份上传成功。\n版本：v" + (result.Value<int?>("revision") ?? 0)
-                    + "\n加密包大小：" + ClientDataCloudBackupService.FormatBytes(result.Value<long?>("size_bytes") ?? 0)
-                    + "\n\n新电脑配置相同 Bot 令牌后，即可点击“从云端一键恢复”。",
-                    "云备份完成",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                using (ShopSettingsScope.Enter(_shop))
+                {
+                    var result = await ClientDataCloudBackupService.UploadAsync(_shop, SetOperation);
+                    MessageBox.Show(
+                        "本店云备份上传成功。\n版本：v" + (result.Value<int?>("revision") ?? 0)
+                        + "\n加密包大小：" + ClientDataCloudBackupService.FormatBytes(result.Value<long?>("size_bytes") ?? 0),
+                        "本店云备份完成", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("上传云备份失败：" + ex.Message, "云备份", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show("上传本店云备份失败：" + ex.Message, "云备份", MessageBoxButton.OK, MessageBoxImage.Error);
             }
             finally
             {
                 SetBusy(false, null);
-                await RefreshAsync();
+                await RunScopedAsync(RefreshAsync);
             }
         }
 
         private async Task RestoreAsync()
         {
             if (_busy) return;
-            var answer = MessageBox.Show(
-                "将把云端业务数据覆盖到当前电脑，并在恢复前自动生成本机回滚备份。\n\n当前统一 API 地址和 Bot 令牌会保留；运行日志不会被修改。恢复后程序将自动重启。是否继续？",
-                "从云端一键恢复",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Warning);
-            if (answer != MessageBoxResult.Yes) return;
-
-            SetBusy(true, "正在下载云端备份...");
+            if (MessageBox.Show(
+                "将用云端数据覆盖当前 ShopKey 的业务数据，并先生成本店加密回滚包。其他店铺不会修改。恢复后程序自动重启。是否继续？",
+                "恢复本店云备份", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes) return;
+            SetBusy(true, "正在下载本店云备份...");
             try
             {
-                var result = await ClientDataCloudBackupService.DownloadAndRestoreAsync(SetOperation);
-                MessageBox.Show(
-                    "恢复成功。\n来源电脑：" + (string.IsNullOrWhiteSpace(result.SourceDevice) ? "未知" : result.SourceDevice)
-                    + "\n备份时间：" + (string.IsNullOrWhiteSpace(result.CreatedAt) ? "未知" : result.CreatedAt)
-                    + "\n恢复参数：" + result.ParamCount
-                    + "\n恢复文件：" + result.FileCount
-                    + "\n本机回滚包：" + result.RollbackPath
-                    + "\n\n程序现在将自动重启。",
-                    "换机恢复完成",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-                ClientDataCloudBackupService.RestartApplication();
+                using (ShopSettingsScope.Enter(_shop))
+                {
+                    var result = await ClientDataCloudBackupService.DownloadAndRestoreAsync(_shop, SetOperation);
+                    MessageBox.Show(
+                        "本店恢复成功。\n来源电脑：" + (string.IsNullOrWhiteSpace(result.SourceDevice) ? "未知" : result.SourceDevice)
+                        + "\n备份时间：" + (string.IsNullOrWhiteSpace(result.CreatedAt) ? "未知" : result.CreatedAt)
+                        + "\n恢复设置：" + result.ParamCount + "\n恢复文件：" + result.FileCount
+                        + "\n本店回滚包：" + result.RollbackPath + "\n\n程序现在将自动重启。",
+                        "本店换机恢复完成", MessageBoxButton.OK, MessageBoxImage.Information);
+                    ClientDataCloudBackupService.RestartApplication();
+                }
             }
             catch (Exception ex)
             {
-                MessageBox.Show("从云端恢复失败：" + ex.Message, "换机恢复", MessageBoxButton.OK, MessageBoxImage.Error);
+                MessageBox.Show("恢复本店云备份失败：" + ex.Message, "换机恢复", MessageBoxButton.OK, MessageBoxImage.Error);
                 SetBusy(false, null);
             }
         }

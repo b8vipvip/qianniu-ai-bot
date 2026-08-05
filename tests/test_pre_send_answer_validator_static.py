@@ -48,8 +48,10 @@ def test_dedup_pipeline_validates_before_real_send_and_repairs_once():
 def test_trusted_exact_local_knowledge_does_not_trigger_extra_ai_call():
     code = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     assert "exactTrustedKnowledge" in code
-    assert "if (!exactTrustedKnowledge" in code
-    assert "本地知识原文已经由 Smart Reply Router" in code
+    guard = code.index("if (!exactTrustedKnowledge")
+    validate = code.index("PreSendAnswerValidator.Validate(", guard)
+    assert guard < validate
+    assert "knowledge != null && SameAnswer(knowledge.Answer, candidateAnswer)" in code
 
 
 def test_build_targets_include_validator():

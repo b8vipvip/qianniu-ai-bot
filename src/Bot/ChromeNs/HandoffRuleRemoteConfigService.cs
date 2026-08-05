@@ -1,8 +1,11 @@
 using Bot.Options;
+using Bot.ShopScope;
 using BotLib;
+using BotLib.Extensions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -16,34 +19,24 @@ namespace Bot.ChromeNs
     {
         [JsonProperty("id")]
         public int Id { get; set; }
-
         [JsonProperty("enabled")]
         public bool Enabled { get; set; }
-
         [JsonProperty("rule_type")]
         public string RuleType { get; set; }
-
         [JsonProperty("keyword")]
         public string Keyword { get; set; }
-
         [JsonProperty("match_mode")]
         public string MatchMode { get; set; }
-
         [JsonProperty("risk_terms")]
         public string RiskTerms { get; set; }
-
         [JsonProperty("exceptions")]
         public string Exceptions { get; set; }
-
         [JsonProperty("safe_reply")]
         public string SafeReply { get; set; }
-
         [JsonProperty("note")]
         public string Note { get; set; }
-
         [JsonProperty("sort_order")]
         public int SortOrder { get; set; }
-
         [JsonIgnore]
         public bool IsSelected { get; set; }
 
@@ -60,11 +53,6 @@ namespace Bot.ChromeNs
         }
     }
 
-    /// <summary>
-    /// Compatibility class name retained so existing callers keep working.
-    /// The authoritative AI handoff policy is now a local JSON file; this class
-    /// no longer downloads rules from the enterprise-WeCom server.
-    /// </summary>
     internal static class HandoffRuleRemoteConfigService
     {
         private const string Schema = "qianniu-ai-bot.handoff-policy";
@@ -72,35 +60,41 @@ namespace Bot.ChromeNs
         private const string DefaultAccountSafeReply =
             "可以的，月卡可以给朋友或其他账号充值，您再拍对应月卡即可；下单后按页面提示提供需要充值的账号。";
 
-        private static readonly object Sync = new object();
-        private static List<RemoteHandoffRule> _rules = new List<RemoteHandoffRule>();
+        private sealed class RuleState
+        {
+            public readonly object Sync = new object();
+            public List<RemoteHandoffRule> Rules = new List<RemoteHandoffRule>();
+            public DateTime LastWriteUtc = DateTime.MinValue;
+            public long LastLength = -1;
+            public bool Loaded;
+        }
+
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
+        private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
+        private static readonly ConcurrentDictionary<string, RuleState> States =
+            new ConcurrentDictionary<string, RuleState>(StringComparer.OrdinalIgnoreCase);
         private static int _initialized;
 
         public static void Initialize()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            LoadLocalRules();
             HandoffPolicyUiBridge.Initialize();
             BulkListManagementUi.Initialize();
-            Log.Info("本机AI转人工通知策略已启动：只读取本机 handoff-policy.json，不再访问服务端规则接口。");
+            Log.Info("本机AI转人工通知策略已启动：策略按 ShopKey 独立保存，不再访问服务端规则接口。");
         }
 
         public static string GetPath()
         {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "QianniuAiBot",
-                "data",
-                "handoff-policy.json");
+            var shop = ShopSettingsScope.Current;
+            if (shop != null) return Path.Combine(Paths.GetRulesRoot(shop), "handoff-policy.json");
+            return Path.Combine(PathEx.GlobalDataDir, "handoff-policy.json");
         }
 
         public static List<RemoteHandoffRule> GetRules()
         {
             EnsureInitialized();
-            lock (Sync)
-            {
-                return _rules.Select(Clone).ToList();
-            }
+            var state = GetState(true);
+            lock (state.Sync) return state.Rules.Select(Clone).ToList();
         }
 
         public static string ExportJson(IEnumerable<RemoteHandoffRule> rules)
@@ -111,6 +105,7 @@ namespace Bot.ChromeNs
                 ["schema"] = Schema,
                 ["version"] = CurrentVersion,
                 ["exportedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["shopKey"] = ShopSettingsScope.Current == null ? string.Empty : ShopSettingsScope.Current.ShopKey,
                 ["rules"] = JArray.FromObject(normalized)
             }.ToString(Formatting.Indented);
         }
@@ -126,9 +121,7 @@ namespace Bot.ChromeNs
                 var schema = Convert.ToString(root["schema"]);
                 if (!string.IsNullOrWhiteSpace(schema)
                     && !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase))
-                {
                     throw new Exception("文件类型不匹配：" + schema);
-                }
                 array = root["rules"] as JArray ?? root["Rules"] as JArray;
             }
             if (array == null) throw new Exception("文件中没有 rules 规则数组。");
@@ -142,21 +135,23 @@ namespace Bot.ChromeNs
             var path = GetPath();
             var directory = Path.GetDirectoryName(path);
             if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-            BackupCurrentFile("handoff-policy-before-save");
+            BackupCurrentFile(path, "handoff-policy-before-save");
             AtomicWrite(path, ExportJson(normalized));
-            lock (Sync)
+            var state = States.GetOrAdd(path, _ => new RuleState());
+            lock (state.Sync)
             {
-                _rules = normalized.Select(Clone).ToList();
+                state.Rules = normalized.Select(Clone).ToList();
+                RefreshFileStamp(path, state);
+                state.Loaded = true;
             }
             SyncKeywordsToLocalConfig(normalized);
-            Log.Info("本机AI转人工通知策略已保存: enabled=" + normalized.Count(x => x.Enabled)
-                + ", total=" + normalized.Count + ", file=" + Path.GetFileName(path));
+            Log.Info("本店AI转人工通知策略已保存: enabled=" + normalized.Count(x => x.Enabled)
+                + ", total=" + normalized.Count + ", file=" + path);
         }
 
         public static List<RemoteHandoffRule> ResetDefaults()
         {
-            var defaults = DefaultRules();
-            SaveRules(defaults);
+            SaveRules(DefaultRules());
             return GetRules();
         }
 
@@ -166,16 +161,8 @@ namespace Bot.ChromeNs
             out string detail)
         {
             detail = string.Empty;
-            if (decision == null || !decision.Matched || string.IsNullOrWhiteSpace(decision.HitKeyword))
-                return false;
-
-            EnsureInitialized();
-            List<RemoteHandoffRule> snapshot;
-            lock (Sync)
-            {
-                snapshot = _rules.Select(Clone).ToList();
-            }
-
+            if (decision == null || !decision.Matched || string.IsNullOrWhiteSpace(decision.HitKeyword)) return false;
+            var snapshot = GetRules();
             var rule = snapshot
                 .Where(x => x != null && x.Enabled)
                 .OrderBy(x => x.SortOrder)
@@ -188,24 +175,20 @@ namespace Bot.ChromeNs
             var hasRisk = ContainsAny(question, rule.RiskTerms, out riskHit);
             var hasException = ContainsAny(question, rule.Exceptions, out exceptionHit);
             var contextual = string.Equals(rule.MatchMode, "sensitive_context", StringComparison.OrdinalIgnoreCase);
-
             if (contextual && hasRisk)
             {
                 UpdateReason(decision, rule);
-                detail = "本机策略敏感语境成立：" + riskHit;
+                detail = "本店策略敏感语境成立：" + riskHit;
                 return false;
             }
             if (hasException)
             {
                 ApplySafeReply(decision, rule.SafeReply, rule.Keyword, exceptionHit);
-                detail = "本机策略安全例外：" + exceptionHit;
+                detail = "本店策略安全例外：" + exceptionHit;
                 return true;
             }
-
             UpdateReason(decision, rule);
-            detail = contextual
-                ? "本机策略敏感语境未充分确认，保持人工确认"
-                : "本机策略包含规则命中";
+            detail = contextual ? "本店策略敏感语境未充分确认，保持人工确认" : "本店策略包含规则命中";
             return false;
         }
 
@@ -214,39 +197,53 @@ namespace Bot.ChromeNs
             if (_initialized == 0) Initialize();
         }
 
-        private static void LoadLocalRules()
+        private static RuleState GetState(bool synchronizeKeywords)
         {
-            try
+            var path = GetPath();
+            var state = States.GetOrAdd(path, _ => new RuleState());
+            lock (state.Sync)
             {
-                var path = GetPath();
-                List<RemoteHandoffRule> loaded;
-                if (!File.Exists(path))
+                var info = new FileInfo(path);
+                if (state.Loaded && info.Exists
+                    && info.LastWriteTimeUtc == state.LastWriteUtc
+                    && info.Length == state.LastLength) return state;
+                try
                 {
-                    loaded = DefaultRules();
-                    var directory = Path.GetDirectoryName(path);
-                    if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                    AtomicWrite(path, ExportJson(loaded));
+                    EnsurePolicyFile(path);
+                    state.Rules = ParseImport(File.ReadAllText(path, Encoding.UTF8));
+                    RefreshFileStamp(path, state);
+                    state.Loaded = true;
+                    if (synchronizeKeywords) SyncKeywordsToLocalConfig(state.Rules);
                 }
-                else
+                catch (Exception ex)
                 {
-                    loaded = ParseImport(File.ReadAllText(path, Encoding.UTF8));
+                    state.Rules = DefaultRules();
+                    state.Loaded = true;
+                    if (synchronizeKeywords) SyncKeywordsToLocalConfig(state.Rules);
+                    Log.ErrorWithMaxCount("读取本店AI转人工通知策略失败，已使用默认规则：" + Safe(ex.Message), 10);
                 }
-                lock (Sync)
-                {
-                    _rules = loaded.Select(Clone).ToList();
-                }
-                SyncKeywordsToLocalConfig(loaded);
+                return state;
             }
-            catch (Exception ex)
+        }
+
+        private static void EnsurePolicyFile(string path)
+        {
+            if (File.Exists(path)) return;
+            var directory = Path.GetDirectoryName(path);
+            if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+            var legacy = Path.Combine(PathEx.GlobalDataDir, "handoff-policy.json");
+            if (ShopSettingsScope.Current != null && CanAutoAdoptLegacy() && File.Exists(legacy))
             {
-                var fallback = DefaultRules();
-                lock (Sync)
-                {
-                    _rules = fallback.Select(Clone).ToList();
-                }
-                SyncKeywordsToLocalConfig(fallback);
-                Log.ErrorWithMaxCount("读取本机AI转人工通知策略失败，已使用默认规则：" + Safe(ex.Message), 10);
+                AtomicWrite(path, File.ReadAllText(legacy, Encoding.UTF8));
+                return;
             }
+            AtomicWrite(path, ExportJson(DefaultRules()));
+        }
+
+        private static bool CanAutoAdoptLegacy()
+        {
+            try { return Profiles.GetAll().Count == 1; }
+            catch { return false; }
         }
 
         private static List<RemoteHandoffRule> DefaultRules()
@@ -316,12 +313,9 @@ namespace Bot.ChromeNs
                 item.Id = source.Id > 0 ? source.Id : nextId;
                 nextId = Math.Max(nextId, item.Id + 1);
                 item.Enabled = source.Enabled;
-                item.RuleType = string.Equals(source.RuleType, "manual", StringComparison.OrdinalIgnoreCase)
-                    ? "manual"
-                    : "confirm";
+                item.RuleType = string.Equals(source.RuleType, "manual", StringComparison.OrdinalIgnoreCase) ? "manual" : "confirm";
                 item.MatchMode = string.Equals(source.MatchMode, "sensitive_context", StringComparison.OrdinalIgnoreCase)
-                    ? "sensitive_context"
-                    : "contains";
+                    ? "sensitive_context" : "contains";
                 item.Keyword = keyword;
                 item.RiskTerms = CleanTerms(source.RiskTerms, 3000);
                 item.Exceptions = CleanTerms(source.Exceptions, 3000);
@@ -331,10 +325,7 @@ namespace Bot.ChromeNs
                 item.IsSelected = false;
                 output.Add(item);
             }
-            return output
-                .OrderBy(x => x.SortOrder)
-                .ThenBy(x => x.Id)
-                .ToList();
+            return output.OrderBy(x => x.SortOrder).ThenBy(x => x.Id).ToList();
         }
 
         private static void SyncKeywordsToLocalConfig(IEnumerable<RemoteHandoffRule> rules)
@@ -342,43 +333,30 @@ namespace Bot.ChromeNs
             try
             {
                 var enabled = (rules ?? Enumerable.Empty<RemoteHandoffRule>())
-                    .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Keyword))
-                    .ToList();
+                    .Where(x => x != null && x.Enabled && !string.IsNullOrWhiteSpace(x.Keyword)).ToList();
                 var manual = string.Join(",", enabled
                     .Where(x => string.Equals(x.RuleType, "manual", StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(x => x.SortOrder)
-                    .Select(x => x.Keyword.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase));
+                    .OrderBy(x => x.SortOrder).Select(x => x.Keyword.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
                 var confirm = string.Join(",", enabled
                     .Where(x => string.Equals(x.RuleType, "confirm", StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(x => x.SortOrder)
-                    .Select(x => x.Keyword.Trim())
-                    .Distinct(StringComparer.OrdinalIgnoreCase));
-
+                    .OrderBy(x => x.SortOrder).Select(x => x.Keyword.Trim()).Distinct(StringComparer.OrdinalIgnoreCase));
                 var cfg = BotFeatureStore.GetAutoReplyRules();
                 if (cfg == null) return;
                 if (string.Equals(cfg.ManualKeywords ?? string.Empty, manual, StringComparison.Ordinal)
-                    && string.Equals(cfg.NoAutoReplyKeywords ?? string.Empty, confirm, StringComparison.Ordinal))
-                {
-                    return;
-                }
+                    && string.Equals(cfg.NoAutoReplyKeywords ?? string.Empty, confirm, StringComparison.Ordinal)) return;
                 cfg.ManualKeywords = manual;
                 cfg.NoAutoReplyKeywords = confirm;
                 BotFeatureStore.SaveAutoReplyRules(cfg);
-                Log.Info("本机AI转人工通知关键词已同步：强制=" + Split(manual).Count()
+                Log.Info("本店AI转人工通知关键词已同步：强制=" + Split(manual).Count()
                     + "，人工确认=" + Split(confirm).Count());
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("同步本机AI转人工通知关键词失败：" + Safe(ex.Message), 10);
+                Log.ErrorWithMaxCount("同步本店AI转人工通知关键词失败：" + Safe(ex.Message), 10);
             }
         }
 
-        private static void ApplySafeReply(
-            AutoReplyRuleDecision decision,
-            string reply,
-            string keyword,
-            string exceptionHit)
+        private static void ApplySafeReply(AutoReplyRuleDecision decision, string reply, string keyword, string exceptionHit)
         {
             decision.AllowAutoReply = true;
             decision.UseAiReply = false;
@@ -390,9 +368,7 @@ namespace Bot.ChromeNs
 
         private static void UpdateReason(AutoReplyRuleDecision decision, RemoteHandoffRule rule)
         {
-            decision.HitKeyword = string.IsNullOrWhiteSpace(rule.Keyword)
-                ? decision.HitKeyword
-                : rule.Keyword.Trim();
+            decision.HitKeyword = string.IsNullOrWhiteSpace(rule.Keyword) ? decision.HitKeyword : rule.Keyword.Trim();
             decision.Reason = string.Equals(rule.RuleType, "manual", StringComparison.OrdinalIgnoreCase)
                 ? "命中强制转人工关键词：" + decision.HitKeyword
                 : "命中仅人工确认关键词：" + decision.HitKeyword;
@@ -415,22 +391,13 @@ namespace Bot.ChromeNs
         {
             return (values ?? string.Empty)
                 .Split(new[] { '|', ',', '，', ';', '；', '\n', '\r' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(x => x.Trim())
-                .Where(x => x.Length > 0)
-                .Distinct(StringComparer.OrdinalIgnoreCase);
+                .Select(x => x.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase);
         }
 
-        private static string CleanTerms(string value, int max)
-        {
-            return Clean(string.Join("|", Split(value)), max);
-        }
-
+        private static string CleanTerms(string value, int max) { return Clean(string.Join("|", Split(value)), max); }
         private static bool Same(string left, string right)
         {
-            return string.Equals(
-                (left ?? string.Empty).Trim(),
-                (right ?? string.Empty).Trim(),
-                StringComparison.OrdinalIgnoreCase);
+            return string.Equals((left ?? string.Empty).Trim(), (right ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase);
         }
 
         private static RemoteHandoffRule Clone(RemoteHandoffRule rule)
@@ -452,15 +419,13 @@ namespace Bot.ChromeNs
             };
         }
 
-        private static void BackupCurrentFile(string prefix)
+        private static void BackupCurrentFile(string source, string prefix)
         {
-            var source = GetPath();
             if (!File.Exists(source)) return;
-            var directory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "QianniuAiBot",
-                "data",
-                "backups");
+            var shop = ShopSettingsScope.Current;
+            var directory = shop == null
+                ? Path.Combine(PathEx.GlobalDataDir, "backups")
+                : Paths.GetBackupRoot(shop);
             Directory.CreateDirectory(directory);
             var target = Path.Combine(directory,
                 prefix + "-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff") + ".json");
@@ -469,24 +434,39 @@ namespace Bot.ChromeNs
 
         private static void AtomicWrite(string path, string content)
         {
-            var temp = path + ".tmp";
+            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
             File.WriteAllText(temp, content ?? string.Empty, new UTF8Encoding(false));
-            if (File.Exists(path)) File.Delete(path);
-            File.Move(temp, path);
+            try
+            {
+                if (File.Exists(path))
+                {
+                    var backup = path + ".bak";
+                    try { File.Replace(temp, path, backup, true); return; }
+                    catch (PlatformNotSupportedException) { }
+                    catch (IOException) { }
+                    File.Copy(temp, path, true);
+                    File.Delete(temp);
+                    return;
+                }
+                File.Move(temp, path);
+            }
+            finally { if (File.Exists(temp)) File.Delete(temp); }
+        }
+
+        private static void RefreshFileStamp(string path, RuleState state)
+        {
+            var info = new FileInfo(path);
+            info.Refresh();
+            state.LastWriteUtc = info.Exists ? info.LastWriteTimeUtc : DateTime.MinValue;
+            state.LastLength = info.Exists ? info.Length : -1;
         }
 
         private static string Clean(string value, int max)
         {
-            value = Regex.Replace(
-                (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim(),
-                @"\s+",
-                " ");
+            value = Regex.Replace((value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim(), @"\s+", " ");
             return value.Length <= max ? value : value.Substring(0, max).Trim();
         }
 
-        private static string Safe(string value)
-        {
-            return Clean(value, 300);
-        }
+        private static string Safe(string value) { return Clean(value, 300); }
     }
 }

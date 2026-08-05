@@ -8,52 +8,58 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_windows_client_exposes_one_click_backup_and_restore():
+def test_windows_client_exposes_per_shop_backup_and_restore():
     source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
-    assert 'Content = "云备份/换机"' in source
-    assert '"上传当前电脑数据"' in source
-    assert '"从云端一键恢复"' in source
-    assert "GetStatusAsync" in source
-    assert "UploadAsync" in source
-    assert "DownloadAndRestoreAsync" in source
+    assert 'Content = "本店云备份/换机"' in source
+    assert '"上传本店数据"' in source
+    assert '"恢复本店云备份"' in source
+    assert "GetStatusAsync(ShopContext shop)" in source
+    assert "UploadAsync(ShopContext shop" in source
+    assert "DownloadAndRestoreAsync(ShopContext shop" in source
     assert "RestartApplication" in source
+    assert "ShopScopedUiBridge.Attach(window, shop)" in source
 
 
-def test_backup_is_encrypted_with_current_bot_token_and_integrity_checked():
+def test_backup_is_encrypted_with_current_shop_token_and_shop_key_integrity_checked():
     source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
-    assert 'private const string Magic = "QABK1"' in source
+    assert 'private const string Magic = "QABK2"' in source
     assert "Rfc2898DeriveBytes" in source
+    assert '"|qianniu-shop-backup|" + (shopKey ?? string.Empty)' in source
     assert "Aes.Create" in source
     assert "HMACSHA256" in source
     assert "ConstantTimeEquals" in source
-    assert "Bot 令牌不一致或云备份已损坏" in source
+    assert "本店 Bot 令牌/ShopKey 不一致或云备份已损坏" in source
 
 
-def test_logs_transient_files_and_connection_credentials_are_excluded():
+def test_logs_tokens_dpapi_files_and_transient_cloud_state_are_excluded():
     source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
     for value in (
-        '"log", "logs"',
-        '"backup", "backups"',
-        '"tmp", "temp"',
-        '"cache", "caches"',
-        '"crash", "crashes"',
-        '"update", "updates"',
+        'new[] { "logs", "backup", "cache" }',
+        'string.Equals(relative, "profile.json"',
+        'string.Equals(relative, "config\\\\settings.json"',
+        'string.Equals(relative, "config\\\\control-plane-token.json"',
         'string.Equals(extension, ".log"',
-        'string.Equals(name, "params.db"',
-        'UrlKey + "#-#" + Scope',
-        'TokenKey + "#-#" + Scope',
+        'string.Equals(extension, ".tmp"',
+        'string.Equals(extension, ".bak"',
+        'IsTransientSetting',
+        '"ProcessedCommand"',
+        '"BotWebRemotePause"',
     ):
         assert value in source
+    assert "PathEx.DataDir" not in source
+    assert 'WriteTextEntry(zip, "params.json"' not in source
 
 
-def test_business_parameters_and_data_files_are_included_with_local_rollback():
+def test_logical_shop_settings_and_business_files_are_included_with_local_rollback():
     source = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
-    assert "ExportParameters" in source
-    assert 'WriteTextEntry(zip, "params.json"' in source
+    assert "ExportPortableSettings" in source
+    assert "ShopScopedSettingsStore(shop, Paths).ExportValues" in source
+    assert 'WriteTextEntry(zip, "settings.json"' in source
     assert 'zip.CreateEntry("files/"' in source
     assert "CreateRollbackBackup" in source
     assert "before-cloud-restore-" in source
-    assert "PersistentParams.TrySaveParam" in source
+    assert "ReplaceValues(current)" in source
+    assert "云备份 ShopKey 与当前店铺不匹配" in source
 
 
 def test_build_includes_client_backup_service():

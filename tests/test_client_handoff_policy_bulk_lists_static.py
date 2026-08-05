@@ -17,15 +17,19 @@ def test_handoff_policy_is_local_and_no_longer_polls_server():
     assert "PollLoopAsync" not in source
     assert "HttpClient" not in source
     assert "不再访问服务端规则接口" in source
+    assert "Paths.GetRulesRoot(shop)" in source
 
 
-def test_legacy_server_rules_are_migrated_once_then_marked_complete():
+def test_legacy_server_rules_are_migrated_once_per_shop_then_marked_complete():
     migration = read("src/Bot/ChromeNs/HandoffPolicyLegacyMigrationService.cs")
     bridge = read("src/Bot/ChromeNs/BulkListManagementUiBridge.cs")
     props = read("src/Bot/Directory.Build.props")
     assert "HandoffPolicyLegacyMigrationService.StartOnce" in bridge
     assert "/api/runtime/v1/handoff/rules" in migration
-    assert "handoff-policy-migration.json" in migration
+    assert "handoff-policy-server-migration.json" in migration
+    assert "ShopControlPlaneConnectionStore" in migration
+    assert '"X-Shop-Key"' in migration
+    assert "Paths.GetStateRoot(shop)" in migration
     assert "HandoffRuleRemoteConfigService.SaveRules(rules)" in migration
     assert "Task.Run" in migration
     assert "while (true)" not in migration
@@ -73,6 +77,7 @@ def test_new_windows_files_are_included_in_all_wpf_builds():
 def test_handoff_notification_still_applies_local_safe_exceptions():
     source = read("src/Bot/ChromeNs/HandoffNotificationService.cs")
     assert "HandoffRuleRemoteConfigService.TryApplySafeAutoReply" in source
+    assert "ShopSettingsScope.Enter(shop)" in source
 
 
 def test_server_no_longer_registers_or_packages_handoff_policy_engine():

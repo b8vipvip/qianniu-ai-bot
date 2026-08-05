@@ -69,14 +69,15 @@ def test_persistent_params_routes_scoped_reads_and_writes_before_global_db():
     assert "public delegate bool TryWriteHandler" in router
 
 
-def test_only_explicit_ai_scope_is_shop_routed_in_this_pr():
+def test_only_explicit_supported_scopes_are_shop_routed():
     source = read("src/Bot/ShopScope/ShopScopedParamBridge.cs")
-    assert '"ai"' in source
-    assert '"feature"' not in source
+    for scope in ("ai", "feature", "shop-cloud", "shop-runtime"):
+        assert f'"{scope}"' in source
     assert '"ai-control-plane"' not in source
     assert "ShopSettingsScope.Current" in source
-    assert "store.TryGetString(masterKey" in source
-    assert "store.SetString(masterKey" in source
+    assert "ShopScopedSettingsStore" in source
+    assert "TryGetString(masterKey" in source
+    assert "SetString(masterKey" in source
 
 
 def test_settings_window_scopes_ai_load_and_save_without_process_global_shop_state():
@@ -131,34 +132,39 @@ def test_unstable_nickname_binding_requires_explicit_confirmation_and_keeps_wind
     assert "窗口已保留，请修正后重试" in window
 
 
-def test_ui_only_claims_token_and_ai_model_api_isolation():
+def test_ui_claims_complete_business_data_and_cloud_isolation_scope():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
-    assert "AI 模型/API 设置将写入" in ui
-    assert "本阶段已隔离令牌与 AI 模型/API 设置" in ui
-    assert "知识库、规则、Web 同步和云备份仍由后续阶段改造" in ui
-    assert "AI/功能设置将写入" not in ui
+    assert "知识库、规则、消息状态、Web 同步、知识云同步和本店云备份" in ui
+    assert "均按 ShopKey 隔离" in ui
+    assert "仍由后续阶段改造" not in ui
 
 
-def test_build_includes_new_bot_and_botlib_sources():
+def test_build_includes_shop_scope_and_botlib_router_sources():
     bot_props = read("src/Bot/Directory.Build.props")
     botlib_props = read("src/BotLib/Directory.Build.props")
     for filename in (
         "ShopContextLocator.cs",
         "ShopControlPlaneConnectionStore.cs",
+        "ShopLegacyDataMigrationService.cs",
         "ShopScopedParamBridge.cs",
+        "ShopScopedRuntimeBridge.cs",
         "ShopScopedSettingsStore.cs",
+        "ShopScopedUiBridge.cs",
         "ShopSettingsScope.cs",
         "ShopTokenStore.cs",
         "ShopBindingOptionsControl.cs",
     ):
         assert filename in bot_props
-    assert "ScopedParamRouter.cs" in botlib_props
+    for filename in ("ScopedParamRouter.cs", "ScopedDataPathRouter.cs", "ScopedLogRouter.cs"):
+        assert filename in botlib_props
 
 
-def test_web_cloud_and_full_backup_tokens_are_not_silently_switched_in_pr2():
+def test_web_cloud_and_backup_use_per_shop_connection_store_without_global_token():
     web = read("src/Bot/ChromeNs/BotWebConsoleSyncService.cs")
     knowledge = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
     backup = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
-    assert "ShopControlPlaneConnectionStore" not in web
-    assert "ShopControlPlaneConnectionStore" not in knowledge
-    assert "ShopControlPlaneConnectionStore" not in backup
+    for source in (web, knowledge, backup):
+        assert "ShopControlPlaneConnectionStore" in source
+        assert "ControlPlaneClientToken" not in source
+        assert '"ai-control-plane"' not in source
+        assert "X-Shop-Key" in source

@@ -18,5 +18,6 @@ namespace Bot.ShopScope
         string GetCacheRoot(ShopContext shop);
         string GetLogRoot(ShopContext shop);
         string GetBackupRoot(ShopContext shop);
+        string GetCompatibilityDataRoot(ShopContext shop);
     }
 }

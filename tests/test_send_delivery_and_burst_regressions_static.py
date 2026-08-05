@@ -8,14 +8,19 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_send_watchdog_requires_real_seller_echo_and_queues_ai_report():
+def test_send_watchdog_requires_real_shop_seller_echo_and_queues_ai_report():
     source = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     assert "HasRecentSellerEcho" in source
     assert "SendFailureAnomalyService.Queue" in source
     assert "答案已经生成并进入自动发送流程" in source
     assert "VerifyDelayMilliseconds = 9000" in source
     assert "Pending[pending.Id] = pending;" in source
-    assert "新买家消息不能取消上一条答案的送达核验" in source
+    assert "public static void OnBuyerMessageObserved" in source
+    observe_start = source.index("public static void OnBuyerMessageObserved")
+    observe_end = source.index("public static void ExpectDelivery", observe_start)
+    assert "Pending.TryRemove" not in source[observe_start:observe_end]
+    assert "pending.Shop.ShopKey" in source
+    assert "FindQn(pending.Shop, pending.Seller)" in source
     assert "Pending.TryRemove(pending.Id" in source
 
 
@@ -52,6 +57,7 @@ def test_progress_card_rotates_when_new_buyer_turn_arrives_during_ai_generation(
     assert "entry.AnswerStartedAt != DateTime.MinValue" in source
     assert "已被买家新消息替代，旧答案不会发送" in source
     assert "Entries.TryUpdate(key, replacement, entry)" in source
+    assert "ScopeKey(seller)" in source
 
 
 def test_answer_context_menu_has_copy_action():

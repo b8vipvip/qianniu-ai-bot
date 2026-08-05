@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -37,39 +38,22 @@ namespace Bot.ChromeNs
             var knowledge = ResolveKnowledge(seller, buyer, question, candidateAnswer);
             var validationRegenerated = false;
             var validationSource = string.Empty;
-            var exactTrustedKnowledge = knowledge != null
-                && SameAnswer(knowledge.Answer, candidateAnswer);
+            var exactTrustedKnowledge = knowledge != null && SameAnswer(knowledge.Answer, candidateAnswer);
 
-            // 本地知识原文已经由 Smart Reply Router 的适用条件和可靠度门槛审核，
-            // 这里主要审核 AI 生成、上下文改写和重复重答结果，避免对可信固定答案再次调用 AI。
             if (!exactTrustedKnowledge
                 && !string.IsNullOrWhiteSpace(candidateAnswer)
                 && !candidateAnswer.StartsWith("错误：", StringComparison.Ordinal))
             {
                 var validation = PreSendAnswerValidator.Validate(
-                    seller,
-                    buyer,
-                    question,
-                    candidateAnswer,
-                    knowledge,
-                    false);
+                    seller, buyer, question, candidateAnswer, knowledge, false);
                 ReplyQualityMetricsService.RecordValidation(
-                    validation.Action,
-                    validation.Issues,
-                    false);
+                    validation.Action, validation.Issues, false);
                 if (validation.Action == AnswerValidationAction.Manual)
-                {
                     return BuildBlockedResult("发送前校验要求人工确认：" + validation.Reason);
-                }
                 if (validation.Action == AnswerValidationAction.Regenerate)
                 {
                     var repaired = RegenerateInvalidAnswer(
-                        seller,
-                        buyer,
-                        question,
-                        candidateAnswer,
-                        knowledge,
-                        validation);
+                        seller, buyer, question, candidateAnswer, knowledge, validation);
                     repaired = BotFeatureStore.ApplyOutputPolicy(repaired);
                     if (string.IsNullOrWhiteSpace(repaired)
                         || repaired.StartsWith("错误：", StringComparison.Ordinal))
@@ -79,16 +63,9 @@ namespace Bot.ChromeNs
                     }
 
                     var secondValidation = PreSendAnswerValidator.Validate(
-                        seller,
-                        buyer,
-                        question,
-                        repaired,
-                        knowledge,
-                        true);
+                        seller, buyer, question, repaired, knowledge, true);
                     ReplyQualityMetricsService.RecordValidation(
-                        secondValidation.Action,
-                        secondValidation.Issues,
-                        true);
+                        secondValidation.Action, secondValidation.Issues, true);
                     if (secondValidation.Action != AnswerValidationAction.Pass)
                     {
                         ReplyQualityMetricsService.RecordRepair(false);
@@ -100,12 +77,8 @@ namespace Bot.ChromeNs
                     validationRegenerated = true;
                     validationSource = "AI校验重答";
                     KnowledgeLearningService.RegisterAnswerSource(
-                        seller,
-                        buyer,
-                        question,
-                        candidateAnswer,
-                        validationSource);
-                    Log.Info("发送前答案校验已完成一次安全重答: seller="
+                        seller, buyer, question, candidateAnswer, validationSource);
+                    Log.Info("本店发送前答案校验已完成一次安全重答: seller="
                         + seller + ", buyer=" + buyer);
                 }
             }
@@ -117,20 +90,13 @@ namespace Bot.ChromeNs
                 Source = validationSource,
                 Regenerated = validationRegenerated
             };
-
             if (string.IsNullOrWhiteSpace(result.Answer)
-                || result.Answer.StartsWith("错误：", StringComparison.Ordinal))
-            {
-                return result;
-            }
+                || result.Answer.StartsWith("错误：", StringComparison.Ordinal)) return result;
 
             string previousAnswer;
             DateTime previousAt;
             if (!TryGetLastDelivered(seller, buyer, out previousAnswer, out previousAt)
-                || !SameAnswer(previousAnswer, result.Answer))
-            {
-                return result;
-            }
+                || !SameAnswer(previousAnswer, result.Answer)) return result;
 
             ReplyQualityMetricsService.RecordDuplicateRewrite();
             knowledge = knowledge ?? ResolveKnowledge(seller, buyer, question, result.Answer);
@@ -140,43 +106,30 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(regenerated)
                 || regenerated.StartsWith("错误：", StringComparison.Ordinal)
                 || SameAnswer(previousAnswer, regenerated))
-            {
                 regenerated = BuildSafeFallback(question);
-            }
 
             regenerated = BotFeatureStore.ApplyOutputPolicy(regenerated);
             if (string.IsNullOrWhiteSpace(regenerated) || SameAnswer(previousAnswer, regenerated))
-            {
                 regenerated = "如果前面的步骤都试过仍无效，建议转人工进一步核查。";
-            }
 
             var duplicateValidation = PreSendAnswerValidator.Validate(
-                seller,
-                buyer,
-                question,
-                regenerated,
-                knowledge,
-                true);
+                seller, buyer, question, regenerated, knowledge, true);
             ReplyQualityMetricsService.RecordValidation(
-                duplicateValidation.Action,
-                duplicateValidation.Issues,
-                true);
+                duplicateValidation.Action, duplicateValidation.Issues, true);
             if (duplicateValidation.Action != AnswerValidationAction.Pass)
-            {
                 return BuildBlockedResult("重复答案重答未通过发送前校验：" + duplicateValidation.Reason);
-            }
 
             result.Answer = BotOutboundMessageFormatter.EnsureAiMarker(regenerated);
             result.PreviousAnswer = previousAnswer;
-            result.Source = result.Regenerated ? "AI校验重答+重复兜底" : (knowledge == null ? "AI重答" : "本地知识库重答");
+            result.Source = result.Regenerated
+                ? "AI校验重答+重复兜底"
+                : (knowledge == null ? "AI重答" : "本地知识库重答");
             result.Regenerated = true;
             KnowledgeLearningService.RegisterAnswerSource(
-                seller,
-                buyer,
-                question,
+                seller, buyer, question,
                 BotOutboundMessageFormatter.StripAiMarker(result.Answer),
                 result.Source);
-            Log.Info("检测到与上一轮完全相同的答案，已重新生成。seller="
+            Log.Info("检测到本店上一轮完全相同答案，已重新生成。seller="
                 + seller + ", buyer=" + buyer + ", source=" + result.Source);
             return result;
         }
@@ -184,11 +137,7 @@ namespace Bot.ChromeNs
         public static void RememberDelivered(string seller, string buyer, string answer)
         {
             if (string.IsNullOrWhiteSpace(answer)
-                || answer.StartsWith("错误：", StringComparison.Ordinal))
-            {
-                return;
-            }
-
+                || answer.StartsWith("错误：", StringComparison.Ordinal)) return;
             LastDelivered[Key(seller, buyer)] = new DeliveredAnswerStamp
             {
                 Answer = BotOutboundMessageFormatter.EnsureAiMarker(answer),
@@ -226,11 +175,7 @@ namespace Bot.ChromeNs
                 .FirstOrDefault();
             if (latest == null) return false;
             if (latest.Timestamp != DateTime.MinValue
-                && latest.Timestamp < DateTime.Now.AddMinutes(-30))
-            {
-                return false;
-            }
-
+                && latest.Timestamp < DateTime.Now.AddMinutes(-30)) return false;
             answer = latest.Text.Trim();
             sentAt = latest.Timestamp == DateTime.MinValue ? DateTime.Now : latest.Timestamp;
             return true;
@@ -250,17 +195,10 @@ namespace Bot.ChromeNs
                     && (Canonical(x.Answer) == answerKey
                         || Canonical(BotFeatureStore.ApplyOutputPolicy(x.Answer)) == answerKey));
             if (knowledge != null) return knowledge;
-
             KnowledgeBaseEntry matched;
             double score;
             return KnowledgeLearningService.TryFindLocalAnswer(
-                seller,
-                buyer,
-                question,
-                out matched,
-                out score)
-                ? matched
-                : null;
+                seller, buyer, question, out matched, out score) ? matched : null;
         }
 
         private static string RegenerateInvalidAnswer(
@@ -289,25 +227,22 @@ namespace Bot.ChromeNs
                                 ? "【可靠事实】未提供可确认的店铺事实，禁止自行补充。"
                                 : evidence)
                             + "\n【买家当前问题】\n" + (question ?? string.Empty)
-                            + "\n【未通过校验的原答案】\n" + BotOutboundMessageFormatter.StripAiMarker(invalidAnswer)
+                            + "\n【未通过校验的原答案】\n"
+                            + BotOutboundMessageFormatter.StripAiMarker(invalidAnswer)
                             + (string.IsNullOrWhiteSpace(timeline)
                                 ? string.Empty
                                 : "\n【同一买家最近时间线】\n" + timeline)
                     }
                 };
                 var response = MyOpenAI.CallStructuredChat(
-                    messages,
-                    220,
-                    0.10,
-                    45,
-                    CancellationToken.None);
+                    messages, 220, 0.10, 45, CancellationToken.None);
                 return response != null && response.Success
                     ? (response.Answer ?? string.Empty).Trim()
                     : string.Empty;
             }
             catch (Exception ex)
             {
-                Log.Info("发送前答案校验重答失败：" + ex.Message);
+                Log.Info("本店发送前答案校验重答失败：" + ex.Message);
                 return string.Empty;
             }
         }
@@ -344,18 +279,14 @@ namespace Bot.ChromeNs
                     }
                 };
                 var response = MyOpenAI.CallStructuredChat(
-                    messages,
-                    180,
-                    0.35,
-                    90,
-                    CancellationToken.None);
+                    messages, 180, 0.35, 90, CancellationToken.None);
                 return response != null && response.Success
                     ? (response.Answer ?? string.Empty).Trim()
                     : string.Empty;
             }
             catch (Exception ex)
             {
-                Log.Info("重复答案重新生成失败，使用安全兜底：" + ex.Message);
+                Log.Info("本店重复答案重新生成失败，使用安全兜底：" + ex.Message);
                 return string.Empty;
             }
         }
@@ -375,17 +306,11 @@ namespace Bot.ChromeNs
         {
             var compact = Canonical(question);
             if (ContainsAny(compact, "好了", "可以了", "解决了", "能用了", "正常了"))
-            {
                 return "好的，能正常使用就行，有其他问题再告诉我。";
-            }
             if (ContainsAny(compact, "没有", "没到", "不行", "不可以", "不能", "还是", "没解决"))
-            {
                 return "明白，刚才的方法还没解决，我换个方向继续帮您排查。";
-            }
             if (ContainsAny(compact, "怎么回事", "为什么", "怎么了"))
-            {
                 return "这说明刚才的处理还没生效，我继续帮您核查下一步。";
-            }
             return "明白，我换个思路继续帮您处理，避免重复前面的步骤。";
         }
 
@@ -407,8 +332,16 @@ namespace Bot.ChromeNs
 
         private static string Key(string seller, string buyer)
         {
-            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+            return ScopeKey(seller) + "|" + (seller ?? string.Empty).Trim().ToLowerInvariant()
                 + "|" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
+        }
+
+        private static string ScopeKey(string seller)
+        {
+            var current = ShopSettingsScope.Current;
+            if (current != null) return current.ShopKey;
+            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
+            catch { return "legacy-" + (seller ?? string.Empty).Trim().ToLowerInvariant(); }
         }
 
         private static void Cleanup()
@@ -416,8 +349,7 @@ namespace Bot.ChromeNs
             var cutoff = DateTime.Now.AddHours(-2);
             foreach (var key in LastDelivered
                 .Where(x => x.Value == null || x.Value.SentAt < cutoff)
-                .Select(x => x.Key)
-                .ToList())
+                .Select(x => x.Key).ToList())
             {
                 DeliveredAnswerStamp ignored;
                 LastDelivered.TryRemove(key, out ignored);
@@ -447,9 +379,7 @@ namespace Bot.ChromeNs
         {
             value = (value ?? string.Empty).Trim();
             while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))
-            {
                 value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();
-            }
             return value;
         }
     }
