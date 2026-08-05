@@ -1,7 +1,10 @@
-﻿using BotLib;
+﻿using Bot.ShopScope;
+using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -13,24 +16,24 @@ namespace Bot.ChromeNs
 {
     internal static class WeComAppBridgeClient
     {
-        private const string ControlPlaneScope = "ai-control-plane";
-        private const string ControlPlaneUrlKey = "ControlPlaneUrl";
-        private const string ControlPlaneTokenKey = "ControlPlaneClientToken";
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
+        private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
         private static int _started;
 
         public static void Start()
         {
             if (Interlocked.Exchange(ref _started, 1) != 0) return;
             Task.Run(PollLoopAsync);
-            Log.Info("企业微信应用人工回复桥接轮询已启动。");
+            Log.Info("企业微信应用人工回复桥接轮询已启动：按 ShopKey 分别领取和回报人工回复。" );
         }
 
         public static bool IsConfigured()
         {
+            var shop = ShopSettingsScope.Current;
+            if (shop == null) return false;
             string url;
             string token;
-            ReadConnection(out url, out token);
-            return !string.IsNullOrWhiteSpace(url) && !string.IsNullOrWhiteSpace(token);
+            return TryReadConnection(shop, out url, out token);
         }
 
         public static async Task<string> SendNotificationAsync(
@@ -40,16 +43,15 @@ namespace Bot.ChromeNs
             AutoReplyRuleDecision decision,
             bool test)
         {
+            var shop = ShopSettingsScope.Current;
+            if (shop == null) return "当前没有店铺作用域";
             string serverUrl;
             string token;
-            ReadConnection(out serverUrl, out token);
-            if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(token))
-            {
-                return "未配置统一API服务";
-            }
+            if (!TryReadConnection(shop, out serverUrl, out token)) return "未配置本店统一API令牌";
 
             var payload = new JObject
             {
+                ["shop_key"] = shop.ShopKey,
                 ["seller"] = seller ?? string.Empty,
                 ["buyer"] = buyer ?? string.Empty,
                 ["question"] = question ?? string.Empty,
@@ -57,10 +59,10 @@ namespace Bot.ChromeNs
                 ["is_off_hours"] = decision != null && decision.IsOffHours,
                 ["test"] = test
             };
-
             try
             {
                 var result = await SendJsonAsync(
+                    shop,
                     HttpMethod.Post,
                     serverUrl + "/api/runtime/v1/handoff/notify",
                     token,
@@ -68,9 +70,7 @@ namespace Bot.ChromeNs
                 if (!result.Success) return result.Error;
                 var json = JObject.Parse(result.Body);
                 var ticket = Convert.ToString(json["ticket_id"]);
-                return string.IsNullOrWhiteSpace(ticket)
-                    ? "成功"
-                    : "成功，工单=" + ticket;
+                return string.IsNullOrWhiteSpace(ticket) ? "成功" : "成功，工单=" + ticket;
             }
             catch (Exception ex)
             {
@@ -84,15 +84,15 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    if (IsConfigured())
+                    var shops = SnapshotOnlineShops();
+                    foreach (var shop in shops)
                     {
-                        await PollOnceAsync();
-                        await Task.Delay(3000);
+                        string url;
+                        string token;
+                        if (!TryReadConnection(shop, out url, out token)) continue;
+                        await PollOnceAsync(shop, url, token);
                     }
-                    else
-                    {
-                        await Task.Delay(15000);
-                    }
+                    await Task.Delay(shops.Count == 0 ? 10000 : 3000);
                 }
                 catch (Exception ex)
                 {
@@ -102,14 +102,31 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static async Task PollOnceAsync()
+        private static IList<ShopContext> SnapshotOnlineShops()
         {
-            string serverUrl;
-            string token;
-            ReadConnection(out serverUrl, out token);
-            if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(token)) return;
+            var result = new Dictionary<string, ShopContext>(StringComparer.Ordinal);
+            try
+            {
+                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                foreach (var qn in qns)
+                {
+                    if (qn == null || qn.Seller == null) continue;
+                    try
+                    {
+                        var shop = Profiles.GetOrCreate(ShopIdentityResolver.Resolve(qn.Seller)).ToContext();
+                        result[shop.ShopKey] = shop;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return result.Values.ToList();
+        }
 
+        private static async Task PollOnceAsync(ShopContext shop, string serverUrl, string token)
+        {
             var next = await SendJsonAsync(
+                shop,
                 HttpMethod.Get,
                 serverUrl + "/api/runtime/v1/handoff/replies/next",
                 token,
@@ -119,7 +136,8 @@ namespace Bot.ChromeNs
             {
                 if (next.StatusCode != HttpStatusCode.NotFound)
                 {
-                    Log.Info("领取企业微信人工回复失败：" + next.Error);
+                    using (ShopSettingsScope.Enter(shop))
+                        Log.Info("领取本店企业微信人工回复失败：" + next.Error);
                 }
                 return;
             }
@@ -132,59 +150,74 @@ namespace Bot.ChromeNs
             var question = Convert.ToString(json["question"]);
             var reply = Convert.ToString(json["reply_text"]);
             var claimToken = Convert.ToString(json["claim_token"]);
-
             if (commandId <= 0 || string.IsNullOrWhiteSpace(claimToken)) return;
-            var qn = QN.FindExistingBySellerNick(seller);
+
+            var qn = FindQn(shop, seller);
             if (qn == null || qn.CDP == null)
             {
-                Log.Info("企业微信人工回复等待对应千牛客服上线。ticket=" + ticketId + ", seller=" + seller);
+                using (ShopSettingsScope.Enter(shop))
+                    Log.Info("本店企业微信人工回复等待对应千牛客服上线。ticket=" + ticketId + ", seller=" + seller);
                 return;
             }
 
             var success = false;
             var error = string.Empty;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                try
+                {
+                    if (string.IsNullOrWhiteSpace(buyer) || string.IsNullOrWhiteSpace(reply))
+                        throw new Exception("人工回复任务缺少买家或回复内容");
+                    KnowledgeLearningService.AllowNextManualSend(seller, buyer, reply);
+                    success = await qn.SendTextWithRetryAsync(buyer, reply, 1);
+                    if (!success)
+                    {
+                        error = "无法确认目标买家会话或千牛发送未完成";
+                    }
+                    else
+                    {
+                        ReplyDeduplicationService.RememberDelivered(seller, buyer, reply);
+                        KnowledgeLearningService.RegisterAnswerSource(
+                            seller, buyer, question, reply, "人工回复-企业微信应用");
+                        KnowledgeLearningService.QueueLearn(
+                            question, reply, "人工回复-企业微信应用", seller, buyer);
+                        Log.Info("本店企业微信人工回复已发送并进入知识学习队列。shop="
+                            + shop.ShopKey + ", ticket=" + ticketId + ", seller=" + seller + ", buyer=" + buyer);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = Safe(ex.Message);
+                    Log.Info("本店企业微信人工回复发送失败。ticket=" + ticketId + ", error=" + error);
+                }
+            }
+            await CompleteAsync(shop, serverUrl, token, commandId, claimToken, success, error);
+        }
+
+        private static QN FindQn(ShopContext shop, string seller)
+        {
             try
             {
-                if (string.IsNullOrWhiteSpace(buyer) || string.IsNullOrWhiteSpace(reply))
+                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                foreach (var qn in qns)
                 {
-                    throw new Exception("人工回复任务缺少买家或回复内容");
-                }
-
-                KnowledgeLearningService.AllowNextManualSend(seller, buyer, reply);
-                success = await qn.SendTextWithRetryAsync(buyer, reply, 1);
-                if (!success)
-                {
-                    error = "无法确认目标买家会话或千牛发送未完成";
-                }
-                else
-                {
-                    ReplyDeduplicationService.RememberDelivered(seller, buyer, reply);
-                    KnowledgeLearningService.RegisterAnswerSource(
-                        seller,
-                        buyer,
-                        question,
-                        reply,
-                        "人工回复-企业微信应用");
-                    KnowledgeLearningService.QueueLearn(
-                        question,
-                        reply,
-                        "人工回复-企业微信应用",
-                        seller,
-                        buyer);
-                    Log.Info("企业微信人工回复已发送并进入知识学习队列。ticket="
-                        + ticketId + ", seller=" + seller + ", buyer=" + buyer);
+                    if (qn == null || qn.Seller == null) continue;
+                    if (!string.Equals((qn.Seller.Nick ?? string.Empty).Trim(),
+                        (seller ?? string.Empty).Trim(), StringComparison.OrdinalIgnoreCase)) continue;
+                    try
+                    {
+                        if (string.Equals(ShopIdentityResolver.Resolve(qn.Seller).ShopKey,
+                            shop.ShopKey, StringComparison.Ordinal)) return qn;
+                    }
+                    catch { }
                 }
             }
-            catch (Exception ex)
-            {
-                error = Safe(ex.Message);
-                Log.Info("企业微信人工回复发送失败。ticket=" + ticketId + ", error=" + error);
-            }
-
-            await CompleteAsync(serverUrl, token, commandId, claimToken, success, error);
+            catch { }
+            return null;
         }
 
         private static async Task CompleteAsync(
+            ShopContext shop,
             string serverUrl,
             string token,
             int commandId,
@@ -194,47 +227,43 @@ namespace Bot.ChromeNs
         {
             var payload = new JObject
             {
+                ["shop_key"] = shop.ShopKey,
                 ["claim_token"] = claimToken,
                 ["success"] = success,
                 ["error"] = error ?? string.Empty
             };
             var result = await SendJsonAsync(
+                shop,
                 HttpMethod.Post,
                 serverUrl + "/api/runtime/v1/handoff/replies/" + commandId + "/complete",
                 token,
                 payload);
             if (!result.Success)
             {
-                Log.Info("回报企业微信人工回复结果失败：" + result.Error);
+                using (ShopSettingsScope.Enter(shop))
+                    Log.Info("回报本店企业微信人工回复结果失败：" + result.Error);
             }
         }
 
         private static async Task<HttpResult> SendJsonAsync(
+            ShopContext shop,
             HttpMethod method,
             string url,
             string token,
             JObject payload)
         {
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            using (var handler = new HttpClientHandler
-            {
-                UseProxy = true,
-                Proxy = WebRequest.DefaultWebProxy
-            })
+            using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
             using (var http = new HttpClient(handler))
             using (var request = new HttpRequestMessage(method, url))
             {
                 http.Timeout = TimeSpan.FromSeconds(25);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                 request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-wecom-bridge/1.0");
+                request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-wecom-bridge/2.0");
+                request.Headers.TryAddWithoutValidation("X-Shop-Key", shop.ShopKey);
                 if (payload != null)
-                {
-                    request.Content = new StringContent(
-                        payload.ToString(Formatting.None),
-                        Encoding.UTF8,
-                        "application/json");
-                }
+                    request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
                 using (var response = await http.SendAsync(request))
                 {
                     var body = await response.Content.ReadAsStringAsync();
@@ -251,22 +280,16 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static void ReadConnection(out string serverUrl, out string token)
+        private static bool TryReadConnection(ShopContext shop, out string serverUrl, out string token)
         {
-            serverUrl = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(
-                ControlPlaneUrlKey,
-                ControlPlaneScope,
-                string.Empty);
-            token = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(
-                ControlPlaneTokenKey,
-                ControlPlaneScope,
-                string.Empty);
-            serverUrl = (serverUrl ?? string.Empty).Trim().TrimEnd('/');
-            if (serverUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-            {
-                serverUrl = serverUrl.Substring(0, serverUrl.Length - 3).TrimEnd('/');
-            }
-            token = (token ?? string.Empty).Trim();
+            serverUrl = string.Empty;
+            token = string.Empty;
+            if (shop == null) return false;
+            var connection = new ShopControlPlaneConnectionStore(shop, Paths);
+            serverUrl = connection.GetServerUrl();
+            string error;
+            if (!connection.TryGetToken(out token, out error)) return false;
+            return !string.IsNullOrWhiteSpace(serverUrl) && !string.IsNullOrWhiteSpace(token);
         }
 
         private static string Safe(string value)
