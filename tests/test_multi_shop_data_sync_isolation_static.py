@@ -71,7 +71,8 @@ def test_web_console_state_commands_and_qn_lookup_are_shop_bound():
     assert "ShopControlPlaneConnectionStore" in source
     assert 'request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey)' in source
     assert "FindQns(state.Shop)" in source
-    assert "ShopIdentityResolver.Resolve(qn.Seller).ShopKey" in source
+    assert "ShopIdentityResolver.Resolve(qn.Seller)" in source
+    assert "current.ShopKey" in source
     assert "QN.CurQN" not in source
     assert "ControlPlaneClientToken" not in source
 
@@ -84,8 +85,9 @@ def test_cloud_backup_is_shop_portable_and_rejects_cross_shop_restore():
     assert "ShopScopedSettingsStore(shop, Paths).ExportValues" in source
     assert "ReplaceValues(current)" in source
     assert "云备份 ShopKey 与当前店铺不匹配" in source
-    assert '"config\\settings.json"' in source
-    assert '"config\\control-plane-token.json"' in source
+    assert "ShouldExclude" in source
+    assert "settings.json" in source
+    assert "control-plane-token.json" in source
     assert "PathEx.DataDir" not in source
     assert "params.db" not in source
 
@@ -115,7 +117,7 @@ def test_conversation_alias_learning_dedup_progress_and_watchdogs_include_shop_k
         assert "ShopSettingsScope.Current" in source
         assert "ShopKey" in source
     assert "QN.CurQN" not in files["conversation"]
-    assert "FindQn(shop, seller)" in files["watchdog"]
+    assert "FindQn(pending.Shop, pending.Seller)" in files["watchdog"]
     assert "SaveLocks.GetOrAdd(ScopeKey()" in files["learning"]
 
 
