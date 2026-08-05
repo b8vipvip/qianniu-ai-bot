@@ -22,6 +22,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopControlPlaneConnectionStore.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopIdentityResolver.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopKeyGenerator.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopLegacyDataMigrationService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopProfile.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopProfileStore.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedParamBridge.cs" />
