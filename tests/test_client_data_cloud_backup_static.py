@@ -43,7 +43,7 @@ def test_logs_tokens_dpapi_files_and_transient_cloud_state_are_excluded():
         'string.Equals(extension, ".bak"',
         'IsTransientSetting',
         '"ProcessedCommand"',
-        '"RemotePause"',
+        '"BotWebRemotePause"',
     ):
         assert value in source
     assert "PathEx.DataDir" not in source
