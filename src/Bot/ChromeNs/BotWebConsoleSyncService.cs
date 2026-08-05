@@ -1,5 +1,6 @@
+using Bot.ShopScope;
 using BotLib;
-using Newtonsoft.Json;
+using BotLib.Db.Sqlite;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
@@ -19,8 +20,6 @@ namespace Bot
 {
     public partial class App
     {
-        // Instance field initializers always run before App's instance constructor. This avoids the
-        // beforefieldinit problem that previously made optional UI/runtime bootstraps disappear.
         private readonly object _botWebConsoleBootstrap =
             ChromeNs.BotWebConsoleSyncService.InitializeForApp();
     }
@@ -30,9 +29,7 @@ namespace Bot.ChromeNs
 {
     internal static class BotWebConsoleSyncService
     {
-        private const string Scope = "ai-control-plane";
-        private const string UrlKey = "ControlPlaneUrl";
-        private const string TokenKey = "ControlPlaneClientToken";
+        private const string Scope = "shop-cloud";
         private const string PauseKey = "BotWebRemotePause";
         private const string MessageSyncKey = "BotWebMessageSync";
         private const string ManualReplyKey = "BotWebAllowManualReply";
@@ -50,74 +47,105 @@ namespace Bot.ChromeNs
             public DateTime OccurredAt;
         }
 
-        private static readonly ConcurrentDictionary<string, WebMessage> PendingMessages =
-            new ConcurrentDictionary<string, WebMessage>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<long, JObject> PendingCommandResults =
-            new ConcurrentDictionary<long, JObject>();
+        private sealed class ShopWebState
+        {
+            public ShopContext Shop;
+            public readonly ConcurrentDictionary<string, WebMessage> PendingMessages =
+                new ConcurrentDictionary<string, WebMessage>(StringComparer.Ordinal);
+            public readonly ConcurrentDictionary<long, JObject> PendingCommandResults =
+                new ConcurrentDictionary<long, JObject>();
+            public readonly object ProcessedSync = new object();
+            public readonly HashSet<long> ProcessedCommands = new HashSet<long>();
+            public volatile bool RemotePause;
+            public volatile bool MessageSyncEnabled = true;
+            public volatile bool AllowManualReply = true;
+            public volatile int SyncIntervalSeconds = 3;
+            public DateTime NextSyncUtc = DateTime.MinValue;
+            public int Syncing;
+            public bool Loaded;
+        }
+
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
+        private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
+        private static readonly ConcurrentDictionary<string, ShopWebState> States =
+            new ConcurrentDictionary<string, ShopWebState>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<int, Func<BuyerMessageBurstLease, Task>> InstalledWrappers =
             new ConcurrentDictionary<int, Func<BuyerMessageBurstLease, Task>>();
         private static readonly ConcurrentDictionary<int, byte> HandlerReplacementWarnings =
             new ConcurrentDictionary<int, byte>();
-        private static readonly object ProcessedSync = new object();
-        private static readonly HashSet<long> ProcessedCommands = new HashSet<long>();
         private static readonly DateTime ProcessStartedAt = SafeProcessStart();
 
         private static Timer _syncTimer;
         private static Timer _patchTimer;
         private static int _initialized;
-        private static int _syncing;
-        private static volatile bool _remotePause;
-        private static volatile bool _messageSyncEnabled = true;
-        private static volatile bool _allowManualReply = true;
-        private static volatile int _syncIntervalSeconds = 3;
 
         public static object InitializeForApp()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return new object();
-            LoadSettings();
             PatchExisting();
-            _patchTimer = new Timer(_ => PatchExisting(), null, 350, 700);
-            _syncTimer = new Timer(_ => QueueSync(), null, 2000, Math.Max(2, _syncIntervalSeconds) * 1000);
-            Log.Info("Bot Web端同步已启动：使用客户端令牌同步状态、最近消息和远程设置。" );
+            _patchTimer = new Timer(_ => PatchExisting(), null, 350, 900);
+            _syncTimer = new Timer(_ => QueueDueSyncs(), null, 1500, 1000);
+            Log.Info("Bot Web端同步已启动：每个 ShopKey 使用独立令牌、消息队列、命令状态和远程开关。" );
             return new object();
         }
 
         internal static bool IsRemotePaused
         {
-            get { return _remotePause; }
+            get
+            {
+                var shop = ShopSettingsScope.Current;
+                return shop != null && GetState(shop).RemotePause;
+            }
         }
 
-        private static void LoadSettings()
+        private static ShopWebState GetState(ShopContext shop)
         {
-            _remotePause = ReadBool(PauseKey, false);
-            _messageSyncEnabled = ReadBool(MessageSyncKey, true);
-            _allowManualReply = ReadBool(ManualReplyKey, true);
-            int parsed;
-            var interval = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(IntervalKey, Scope, "3");
-            _syncIntervalSeconds = int.TryParse(interval, out parsed) ? Math.Max(2, Math.Min(60, parsed)) : 3;
-            lock (ProcessedSync)
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            var state = States.GetOrAdd(shop.ShopKey, _ => new ShopWebState { Shop = shop });
+            state.Shop = shop;
+            if (!state.Loaded) LoadSettings(state);
+            return state;
+        }
+
+        private static void LoadSettings(ShopWebState state)
+        {
+            lock (state.ProcessedSync)
             {
-                ProcessedCommands.Clear();
-                var raw = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(ProcessedCommandsKey, Scope, string.Empty);
-                foreach (var part in (raw ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                if (state.Loaded) return;
+                using (ShopSettingsScope.Enter(state.Shop))
                 {
-                    long id;
-                    if (long.TryParse(part, out id) && id > 0) ProcessedCommands.Add(id);
+                    state.RemotePause = ReadBool(PauseKey, false);
+                    state.MessageSyncEnabled = ReadBool(MessageSyncKey, true);
+                    state.AllowManualReply = ReadBool(ManualReplyKey, true);
+                    int parsed;
+                    var interval = PersistentParams.GetParam2Key(IntervalKey, Scope, "3");
+                    state.SyncIntervalSeconds = int.TryParse(interval, out parsed)
+                        ? Math.Max(2, Math.Min(60, parsed))
+                        : 3;
+                    state.ProcessedCommands.Clear();
+                    var raw = PersistentParams.GetParam2Key(ProcessedCommandsKey, Scope, string.Empty);
+                    foreach (var part in (raw ?? string.Empty).Split(new[] { ',' }, StringSplitOptions.RemoveEmptyEntries))
+                    {
+                        long id;
+                        if (long.TryParse(part, out id) && id > 0) state.ProcessedCommands.Add(id);
+                    }
                 }
+                state.NextSyncUtc = DateTime.UtcNow;
+                state.Loaded = true;
             }
         }
 
         private static bool ReadBool(string key, bool defaultValue)
         {
             return string.Equals(
-                BotLib.Db.Sqlite.PersistentParams.GetParam2Key(key, Scope, defaultValue ? "true" : "false"),
+                PersistentParams.GetParam2Key(key, Scope, defaultValue ? "true" : "false"),
                 "true",
                 StringComparison.OrdinalIgnoreCase);
         }
 
         private static void SaveBool(string key, bool value)
         {
-            BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(key, Scope, value ? "true" : "false");
+            PersistentParams.TrySaveParam2Key(key, Scope, value ? "true" : "false");
         }
 
         private static void PatchExisting()
@@ -148,91 +176,107 @@ namespace Bot.ChromeNs
                     Func<BuyerMessageBurstLease, Task> installed;
                     if (InstalledWrappers.TryGetValue(key, out installed))
                     {
-                        // Another observer may wrap our installed handler later. Re-wrapping that
-                        // outer delegate every 700 ms creates an ever-growing closure chain. The
-                        // next buyer message then walks the whole chain and can terminate clr.dll
-                        // with 0xc00000fd (stack overflow). One coordinator must be wrapped at most
-                        // once by this service for the lifetime of the process.
-                        if (!ReferenceEquals(current, installed)
-                            && HandlerReplacementWarnings.TryAdd(key, 0))
-                        {
-                            Log.Info("Bot Web端消息处理器已被其他模块继续包装；已保持单次安装，避免递归栈溢出。" );
-                        }
+                        if (!ReferenceEquals(current, installed) && HandlerReplacementWarnings.TryAdd(key, 0))
+                            Log.Info("Bot Web端消息处理器已被其他模块继续包装；保持单次安装，避免闭包链增长。" );
                         continue;
                     }
 
+                    var capturedQn = qn;
                     var next = current;
-                    Func<BuyerMessageBurstLease, Task> wrapped = lease => HandleBurstAsync(next, lease);
+                    Func<BuyerMessageBurstLease, Task> wrapped =
+                        lease => HandleBurstAsync(capturedQn, next, lease);
                     handlerField.SetValue(coordinator, wrapped);
                     InstalledWrappers[key] = wrapped;
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("安装 Bot Web端消息观察器失败：" + Safe(ex.Message, 260), 10);
+                Log.ErrorWithMaxCount("安装 Bot Web端店铺消息观察器失败：" + Safe(ex.Message, 260), 10);
             }
         }
 
         private static async Task HandleBurstAsync(
+            QN qn,
             Func<BuyerMessageBurstLease, Task> next,
             BuyerMessageBurstLease lease)
         {
             if (next == null) return;
-            var burst = lease == null ? null : lease.Burst;
-            if (burst != null)
+            var shop = ResolveShop(qn, lease == null ? null : lease.Burst);
+            if (shop == null)
             {
-                CaptureConversation(burst);
-                if (_remotePause && burst.HasReplyableItem)
-                {
-                    Log.Info("Bot Web端已暂停智能自动回复: seller=" + Safe(burst.SellerNick, 80)
-                        + ", buyer=" + Safe(burst.BuyerNick, 80));
-                    return;
-                }
+                await next(lease);
+                return;
             }
-            await next(lease);
+
+            using (ShopSettingsScope.Enter(shop))
+            {
+                var state = GetState(shop);
+                var burst = lease == null ? null : lease.Burst;
+                if (burst != null)
+                {
+                    CaptureConversation(state, burst);
+                    if (state.RemotePause && burst.HasReplyableItem)
+                    {
+                        Log.Info("Bot Web端已暂停本店智能自动回复: shop=" + shop.ShopKey
+                            + ", seller=" + Safe(burst.SellerNick, 80)
+                            + ", buyer=" + Safe(burst.BuyerNick, 80));
+                        return;
+                    }
+                }
+                await next(lease);
+            }
         }
 
-        private static void CaptureConversation(BuyerMessageBurst burst)
+        private static ShopContext ResolveShop(QN qn, BuyerMessageBurst burst)
         {
-            if (!_messageSyncEnabled || burst == null) return;
+            try
+            {
+                if (qn != null && qn.Seller != null)
+                    return Profiles.GetOrCreate(ShopIdentityResolver.Resolve(qn.Seller)).ToContext();
+                if (burst != null && !string.IsNullOrWhiteSpace(burst.SellerNick))
+                    return ShopContextLocator.ResolveRuntimeBySellerNick(burst.SellerNick);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("Bot Web端无法解析消息所属店铺：" + Safe(ex.Message, 220), 20);
+            }
+            return null;
+        }
+
+        private static void CaptureConversation(ShopWebState state, BuyerMessageBurst burst)
+        {
+            if (!state.MessageSyncEnabled || burst == null) return;
             var seller = (burst.SellerNick ?? string.Empty).Trim();
             var buyer = (burst.BuyerNick ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0) return;
-
             try
             {
                 var turns = ConversationContextStore.GetRecentTurns(seller, buyer, string.Empty, 24);
                 foreach (var turn in turns)
                 {
                     if (turn == null || turn.Withdrawn || string.IsNullOrWhiteSpace(turn.Text)) continue;
-                    EnqueueMessage(
-                        seller,
-                        buyer,
-                        turn.Role,
-                        turn.Text,
-                        "text",
+                    EnqueueMessage(state, seller, buyer, turn.Role, turn.Text, "text",
                         turn.Timestamp == DateTime.MinValue ? DateTime.Now : turn.Timestamp,
                         turn.MessageKey);
                 }
-
                 if (!string.IsNullOrWhiteSpace(burst.CombinedQuestion))
                 {
                     var at = burst.Items == null
                         ? DateTime.Now
                         : burst.Items.Where(x => x != null)
                             .Select(x => x.ReceivedAt == DateTime.MinValue ? DateTime.Now : x.ReceivedAt)
-                            .DefaultIfEmpty(DateTime.Now)
-                            .Max();
-                    EnqueueMessage(seller, buyer, "user", burst.CombinedQuestion, "text", at, string.Empty);
+                            .DefaultIfEmpty(DateTime.Now).Max();
+                    EnqueueMessage(state, seller, buyer, "user", burst.CombinedQuestion, "text", at, string.Empty);
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("收集 Bot Web端会话消息失败：" + Safe(ex.Message, 260), 10);
+                Log.ErrorWithMaxCount("收集本店 Bot Web 会话消息失败：" + Safe(ex.Message, 260), 10);
             }
         }
 
         private static void EnqueueMessage(
+            ShopWebState state,
             string seller,
             string buyer,
             string role,
@@ -241,7 +285,7 @@ namespace Bot.ChromeNs
             DateTime occurredAt,
             string messageKey)
         {
-            if (!_messageSyncEnabled) return;
+            if (state == null || !state.MessageSyncEnabled) return;
             seller = Safe(seller, 120);
             buyer = Safe(buyer, 120);
             role = string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase)
@@ -252,10 +296,8 @@ namespace Bot.ChromeNs
             if (text.Length > 6000) text = text.Substring(0, 6000);
             if (occurredAt == DateTime.MinValue) occurredAt = DateTime.Now;
             if (string.IsNullOrWhiteSpace(messageKey))
-            {
-                messageKey = Hash(seller + "|" + buyer + "|" + role + "|"
+                messageKey = Hash(state.Shop.ShopKey + "|" + seller + "|" + buyer + "|" + role + "|"
                     + occurredAt.ToUniversalTime().Ticks + "|" + text);
-            }
             var item = new WebMessage
             {
                 MessageKey = Safe(messageKey, 200),
@@ -266,130 +308,178 @@ namespace Bot.ChromeNs
                 MessageType = Safe(messageType, 50),
                 OccurredAt = occurredAt
             };
-            PendingMessages[item.MessageKey] = item;
-            if (PendingMessages.Count > 1500)
+            state.PendingMessages[item.MessageKey] = item;
+            if (state.PendingMessages.Count > 1500)
             {
-                foreach (var old in PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(PendingMessages.Count - 1200))
+                foreach (var old in state.PendingMessages.Values
+                    .OrderBy(x => x.OccurredAt).Take(state.PendingMessages.Count - 1200))
                 {
                     WebMessage ignored;
-                    PendingMessages.TryRemove(old.MessageKey, out ignored);
+                    state.PendingMessages.TryRemove(old.MessageKey, out ignored);
                 }
             }
         }
 
-        private static void QueueSync()
+        private static void QueueDueSyncs()
         {
-            if (Interlocked.Exchange(ref _syncing, 1) != 0) return;
+            foreach (var shop in SnapshotActiveShops())
+            {
+                var state = GetState(shop);
+                if (DateTime.UtcNow < state.NextSyncUtc) continue;
+                state.NextSyncUtc = DateTime.UtcNow.AddSeconds(Math.Max(2, state.SyncIntervalSeconds));
+                QueueSync(state);
+            }
+        }
+
+        private static IList<ShopContext> SnapshotActiveShops()
+        {
+            var result = new Dictionary<string, ShopContext>(StringComparer.Ordinal);
+            try
+            {
+                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                foreach (var qn in qns)
+                {
+                    if (qn == null || qn.Seller == null) continue;
+                    try
+                    {
+                        var shop = Profiles.GetOrCreate(ShopIdentityResolver.Resolve(qn.Seller)).ToContext();
+                        result[shop.ShopKey] = shop;
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return result.Values.ToList();
+        }
+
+        private static void QueueSync(ShopWebState state)
+        {
+            if (state == null || Interlocked.Exchange(ref state.Syncing, 1) != 0) return;
             Task.Run(async () =>
             {
-                try { await SyncOnceAsync(); }
+                try { await SyncOnceAsync(state); }
                 catch (Exception ex)
                 {
-                    Log.ErrorWithMaxCount("Bot Web端同步失败：" + Safe(ex.Message, 300), 20);
+                    using (ShopSettingsScope.Enter(state.Shop))
+                        Log.ErrorWithMaxCount("本店 Bot Web端同步失败：" + Safe(ex.Message, 300), 20);
                 }
-                finally { Interlocked.Exchange(ref _syncing, 0); }
+                finally { Interlocked.Exchange(ref state.Syncing, 0); }
             });
         }
 
-        private static async Task SyncOnceAsync()
+        private static async Task SyncOnceAsync(ShopWebState state)
         {
-            string serverUrl;
-            string token;
-            ReadConnection(out serverUrl, out token);
-            if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(token)) return;
+            using (ShopSettingsScope.Enter(state.Shop))
+            {
+                var connection = new ShopControlPlaneConnectionStore(state.Shop, Paths);
+                var serverUrl = connection.GetServerUrl();
+                string token;
+                string tokenError;
+                if (!connection.TryGetToken(out token, out tokenError)
+                    || string.IsNullOrWhiteSpace(serverUrl)
+                    || string.IsNullOrWhiteSpace(token)) return;
 
-            var messageSnapshot = _messageSyncEnabled
-                ? PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500).ToList()
-                : new List<WebMessage>();
-            var resultSnapshot = PendingCommandResults.ToArray();
-            var status = BuildStatus();
-            var currentSettings = new JObject
-            {
-                ["auto_reply_enabled"] = !_remotePause,
-                ["message_sync_enabled"] = _messageSyncEnabled,
-                ["allow_web_manual_reply"] = _allowManualReply,
-                ["sync_interval_seconds"] = _syncIntervalSeconds
-            };
-            var payload = new JObject
-            {
-                ["status"] = status,
-                ["current_settings"] = currentSettings,
-                ["messages"] = new JArray(messageSnapshot.Select(ToJson)),
-                ["command_results"] = new JArray(resultSnapshot.Select(x => x.Value))
-            };
-
-            ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
-            using (var handler = new HttpClientHandler
-            {
-                UseProxy = true,
-                Proxy = WebRequest.DefaultWebProxy
-            })
-            using (var http = new HttpClient(handler))
-            using (var request = new HttpRequestMessage(
-                HttpMethod.Post,
-                serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/sync"))
-            {
-                http.Timeout = TimeSpan.FromSeconds(25);
-                request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-                request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-sync/1.0");
-                request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
-                using (var response = await http.SendAsync(request))
+                var messageSnapshot = state.MessageSyncEnabled
+                    ? state.PendingMessages.Values.OrderBy(x => x.OccurredAt).Take(500).ToList()
+                    : new List<WebMessage>();
+                var resultSnapshot = state.PendingCommandResults.ToArray();
+                var payload = new JObject
                 {
-                    var body = await response.Content.ReadAsStringAsync();
-                    if (!response.IsSuccessStatusCode)
-                        throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
-                    var root = JObject.Parse(body);
-                    ApplyDesiredSettings(root["desired_settings"] as JObject);
-                    await ApplyCommandsAsync(root["commands"] as JArray);
-                }
-            }
+                    ["shop_key"] = state.Shop.ShopKey,
+                    ["status"] = BuildStatus(state),
+                    ["current_settings"] = new JObject
+                    {
+                        ["auto_reply_enabled"] = !state.RemotePause,
+                        ["message_sync_enabled"] = state.MessageSyncEnabled,
+                        ["allow_web_manual_reply"] = state.AllowManualReply,
+                        ["sync_interval_seconds"] = state.SyncIntervalSeconds
+                    },
+                    ["messages"] = new JArray(messageSnapshot.Select(ToJson)),
+                    ["command_results"] = new JArray(resultSnapshot.Select(x => x.Value))
+                };
 
-            foreach (var item in messageSnapshot)
-            {
-                WebMessage ignored;
-                PendingMessages.TryRemove(item.MessageKey, out ignored);
-            }
-            foreach (var pair in resultSnapshot)
-            {
-                JObject ignored;
-                PendingCommandResults.TryRemove(pair.Key, out ignored);
+                ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
+                using (var handler = new HttpClientHandler { UseProxy = true, Proxy = WebRequest.DefaultWebProxy })
+                using (var http = new HttpClient(handler))
+                using (var request = new HttpRequestMessage(
+                    HttpMethod.Post,
+                    serverUrl.TrimEnd('/') + "/api/runtime/v1/bot-web/sync"))
+                {
+                    http.Timeout = TimeSpan.FromSeconds(25);
+                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+                    request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-sync/2.0");
+                    request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
+                    request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
+                    using (var response = await http.SendAsync(request))
+                    {
+                        var body = await response.Content.ReadAsStringAsync();
+                        if (!response.IsSuccessStatusCode)
+                            throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
+                        var root = JObject.Parse(body);
+                        ApplyDesiredSettings(state, root["desired_settings"] as JObject);
+                        await ApplyCommandsAsync(state, root["commands"] as JArray);
+                    }
+                }
+
+                foreach (var item in messageSnapshot)
+                {
+                    WebMessage ignored;
+                    state.PendingMessages.TryRemove(item.MessageKey, out ignored);
+                }
+                foreach (var pair in resultSnapshot)
+                {
+                    JObject ignored;
+                    state.PendingCommandResults.TryRemove(pair.Key, out ignored);
+                }
             }
         }
 
-        private static JObject BuildStatus()
+        private static JObject BuildStatus(ShopWebState state)
         {
-            QN[] qns;
-            try { qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray(); }
-            catch { qns = new QN[0]; }
-            var sellers = qns
-                .Where(x => x != null && x.Seller != null && !string.IsNullOrWhiteSpace(x.Seller.Nick))
-                .Select(x => x.Seller.Nick.Trim())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(30)
-                .ToList();
-            var currentSeller = QN.CurQN == null || QN.CurQN.Seller == null
-                ? string.Empty
-                : (QN.CurQN.Seller.Nick ?? string.Empty).Trim();
-            var windowsAuto = false;
-            try { windowsAuto = Params.Robot.GetIsAutoReply(); } catch { }
-            var uptime = Math.Max(0, (long)(DateTime.Now - ProcessStartedAt).TotalSeconds);
+            var qns = FindQns(state.Shop);
+            var sellers = qns.Where(x => x.Seller != null)
+                .Select(x => (x.Seller.Nick ?? string.Empty).Trim())
+                .Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).Take(30).ToList();
+            var windowsAuto = Params.Robot.GetIsAutoReply();
             return new JObject
             {
+                ["shop_key"] = state.Shop.ShopKey,
                 ["app_version"] = GetVersion(),
                 ["seller_nicks"] = new JArray(sellers),
                 ["seller_count"] = sellers.Count,
-                ["current_seller"] = currentSeller,
+                ["current_seller"] = sellers.FirstOrDefault() ?? string.Empty,
                 ["windows_auto_reply_enabled"] = windowsAuto,
-                ["remote_pause"] = _remotePause,
-                ["effective_auto_reply_enabled"] = windowsAuto && !_remotePause,
-                ["message_sync_enabled"] = _messageSyncEnabled,
-                ["allow_web_manual_reply"] = _allowManualReply,
-                ["pending_message_count"] = PendingMessages.Count,
-                ["uptime_seconds"] = uptime,
+                ["remote_pause"] = state.RemotePause,
+                ["effective_auto_reply_enabled"] = windowsAuto && !state.RemotePause,
+                ["message_sync_enabled"] = state.MessageSyncEnabled,
+                ["allow_web_manual_reply"] = state.AllowManualReply,
+                ["pending_message_count"] = state.PendingMessages.Count,
+                ["uptime_seconds"] = Math.Max(0, (long)(DateTime.Now - ProcessStartedAt).TotalSeconds),
                 ["process_id"] = Process.GetCurrentProcess().Id,
                 ["synced_at"] = DateTime.UtcNow.ToString("o")
             };
+        }
+
+        private static IList<QN> FindQns(ShopContext shop)
+        {
+            var result = new List<QN>();
+            try
+            {
+                var qns = QN.QNSet == null ? new QN[0] : QN.QNSet.ToArray();
+                foreach (var qn in qns)
+                {
+                    if (qn == null || qn.Seller == null) continue;
+                    try
+                    {
+                        var current = ShopIdentityResolver.Resolve(qn.Seller);
+                        if (string.Equals(current.ShopKey, shop.ShopKey, StringComparison.Ordinal)) result.Add(qn);
+                    }
+                    catch { }
+                }
+            }
+            catch { }
+            return result;
         }
 
         private static JObject ToJson(WebMessage item)
@@ -406,49 +496,45 @@ namespace Bot.ChromeNs
             };
         }
 
-        private static void ApplyDesiredSettings(JObject desired)
+        private static void ApplyDesiredSettings(ShopWebState state, JObject desired)
         {
             if (desired == null) return;
-            var pause = desired["auto_reply_enabled"] != null
-                && desired["auto_reply_enabled"].Type != JTokenType.Null
-                ? !desired.Value<bool>("auto_reply_enabled")
-                : _remotePause;
+            var pause = desired["auto_reply_enabled"] != null && desired["auto_reply_enabled"].Type != JTokenType.Null
+                ? !desired.Value<bool>("auto_reply_enabled") : state.RemotePause;
             var messageSync = desired["message_sync_enabled"] == null
-                ? _messageSyncEnabled
-                : desired.Value<bool>("message_sync_enabled");
+                ? state.MessageSyncEnabled : desired.Value<bool>("message_sync_enabled");
             var manual = desired["allow_web_manual_reply"] == null
-                ? _allowManualReply
-                : desired.Value<bool>("allow_web_manual_reply");
+                ? state.AllowManualReply : desired.Value<bool>("allow_web_manual_reply");
             var interval = desired["sync_interval_seconds"] == null
-                ? _syncIntervalSeconds
+                ? state.SyncIntervalSeconds
                 : Math.Max(2, Math.Min(60, desired.Value<int>("sync_interval_seconds")));
 
-            if (_remotePause != pause)
+            if (state.RemotePause != pause)
             {
-                _remotePause = pause;
+                state.RemotePause = pause;
                 SaveBool(PauseKey, pause);
-                Log.Info("Bot Web端远程智能回复开关已应用: enabled=" + (!pause));
+                Params.Robot.SetIsAutoReply(!pause);
+                Log.Info("本店 Web端远程智能回复开关已应用: shop=" + state.Shop.ShopKey + ", enabled=" + (!pause));
             }
-            if (_messageSyncEnabled != messageSync)
+            if (state.MessageSyncEnabled != messageSync)
             {
-                _messageSyncEnabled = messageSync;
+                state.MessageSyncEnabled = messageSync;
                 SaveBool(MessageSyncKey, messageSync);
-                if (!messageSync) PendingMessages.Clear();
+                if (!messageSync) state.PendingMessages.Clear();
             }
-            if (_allowManualReply != manual)
+            if (state.AllowManualReply != manual)
             {
-                _allowManualReply = manual;
+                state.AllowManualReply = manual;
                 SaveBool(ManualReplyKey, manual);
             }
-            if (_syncIntervalSeconds != interval)
+            if (state.SyncIntervalSeconds != interval)
             {
-                _syncIntervalSeconds = interval;
-                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(IntervalKey, Scope, interval.ToString());
-                if (_syncTimer != null) _syncTimer.Change(interval * 1000, interval * 1000);
+                state.SyncIntervalSeconds = interval;
+                PersistentParams.TrySaveParam2Key(IntervalKey, Scope, interval.ToString());
             }
         }
 
-        private static async Task ApplyCommandsAsync(JArray commands)
+        private static async Task ApplyCommandsAsync(ShopWebState state, JArray commands)
         {
             if (commands == null) return;
             foreach (var token in commands.Take(30))
@@ -457,34 +543,33 @@ namespace Bot.ChromeNs
                 if (command == null) continue;
                 var id = command.Value<long?>("id") ?? 0;
                 if (id < 1) continue;
-                if (WasProcessed(id))
+                if (WasProcessed(state, id))
                 {
-                    PendingCommandResults[id] = Result(id, true, string.Empty, new JObject { ["duplicate"] = true });
+                    state.PendingCommandResults[id] = Result(id, true, string.Empty, new JObject { ["duplicate"] = true });
                     continue;
                 }
-
                 var type = Convert.ToString(command["type"]);
                 try
                 {
                     JObject result;
                     if (string.Equals(type, "send_text", StringComparison.OrdinalIgnoreCase))
-                        result = await ExecuteSendTextAsync(id, command["payload"] as JObject);
+                        result = await ExecuteSendTextAsync(state, id, command["payload"] as JObject);
                     else
                         throw new Exception("不支持的远程命令：" + Safe(type, 80));
-                    MarkProcessed(id);
-                    PendingCommandResults[id] = Result(id, true, string.Empty, result);
+                    MarkProcessed(state, id);
+                    state.PendingCommandResults[id] = Result(id, true, string.Empty, result);
                 }
                 catch (Exception ex)
                 {
-                    MarkProcessed(id);
-                    PendingCommandResults[id] = Result(id, false, Safe(ex.Message, 600), new JObject());
+                    MarkProcessed(state, id);
+                    state.PendingCommandResults[id] = Result(id, false, Safe(ex.Message, 600), new JObject());
                 }
             }
         }
 
-        private static async Task<JObject> ExecuteSendTextAsync(long commandId, JObject payload)
+        private static async Task<JObject> ExecuteSendTextAsync(ShopWebState state, long commandId, JObject payload)
         {
-            if (!_allowManualReply) throw new Exception("Web端人工回复已关闭");
+            if (!state.AllowManualReply) throw new Exception("本店 Web端人工回复已关闭");
             if (payload == null) throw new Exception("远程回复参数为空");
             var seller = Safe(Convert.ToString(payload["seller"]), 120);
             var buyer = Safe(Convert.ToString(payload["buyer"]), 120);
@@ -493,10 +578,9 @@ namespace Bot.ChromeNs
                 throw new Exception("客服账号、买家或回复内容为空");
             if (text.Length > 2000) throw new Exception("回复内容超过 2000 字");
 
-            var qn = QN.FindExistingBySellerNick(seller) ?? QN.CurQN;
-            if (qn == null || qn.Seller == null
-                || !string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.OrdinalIgnoreCase))
-                throw new Exception("未找到对应的在线客服账号");
+            var qn = FindQns(state.Shop).FirstOrDefault(x => x.Seller != null
+                && string.Equals((x.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.OrdinalIgnoreCase));
+            if (qn == null) throw new Exception("本店未找到对应的在线客服账号");
             var resolvedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             var ok = await qn.SendTextWithRetryAsync(resolvedBuyer, text, 1);
             if (!ok)
@@ -504,8 +588,8 @@ namespace Bot.ChromeNs
                 var reason = qn.Rpa == null ? "未知发送失败" : qn.Rpa.GetSendFailureReason();
                 throw new Exception(reason);
             }
-            EnqueueMessage(seller, resolvedBuyer, "assistant", text, "web_sent", DateTime.Now, "command:" + commandId);
-            return new JObject { ["sent"] = true };
+            EnqueueMessage(state, seller, resolvedBuyer, "assistant", text, "web_sent", DateTime.Now, "command:" + commandId);
+            return new JObject { ["sent"] = true, ["shop_key"] = state.Shop.ShopKey };
         }
 
         private static JObject Result(long id, bool success, string error, JObject result)
@@ -519,33 +603,23 @@ namespace Bot.ChromeNs
             };
         }
 
-        private static bool WasProcessed(long id)
+        private static bool WasProcessed(ShopWebState state, long id)
         {
-            lock (ProcessedSync) return ProcessedCommands.Contains(id);
+            lock (state.ProcessedSync) return state.ProcessedCommands.Contains(id);
         }
 
-        private static void MarkProcessed(long id)
+        private static void MarkProcessed(ShopWebState state, long id)
         {
-            lock (ProcessedSync)
+            lock (state.ProcessedSync)
             {
-                ProcessedCommands.Add(id);
-                while (ProcessedCommands.Count > 200)
-                    ProcessedCommands.Remove(ProcessedCommands.OrderBy(x => x).First());
-                BotLib.Db.Sqlite.PersistentParams.TrySaveParam2Key(
+                state.ProcessedCommands.Add(id);
+                while (state.ProcessedCommands.Count > 200)
+                    state.ProcessedCommands.Remove(state.ProcessedCommands.OrderBy(x => x).First());
+                PersistentParams.TrySaveParam2Key(
                     ProcessedCommandsKey,
                     Scope,
-                    string.Join(",", ProcessedCommands.OrderBy(x => x)));
+                    string.Join(",", state.ProcessedCommands.OrderBy(x => x)));
             }
-        }
-
-        private static void ReadConnection(out string serverUrl, out string token)
-        {
-            serverUrl = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(UrlKey, Scope, string.Empty);
-            token = BotLib.Db.Sqlite.PersistentParams.GetParam2Key(TokenKey, Scope, string.Empty);
-            serverUrl = (serverUrl ?? string.Empty).Trim().TrimEnd('/');
-            if (serverUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
-                serverUrl = serverUrl.Substring(0, serverUrl.Length - 3).TrimEnd('/');
-            token = (token ?? string.Empty).Trim();
         }
 
         private static string GetVersion()
@@ -569,8 +643,7 @@ namespace Bot.ChromeNs
             using (var sha = SHA256.Create())
             {
                 return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty)))
-                    .Replace("-", string.Empty)
-                    .ToLowerInvariant();
+                    .Replace("-", string.Empty).ToLowerInvariant();
             }
         }
 
