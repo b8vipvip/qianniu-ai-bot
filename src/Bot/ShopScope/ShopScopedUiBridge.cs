@@ -5,6 +5,7 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Threading;
 
 namespace Bot
@@ -18,10 +19,6 @@ namespace Bot
 
 namespace Bot.ShopScope
 {
-    /// <summary>
-    /// Associates settings/knowledge child windows with the WndAssist seller that opened them.
-    /// Routed operations enter a short AsyncLocal scope before instance handlers execute.
-    /// </summary>
     internal static class ShopScopedUiBridge
     {
         private sealed class ContextHolder
@@ -55,7 +52,7 @@ namespace Bot.ShopScope
                 EventManager.RegisterClassHandler(
                     typeof(Window),
                     Keyboard.PreviewKeyDownEvent,
-                    new System.Windows.Input.KeyEventHandler(OnPreviewKeyDown),
+                    new KeyEventHandler(OnPreviewKeyDown),
                     true);
             }
             return new object();
@@ -125,7 +122,7 @@ namespace Bot.ShopScope
             EnterForRoutedOperation(window, shop);
         }
 
-        private static void OnPreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+        private static void OnPreviewKeyDown(object sender, KeyEventArgs e)
         {
             var window = sender as Window;
             var shop = Get(window) ?? GetFromOwner(window) ?? ResolveFromWindow(window);
@@ -138,9 +135,7 @@ namespace Bot.ShopScope
             if (shop == null) return;
             var scope = ShopSettingsScope.Enter(shop);
             var dispatcher = window == null ? Dispatcher.CurrentDispatcher : window.Dispatcher;
-            dispatcher.BeginInvoke(
-                DispatcherPriority.ContextIdle,
-                new Action(scope.Dispose));
+            dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(scope.Dispose));
         }
 
         private static Window ResolveWindow(DependencyObject source)
