@@ -25,7 +25,7 @@ def test_legacy_global_token_requires_explicit_ui_import():
     connection = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
     assert "GetLegacyGlobalToken" in connection
-    assert 'Content = "导入旧全局令牌"' not in ui  # button is created through MakeButton
+    assert 'Content = "导入旧全局令牌"' not in ui
     assert 'MakeButton("导入旧全局令牌"' in ui
     assert "ImportLegacy_Click" in ui
     assert "点击窗口底部“保存”后才会写入本店 DPAPI 令牌文件" in ui
@@ -52,10 +52,10 @@ def test_persistent_params_routes_scoped_reads_and_writes_before_global_db():
     assert "public delegate bool TryWriteHandler" in router
 
 
-def test_only_explicit_ai_and_feature_scopes_are_shop_routed():
+def test_only_explicit_ai_scope_is_shop_routed_in_this_pr():
     source = read("src/Bot/ShopScope/ShopScopedParamBridge.cs")
     assert '"ai"' in source
-    assert '"feature"' in source
+    assert '"feature"' not in source
     assert '"ai-control-plane"' not in source
     assert "ShopSettingsScope.Current" in source
     assert "store.TryGetString(masterKey" in source
@@ -73,12 +73,14 @@ def test_settings_window_scopes_ai_load_and_save_without_process_global_shop_sta
     assert "static ShopContext CurrentShop" not in scope
 
 
-def test_unstable_nickname_binding_requires_explicit_confirmation():
+def test_unstable_nickname_binding_requires_explicit_confirmation_and_keeps_window():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    window = read("src/Bot/Options/WndOption.xaml.cs")
     assert "!_shop.HasStableSellerId" in ui
     assert "_allowNicknameFallback.IsChecked != true" in ui
     assert "当前千牛身份没有 TargetId" in ui
     assert "临时按规范化昵称绑定" in ui
+    assert "窗口已保留，请修正后重试" in window
 
 
 def test_build_includes_new_bot_and_botlib_sources():
