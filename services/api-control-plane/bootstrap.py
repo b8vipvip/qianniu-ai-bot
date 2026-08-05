@@ -6,6 +6,7 @@ import uvicorn
 
 import app as control_plane
 import bot_web_admin
+import bot_web_bot_enabled
 import bot_web_bot_qa
 import bot_web_console
 import bot_web_conversation_knowledge
@@ -29,6 +30,7 @@ control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(recharge_status_query.router)
 bot_web_console.install(control_plane)
+bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
 # Register Bot-only Q&A routes before the legacy all-chat routes. Starlette
 # resolves the first matching route, while knowledge-management endpoints from
