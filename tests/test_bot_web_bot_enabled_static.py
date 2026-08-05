@@ -31,6 +31,16 @@ def test_web_page_exposes_independent_bot_master_switch():
     assert "Windows 当前实际状态" in script
 
 
+def test_web_polling_starts_with_app_and_stops_on_logout_or_expired_session():
+    script = read(SCRIPT)
+    assert "const baseShowLogin = showLogin" in script
+    assert "const baseShowApp = showApp" in script
+    assert "stopBotTimer();" in script
+    assert "startBotTimer();" in script
+    assert "clearInterval(botTimer)" in script
+    assert "botState = null" in script
+
+
 def test_server_uses_dedicated_per_client_state_without_json_sync_races():
     source = read(SERVER)
     assert "CREATE TABLE IF NOT EXISTS bot_client_bot_enabled" in source
