@@ -1,0 +1,8 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)..\Directory.Build.props"
+          Condition="Exists('$(MSBuildThisFileDirectory)..\Directory.Build.props')" />
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Db\Sqlite\ScopedParamRouter.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Db\Sqlite\ScopedParamRouter.cs" />
+  </ItemGroup>
+</Project>
