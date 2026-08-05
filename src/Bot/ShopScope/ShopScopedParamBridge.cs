@@ -23,7 +23,6 @@ namespace Bot.ShopScope
             };
 
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
-        private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
         private static int _initialized;
 
         public static object InitializeForApp()
@@ -41,7 +40,6 @@ namespace Bot.ShopScope
             var shop = ShopSettingsScope.Current;
             if (shop == null || !AllowedSubKeys.Contains(subKey ?? string.Empty)) return false;
 
-            Profiles.GetOrCreate(shop);
             var store = new ShopScopedSettingsStore(shop, Paths);
             return store.TryGetString(masterKey, out value);
         }
@@ -51,7 +49,6 @@ namespace Bot.ShopScope
             var shop = ShopSettingsScope.Current;
             if (shop == null || !AllowedSubKeys.Contains(subKey ?? string.Empty)) return false;
 
-            Profiles.GetOrCreate(shop);
             var store = new ShopScopedSettingsStore(shop, Paths);
             store.SetString(masterKey, value ?? string.Empty);
             return true;
