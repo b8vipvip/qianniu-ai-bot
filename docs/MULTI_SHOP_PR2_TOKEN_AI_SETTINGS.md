@@ -13,11 +13,12 @@
 4. 设置窗口新增“店铺绑定”页面；
 5. 旧全局令牌只能由用户点击“导入旧全局令牌”后显式保存到当前店铺；
 6. AI 接口列表、调度策略、模型、API Key、系统提示词等 `ai` 作用域配置写入当前店铺的 `config/settings.json`；
-7. 主买家回复链和图片视觉模型判断按消息所属卖家进入对应店铺 AI 配置作用域；
-8. 店铺配置不存在某项值时，只读回退旧全局配置，保证旧单店铺用户升级后继续工作；
-9. 店铺作用域写入不会在失败时回退全局数据库，避免一个店铺的保存操作污染其他店铺。
+7. 店铺 AI 设置载荷同样使用 DPAPI `CurrentUser` 整体加密，API Key 不以 JSON 明文出现；
+8. 主买家回复链和图片视觉模型判断按消息所属卖家进入对应店铺 AI 配置作用域；
+9. 店铺配置不存在某项值时，只读回退旧全局配置，保证旧单店铺用户升级后继续工作；
+10. 店铺作用域写入不会在失败时回退全局数据库，避免一个店铺的保存操作污染其他店铺。
 
-## 2. 文件布局
+## 2. 文件布局与加密
 
 ```text
 %LocalAppData%\QianniuAiBot\shops\<ShopKey>\config\settings.json
@@ -28,6 +29,12 @@
 
 ```text
 qianniu-ai-bot.shop-settings / version 1
+```
+
+文件只保存 schema、ShopKey、算法、更新时间、条目数量和 `protected_values`。真实 AI 设置字典先序列化，再使用以下附加熵加密：
+
+```text
+qianniu-ai-bot|shop-settings|<ShopKey>
 ```
 
 令牌文件使用 schema：
@@ -42,6 +49,14 @@ qianniu-ai-bot.shop-token / version 1
 - 令牌 SHA-256 前 12 位指纹；
 - ShopKey；
 - 算法和更新时间。
+
+令牌附加熵为：
+
+```text
+qianniu-ai-bot|control-plane-token|<ShopKey>
+```
+
+两个文件只能由当前 Windows 用户解密；把 A 店文件复制到 B 店目录后，也会因 ShopKey 附加熵和文件内 ShopKey 校验而失败。
 
 ## 3. 设置作用域
 
@@ -78,7 +93,7 @@ BuyerMessageBurst.SellerNick
 
 ### 旧全局 AI 配置
 
-当本店 `settings.json` 尚无对应 key 时，读取旧 `params.db` 中的全局值。用户在店铺设置页面保存后，新值只写本店文件。
+当本店 `settings.json` 尚无对应 key 时，读取旧 `params.db` 中的全局值。用户在店铺设置页面保存后，新值只写本店加密文件。
 
 ### 旧全局 Bot 令牌
 
@@ -90,10 +105,12 @@ BuyerMessageBurst.SellerNick
 
 ### 文件损坏或写入失败
 
-- schema 或 ShopKey 不匹配会直接报错；
+- schema、算法或 ShopKey 不匹配会直接报错；
+- DPAPI 解密失败或载荷损坏会直接报错；
 - 店铺配置写入失败不会写回全局数据库；
 - 保存异常时设置窗口重新显示，不会关闭并假装成功；
-- 清除令牌会同时删除当前文件、`.bak` 和临时副本；任一删除失败都会显示错误。
+- 清除令牌会同时删除当前文件、`.bak` 和临时副本；任一删除失败都会显示错误；
+- 加密和解密使用过的字节数组会在所有退出路径中清零。
 
 ## 6. 本阶段明确未完成
 
