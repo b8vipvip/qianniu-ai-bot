@@ -7,7 +7,7 @@ namespace Bot.ShopScope
     internal sealed class ShopScopedPathProvider : IShopScopedPathProvider
     {
         public ShopScopedPathProvider()
-            : this(PathEx.UserDataRoot, PathEx.DataDir)
+            : this(PathEx.UserDataRoot, PathEx.GlobalDataDir)
         {
         }
 
@@ -23,13 +23,7 @@ namespace Bot.ShopScope
         public string UserDataRoot { get; private set; }
         public string GlobalRoot { get; private set; }
         public string ShopsRoot { get; private set; }
-
-        /// <summary>
-        /// Existing single-shop data directory. PR 1 exposes it explicitly but does not move data yet.
-        /// Later migration code must be the only code that copies from this location.
-        /// </summary>
         public string LegacyDataRoot { get; private set; }
-
         public string RegistryPath { get; private set; }
 
         public string GetShopRoot(ShopContext shop)
@@ -83,6 +77,11 @@ namespace Bot.ShopScope
         public string GetBackupRoot(ShopContext shop)
         {
             return GetShopDirectory(shop, "backup");
+        }
+
+        public string GetCompatibilityDataRoot(ShopContext shop)
+        {
+            return EnsureDirectory(Path.Combine(GetStateRoot(shop), "data"));
         }
 
         private string GetShopDirectory(ShopContext shop, string name)
