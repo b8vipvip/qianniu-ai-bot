@@ -20,7 +20,6 @@ def test_server_registers_conversation_and_knowledge_extension():
     bootstrap = read(BOOTSTRAP)
     dockerfile = read(DOCKERFILE)
     server = read(SERVER)
-
     assert "import bot_web_conversation_knowledge" in bootstrap
     assert "bot_web_conversation_knowledge.install(control_plane)" in bootstrap
     assert "bot_web_conversation_knowledge.init_db()" in bootstrap
@@ -31,7 +30,6 @@ def test_server_registers_conversation_and_knowledge_extension():
 
 def test_conversation_list_is_sorted_by_latest_message_and_supports_read_state():
     source = read(SERVER)
-
     assert '@router.get("/api/bot-web/conversations")' in source
     assert "SELECT seller,buyer,MAX(id) AS max_id" in source
     assert "ORDER BY m.occurred_at DESC,m.id DESC" in source
@@ -42,7 +40,6 @@ def test_conversation_list_is_sorted_by_latest_message_and_supports_read_state()
 
 def test_web_knowledge_crud_and_runtime_cloud_sync_are_client_isolated():
     source = read(SERVER)
-
     assert '@router.get("/api/bot-web/knowledge")' in source
     assert '@router.post("/api/bot-web/knowledge")' in source
     assert '@router.put("/api/bot-web/knowledge/{knowledge_id}")' in source
@@ -57,7 +54,6 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     html = read(HTML)
     js = read(JS)
     css = read(CSS)
-
     assert 'id="conversationList"' in html
     assert 'id="chatMessageList"' in html
     assert 'data-page="knowledge"' in html
@@ -73,15 +69,20 @@ def test_mobile_page_has_buyer_list_detail_long_press_and_knowledge_management()
     assert ".knowledge-card" in css
 
 
-def test_windows_client_requires_opt_in_and_backs_up_before_cloud_apply():
+def test_windows_client_requires_per_shop_opt_in_token_revision_and_backup():
     source = read(CLIENT)
     props = read(PROPS)
-
-    assert "启用知识库云同步" in source
+    assert "启用本店知识库云同步" in source
     assert "KnowledgeCloudSyncEnabled" in source
     assert "/api/runtime/v1/bot-web/knowledge-sync" in source
+    assert "ShopControlPlaneConnectionStore" in source
+    assert "ConcurrentDictionary<string, ShopSyncState>" in source
+    assert '"X-Shop-Key"' in source
+    assert "RevisionKey, Scope" in source
+    assert "LastHashKey, Scope" in source
     assert "BotFeatureStore.GetKnowledgeBase()" in source
     assert "BotFeatureStore.SaveKnowledgeBase(cloud)" in source
     assert "knowledge-cloud-before-apply-" in source
+    assert "Paths.GetBackupRoot(shop)" in source
     assert "KnowledgeCloudSyncService.cs" in props
-    assert "客户端令牌" not in source.split('Log.Info("知识库云同步')[0]
+    assert "ControlPlaneClientToken" not in source
