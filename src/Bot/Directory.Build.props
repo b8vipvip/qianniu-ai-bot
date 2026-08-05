@@ -35,6 +35,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)Options\ShopBindingOptionsControl.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BusinessPolicyProfileService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BusinessPolicyProfileService.cs" />
   </ItemGroup>
