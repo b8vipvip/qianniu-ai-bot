@@ -11,6 +11,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCloudSyncService.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\ClientDataCloudBackupService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\ClientDataCloudBackupService.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BusinessPolicyProfileService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BusinessPolicyProfileService.cs" />
   </ItemGroup>
