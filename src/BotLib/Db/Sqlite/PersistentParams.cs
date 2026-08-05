@@ -3,8 +3,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace BotLib.Db.Sqlite
 {
@@ -13,6 +11,7 @@ namespace BotLib.Db.Sqlite
         private static ConcurrentDictionary<string, string> _cache = new ConcurrentDictionary<string, string>();
         private static SQLiteHelper _db;
         private const string _keyLinkerStr = "#-#";
+
         private static void ClearCache()
         {
             _cache = new ConcurrentDictionary<string, string>();
@@ -22,9 +21,9 @@ namespace BotLib.Db.Sqlite
         {
             var dbpath = PathEx.DataDir + "params.db";
             _db = new SQLiteHelper(dbpath, new List<Type>
-			{
-				typeof(ParamItem)
-			});
+            {
+                typeof(ParamItem)
+            });
             InitParam();
         }
 
@@ -73,7 +72,9 @@ namespace BotLib.Db.Sqlite
 
         public static void TrySaveParam2Key<T>(string masterKey, string subKey, T value)
         {
-            TrySaveParam<T>(GetKey(masterKey, subKey), value);
+            var serialized = Util.SerializeWithTypeName(value);
+            if (ScopedParamRouter.TryWrite(masterKey, subKey, serialized)) return;
+            TrySaveParam(GetKey(masterKey, subKey), serialized);
         }
 
         public static void TrySaveParam(string key, DateTime time)
@@ -139,7 +140,7 @@ namespace BotLib.Db.Sqlite
         {
             var rtdict = new Dictionary<string, string>();
             string init = GetKey(mk, "");
-            _db.ReadRecords<ParamItem>(k => k.Key.StartsWith(init)).ForEach( item =>
+            _db.ReadRecords<ParamItem>(k => k.Key.StartsWith(init)).ForEach(item =>
             {
                 rtdict[item.Key] = item.Value;
             });
@@ -148,31 +149,43 @@ namespace BotLib.Db.Sqlite
 
         public static void TrySaveParam2Key(string masterKey, string subKey, bool value)
         {
-            TrySaveParam(GetKey(masterKey, subKey), value);
+            var raw = value.ToString();
+            if (ScopedParamRouter.TryWrite(masterKey, subKey, raw)) return;
+            TrySaveParam(GetKey(masterKey, subKey), raw);
         }
 
         public static void TrySaveParam2Key(string masterKey, string subKey, long value)
         {
-            TrySaveParam(GetKey(masterKey, subKey), value);
+            var raw = value.ToString();
+            if (ScopedParamRouter.TryWrite(masterKey, subKey, raw)) return;
+            TrySaveParam(GetKey(masterKey, subKey), raw);
         }
 
         public static void TrySaveParam2Key(string masterKey, string subKey, double value)
         {
-            TrySaveParam(GetKey(masterKey, subKey), value);
+            var raw = value.ToString();
+            if (ScopedParamRouter.TryWrite(masterKey, subKey, raw)) return;
+            TrySaveParam(GetKey(masterKey, subKey), raw);
         }
 
         public static void TrySaveParam2Key(string masterKey, string subKey, int value)
         {
-            TrySaveParam(GetKey(masterKey, subKey), value);
+            var raw = value.ToString();
+            if (ScopedParamRouter.TryWrite(masterKey, subKey, raw)) return;
+            TrySaveParam(GetKey(masterKey, subKey), raw);
         }
 
         public static void TrySaveParam2Key(string masterKey, string subKey, DateTime value)
         {
-            TrySaveParam(GetKey(masterKey, subKey), value);
+            var raw = value.Ticks.ToString();
+            if (ScopedParamRouter.TryWrite(masterKey, subKey, raw)) return;
+            TrySaveParam(GetKey(masterKey, subKey), raw);
         }
 
         public static void TrySaveParam2Key(string masterKey, string subKey, string value)
         {
+            value = value ?? string.Empty;
+            if (ScopedParamRouter.TryWrite(masterKey, subKey, value)) return;
             TrySaveParam(GetKey(masterKey, subKey), value);
         }
 
@@ -197,6 +210,15 @@ namespace BotLib.Db.Sqlite
 
         public static T GetParam2Key<T>(string masterKey, string subKey, T defv)
         {
+            string scoped;
+            if (ScopedParamRouter.TryRead(masterKey, subKey, out scoped))
+            {
+                if (!string.IsNullOrEmpty(scoped))
+                {
+                    defv = Util.DeserializeWithTypeName<T>(scoped);
+                }
+                return defv;
+            }
             return GetParam<T>(GetKey(masterKey, subKey), defv);
         }
 
@@ -204,13 +226,8 @@ namespace BotLib.Db.Sqlite
         {
             if (_cache.ContainsKey(key))
             {
-                try
-                {
-                    defv = Convert.ToInt32(_cache[key]);
-                }
-                catch
-                {
-                }
+                try { defv = Convert.ToInt32(_cache[key]); }
+                catch { }
             }
             return defv;
         }
@@ -219,13 +236,8 @@ namespace BotLib.Db.Sqlite
         {
             if (_cache.ContainsKey(key))
             {
-                try
-                {
-                    defv = Convert.ToDouble(_cache[key]);
-                }
-                catch
-                {
-                }
+                try { defv = Convert.ToDouble(_cache[key]); }
+                catch { }
             }
             return defv;
         }
@@ -234,13 +246,8 @@ namespace BotLib.Db.Sqlite
         {
             if (_cache.ContainsKey(key))
             {
-                try
-                {
-                    defv = new DateTime(Convert.ToInt64(_cache[key]));
-                }
-                catch
-                {
-                }
+                try { defv = new DateTime(Convert.ToInt64(_cache[key])); }
+                catch { }
             }
             return defv;
         }
@@ -249,13 +256,8 @@ namespace BotLib.Db.Sqlite
         {
             if (_cache.ContainsKey(key))
             {
-                try
-                {
-                    defv = Convert.ToInt64(_cache[key]);
-                }
-                catch
-                {
-                }
+                try { defv = Convert.ToInt64(_cache[key]); }
+                catch { }
             }
             return defv;
         }
@@ -264,51 +266,81 @@ namespace BotLib.Db.Sqlite
         {
             if (_cache.ContainsKey(key))
             {
-                try
-                {
-                    defv = Convert.ToBoolean(_cache[key]);
-                }
-                catch
-                {
-                }
+                try { defv = Convert.ToBoolean(_cache[key]); }
+                catch { }
             }
             return defv;
         }
 
         public static bool GetParam2Key(string masterKey, string subKey, bool defv)
         {
+            string scoped;
+            if (ScopedParamRouter.TryRead(masterKey, subKey, out scoped))
+            {
+                bool parsed;
+                return bool.TryParse(scoped, out parsed) ? parsed : defv;
+            }
             return GetParam(GetKey(masterKey, subKey), defv);
         }
 
         public static long GetParam2Key(string masterKey, string subKey, long defv)
         {
+            string scoped;
+            if (ScopedParamRouter.TryRead(masterKey, subKey, out scoped))
+            {
+                long parsed;
+                return long.TryParse(scoped, out parsed) ? parsed : defv;
+            }
             return GetParam(GetKey(masterKey, subKey), defv);
         }
 
         public static DateTime GetParam2Key(string masterKey, string subKey, DateTime defv)
         {
+            string scoped;
+            if (ScopedParamRouter.TryRead(masterKey, subKey, out scoped))
+            {
+                long ticks;
+                return long.TryParse(scoped, out ticks) ? new DateTime(ticks) : defv;
+            }
             return GetParam(GetKey(masterKey, subKey), defv);
         }
 
         public static double GetParam2Key(string masterKey, string subKey, double defv)
         {
+            string scoped;
+            if (ScopedParamRouter.TryRead(masterKey, subKey, out scoped))
+            {
+                double parsed;
+                return double.TryParse(scoped, out parsed) ? parsed : defv;
+            }
             return GetParam(GetKey(masterKey, subKey), defv);
         }
 
         public static int GetParam2Key(string masterKey, string subKey, int defv)
         {
+            string scoped;
+            if (ScopedParamRouter.TryRead(masterKey, subKey, out scoped))
+            {
+                int parsed;
+                return int.TryParse(scoped, out parsed) ? parsed : defv;
+            }
             return GetParam(GetKey(masterKey, subKey), defv);
         }
 
         public static string GetParam2Key(string masterKey, string subKey, string defv)
         {
+            string scoped;
+            if (ScopedParamRouter.TryRead(masterKey, subKey, out scoped))
+            {
+                return scoped ?? defv;
+            }
             return GetParam(GetKey(masterKey, subKey), defv);
         }
 
         public static Dictionary<string, string> GetParamsByMasterKeyOf2Key(string masterkey)
         {
             var dict = new Dictionary<string, string>();
-            masterkey += "#-#";
+            masterkey += _keyLinkerStr;
             int length = masterkey.Length;
             foreach (var kv in _cache)
             {
@@ -323,7 +355,7 @@ namespace BotLib.Db.Sqlite
 
         private static string GetKey(string masterKey, string subKey)
         {
-            return masterKey + "#-#" + subKey;
+            return masterKey + _keyLinkerStr + subKey;
         }
 
         private class ParamItem
