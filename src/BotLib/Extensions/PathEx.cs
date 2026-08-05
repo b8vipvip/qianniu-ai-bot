@@ -10,8 +10,7 @@ namespace BotLib.Extensions
         private const string ClientDataRootFolderName = "QianniuAiBot";
         private static string _parentPathOfExePath;
         private static int tmpFilenameOrder = 0;
-        private static string _tmpPath;
-        private static string _dataDir;
+        private static string _globalDataDir;
         private static string _legacyDataDir;
         private static string _userDataRoot;
         private static string _startUpPathOfExe;
@@ -70,7 +69,7 @@ namespace BotLib.Extensions
             {
                 if (Params.IsServerLib)
                 {
-                    return DataDir;
+                    return GlobalDataDir;
                 }
 
                 if (string.IsNullOrEmpty(_legacyDataDir))
@@ -118,27 +117,21 @@ namespace BotLib.Extensions
 
         public static string GetSubDirOfData(string sub)
         {
-            string text = string.IsNullOrEmpty(sub) ? DataDir : (DataDir + sub + "\\");
+            string text = string.IsNullOrEmpty(sub) ? DataDir : Path.Combine(DataDir, sub);
+            text = EnsureTrailingSeparator(text);
             Directory.CreateDirectory(text);
             return text;
         }
 
         public static string GetTmpFileName(string ext = "")
         {
-            tmpFilenameOrder++;
-            return TmpPath + tmpFilenameOrder + ext;
+            var order = System.Threading.Interlocked.Increment(ref tmpFilenameOrder);
+            return TmpPath + order + ext;
         }
 
         public static string TmpPath
         {
-            get
-            {
-                if (_tmpPath == null)
-                {
-                    _tmpPath = GetSubDirOfData("tmp");
-                }
-                return _tmpPath;
-            }
+            get { return GetSubDirOfData("tmp"); }
         }
 
         public static string GetRightSectionOfPath(string path, bool removeHeadXiegan, int n = 1)
@@ -198,23 +191,46 @@ namespace BotLib.Extensions
             }
         }
 
+        /// <summary>
+        /// The original process-wide data folder. Migration and registry code must use this
+        /// property so an ambient shop scope cannot accidentally change its source directory.
+        /// </summary>
+        public static string GlobalDataDir
+        {
+            get
+            {
+                if (string.IsNullOrEmpty(_globalDataDir))
+                {
+                    if (Params.IsServerLib)
+                    {
+                        _globalDataDir = GetAppSubDir("data");
+                    }
+                    else
+                    {
+                        _globalDataDir = EnsureTrailingSeparator(Path.Combine(UserDataRoot, "data"));
+                        Directory.CreateDirectory(_globalDataDir);
+                    }
+                }
+                return _globalDataDir;
+            }
+        }
+
+        /// <summary>
+        /// Compatibility data folder. In a ShopContext it resolves to that shop's state/data
+        /// directory; outside a shop operation it remains the legacy process-wide folder.
+        /// </summary>
         public static string DataDir
         {
             get
             {
-                if (string.IsNullOrEmpty(_dataDir))
+                string scoped;
+                if (!Params.IsServerLib && ScopedDataPathRouter.TryResolve(out scoped))
                 {
-                    if (Params.IsServerLib)
-                    {
-                        _dataDir = GetAppSubDir("data");
-                    }
-                    else
-                    {
-                        _dataDir = EnsureTrailingSeparator(Path.Combine(UserDataRoot, "data"));
-                        Directory.CreateDirectory(_dataDir);
-                    }
+                    scoped = EnsureTrailingSeparator(Path.GetFullPath(scoped));
+                    Directory.CreateDirectory(scoped);
+                    return scoped;
                 }
-                return _dataDir;
+                return GlobalDataDir;
             }
         }
 
