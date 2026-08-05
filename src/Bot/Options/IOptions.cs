@@ -35,6 +35,7 @@ namespace Bot.Options
         ShopDataShare,
         HotKey,
         Robot,
+        ShopBinding,
         RemindPay,
         InviteOrder,
         DataManagement,
