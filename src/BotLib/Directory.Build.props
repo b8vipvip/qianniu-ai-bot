@@ -5,4 +5,12 @@
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Db\Sqlite\ScopedParamRouter.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)Db\Sqlite\ScopedParamRouter.cs" />
   </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Extensions\ScopedDataPathRouter.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Extensions\ScopedDataPathRouter.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ScopedLogRouter.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ScopedLogRouter.cs" />
+  </ItemGroup>
 </Project>
