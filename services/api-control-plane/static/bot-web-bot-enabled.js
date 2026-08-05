@@ -1,6 +1,7 @@
 (() => {
   let botState = null;
   let refreshing = false;
+  let botTimer = null;
 
   function renderBotControl() {
     const checkbox = $("botEnabled");
@@ -51,6 +52,30 @@
     }
   }
 
+  function stopBotTimer() {
+    if (botTimer) clearInterval(botTimer);
+    botTimer = null;
+  }
+
+  function startBotTimer() {
+    stopBotTimer();
+    refreshBotEnabled(false);
+    botTimer = setInterval(() => refreshBotEnabled(false), 2500);
+  }
+
+  const baseShowLogin = showLogin;
+  showLogin = function () {
+    stopBotTimer();
+    botState = null;
+    baseShowLogin();
+  };
+
+  const baseShowApp = showApp;
+  showApp = function (name) {
+    baseShowApp(name);
+    startBotTimer();
+  };
+
   const baseRenderSettings = renderSettings;
   renderSettings = function () {
     baseRenderSettings();
@@ -93,6 +118,5 @@
     }
   };
 
-  refreshBotEnabled(false);
-  setInterval(() => refreshBotEnabled(false), 2500);
+  if (!$("appView").classList.contains("hidden")) startBotTimer();
 })();
