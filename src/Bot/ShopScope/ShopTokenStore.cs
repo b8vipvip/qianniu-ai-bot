@@ -220,13 +220,7 @@ namespace Bot.ShopScope
 
         private static void DeleteIfExists(string path)
         {
-            try
-            {
-                if (File.Exists(path)) File.Delete(path);
-            }
-            catch
-            {
-            }
+            if (File.Exists(path)) File.Delete(path);
         }
 
         private sealed class TokenDocument
