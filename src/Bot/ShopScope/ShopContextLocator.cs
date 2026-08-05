@@ -73,7 +73,8 @@ namespace Bot.ShopScope
         {
             try
             {
-                return QN.QNSet == null ? new List<QN>() : QN.QNSet.ToArray();
+                if (QN.QNSet == null) return new List<QN>();
+                return QN.QNSet.ToArray();
             }
             catch
             {
