@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -64,6 +65,41 @@ namespace Bot.ShopScope
             }
         }
 
+        public IDictionary<string, string> ExportValues()
+        {
+            lock (GetLock())
+            {
+                return new Dictionary<string, string>(Load().Values, StringComparer.Ordinal);
+            }
+        }
+
+        public void ReplaceValues(IDictionary<string, string> values)
+        {
+            lock (GetLock())
+            {
+                var document = NewDocument();
+                document.Values = NormalizeValues(values);
+                document.UpdatedAtUtc = DateTime.UtcNow;
+                Save(document);
+            }
+        }
+
+        public void MergeValues(IDictionary<string, string> values, bool overwrite)
+        {
+            if (values == null) return;
+            lock (GetLock())
+            {
+                var document = Load();
+                foreach (var pair in NormalizeValues(values))
+                {
+                    if (overwrite || !document.Values.ContainsKey(pair.Key))
+                        document.Values[pair.Key] = pair.Value;
+                }
+                document.UpdatedAtUtc = DateTime.UtcNow;
+                Save(document);
+            }
+        }
+
         public string SettingsPath
         {
             get { return _path; }
@@ -83,6 +119,8 @@ namespace Bot.ShopScope
                 var document = JsonConvert.DeserializeObject<SettingsDocument>(json);
                 Validate(document);
                 document.Values = DecryptValues(document.ProtectedValues);
+                if (document.ValueCount != document.Values.Count)
+                    throw new InvalidDataException("Shop settings value count does not match protected payload.");
                 return document;
             }
             catch (InvalidDataException)
@@ -159,8 +197,9 @@ namespace Bot.ShopScope
                     Entropy(),
                     DataProtectionScope.CurrentUser);
                 var json = Encoding.UTF8.GetString(plain);
-                return JsonConvert.DeserializeObject<Dictionary<string, string>>(json)
+                var values = JsonConvert.DeserializeObject<Dictionary<string, string>>(json)
                     ?? new Dictionary<string, string>(StringComparer.Ordinal);
+                return NormalizeValues(values);
             }
             finally
             {
@@ -185,6 +224,18 @@ namespace Bot.ShopScope
             {
                 throw new InvalidDataException("Shop settings file has an invalid schema or ShopKey.");
             }
+        }
+
+        private static Dictionary<string, string> NormalizeValues(IDictionary<string, string> values)
+        {
+            var result = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (values == null) return result;
+            foreach (var pair in values)
+            {
+                var key = RequireKey(pair.Key);
+                result[key] = pair.Value ?? string.Empty;
+            }
+            return result;
         }
 
         private static void AtomicWrite(string path, string content)
