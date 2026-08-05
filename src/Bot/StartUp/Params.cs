@@ -4,18 +4,10 @@ using BotLib.Extensions;
 using BotLib.Misc;
 using Bot.Common;
 using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Windows.Forms;
 using Bot.Common.Account;
 using DbEntity;
 using Bot.AssistWindow;
 using Bot.Common.Db;
-using Newtonsoft.Json;
-using System.Security.Cryptography;
 
 namespace Bot
 {
@@ -36,18 +28,17 @@ namespace Bot
         public static readonly DateTime AppStartTime;
         public static bool IsAppClosing;
 
-
         public static string SystemInfo
         {
             get
             {
                 return string.Format("{0},PcId={1},{2}", new object[]
-				{
-					VersionStr,
-					PcId,
-					ComputerInfo.SysInfoForLog,
-					"软件"
-				});
+                {
+                    VersionStr,
+                    PcId,
+                    ComputerInfo.SysInfoForLog,
+                    "软件"
+                });
             }
         }
 
@@ -55,10 +46,7 @@ namespace Bot
         {
             get
             {
-                if (_pcGuid == null)
-                {
-                    _pcGuid = ComputerInfo.GetCpuID();
-                }
+                if (_pcGuid == null) _pcGuid = ComputerInfo.GetCpuID();
                 return _pcGuid;
             }
         }
@@ -85,18 +73,12 @@ namespace Bot
 
         public static bool IsAppStartMoreThan10Second
         {
-            get
-            {
-                return (DateTime.Now - AppStartTime).TotalSeconds > 10.0;
-            }
+            get { return (DateTime.Now - AppStartTime).TotalSeconds > 10.0; }
         }
 
         public static bool IsAppStartMoreThan20Second
         {
-            get
-            {
-                return (DateTime.Now - AppStartTime).TotalSeconds > 20.0;
-            }
+            get { return (DateTime.Now - AppStartTime).TotalSeconds > 20.0; }
         }
 
         static Params()
@@ -109,8 +91,7 @@ namespace Bot
 
         public static void SetProcessPath(string processName, string processPath)
         {
-            string key = GetProcessPathKey(processName);
-            PersistentParams.TrySaveParam(key, processPath);
+            PersistentParams.TrySaveParam(GetProcessPathKey(processName), processPath);
         }
 
         private static string GetProcessPathKey(string processName)
@@ -120,102 +101,60 @@ namespace Bot
 
         public static string GetProcessPath(string processName)
         {
-            string key = GetProcessPathKey(processName);
-            return PersistentParams.GetParam(key, "");
+            return PersistentParams.GetParam(GetProcessPathKey(processName), "");
         }
 
         public class Other
         {
         }
 
-
         public class Panel
         {
-            public const string RightPanelCompOrderCsvDefault = "工作台";//"话术,商品,机器人,订单,优惠券";
+            public const string RightPanelCompOrderCsvDefault = "工作台";
             public const bool ShortcutIsVisibleDefault = true;
             public const bool GoodsKnowledgeIsVisibleDefault = true;
             public const bool RobotIsVisibleDefault = true;
             public const bool OrderIsVisibleDefault = true;
             public const bool LogisIsVisibleDefault = true;
             public const bool CouponIsVisibleDefault = true;
+
             public static string GetRightPanelCompOrderCsv(string seller)
             {
                 return PersistentParams.GetParam2Key("RightPanelCompOrderCsv", seller, RightPanelCompOrderCsvDefault);
             }
+
             public static void SetRightPanelCompOrderCsv(string seller, string tabs)
             {
                 PersistentParams.TrySaveParam2Key("RightPanelCompOrderCsv", seller, tabs);
             }
-            public static bool GetShortcutIsVisible(string seller)
-            {
-                return PersistentParams.GetParam2Key("ShortcutIsVisible", seller, true);
-            }
-            public static void SetShortcutIsVisible(string seller, bool visible)
-            {
-                PersistentParams.TrySaveParam2Key("ShortcutIsVisible", seller, visible);
-            }
-            public static bool GetGoodsKnowledgeIsVisible(string seller)
-            {
-                return PersistentParams.GetParam2Key("GoodsKnowledgeIsVisible", seller, true);
-            }
-            public static void SetGoodsKnowledgeIsVisible(string seller, bool visible)
-            {
-                PersistentParams.TrySaveParam2Key("GoodsKnowledgeIsVisible", seller, visible);
-            }
-            public static bool GetRobotIsVisible(string seller)
-            {
-                return PersistentParams.GetParam2Key("RobotIsVisible", seller, true);
-            }
-            public static void SetRobotIsVisible(string seller, bool visible)
-            {
-                PersistentParams.TrySaveParam2Key("RobotIsVisible", seller, visible);
-            }
-            public static bool GetOrderIsVisible(string seller)
-            {
-                return PersistentParams.GetParam2Key("OrderIsVisible", seller, true);
-            }
-            public static void SetOrderIsVisible(string seller, bool visible)
-            {
-                PersistentParams.TrySaveParam2Key("OrderIsVisible", seller, visible);
-            }
-            public static bool GetCouponIsVisible(string seller)
-            {
-                return PersistentParams.GetParam2Key("CouponIsVisible", seller, true);
-            }
-            public static void SetCouponIsVisible(string seller, bool visible)
-            {
-                PersistentParams.TrySaveParam2Key("CouponIsVisible", seller, visible);
-            }
+
+            public static bool GetShortcutIsVisible(string seller) { return PersistentParams.GetParam2Key("ShortcutIsVisible", seller, true); }
+            public static void SetShortcutIsVisible(string seller, bool visible) { PersistentParams.TrySaveParam2Key("ShortcutIsVisible", seller, visible); }
+            public static bool GetGoodsKnowledgeIsVisible(string seller) { return PersistentParams.GetParam2Key("GoodsKnowledgeIsVisible", seller, true); }
+            public static void SetGoodsKnowledgeIsVisible(string seller, bool visible) { PersistentParams.TrySaveParam2Key("GoodsKnowledgeIsVisible", seller, visible); }
+            public static bool GetRobotIsVisible(string seller) { return PersistentParams.GetParam2Key("RobotIsVisible", seller, true); }
+            public static void SetRobotIsVisible(string seller, bool visible) { PersistentParams.TrySaveParam2Key("RobotIsVisible", seller, visible); }
+            public static bool GetOrderIsVisible(string seller) { return PersistentParams.GetParam2Key("OrderIsVisible", seller, true); }
+            public static void SetOrderIsVisible(string seller, bool visible) { PersistentParams.TrySaveParam2Key("OrderIsVisible", seller, visible); }
+            public static bool GetCouponIsVisible(string seller) { return PersistentParams.GetParam2Key("CouponIsVisible", seller, true); }
+            public static void SetCouponIsVisible(string seller, bool visible) { PersistentParams.TrySaveParam2Key("CouponIsVisible", seller, visible); }
 
             public static bool GetPanelOptionVisible(string seller, string tabName)
             {
-                if (tabName == "话术")
-                {
-                    return GetShortcutIsVisible(seller);
-                }
-                if (tabName == "订单")
-                {
-                    return GetOrderIsVisible(seller);
-                }
-                if (tabName == "机器人")
-                {
-                    return GetRobotIsVisible(seller);
-                }
-                if (tabName == "商品")
-                {
-                    return GetGoodsKnowledgeIsVisible(seller);
-                }
-                if (tabName == "优惠券")
-                {
-                    return GetCouponIsVisible(seller);
-                }
+                if (tabName == "话术") return GetShortcutIsVisible(seller);
+                if (tabName == "订单") return GetOrderIsVisible(seller);
+                if (tabName == "机器人") return GetRobotIsVisible(seller);
+                if (tabName == "商品") return GetGoodsKnowledgeIsVisible(seller);
+                if (tabName == "优惠券") return GetCouponIsVisible(seller);
                 return false;
             }
         }
 
         public class Robot
         {
-            public static bool CanUseRobot;
+            private const string RuntimeScope = "shop-runtime";
+            private static bool _processCanUseRobot;
+
             public const int AutoModeBringForegroundIntervalSecond = 5;
             public const int AutoModeCloseUnAnsweredBuyerIntervalSecond = 10;
             public const bool RuleIncludeExceptDefault = false;
@@ -229,8 +168,9 @@ namespace Bot
 
             static Robot()
             {
-                CanUseRobot = true;
+                _processCanUseRobot = true;
             }
+
             public enum OperationEnum
             {
                 None,
@@ -238,77 +178,74 @@ namespace Bot
                 Send,
                 Quote
             }
-            public static bool CanUseRobotReal
+
+            public static bool CanUseRobot
             {
                 get
                 {
-                    return CanUseRobot;
+                    if (ShopScope.ShopSettingsScope.Current == null) return _processCanUseRobot;
+                    return PersistentParams.GetParam2Key("BotEnabled", RuntimeScope, _processCanUseRobot);
+                }
+                set
+                {
+                    if (ShopScope.ShopSettingsScope.Current == null)
+                    {
+                        _processCanUseRobot = value;
+                        return;
+                    }
+                    PersistentParams.TrySaveParam2Key("BotEnabled", RuntimeScope, value);
                 }
             }
-            public static string GetBaseUrl()
-            {
-                return PersistentParams.GetParam2Key("BaseUrl", "ai", string.Empty);
-            }
-            public static void SetBaseUrl(string baseUrl)
-            {
-                PersistentParams.TrySaveParam2Key("BaseUrl", "ai", baseUrl);
-            }
-            public static string GetApiKey()
-            {
-                return PersistentParams.GetParam2Key("ApiKey", "ai", string.Empty);
-            }
-            public static void SetApiKey(string apiKey)
-            {
-                PersistentParams.TrySaveParam2Key("ApiKey", "ai", apiKey);
-            }
-            public static string GetModelName()
-            {
-                return PersistentParams.GetParam2Key("ModelName", "ai", string.Empty);
-            }
-            public static void SetModelName( string modelName)
-            {
-                PersistentParams.TrySaveParam2Key("ModelName", "ai", modelName);
-            }
-            public static string GetSystemPrompt()
-            {
-                return PersistentParams.GetParam2Key("SystemPrompt", "ai", string.Empty);
-            }
-            public static void SetSystemPrompt(string systemPrompt)
-            {
-                PersistentParams.TrySaveParam2Key("SystemPrompt", "ai", systemPrompt);
-            }
-            public static OperationEnum GetOperation()
-            {
-                return PersistentParams.GetParam2Key("Robot.Operation", "ai", OperationEnum.None);
 
-            }
-            public static void SetOperation(string nick, OperationEnum operation)
+            public static bool CanUseRobotReal
             {
-                PersistentParams.TrySaveParam2Key("Robot.Operation", "ai", operation);
+                get { return CanUseRobot; }
             }
 
+            public static string GetBaseUrl() { return PersistentParams.GetParam2Key("BaseUrl", "ai", string.Empty); }
+            public static void SetBaseUrl(string baseUrl) { PersistentParams.TrySaveParam2Key("BaseUrl", "ai", baseUrl); }
+            public static string GetApiKey() { return PersistentParams.GetParam2Key("ApiKey", "ai", string.Empty); }
+            public static void SetApiKey(string apiKey) { PersistentParams.TrySaveParam2Key("ApiKey", "ai", apiKey); }
+            public static string GetModelName() { return PersistentParams.GetParam2Key("ModelName", "ai", string.Empty); }
+            public static void SetModelName(string modelName) { PersistentParams.TrySaveParam2Key("ModelName", "ai", modelName); }
+            public static string GetSystemPrompt() { return PersistentParams.GetParam2Key("SystemPrompt", "ai", string.Empty); }
+            public static void SetSystemPrompt(string systemPrompt) { PersistentParams.TrySaveParam2Key("SystemPrompt", "ai", systemPrompt); }
+            public static OperationEnum GetOperation() { return PersistentParams.GetParam2Key("Robot.Operation", "ai", OperationEnum.None); }
+            public static void SetOperation(string nick, OperationEnum operation) { PersistentParams.TrySaveParam2Key("Robot.Operation", "ai", operation); }
 
             public static bool GetIsAutoReply()
             {
-                return PersistentParams.GetParam<bool>("IsAutoReply", true);
+                if (ShopScope.ShopSettingsScope.Current == null)
+                    return PersistentParams.GetParam<bool>("IsAutoReply", true);
+                return PersistentParams.GetParam2Key("IsAutoReply", RuntimeScope, true);
             }
 
             public static void SetIsAutoReply(bool isAutoReply)
             {
-                PersistentParams.TrySaveParam<bool>("IsAutoReply", isAutoReply);
+                if (ShopScope.ShopSettingsScope.Current == null)
+                {
+                    PersistentParams.TrySaveParam<bool>("IsAutoReply", isAutoReply);
+                    return;
+                }
+                PersistentParams.TrySaveParam2Key("IsAutoReply", RuntimeScope, isAutoReply);
             }
 
             public static string GetAutoModeNoAnswerTip(string nick)
             {
-                return PersistentParams.GetParam2Key("Robot.AutoModeNoAnswerTip", nick, AutoModeNoAnswerTipDefault);
+                if (ShopScope.ShopSettingsScope.Current == null)
+                    return PersistentParams.GetParam2Key("Robot.AutoModeNoAnswerTip", nick, AutoModeNoAnswerTipDefault);
+                return PersistentParams.GetParam2Key("Robot.AutoModeNoAnswerTip", RuntimeScope, AutoModeNoAnswerTipDefault);
             }
+
             public static void SetAutoModeNoAnswerTip(string nick, string autoModeNoAnswerTip)
             {
-                PersistentParams.TrySaveParam2Key("Robot.AutoModeNoAnswerTip", nick, autoModeNoAnswerTip);
+                if (ShopScope.ShopSettingsScope.Current == null)
+                {
+                    PersistentParams.TrySaveParam2Key("Robot.AutoModeNoAnswerTip", nick, autoModeNoAnswerTip);
+                    return;
+                }
+                PersistentParams.TrySaveParam2Key("Robot.AutoModeNoAnswerTip", RuntimeScope, autoModeNoAnswerTip);
             }
-
         }
-
     }
-
 }
