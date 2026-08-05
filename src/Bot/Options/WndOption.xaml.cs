@@ -185,12 +185,27 @@ namespace Bot.Options
         private void Save(string seller)
         {
             Util.Assert(!string.IsNullOrEmpty(seller));
-            Hide();
-            RunInShopScope(() => TraversalOpsAndDoAction(op =>
+            try
             {
-                op.Save(seller);
-            }));
-            Close();
+                Hide();
+                RunInShopScope(() => TraversalOpsAndDoAction(op =>
+                {
+                    op.Save(seller);
+                }));
+                Close();
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+                Show();
+                Activate();
+                MessageBox.Show(
+                    this,
+                    "保存设置失败：" + ex.Message + "\n\n窗口已保留，请修正后重试。",
+                    "保存失败",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Error);
+            }
         }
 
         private void btnCancel_Click(object sender, RoutedEventArgs e)
