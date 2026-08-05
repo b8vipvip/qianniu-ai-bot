@@ -42,27 +42,33 @@ namespace Bot.ShopScope
             if (token.Length < 16) throw new ArgumentException("Bot 客户端令牌长度无效。", nameof(token));
 
             var plain = Encoding.UTF8.GetBytes(token);
-            var protectedBytes = ProtectedData.Protect(
-                plain,
-                Entropy(),
-                DataProtectionScope.CurrentUser);
-            Array.Clear(plain, 0, plain.Length);
-
-            var document = new TokenDocument
+            byte[] protectedBytes = null;
+            try
             {
-                Schema = Schema,
-                SchemaVersion = SchemaVersion,
-                ShopKey = _shop.ShopKey,
-                Algorithm = Algorithm,
-                ProtectedToken = Convert.ToBase64String(protectedBytes),
-                Fingerprint = Fingerprint(token),
-                UpdatedAtUtc = DateTime.UtcNow
-            };
-            Array.Clear(protectedBytes, 0, protectedBytes.Length);
+                protectedBytes = ProtectedData.Protect(
+                    plain,
+                    Entropy(),
+                    DataProtectionScope.CurrentUser);
+                var document = new TokenDocument
+                {
+                    Schema = Schema,
+                    SchemaVersion = SchemaVersion,
+                    ShopKey = _shop.ShopKey,
+                    Algorithm = Algorithm,
+                    ProtectedToken = Convert.ToBase64String(protectedBytes),
+                    Fingerprint = Fingerprint(token),
+                    UpdatedAtUtc = DateTime.UtcNow
+                };
 
-            lock (Sync)
+                lock (Sync)
+                {
+                    AtomicWrite(_path, JsonConvert.SerializeObject(document, Formatting.Indented));
+                }
+            }
+            finally
             {
-                AtomicWrite(_path, JsonConvert.SerializeObject(document, Formatting.Indented));
+                Array.Clear(plain, 0, plain.Length);
+                if (protectedBytes != null) Array.Clear(protectedBytes, 0, protectedBytes.Length);
             }
         }
 
@@ -72,6 +78,8 @@ namespace Bot.ShopScope
             error = string.Empty;
             if (!File.Exists(_path)) return false;
 
+            byte[] protectedBytes = null;
+            byte[] plain = null;
             try
             {
                 TokenDocument document;
@@ -82,20 +90,12 @@ namespace Bot.ShopScope
                 }
                 Validate(document);
 
-                var protectedBytes = Convert.FromBase64String(document.ProtectedToken);
-                var plain = ProtectedData.Unprotect(
+                protectedBytes = Convert.FromBase64String(document.ProtectedToken);
+                plain = ProtectedData.Unprotect(
                     protectedBytes,
                     Entropy(),
                     DataProtectionScope.CurrentUser);
-                try
-                {
-                    token = Encoding.UTF8.GetString(plain).Trim();
-                }
-                finally
-                {
-                    Array.Clear(protectedBytes, 0, protectedBytes.Length);
-                    Array.Clear(plain, 0, plain.Length);
-                }
+                token = Encoding.UTF8.GetString(plain).Trim();
                 if (token.Length < 16)
                     throw new InvalidDataException("解密后的 Bot 客户端令牌无效。");
                 if (!string.Equals(document.Fingerprint, Fingerprint(token), StringComparison.Ordinal))
@@ -107,6 +107,11 @@ namespace Bot.ShopScope
                 token = string.Empty;
                 error = "无法读取本店令牌：" + ex.Message;
                 return false;
+            }
+            finally
+            {
+                if (protectedBytes != null) Array.Clear(protectedBytes, 0, protectedBytes.Length);
+                if (plain != null) Array.Clear(plain, 0, plain.Length);
             }
         }
 
