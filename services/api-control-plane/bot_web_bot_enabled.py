@@ -125,6 +125,14 @@ def runtime_bot_enabled_sync(
     current_enabled = bool(data.current_enabled)
     now = bot_web_console._now()
     with _cp.db() as conn:
+        existing = conn.execute(
+            "SELECT shop_key FROM bot_client_bot_enabled WHERE client_id=?",
+            (client_id,),
+        ).fetchone()
+        bound_shop_key = (existing["shop_key"] if existing else "") or ""
+        if bound_shop_key and bound_shop_key != shop_key:
+            raise HTTPException(status_code=409, detail="该客户端令牌已绑定其他 ShopKey")
+
         # Upgrade compatibility: the first new-client sync adopts the current
         # Windows value. A Web value saved before first sync is preserved.
         conn.execute(
