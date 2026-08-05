@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
 using System.Text;
 
 namespace Bot.ShopScope
@@ -11,6 +12,7 @@ namespace Bot.ShopScope
     {
         private const string Schema = "qianniu-ai-bot.shop-settings";
         private const int SchemaVersion = 1;
+        private const string Algorithm = "DPAPI-CurrentUser";
         private static readonly ConcurrentDictionary<string, object> Locks =
             new ConcurrentDictionary<string, object>(StringComparer.Ordinal);
 
@@ -79,14 +81,8 @@ namespace Bot.ShopScope
             {
                 var json = File.ReadAllText(_path, Encoding.UTF8);
                 var document = JsonConvert.DeserializeObject<SettingsDocument>(json);
-                if (document == null
-                    || !string.Equals(document.Schema, Schema, StringComparison.Ordinal)
-                    || document.SchemaVersion != SchemaVersion
-                    || !string.Equals(document.ShopKey, _shop.ShopKey, StringComparison.Ordinal)
-                    || document.Values == null)
-                {
-                    throw new InvalidDataException("Shop settings file has an invalid schema or ShopKey.");
-                }
+                Validate(document);
+                document.Values = DecryptValues(document.ProtectedValues);
                 return document;
             }
             catch (InvalidDataException)
@@ -95,7 +91,7 @@ namespace Bot.ShopScope
             }
             catch (Exception ex)
             {
-                throw new InvalidDataException("Cannot read shop settings: " + ex.Message, ex);
+                throw new InvalidDataException("Cannot read protected shop settings: " + ex.Message, ex);
             }
         }
 
@@ -106,14 +102,89 @@ namespace Bot.ShopScope
                 Schema = Schema,
                 SchemaVersion = SchemaVersion,
                 ShopKey = _shop.ShopKey,
+                Algorithm = Algorithm,
                 UpdatedAtUtc = DateTime.UtcNow,
+                ProtectedValues = string.Empty,
+                ValueCount = 0,
                 Values = new Dictionary<string, string>(StringComparer.Ordinal)
             };
         }
 
         private void Save(SettingsDocument document)
         {
+            document.Schema = Schema;
+            document.SchemaVersion = SchemaVersion;
+            document.ShopKey = _shop.ShopKey;
+            document.Algorithm = Algorithm;
+            document.Values = document.Values ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            document.ValueCount = document.Values.Count;
+            document.ProtectedValues = EncryptValues(document.Values);
             AtomicWrite(_path, JsonConvert.SerializeObject(document, Formatting.Indented));
+        }
+
+        private string EncryptValues(Dictionary<string, string> values)
+        {
+            var json = JsonConvert.SerializeObject(
+                values ?? new Dictionary<string, string>(StringComparer.Ordinal),
+                Formatting.None);
+            var plain = Encoding.UTF8.GetBytes(json);
+            byte[] protectedBytes = null;
+            try
+            {
+                protectedBytes = ProtectedData.Protect(
+                    plain,
+                    Entropy(),
+                    DataProtectionScope.CurrentUser);
+                return Convert.ToBase64String(protectedBytes);
+            }
+            finally
+            {
+                Array.Clear(plain, 0, plain.Length);
+                if (protectedBytes != null) Array.Clear(protectedBytes, 0, protectedBytes.Length);
+            }
+        }
+
+        private Dictionary<string, string> DecryptValues(string protectedValues)
+        {
+            if (string.IsNullOrWhiteSpace(protectedValues))
+                return new Dictionary<string, string>(StringComparer.Ordinal);
+
+            byte[] protectedBytes = null;
+            byte[] plain = null;
+            try
+            {
+                protectedBytes = Convert.FromBase64String(protectedValues);
+                plain = ProtectedData.Unprotect(
+                    protectedBytes,
+                    Entropy(),
+                    DataProtectionScope.CurrentUser);
+                var json = Encoding.UTF8.GetString(plain);
+                return JsonConvert.DeserializeObject<Dictionary<string, string>>(json)
+                    ?? new Dictionary<string, string>(StringComparer.Ordinal);
+            }
+            finally
+            {
+                if (protectedBytes != null) Array.Clear(protectedBytes, 0, protectedBytes.Length);
+                if (plain != null) Array.Clear(plain, 0, plain.Length);
+            }
+        }
+
+        private byte[] Entropy()
+        {
+            return Encoding.UTF8.GetBytes("qianniu-ai-bot|shop-settings|" + _shop.ShopKey);
+        }
+
+        private void Validate(SettingsDocument document)
+        {
+            if (document == null
+                || !string.Equals(document.Schema, Schema, StringComparison.Ordinal)
+                || document.SchemaVersion != SchemaVersion
+                || !string.Equals(document.ShopKey, _shop.ShopKey, StringComparison.Ordinal)
+                || !string.Equals(document.Algorithm, Algorithm, StringComparison.Ordinal)
+                || document.ValueCount < 0)
+            {
+                throw new InvalidDataException("Shop settings file has an invalid schema or ShopKey.");
+            }
         }
 
         private static void AtomicWrite(string path, string content)
@@ -172,10 +243,19 @@ namespace Bot.ShopScope
             [JsonProperty("shop_key")]
             public string ShopKey { get; set; }
 
+            [JsonProperty("algorithm")]
+            public string Algorithm { get; set; }
+
+            [JsonProperty("protected_values")]
+            public string ProtectedValues { get; set; }
+
+            [JsonProperty("value_count")]
+            public int ValueCount { get; set; }
+
             [JsonProperty("updated_at_utc")]
             public DateTime UpdatedAtUtc { get; set; }
 
-            [JsonProperty("values")]
+            [JsonIgnore]
             public Dictionary<string, string> Values { get; set; }
         }
     }
