@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
 
@@ -6,13 +7,13 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// 千牛同一个买家在不同事件中可能分别使用内部 nick 与界面 display。
-    /// 例如 receiveNewMsg 使用 daishiji，而 qnbotStatus/onConversationChange 使用 daidai木。
-    /// 回复上下文、右侧消息列表和后台补偿必须把两者视为同一买家，同时真实发送仍使用内部 nick。
+    /// 别名记录同时绑定 ShopKey，避免同名客服或买家在不同店铺互相覆盖。
     /// </summary>
     internal static class BuyerIdentityAliasService
     {
         private sealed class AliasRecord
         {
+            public string ShopKey;
             public string Seller;
             public string InternalNick;
             public string Display;
@@ -32,14 +33,9 @@ namespace Bot.ChromeNs
             var from = Clean(message.fromid.nick);
             var to = Clean(message.toid.nick);
             if (!Same(from, seller) && Same(to, seller))
-            {
                 Observe(seller, from, message.fromid.display, message.fromid.targetId);
-            }
             else if (Same(from, seller) && !Same(to, seller))
-            {
-                // 卖家回显中的 toid.display 在部分千牛版本会错误地等于客服名，不能覆盖已知买家 display。
                 Observe(seller, to, string.Empty, message.toid.targetId);
-            }
         }
 
         public static void Observe(string seller, string internalNick, string display, string targetId)
@@ -55,6 +51,7 @@ namespace Bot.ChromeNs
             Aliases.TryGetValue(Key(seller, internalNick), out old);
             if (old == null && display.Length > 0) Aliases.TryGetValue(Key(seller, display), out old);
             var record = old ?? new AliasRecord();
+            record.ShopKey = ScopeKey(seller);
             record.Seller = seller;
             record.InternalNick = internalNick;
             if (display.Length > 0) record.Display = display;
@@ -112,7 +109,15 @@ namespace Bot.ChromeNs
 
         private static string Key(string seller, string alias)
         {
-            return Clean(seller) + "#" + Clean(alias);
+            return ScopeKey(seller) + "#" + Clean(seller) + "#" + Clean(alias);
+        }
+
+        private static string ScopeKey(string seller)
+        {
+            var current = ShopSettingsScope.Current;
+            if (current != null) return current.ShopKey;
+            try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
+            catch { return "legacy-" + Clean(seller).ToLowerInvariant(); }
         }
 
         private static bool Same(string left, string right)
