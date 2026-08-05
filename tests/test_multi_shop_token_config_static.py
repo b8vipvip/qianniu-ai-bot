@@ -27,6 +27,7 @@ def test_clearing_shop_token_removes_current_backup_and_temp_copies():
     assert 'DeleteIfExists(_path + ".bak")' in source
     assert 'Path.GetFileName(_path) + ".tmp-*"' in source
     assert "Directory.GetFiles(directory, pattern, SearchOption.TopDirectoryOnly)" in source
+    assert "if (File.Exists(path)) File.Delete(path);" in source
 
 
 def test_legacy_global_token_requires_explicit_ui_import():
@@ -40,11 +41,19 @@ def test_legacy_global_token_requires_explicit_ui_import():
     assert "_connection.SaveToken(candidate)" in ui
 
 
-def test_shop_settings_file_is_schema_checked_atomic_and_shop_key_bound():
+def test_shop_ai_settings_payload_is_dpapi_protected_and_shop_key_bound():
     source = read("src/Bot/ShopScope/ShopScopedSettingsStore.cs")
     assert 'Schema = "qianniu-ai-bot.shop-settings"' in source
     assert 'GetConfigPath(_shop, "settings.json")' in source
+    assert "ProtectedData.Protect" in source
+    assert "ProtectedData.Unprotect" in source
+    assert "DataProtectionScope.CurrentUser" in source
+    assert '"qianniu-ai-bot|shop-settings|" + _shop.ShopKey' in source
+    assert 'JsonProperty("protected_values")' in source
+    assert 'JsonProperty("values")' not in source
+    assert "[JsonIgnore]" in source
     assert "document.ShopKey, _shop.ShopKey" in source
+    assert "Array.Clear" in source
     assert "File.Replace" in source
     assert "File.Copy(temp, path, true)" in source
     assert "ConcurrentDictionary<string, object>" in source
@@ -92,6 +101,16 @@ def test_buyer_reply_runtime_enters_shop_scope_at_the_single_handler_call():
     assert "await _handler(lease)" in source
     assert "ResolveRuntimeBySellerNick" in locator
     assert "Profiles.GetOrCreate(ResolveBySellerNickCore" in locator
+
+
+def test_vision_model_selection_uses_message_shop_ai_settings():
+    source = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
+    assert "ResolveShopVisionEndpoints(message, endpoints)" in source
+    assert "message.toid.nick" in source
+    assert "ShopContextLocator.ResolveRuntimeBySellerNick" in source
+    assert "using (ShopSettingsScope.Enter(shop))" in source
+    assert "AiEndpointStore.GetVisionEnabledEndpoints" in source
+    assert "本店未配置可用的视觉模型" in source
 
 
 def test_runtime_scope_does_not_add_a_second_reflection_handler_wrapper():
