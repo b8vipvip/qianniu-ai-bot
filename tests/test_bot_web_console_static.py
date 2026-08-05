@@ -67,7 +67,7 @@ def test_mobile_page_has_status_messages_settings_and_manual_reply():
     assert "setInterval" in script
 
 
-def test_windows_client_syncs_state_and_recent_conversation_without_logging_token():
+def test_windows_client_syncs_per_shop_state_and_recent_conversation_without_logging_token():
     source = read(WINDOWS)
     props = read(PROPS)
     assert "BotWebConsoleSyncService.cs" in props
@@ -78,16 +78,21 @@ def test_windows_client_syncs_state_and_recent_conversation_without_logging_toke
     assert "ApplyDesiredSettings" in source
     assert "ExecuteSendTextAsync" in source
     assert "SendTextWithRetryAsync" in source
-    assert "ControlPlaneClientToken" in source
+    assert "ShopControlPlaneConnectionStore" in source
+    assert "ConcurrentDictionary<string, ShopWebState>" in source
+    assert '"X-Shop-Key"' in source
+    assert "ControlPlaneClientToken" not in source
     assert "token=" not in source.lower()
 
 
-def test_sensitive_command_state_is_idempotent_and_not_persisted_in_server_logs():
+def test_sensitive_command_state_is_per_shop_idempotent_and_not_persisted_in_server_logs():
     source = read(WINDOWS)
     server = read(SERVICE)
     assert "ProcessedCommandsKey" in source
-    assert "WasProcessed(id)" in source
-    assert "MarkProcessed(id)" in source
+    assert "WasProcessed(state, id)" in source
+    assert "MarkProcessed(state, id)" in source
+    assert "state.ProcessedCommands" in source
+    assert "ShopSettingsScope.Enter(state.Shop)" in source
     assert "UNIQUE(client_id, message_key)" in server
     assert "INSERT OR IGNORE INTO bot_messages" in server
     assert "payload_json" in server
