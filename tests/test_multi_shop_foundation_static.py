@@ -41,7 +41,7 @@ def test_profile_store_preserves_shop_key_when_display_name_changes():
     assert 'RegistrySchema = "qianniu-ai-bot.shop-registry"' in source
 
 
-def test_scoped_path_provider_creates_global_and_shop_boundaries():
+def test_scoped_path_provider_creates_global_shop_and_compatibility_boundaries():
     source = read("src/Bot/ShopScope/ShopScopedPathProvider.cs")
     interface = read("src/Bot/ShopScope/IShopScopedPathProvider.cs")
     for value in (
@@ -56,10 +56,14 @@ def test_scoped_path_provider_creates_global_and_shop_boundaries():
         'GetShopDirectory(shop, "cache")',
         'GetShopDirectory(shop, "logs")',
         'GetShopDirectory(shop, "backup")',
+        'Path.Combine(GetStateRoot(shop), "data")',
     ):
         assert value in source
     assert "LegacyDataRoot" in source
     assert "LegacyDataRoot" in interface
+    assert "GetCompatibilityDataRoot" in source
+    assert "GetCompatibilityDataRoot" in interface
+    assert "PathEx.GlobalDataDir" in source
     assert "Path.IsPathRooted" in source
     assert "Path.GetInvalidFileNameChars" in source
 
@@ -78,8 +82,8 @@ def test_foundation_is_compiled_for_bot_and_wpf_temporary_projects():
         assert "ShopScope\\" + filename in props
 
 
-def test_pr1_does_not_switch_existing_single_shop_storage_or_tokens():
-    combined = "\n".join(
+def test_foundation_remains_credential_free_while_runtime_bridge_owns_storage_switch():
+    foundation = "\n".join(
         read(path)
         for path in (
             "src/Bot/ShopScope/IShopScopedPathProvider.cs",
@@ -91,8 +95,12 @@ def test_pr1_does_not_switch_existing_single_shop_storage_or_tokens():
             "src/Bot/ShopScope/ShopScopedPathProvider.cs",
         )
     )
-    assert "ControlPlaneClientToken" not in combined
-    assert "ProtectedData" not in combined
-    assert "TrySaveParam" not in combined
-    assert "PathEx.DataDir" in combined
-    assert "LegacyDataRoot" in combined
+    path_ex = read("src/BotLib/Extensions/PathEx.cs")
+    bridge = read("src/Bot/ShopScope/ShopScopedRuntimeBridge.cs")
+    assert "ControlPlaneClientToken" not in foundation
+    assert "ProtectedData" not in foundation
+    assert "TrySaveParam" not in foundation
+    assert "PathEx.GlobalDataDir" in foundation
+    assert "LegacyDataRoot" in foundation
+    assert "ScopedDataPathRouter.TryResolve" in path_ex
+    assert "GetCompatibilityDataRoot" in bridge
