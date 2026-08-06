@@ -1,26 +1,37 @@
-﻿using System;
-using System.CodeDom.Compiler;
-using System.Collections;
-using System.ComponentModel;
-using System.Diagnostics;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Markup;
-using Delay;
-using Bot.AssistWindow;
+﻿using Bot.AssistWindow;
 using Bot.Common;
-using Bot.Common.Account;
-using Bot.Common.Db;
 using Bot.Common.Windows;
 using Bot.ShopScope;
 using BotLib;
-using BotLib.Wpf.Extensions;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Media;
 
 namespace Bot.Options
 {
     public partial class WndOption : EtWindow
     {
+        private sealed class SettingsPage
+        {
+            public string Group { get; set; }
+            public string Title { get; set; }
+            public string Description { get; set; }
+            public OptionEnum PageType { get; set; }
+            public IOptions Control { get; set; }
+            public string FeaturePage { get; set; }
+            public RadioButton NavigationButton { get; set; }
+        }
+
         private readonly ShopContext _shop;
+        private readonly List<SettingsPage> _pages = new List<SettingsPage>();
+        private readonly List<IOptions> _visitedOptions = new List<IOptions>();
+        private FeatureSettingsOptionsControl _featureSettings;
+        private SettingsPage _currentPage;
+        private OptionEnum _pendingPage = OptionEnum.Unknown;
+        private bool _initialized;
 
         private WndOption(string seller)
         {
@@ -40,104 +51,209 @@ namespace Bot.Options
 
         private void WndOption_Loaded(object sender, RoutedEventArgs e)
         {
-            Style style = FindResource("tabLevel1") as Style;
-            CreateOpTab("店铺绑定", new ShopBindingOptionsControl(Seller), style);
-            RunInShopScope(() => CreateOpTab("AI大模型设置", new CtlRobotOptions(Seller), style));
-            CreateOpTab("数据管理", new CtlDataManagement(), style);
-            CreateOpTab("关于与更新", new BotUpdateOptionsControl(), style);
-            sbSave.ToolTip = _shop == null
-                ? string.Format("保存成 {0} 个人设置（旧全局兼容模式）", Seller)
-                : string.Format("保存到店铺 {0}（{1}）的独立设置", Seller, _shop.ShopKey);
+            if (_initialized) return;
+            _initialized = true;
+
+            BuildSettingsPages();
+            BuildNavigation();
+            UpdateShopScopeHeader();
+
+            var firstPage = _pendingPage == OptionEnum.Unknown
+                ? _pages.FirstOrDefault(x => x.PageType == OptionEnum.ShopBinding)
+                : _pages.FirstOrDefault(x => x.PageType == _pendingPage);
+            NavigateTo(firstPage ?? _pages.FirstOrDefault());
         }
 
-        private void CreateOpTab(string tabTitle, object control, Style style)
+        private void BuildSettingsPages()
         {
-            var tabItem = new TabItem();
-            var header = TextBlockEx.Create(tabTitle, new object[0]);
-            tabItem.Header = header;
-            tabItem.Content = control;
-            tabMain.Items.Add(tabItem);
-            tabItem.Style = style;
+            ShopBindingOptionsControl shopBinding = null;
+            CtlRobotOptions aiSettings = null;
+            CtlDataManagement dataManagement = null;
+            BotUpdateOptionsControl aboutUpdate = null;
+
+            RunInShopScope(delegate
+            {
+                shopBinding = new ShopBindingOptionsControl(Seller);
+                aiSettings = new CtlRobotOptions(Seller);
+                _featureSettings = new FeatureSettingsOptionsControl(Seller);
+                dataManagement = new CtlDataManagement();
+                aboutUpdate = new BotUpdateOptionsControl();
+            });
+
+            AddPage("店铺与连接", "店铺绑定", "查看 ShopKey、迁移旧数据并管理当前店铺身份。",
+                OptionEnum.ShopBinding, shopBinding);
+            AddPage("店铺与连接", "AI 服务", "配置统一 API 服务地址、店铺令牌和文本/视觉路由。",
+                OptionEnum.Robot, aiSettings);
+
+            AddFeaturePage("回复与通知", "知识库", "管理店铺问答、智能导入、搜索和分类。",
+                OptionEnum.GoodsKnowledge, "知识库");
+            AddFeaturePage("回复与通知", "自动回复规则", "设置转人工规则、下单回复和关键词边界。",
+                OptionEnum.AutoReplyRules, "自动回复规则");
+            AddFeaturePage("回复与通知", "消息通知", "配置工作时间、转人工通知和通知渠道。",
+                OptionEnum.Notifications, "消息通知");
+            AddFeaturePage("回复与通知", "消息策略", "控制语气、长度、禁用词和知识使用方式。",
+                OptionEnum.MessagePolicy, "消息策略");
+
+            AddPage("数据与安全", "数据管理", "备份、恢复和迁移当前店铺的业务数据。",
+                OptionEnum.DataManagement, dataManagement);
+            AddFeaturePage("数据与安全", "日志与调试", "查看运行日志和诊断信息。",
+                OptionEnum.Diagnostics, "日志与调试");
+            AddFeaturePage("数据与安全", "商业化合规", "维护上线前的隐私、告知和人工接管清单。",
+                OptionEnum.Compliance, "商业化合规清单");
+
+            AddPage("系统", "关于与更新", "检查正式版本、查看更新说明和自动更新状态。",
+                OptionEnum.AboutUpdate, aboutUpdate);
+        }
+
+        private void AddPage(
+            string group,
+            string title,
+            string description,
+            OptionEnum pageType,
+            IOptions control)
+        {
+            if (control == null) throw new InvalidOperationException("设置页面初始化失败：" + title);
+            _pages.Add(new SettingsPage
+            {
+                Group = group,
+                Title = title,
+                Description = description,
+                PageType = pageType,
+                Control = control
+            });
+        }
+
+        private void AddFeaturePage(
+            string group,
+            string title,
+            string description,
+            OptionEnum pageType,
+            string featurePage)
+        {
+            AddPage(group, title, description, pageType, _featureSettings);
+            _pages[_pages.Count - 1].FeaturePage = featurePage;
+        }
+
+        private void BuildNavigation()
+        {
+            navPanel.Children.Clear();
+            string currentGroup = null;
+            var navStyle = FindResource("SettingsNavItem") as Style;
+            var groupStyle = FindResource("SettingsGroupTitle") as Style;
+
+            foreach (var page in _pages)
+            {
+                if (!string.Equals(currentGroup, page.Group, StringComparison.Ordinal))
+                {
+                    currentGroup = page.Group;
+                    navPanel.Children.Add(new TextBlock
+                    {
+                        Text = currentGroup,
+                        Style = groupStyle
+                    });
+                }
+
+                var title = new TextBlock
+                {
+                    Text = page.Title,
+                    FontSize = 14,
+                    FontWeight = FontWeights.SemiBold,
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                var description = new TextBlock
+                {
+                    Text = page.Description,
+                    FontSize = 10.5,
+                    Foreground = new SolidColorBrush(Color.FromRgb(102, 112, 133)),
+                    Margin = new Thickness(0, 3, 0, 0),
+                    TextTrimming = TextTrimming.CharacterEllipsis
+                };
+                var content = new StackPanel();
+                content.Children.Add(title);
+                content.Children.Add(description);
+
+                var button = new RadioButton
+                {
+                    GroupName = "SettingsNavigation",
+                    Style = navStyle,
+                    Content = content,
+                    Tag = page
+                };
+                button.Checked += NavigationButton_Checked;
+                page.NavigationButton = button;
+                navPanel.Children.Add(button);
+            }
+        }
+
+        private void NavigationButton_Checked(object sender, RoutedEventArgs e)
+        {
+            var button = sender as RadioButton;
+            var page = button == null ? null : button.Tag as SettingsPage;
+            NavigateTo(page);
+        }
+
+        private void NavigateTo(SettingsPage page)
+        {
+            if (page == null) return;
+
+            if (!string.IsNullOrWhiteSpace(page.FeaturePage))
+            {
+                _featureSettings.NavigateTo(page.FeaturePage);
+            }
+
+            _currentPage = page;
+            contentHost.Content = page.Control;
+            txtPageTitle.Text = page.Title;
+            txtPageDescription.Text = page.Description;
+            if (page.NavigationButton != null && page.NavigationButton.IsChecked != true)
+            {
+                page.NavigationButton.IsChecked = true;
+            }
+            if (!_visitedOptions.Contains(page.Control))
+            {
+                _visitedOptions.Add(page.Control);
+            }
+
+            btnRestoreCurrent.IsEnabled = !(page.Control is FeatureSettingsOptionsControl);
+            btnRestoreCurrent.Opacity = btnRestoreCurrent.IsEnabled ? 1.0 : 0.55;
+        }
+
+        private void UpdateShopScopeHeader()
+        {
+            if (_shop == null)
+            {
+                txtShopScope.Text = Seller + " · 旧全局兼容模式（尚未取得稳定 ShopKey）";
+                btnSave.ToolTip = "保存为当前客服的旧全局兼容设置";
+                return;
+            }
+
+            txtShopScope.Text = (_shop.DisplayName ?? Seller) + " · ShopKey：" + _shop.ShopKey;
+            btnSave.ToolTip = "保存到当前店铺的独立配置：" + _shop.ShopKey;
         }
 
         private void btnHelp_Click(object sender, RoutedEventArgs e)
         {
-            if (SelectedSettingControl != null)
+            if (_currentPage != null && _currentPage.Control != null)
             {
-                SelectedSettingControl.NavHelp();
+                _currentPage.Control.NavHelp();
             }
         }
 
-        private IOptions SelectedSettingControl
-        {
-            get
-            {
-                return GetSelectedSettingTabControl(tabMain);
-            }
-        }
-
-        private IOptions GetSelectedSettingTabControl(TabControl tabm)
-        {
-            var selectedTab = tabm.SelectedContent as TabControl;
-            IOptions rtOp;
-            if (selectedTab == null)
-            {
-                rtOp = (tabm.SelectedContent as IOptions);
-            }
-            else
-            {
-                rtOp = GetSelectedSettingTabControl(selectedTab);
-            }
-            return rtOp;
-        }
-
-        private void TraversalOpsAndDoAction(Action<IOptions> act)
-        {
-            TraversalOpsAndDoAction(act, tabMain);
-        }
-
-        private void TraversalOpsAndDoAction(Action<IOptions> act, TabControl tabm)
-        {
-            foreach (var obj in tabm.Items)
-            {
-                var tabItem = (TabItem)obj;
-                if (tabItem.IsLoaded)
-                {
-                    var tabControl = tabItem.Content as TabControl;
-                    if (tabControl != null)
-                    {
-                        TraversalOpsAndDoAction(act, tabControl);
-                    }
-                    else
-                    {
-                        var options = tabItem.Content as IOptions;
-                        if (options != null)
-                        {
-                            act(options);
-                        }
-                        else
-                        {
-                            MsgBox.ShowErrDialog("WndOption,异常的TabItem,header=" + tabItem.Header.ToString(), null);
-                        }
-                    }
-                }
-            }
-        }
-
-        public static void MyShow(string seller, WndAssist owner = null, OptionEnum showPage = OptionEnum.Unknown, Action uiCallback = null)
+        public static void MyShow(
+            string seller,
+            WndAssist owner = null,
+            OptionEnum showPage = OptionEnum.Unknown,
+            Action uiCallback = null)
         {
             Util.Assert(!string.IsNullOrEmpty(seller));
-            var wndOp = ShowSameNickOneInstance<WndOption>(seller, () =>
+            var wndOp = ShowSameNickOneInstance<WndOption>(seller, delegate
             {
                 return new WndOption(seller);
             }, owner, true);
+
             if (uiCallback != null)
             {
-                wndOp.Closed += (s, e) =>
-                {
-                    if (uiCallback != null)
-                        uiCallback();
-                };
+                wndOp.Closed += delegate { uiCallback(); };
             }
             if (showPage > OptionEnum.Unknown)
             {
@@ -147,34 +263,9 @@ namespace Bot.Options
 
         private void ShowPage(OptionEnum showPage)
         {
-            TraversalOpsAndDoAction(op =>
-            {
-                if (showPage == op.OptionType)
-                    ShowPage(op);
-            });
-        }
-
-        private void ShowPage(IOptions op)
-        {
-            TabControl tabControl;
-            for (var c = op as Control; c != null; c = tabControl)
-            {
-                var tabItem = c.xFindAncestor<TabItem>();
-                if (tabItem == null)
-                {
-                    break;
-                }
-                tabControl = tabItem.xFindAncestor<TabControl>();
-                tabControl.SelectedItem = tabItem;
-            }
-        }
-
-        private void btnRestoreAllPageToDef_Click(object sender, RoutedEventArgs e)
-        {
-            RunInShopScope(() => TraversalOpsAndDoAction(op =>
-            {
-                op.RestoreDefault();
-            }));
+            _pendingPage = showPage;
+            if (!_initialized) return;
+            NavigateTo(_pages.FirstOrDefault(x => x.PageType == showPage));
         }
 
         private void sbSave_Click(object sender, RoutedEventArgs e)
@@ -188,10 +279,13 @@ namespace Bot.Options
             try
             {
                 Hide();
-                RunInShopScope(() => TraversalOpsAndDoAction(op =>
+                RunInShopScope(delegate
                 {
-                    op.Save(seller);
-                }));
+                    foreach (var options in _visitedOptions.ToList())
+                    {
+                        options.Save(seller);
+                    }
+                });
                 Close();
             }
             catch (Exception ex)
@@ -213,25 +307,14 @@ namespace Bot.Options
             Close();
         }
 
-        private void btnSaveOneShopDefOp_Click(object sender, RoutedEventArgs e)
+        private void btnRestoreCurrentPageToDef_Click(object sender, RoutedEventArgs e)
         {
-            Save(AccountHelper.GetShopDbAccount(Seller));
-        }
-
-        private void btnSaveMulitiShopDefOp_Click(object sender, RoutedEventArgs e)
-        {
-            Save(AccountHelper.GetPubDbAccount(Seller));
+            if (_currentPage == null || _currentPage.Control == null) return;
+            RunInShopScope(_currentPage.Control.RestoreDefault);
         }
 
         private void EtWindow_Closed(object sender, EventArgs e)
         {
-        }
-
-        private void btnRestoreCurrentPageToDef_Click(object sender, RoutedEventArgs e)
-        {
-            IOptions options = tabMain.SelectedContent as IOptions;
-            if (options == null) return;
-            RunInShopScope(options.RestoreDefault);
         }
 
         private void RunInShopScope(Action action)
