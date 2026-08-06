@@ -57,6 +57,7 @@
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
             <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10 0 0 0">
                 <Image Source="{StaticResource iconYellow}" Width="18" Height="18" Margin="0 0 6 0" />
@@ -64,7 +65,9 @@
             </StackPanel>
             <CheckBox Name="cboxPanelBotEnabled" Grid.Column="1" Margin="8 0 4 0" VerticalAlignment="Center" Foreground="#FFFFFFFF" FontWeight="SemiBold" Click="cboxPanelBotEnabled_Click">启用Bot</CheckBox>
             <CheckBox Name="cboxPanelAuto" Grid.Column="2" Margin="6 0 4 0" VerticalAlignment="Center" Foreground="#FFFFFFFF" FontWeight="SemiBold" Click="cboxPanelAuto_Click">自动回复</CheckBox>
-            <Button Name="btnOption" Grid.Column="3" Style="{StaticResource TopBarButton}" Content="设置"
+            <Button Name="btnDataDesk" Grid.Column="3" Style="{StaticResource TopBarButton}" Content="数据台"
+                    ToolTip="显示或隐藏接待与 AI 调用统计" Click="menuDataDesk_Click" />
+            <Button Name="btnOption" Grid.Column="4" Style="{StaticResource TopBarButton}" Content="设置"
                     ToolTip="打开 Bot 设置" Click="btnOpenSettings_Click">
                 <!-- 保留一个不可见的旧字段，兼容旧代码中的数据台状态刷新；不会显示任何下拉菜单。 -->
                 <Button.ContextMenu>
@@ -73,7 +76,7 @@
                     </ContextMenu>
                 </Button.ContextMenu>
             </Button>
-            <Button Name="btnSyn" Grid.Column="4" Style="{StaticResource TopBarButton}" Click="btnHide_Click">隐藏</Button>
+            <Button Name="btnSyn" Grid.Column="5" Style="{StaticResource TopBarButton}" Click="btnHide_Click">隐藏</Button>
         </Grid>
 
         <TabControl Name="tabControl" Grid.Row="1" Background="{StaticResource rpPageBgBrush}" BorderThickness="0" />
