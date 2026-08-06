@@ -63,7 +63,8 @@ def test_settings_page_and_startup_are_wired():
     options = read("src/Bot/Options/IOptions.cs")
     targets = read("src/Directory.Build.targets")
     assert "BotUpdateService.Initialize()" in app
-    assert 'CreateOpTab("关于与更新", new BotUpdateOptionsControl(), style)' in wnd
+    assert "aboutUpdate = new BotUpdateOptionsControl();" in wnd
+    assert 'AddPage("系统", "关于与更新"' in wnd
     assert "AboutUpdate" in options
     assert "Update\\BotUpdateService.cs" in targets
     assert "Options\\BotUpdateOptionsControl.cs" in targets
