@@ -7,6 +7,7 @@ RIGHT_PANEL_ENTRY = ROOT / "src" / "Bot" / "AssistWindow" / "Widget" / "RightPan
 SETTINGS_XAML = ROOT / "src" / "Bot" / "Options" / "WndOption.xaml"
 SETTINGS_CS = ROOT / "src" / "Bot" / "Options" / "WndOption.xaml.cs"
 FEATURE_HOST = ROOT / "src" / "Bot" / "Options" / "FeatureSettingsOptionsControl.cs"
+BOT_PROPS = ROOT / "src" / "Bot" / "Directory.Build.props"
 
 
 def read(path: Path) -> str:
@@ -74,3 +75,10 @@ def test_feature_business_data_cannot_be_cleared_by_restore_default():
 
     assert "为避免误清空" in code
     assert "暂不提供一键恢复默认" in code
+
+
+def test_new_partial_sources_are_included_in_main_and_wpf_temporary_builds():
+    props = read(BOT_PROPS)
+
+    assert "Options\\FeatureSettingsOptionsControl.cs" in props
+    assert "AssistWindow\\Widget\\RightPanel.SettingsEntry.cs" in props
