@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace Bot.Options
+﻿namespace Bot.Options
 {
     public interface IOptions
     {
@@ -39,6 +33,12 @@ namespace Bot.Options
         RemindPay,
         InviteOrder,
         DataManagement,
-        AboutUpdate
+        AboutUpdate,
+        AutoReplyRules,
+        Notifications,
+        MessagePolicy,
+        Diagnostics,
+        Compliance,
+        FeatureSettings
     }
 }
