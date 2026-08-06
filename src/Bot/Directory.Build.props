@@ -35,6 +35,14 @@
     <Compile Include="$(MSBuildThisFileDirectory)Options\ShopBindingOptionsControl.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Options\FeatureSettingsOptionsControl.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Options\FeatureSettingsOptionsControl.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs" />
   </ItemGroup>
