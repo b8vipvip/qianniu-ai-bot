@@ -83,9 +83,10 @@ def test_only_explicit_supported_scopes_are_shop_routed():
 def test_settings_window_scopes_ai_load_and_save_without_process_global_shop_state():
     source = read("src/Bot/Options/WndOption.xaml.cs")
     scope = read("src/Bot/ShopScope/ShopSettingsScope.cs")
-    assert 'CreateOpTab("店铺绑定", new ShopBindingOptionsControl(Seller)' in source
-    assert 'RunInShopScope(() => CreateOpTab("AI大模型设置"' in source
-    assert "RunInShopScope(() => TraversalOpsAndDoAction" in source
+    assert "shopBinding = new ShopBindingOptionsControl(Seller);" in source
+    assert "aiSettings = new CtlRobotOptions(Seller);" in source
+    assert "RunInShopScope(delegate" in source
+    assert "foreach (var options in _visitedOptions.ToList())" in source
     assert "using (ShopSettingsScope.Enter(_shop))" in source
     assert "AsyncLocal<ShopContext>" in scope
     assert "static ShopContext CurrentShop" not in scope
