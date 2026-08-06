@@ -55,7 +55,8 @@ def test_settings_exposes_data_management_actions_and_shared_build_includes():
     control = read("src/Bot/Options/CtlDataManagement.cs")
     build_targets = read("src/Directory.Build.targets")
 
-    assert 'CreateOpTab("数据管理", new CtlDataManagement(), style)' in options
+    assert "dataManagement = new CtlDataManagement();" in options
+    assert 'AddPage("数据与安全", "数据管理"' in options
     assert "打开数据目录" in control
     assert "安全备份数据" in control
     assert "恢复备份" in control
