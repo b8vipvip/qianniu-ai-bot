@@ -1,0 +1,76 @@
+from pathlib import Path
+
+
+ROOT = Path(__file__).resolve().parents[1]
+RIGHT_PANEL_XAML = ROOT / "src" / "Bot" / "AssistWindow" / "Widget" / "RightPanel.xaml"
+RIGHT_PANEL_ENTRY = ROOT / "src" / "Bot" / "AssistWindow" / "Widget" / "RightPanel.SettingsEntry.cs"
+SETTINGS_XAML = ROOT / "src" / "Bot" / "Options" / "WndOption.xaml"
+SETTINGS_CS = ROOT / "src" / "Bot" / "Options" / "WndOption.xaml.cs"
+FEATURE_HOST = ROOT / "src" / "Bot" / "Options" / "FeatureSettingsOptionsControl.cs"
+
+
+def read(path: Path) -> str:
+    return path.read_text(encoding="utf-8-sig")
+
+
+def test_toolbar_settings_button_opens_window_directly_without_visible_dropdown_items():
+    xaml = read(RIGHT_PANEL_XAML)
+    entry = read(RIGHT_PANEL_ENTRY)
+
+    assert 'Click="btnOpenSettings_Click"' in xaml
+    assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" in entry
+    assert 'Header="API接口"' not in xaml
+    assert 'Header="知识库"' not in xaml
+    assert 'Header="账号与授权"' not in xaml
+    assert 'Header="关于"' not in xaml
+
+
+def test_settings_window_uses_sidebar_and_content_host_instead_of_top_level_tabs():
+    xaml = read(SETTINGS_XAML)
+
+    assert 'x:Name="navPanel"' in xaml
+    assert 'x:Name="contentHost"' in xaml
+    assert 'x:Name="txtPageTitle"' in xaml
+    assert 'x:Name="txtShopScope"' in xaml
+    assert 'Name="tabMain"' not in xaml
+    assert "SplitButton" not in xaml
+
+
+def test_navigation_is_grouped_by_user_task():
+    code = read(SETTINGS_CS)
+
+    for group in ("店铺与连接", "回复与通知", "数据与安全", "系统"):
+        assert group in code
+    for page in (
+        "店铺绑定",
+        "AI 服务",
+        "知识库",
+        "自动回复规则",
+        "消息通知",
+        "消息策略",
+        "数据管理",
+        "日志与调试",
+        "商业化合规",
+        "关于与更新",
+    ):
+        assert page in code
+    assert "账号与授权" not in code
+
+
+def test_feature_pages_are_embedded_and_obsolete_license_page_is_removed():
+    code = read(FEATURE_HOST)
+
+    assert 'RemoveMeaninglessLicensePage();' in code
+    assert 'string.Equals(Convert.ToString(x.Header), "账号与授权"' in code
+    assert '_tabs.Items.Remove(licenseTab);' in code
+    assert 'SetPrivateField(_legacyWindow, "_licensee", null);' in code
+    assert '_legacyWindow.Content = null;' in code
+    assert 'HideLegacyTabHeaders();' in code
+    assert 'KnowledgeCenterWindow.MyShow(Window.GetWindow(this));' in code
+
+
+def test_feature_business_data_cannot_be_cleared_by_restore_default():
+    code = read(FEATURE_HOST)
+
+    assert "为避免误清空" in code
+    assert "暂不提供一键恢复默认" in code
