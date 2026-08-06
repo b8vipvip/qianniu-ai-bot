@@ -15,6 +15,7 @@ import recharge_status_query
 import runtime_embedding_guard
 import runtime_routing_guard
 import runtime_streaming_guard
+import scheduled_deep_test_retry
 import wecom_bridge
 import wecom_policy_migration
 import wecom_settings
@@ -24,6 +25,7 @@ from wecom_crypto import install_on_bridge
 runtime_routing_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
 runtime_embedding_guard.install(control_plane)
+scheduled_deep_test_retry.install(control_plane)
 wecom_policy_migration.install(control_plane)
 install_on_bridge(wecom_bridge)
 control_plane.app.include_router(wecom_bridge.router)
