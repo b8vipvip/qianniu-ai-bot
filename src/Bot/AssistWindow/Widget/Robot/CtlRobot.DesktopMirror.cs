@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using BotLib.Extensions;
 using System.Collections.Generic;
 using System.Windows;
 
