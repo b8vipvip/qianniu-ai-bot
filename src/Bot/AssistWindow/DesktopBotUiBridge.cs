@@ -78,13 +78,18 @@ namespace Bot.AssistWindow
 
             var snapshot = conversation.GetDesktopSnapshot();
             if (snapshot == null) return;
-            Invoke(robot => robot.MirrorConversation(
-                snapshot.Seller,
-                snapshot.Buyer,
-                snapshot.Question,
-                snapshot.Answer,
-                snapshot.IsAutoReply,
-                snapshot.AnswerSource));
+            Invoke(robot =>
+            {
+                robot.MirrorSeller(snapshot.Seller);
+                robot.MirrorBuyer(snapshot.Buyer);
+                robot.MirrorConversation(
+                    snapshot.Seller,
+                    snapshot.Buyer,
+                    snapshot.Question,
+                    snapshot.Answer,
+                    snapshot.IsAutoReply,
+                    snapshot.AnswerSource);
+            });
         }
 
         private static void Invoke(Action<CtlRobot> action)
