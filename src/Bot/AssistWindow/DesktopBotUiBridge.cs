@@ -1,5 +1,8 @@
 using Bot.AssistWindow.Widget.Robot;
 using System;
+using System.Runtime.CompilerServices;
+using System.Threading;
+using System.Windows;
 using System.Windows.Threading;
 
 namespace Bot.AssistWindow
@@ -8,17 +11,22 @@ namespace Bot.AssistWindow
     /// Passive UI-only bridge for the standalone desktop window.
     ///
     /// The existing Desk -> WndAssist -> CtlRobot chain remains authoritative.
-    /// This bridge mirrors already-produced UI events into the desktop window and
-    /// must never generate messages, call AI, query Qianniu, or record runtime stats.
+    /// This bridge observes controls that the legacy UI has already created and mirrors
+    /// them into the desktop window. It never generates messages, calls AI, queries
+    /// Qianniu, or records runtime statistics.
     /// </summary>
     internal static class DesktopBotUiBridge
     {
         private static readonly object Sync = new object();
+        private static readonly ConditionalWeakTable<CtlConversation, object> ObservedConversations =
+            new ConditionalWeakTable<CtlConversation, object>();
         private static WeakReference _robotReference;
+        private static int _initialized;
 
         public static void Register(CtlRobot robot)
         {
             if (robot == null) return;
+            InitializeObserver();
             lock (Sync)
             {
                 _robotReference = new WeakReference(robot);
@@ -48,21 +56,35 @@ namespace Bot.AssistWindow
             Invoke(robot => robot.MirrorBuyer(buyer));
         }
 
-        public static void AddConversation(
-            string seller,
-            string buyer,
-            string question,
-            string answer,
-            bool isAutoReply,
-            string answerSource)
+        private static void InitializeObserver()
         {
+            if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
+            EventManager.RegisterClassHandler(
+                typeof(CtlConversation),
+                FrameworkElement.LoadedEvent,
+                new RoutedEventHandler(OnConversationLoaded),
+                true);
+        }
+
+        private static void OnConversationLoaded(object sender, RoutedEventArgs e)
+        {
+            var conversation = sender as CtlConversation;
+            if (conversation == null || conversation.IsDesktopMirror) return;
+
+            object marker;
+            if (ObservedConversations.TryGetValue(conversation, out marker)) return;
+            try { ObservedConversations.Add(conversation, new object()); }
+            catch { return; }
+
+            var snapshot = conversation.GetDesktopSnapshot();
+            if (snapshot == null) return;
             Invoke(robot => robot.MirrorConversation(
-                seller,
-                buyer,
-                question,
-                answer,
-                isAutoReply,
-                answerSource));
+                snapshot.Seller,
+                snapshot.Buyer,
+                snapshot.Question,
+                snapshot.Answer,
+                snapshot.IsAutoReply,
+                snapshot.AnswerSource));
         }
 
         private static void Invoke(Action<CtlRobot> action)
