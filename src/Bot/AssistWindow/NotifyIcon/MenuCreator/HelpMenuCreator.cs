@@ -20,6 +20,8 @@ namespace Bot.AssistWindow.NotifyIcon.MenuCreator
         public static void Create(CtlNotifyIcon notifyIcon)
         {
             var helpRootMenu = notifyIcon.GetRootMenu(0);
+            helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("打开Bot工作台", OnOpenBotDesktopClicked));
+            helpRootMenu.DropDownItems.Add(notifyIcon.CreateSeparator());
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("打开安装目录", OnOpenAppCatalogClicked));
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("打开data目录", OnOpenDataCatalogClicked));
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateSeparator());
@@ -27,6 +29,11 @@ namespace Bot.AssistWindow.NotifyIcon.MenuCreator
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("清空日志", OnClearLogClicked));
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateSeparator());
             helpRootMenu.DropDownItems.Add(notifyIcon.CreateItem("关于与版本更新", OnAboutClicked));
+        }
+
+        private static void OnOpenBotDesktopClicked(object sender, EventArgs e)
+        {
+            BotDesktopWindow.ShowMain();
         }
 
         private static void OnComeNoodles(object sender, EventArgs e)
