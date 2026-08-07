@@ -7,20 +7,74 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_runtime_checks_only_stable_bot_releases_and_requires_sha256():
-    code = read("src/Bot/Update/BotUpdateService.cs")
-    assert "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases?per_page=20" in code
-    assert 'StartsWith("bot-v"' in code
-    assert 'PackageAssetName = "qianniu-bot-x64.zip"' in code
-    assert 'ManifestAssetName = "update.json"' in code
+def updater_code():
+    paths = [
+        "src/Bot/Update/BotUpdateModels.Fast.cs",
+        "src/Bot/Update/BotUpdateService.Core.Fast.cs",
+        "src/Bot/Update/BotUpdateService.Download.Fast.cs",
+        "src/Bot/Update/BotUpdateService.Actions.Fast.cs",
+        "src/Bot/Update/BotUpdateService.Network.Fast.cs",
+        "src/Bot/Update/BotUpdateService.State.Fast.cs",
+        "src/Bot/Update/BotUpdatePromptWindow.Fast.cs",
+    ]
+    return "\n".join(read(path) for path in paths)
+
+
+def test_runtime_uses_control_plane_cache_then_single_github_latest_fallback():
+    code = updater_code()
+    props = read("src/Bot/Directory.Build.props")
+
+    assert "/api/public/v1/bot-update/latest" in code
+    assert "control-plane-cache-first" in code
+    assert "ServiceMetadataTimeoutSeconds = 6" in code
+    assert (
+        "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest"
+        in code
+    )
+    assert "releases?per_page=20" not in code
+    assert "FetchLatestFromControlPlaneAsync" in code
+    assert "FetchLatestFromGitHubAsync" in code
+    assert "服务端更新缓存不可用，切换 GitHub latest" in code
+
+    assert 'Name="UseOptimizedBotUpdateService"' in props
+    assert 'Compile Remove="$(MSBuildThisFileDirectory)Update\\BotUpdateService.cs"' in props
+    assert "Update\\BotUpdate*.Fast.cs" in props
+
+
+def test_download_prefers_github_then_falls_back_to_verified_server_mirror():
+    code = updater_code()
+
+    assert 'AddDownloadSource(sources, "GitHub", release.PackageUrl)' in code
+    assert 'AddDownloadSource(sources, "服务端镜像", release.MirrorUrl)' in code
+    assert "DownloadConnectTimeoutSeconds = 20" in code
+    assert "DownloadReadTimeoutSeconds = 45" in code
+    assert "HashFile(partial)" in code
+    assert "GitHub 与服务端镜像均下载失败" in code
     assert "release.Sha256" in code
     assert "SHA-256 校验信息" in code
-    assert "HashFile(partial)" in code
     assert "release-info.json" in code
 
 
+def test_server_caches_latest_metadata_and_verified_packages():
+    module = read("services/api-control-plane/bot_update_cache.py")
+    bootstrap = read("services/api-control-plane/bootstrap.py")
+    env = read("services/api-control-plane/.env.example")
+
+    assert 'GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"' in module
+    assert '@router.get("/api/public/v1/bot-update/latest"' in module
+    assert '"/api/public/v1/bot-update/download/{tag}"' in module
+    assert "METADATA_CACHE_SECONDS" in module
+    assert "METADATA_STALE_SECONDS" in module
+    assert "ensure_cached_package" in module
+    assert "_hash_file(target)" in module
+    assert "服务端镜像安装包 SHA-256 校验失败" in module
+    assert "bot_update_cache.router" in bootstrap
+    assert "bot_update_cache.init_bot_update_cache()" in bootstrap
+    assert "BOT_UPDATE_METADATA_CACHE_SECONDS=300" in env
+
+
 def test_update_defaults_are_safe_and_install_still_requires_confirmation():
-    code = read("src/Bot/Update/BotUpdateService.cs")
+    code = updater_code()
     ui = read("src/Bot/Options/BotUpdateOptionsControl.cs")
     assert "AutoCheck = true" in code
     assert "NotifyPopup = true" in code
@@ -62,11 +116,13 @@ def test_settings_page_and_startup_are_wired():
     wnd = read("src/Bot/Options/WndOption.xaml.cs")
     options = read("src/Bot/Options/IOptions.cs")
     targets = read("src/Directory.Build.targets")
+    props = read("src/Bot/Directory.Build.props")
     assert "BotUpdateService.Initialize()" in app
     assert "aboutUpdate = new BotUpdateOptionsControl();" in wnd
     assert 'AddPage("系统", "关于与更新"' in wnd
     assert "AboutUpdate" in options
     assert "Update\\BotUpdateService.cs" in targets
+    assert "Update\\BotUpdate*.Fast.cs" in props
     assert "Options\\BotUpdateOptionsControl.cs" in targets
     assert "Update\\BotAutoUpdater.ps1" in targets
     assert "CopyToOutputDirectory" in targets

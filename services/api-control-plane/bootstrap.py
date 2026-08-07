@@ -5,6 +5,7 @@ import os
 import uvicorn
 
 import app as control_plane
+import bot_update_cache
 import bot_web_admin
 import bot_web_bot_enabled
 import bot_web_bot_qa
@@ -31,6 +32,7 @@ install_on_bridge(wecom_bridge)
 control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(recharge_status_query.router)
+control_plane.app.include_router(bot_update_cache.router)
 bot_web_console.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
@@ -51,7 +53,13 @@ def initialize_control_plane_extensions() -> None:
     bot_web_bot_enabled.init_db()
     bot_web_conversation_knowledge.init_db()
     client_data_backup.init_db()
+    bot_update_cache.init_bot_update_cache()
     wecom_settings.apply_to_bridge(wecom_bridge)
+
+
+@control_plane.app.on_event("shutdown")
+def shutdown_control_plane_extensions() -> None:
+    bot_update_cache.stop_bot_update_cache()
 
 
 if __name__ == "__main__":

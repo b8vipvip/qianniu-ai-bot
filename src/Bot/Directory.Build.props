@@ -77,4 +77,16 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
+
+  <!-- The optimized updater replaces the legacy implementation at compile time.
+       This target runs after repository-wide targets add the historical source,
+       so both the normal Bot project and WPF *_wpftmp projects compile exactly
+       one BotUpdateService implementation. -->
+  <Target Name="UseOptimizedBotUpdateService" BeforeTargets="CoreCompile"
+          Condition="Exists('$(MSBuildThisFileDirectory)Update\BotUpdateService.Core.Fast.cs')">
+    <ItemGroup>
+      <Compile Remove="$(MSBuildThisFileDirectory)Update\BotUpdateService.cs" />
+      <Compile Include="$(MSBuildThisFileDirectory)Update\BotUpdate*.Fast.cs" />
+    </ItemGroup>
+  </Target>
 </Project>
