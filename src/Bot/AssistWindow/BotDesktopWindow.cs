@@ -132,25 +132,27 @@ namespace Bot.AssistWindow
             Grid.SetColumn(title, 0);
             header.Children.Add(title);
 
-            botEnabled = CreateHeaderCheckBox("启用Bot");
-            botEnabled.Click += delegate
+            var botToggle = CreateHeaderCheckBox("启用Bot");
+            botToggle.Click += delegate
             {
-                Params.Robot.CanUseRobot = botEnabled.IsChecked ?? true;
+                Params.Robot.CanUseRobot = botToggle.IsChecked ?? true;
                 RefreshSwitches();
                 Log.Info("Bot总开关=" + (Params.Robot.CanUseRobotReal ? "启用" : "停用"));
             };
-            Grid.SetColumn(botEnabled, 1);
-            header.Children.Add(botEnabled);
+            Grid.SetColumn(botToggle, 1);
+            header.Children.Add(botToggle);
+            botEnabled = botToggle;
 
-            autoReply = CreateHeaderCheckBox("自动回复");
-            autoReply.Click += delegate
+            var autoToggle = CreateHeaderCheckBox("自动回复");
+            autoToggle.Click += delegate
             {
-                Params.Robot.SetIsAutoReply(autoReply.IsChecked ?? false);
+                Params.Robot.SetIsAutoReply(autoToggle.IsChecked ?? false);
                 RefreshSwitches();
-                Log.Info("自动回复=" + ((autoReply.IsChecked ?? false) ? "开启" : "关闭"));
+                Log.Info("自动回复=" + ((autoToggle.IsChecked ?? false) ? "开启" : "关闭"));
             };
-            Grid.SetColumn(autoReply, 2);
-            header.Children.Add(autoReply);
+            Grid.SetColumn(autoToggle, 2);
+            header.Children.Add(autoToggle);
+            autoReply = autoToggle;
 
             var dataButton = CreateHeaderButton("数据台", "显示或隐藏接待与 AI 调用统计");
             dataButton.Click += delegate
