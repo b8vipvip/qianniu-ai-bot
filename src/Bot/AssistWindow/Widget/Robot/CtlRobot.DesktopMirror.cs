@@ -45,7 +45,8 @@ namespace Bot.AssistWindow.Widget.Robot
             string answerSource)
         {
             var key = string.Format("{0}#{1}", seller, buyer);
-            var ctlConversation = CtlConversation.Create(
+            var ctlConversation = new CtlConversation { IsDesktopMirror = true };
+            ctlConversation.Setup(
                 seller,
                 buyer,
                 question,
