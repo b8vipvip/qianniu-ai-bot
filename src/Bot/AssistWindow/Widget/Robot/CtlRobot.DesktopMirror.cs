@@ -34,7 +34,7 @@ namespace Bot.AssistWindow.Widget.Robot
 
         /// <summary>
         /// Mirrors an answer that has already been produced by the authoritative Desk
-        /// UI chain. This intentionally does not call BotRuntimeStats.RecordDisplayedAnswer.
+        /// UI chain without recording a second displayed-answer statistic.
         /// </summary>
         internal void MirrorConversation(
             string seller,
