@@ -43,6 +43,15 @@
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\BotDesktopWindow.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\BotDesktopWindow.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\BotDesktopStartup.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\DesktopBotUiBridge.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\Robot\CtlConversation.DesktopMirror.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\Robot\CtlRobot.DesktopMirror.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Options\WndOption.DesktopOwner.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs" />
   </ItemGroup>
