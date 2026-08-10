@@ -128,13 +128,12 @@ namespace Bot.Automation.ChatDeskNs.Automators
             {
                 try
                 {
-                    return QN.QNSet == null
-                        ? new List<QN>()
-                        : QN.QNSet
-                            .Where(qn => qn != null
-                                && qn.Seller != null
-                                && !string.IsNullOrWhiteSpace(qn.Seller.Nick))
-                            .ToArray();
+                    if (QN.QNSet == null) return new List<QN>();
+                    return QN.QNSet
+                        .Where(qn => qn != null
+                            && qn.Seller != null
+                            && !string.IsNullOrWhiteSpace(qn.Seller.Nick))
+                        .ToList();
                 }
                 catch
                 {
