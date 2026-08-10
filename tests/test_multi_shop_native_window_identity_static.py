@@ -42,7 +42,7 @@ def test_scanner_upgrades_bootstrap_generic_desk_and_keeps_all_attached_shells_v
     assert "Desk.IsVisibleAndNotMinimized" in assist
     assert "ShowAssist()" in assist
     assert "it does not" in assist and "enable AI or sending" in assist
-    assert "WndAssist\\MultiShopAttached.cs" in props
+    assert "AssistWindow\\WndAssist.MultiShopAttached.cs" in props
 
 
 def test_existing_seller_bound_runtime_stays_fail_closed_for_multi_shop():
