@@ -107,11 +107,12 @@ namespace Bot.ChromeNs
                     if (entry.DetectedAt == DateTime.MinValue || detectedAt < entry.DetectedAt)
                         entry.DetectedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
                     entry.Question = MergeQuestion(entry.Question, question);
-                    if (entry.Control == null && Desk.Inst != null)
+                    var sellerDesk = Desk.FindExistingBySellerNick(seller);
+                    if (entry.Control == null && sellerDesk != null)
                     {
                         try
                         {
-                            entry.Control = Desk.Inst.AddConversation(
+                            entry.Control = sellerDesk.AddConversation(
                                 seller, buyer, entry.Question,
                                 "正在识别并等待买家本轮消息结束...", false, "处理中");
                         }
