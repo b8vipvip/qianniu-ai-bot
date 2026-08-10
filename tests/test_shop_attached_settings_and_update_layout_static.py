@@ -7,23 +7,25 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_attached_bot_is_default_when_qianniu_desks_exist():
-    startup = read("src/Bot/AssistWindow/BotDesktopStartup.cs")
+def test_attached_bot_is_the_only_runtime_workbench():
     scanner = read("src/Bot/ControllerNs/DeskScanner.cs")
     desk = read("src/Bot/Automation/ChatDeskNs/Desk.cs")
+    tray = read("src/Bot/AssistWindow/NotifyIcon/MenuCreator/HelpMenuCreator.cs")
 
-    assert "Desk.Snapshot().Count > 0" in startup
-    assert "默认使用每店铺独立贴窗 Bot" in startup
     assert "GetOpenChatWnds()" in scanner
     assert "Desk.FindExistingByHwnd" in scanner
+    assert "EnsureVisibleForMultiShopAttachedMode" in scanner
     assert "WndAssist.CreateAndAttachToDesk(desk);" in desk
+    assert "打开Bot工作台" not in tray
+    assert not (ROOT / "src/Bot/AssistWindow/BotDesktopWindow.cs").exists()
 
 
-def test_each_attached_settings_window_uses_its_resolved_desk_seller_shopkey():
+def test_each_attached_settings_window_uses_its_bound_desk_seller_shopkey():
     entry = read("src/Bot/AssistWindow/Widget/RightPanel.SettingsEntry.cs")
     window = read("src/Bot/Options/WndOption.xaml.cs")
+    assert "DeskSellerBindingRegistry.GetSeller(desk)" in entry
     assert "ResolveSellerNameForWindow" in entry
-    assert "IsGenericReceptionTitle(seller)" in entry
+    assert "BindResolvedSeller" in entry
     assert "WndOption.MyShow(seller, Wnd);" in entry
     assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" not in entry
     assert "ShopContextLocator.ResolveBySellerNick(seller)" in window
