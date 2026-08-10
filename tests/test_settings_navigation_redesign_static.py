@@ -19,7 +19,9 @@ def test_toolbar_settings_button_opens_window_directly_without_visible_dropdown_
     entry = read(RIGHT_PANEL_ENTRY)
 
     assert 'Click="btnOpenSettings_Click"' in xaml
-    assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" in entry
+    assert "ResolveSellerNameForWindow" in entry
+    assert "WndOption.MyShow(seller, Wnd);" in entry
+    assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" not in entry
     assert 'Name="btnDataDesk"' in xaml
     assert 'Content="数据台"' in xaml
     assert 'Click="menuDataDesk_Click"' in xaml
