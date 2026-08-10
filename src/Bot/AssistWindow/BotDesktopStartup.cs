@@ -53,11 +53,11 @@ namespace Bot.AssistWindow
         {
             if (_startupTimer != null) return;
             _waitStartedAt = DateTime.UtcNow;
-            _startupTimer = new DispatcherTimer(DispatcherPriority.Background, dispatcher)
-            {
-                Interval = TimeSpan.FromMilliseconds(250)
-            };
-            _startupTimer.Tick += StartupTimer_Tick;
+            _startupTimer = new DispatcherTimer(
+                TimeSpan.FromMilliseconds(250),
+                DispatcherPriority.Background,
+                StartupTimer_Tick,
+                dispatcher);
             _startupTimer.Start();
         }
 
