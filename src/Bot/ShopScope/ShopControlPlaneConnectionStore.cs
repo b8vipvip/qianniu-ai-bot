@@ -5,12 +5,13 @@ namespace Bot.ShopScope
 {
     internal sealed class ShopControlPlaneConnectionStore
     {
-        private const string Scope = "ai-control-plane";
+        private const string LegacyScope = "ai-control-plane";
         private const string UrlKey = "ControlPlaneUrl";
         private const string LegacyTokenKey = "ControlPlaneClientToken";
 
         private readonly ShopContext _shop;
         private readonly ShopTokenStore _tokens;
+        private readonly ShopScopedSettingsStore _settings;
 
         public ShopControlPlaneConnectionStore(ShopContext shop, IShopScopedPathProvider paths)
         {
@@ -18,16 +19,35 @@ namespace Bot.ShopScope
             if (paths == null) throw new ArgumentNullException(nameof(paths));
             _shop = shop;
             _tokens = new ShopTokenStore(shop, paths);
+            _settings = new ShopScopedSettingsStore(shop, paths);
         }
 
         public string GetServerUrl()
         {
-            return NormalizeUrl(PersistentParams.GetParam2Key(UrlKey, Scope, string.Empty));
+            string value;
+            if (_settings.TryGetString(UrlKey, out value))
+            {
+                return NormalizeUrl(value);
+            }
+
+            // Backward compatibility only: the first time a shop is opened after upgrade,
+            // prefill the historical global URL. Saving the page writes the value into this
+            // shop's encrypted settings.json and all subsequent reads stay shop-scoped.
+            return GetLegacyGlobalServerUrl();
         }
 
         public void SetServerUrl(string serverUrl)
         {
-            PersistentParams.TrySaveParam2Key(UrlKey, Scope, NormalizeUrl(serverUrl));
+            _settings.SetString(UrlKey, NormalizeUrl(serverUrl));
+        }
+
+        public bool HasShopServerUrl
+        {
+            get
+            {
+                string ignored;
+                return _settings.TryGetString(UrlKey, out ignored);
+            }
         }
 
         public bool TryGetToken(out string token, out string error)
@@ -62,7 +82,12 @@ namespace Bot.ShopScope
 
         public static string GetLegacyGlobalToken()
         {
-            return (PersistentParams.GetParam2Key(LegacyTokenKey, Scope, string.Empty) ?? string.Empty).Trim();
+            return (PersistentParams.GetParam2Key(LegacyTokenKey, LegacyScope, string.Empty) ?? string.Empty).Trim();
+        }
+
+        public static string GetLegacyGlobalServerUrl()
+        {
+            return NormalizeUrl(PersistentParams.GetParam2Key(UrlKey, LegacyScope, string.Empty));
         }
 
         public static string NormalizeUrl(string serverUrl)

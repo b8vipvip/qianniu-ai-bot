@@ -1,3 +1,4 @@
+using Bot.AssistWindow;
 using Bot.AssistWindow.Widget;
 using Bot.AssistWindow.Widget.Robot;
 using Bot.Automation.ChatDeskNs;
@@ -61,6 +62,15 @@ namespace Bot.ChromeNs
         {
             try
             {
+                if (Desk.Snapshot().Count > 0)
+                {
+                    // If the program started before Qianniu, the standalone window may have
+                    // been auto-shown as a fallback. Once native desks appear, attached panels
+                    // become the default again. A workbench opened manually from the tray is
+                    // marked user-initiated and is therefore not hidden here.
+                    BotDesktopStartup.HideAutomaticFallbackForAttachedMode();
+                }
+
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;

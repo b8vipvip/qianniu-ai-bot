@@ -1,7 +1,9 @@
+using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Diagnostics;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -19,8 +21,10 @@ namespace Bot.Options
         private TextBlock _fingerprint;
         private TextBlock _status;
         private CheckBox _allowNicknameFallback;
+        private CheckBox _knowledgeCloudSync;
         private Button _clearToken;
         private Button _importLegacy;
+        private Button _syncKnowledge;
         private Button _openFolder;
         private string _seller;
 
@@ -49,6 +53,7 @@ namespace Bot.Options
                     ? Visibility.Collapsed
                     : Visibility.Visible;
                 _allowNicknameFallback.IsChecked = false;
+                _knowledgeCloudSync.IsChecked = KnowledgeCloudSyncService.IsEnabledForShop(_shop);
                 SetEnabled(true);
                 RefreshTokenStatus();
             }
@@ -65,6 +70,11 @@ namespace Bot.Options
         }
 
         public void Save(string seller)
+        {
+            SaveConnection(true);
+        }
+
+        private void SaveConnection(bool queueCloudSync)
         {
             if (_shop == null || _connection == null) return;
             try
@@ -84,12 +94,20 @@ namespace Bot.Options
                     _connection.SaveToken(candidate);
                     _token.Password = string.Empty;
                 }
+
+                KnowledgeCloudSyncService.SetEnabledForShop(
+                    _shop,
+                    _knowledgeCloudSync.IsChecked == true,
+                    queueCloudSync);
+
                 RefreshTokenStatus();
-                _status.Text = "本店绑定已保存。知识库、规则、消息状态、Web 同步、知识云同步和本店云备份均按 ShopKey 隔离。";
+                _status.Text = "本店连接与云同步设置已保存。服务端地址、Bot Token、知识库、规则、消息状态和本店云数据均按 ShopKey 隔离。";
                 _status.Foreground = Brushes.SeaGreen;
                 Log.Info("店铺绑定已保存: shopKey=" + _shop.ShopKey
                     + ", stable=" + _shop.HasStableSellerId
-                    + ", tokenFingerprint=" + _connection.TokenFingerprint);
+                    + ", serverUrlScoped=" + _connection.HasShopServerUrl
+                    + ", tokenFingerprint=" + _connection.TokenFingerprint
+                    + ", knowledgeCloud=" + (_knowledgeCloudSync.IsChecked == true));
             }
             catch (Exception ex)
             {
@@ -104,14 +122,15 @@ namespace Bot.Options
             _serverUrl.Text = _connection.GetServerUrl();
             _token.Password = string.Empty;
             _allowNicknameFallback.IsChecked = false;
-            _status.Text = "已恢复界面内容，未删除本店已保存令牌。";
+            _knowledgeCloudSync.IsChecked = _shop != null && KnowledgeCloudSyncService.IsEnabledForShop(_shop);
+            _status.Text = "已恢复界面内容，未删除本店已保存令牌、服务端地址或云端知识。";
             _status.Foreground = Brushes.Gray;
         }
 
         public void NavHelp()
         {
             MessageBox.Show(
-                "每个店铺使用独立 ShopKey 和独立 Bot 客户端令牌。令牌与店铺设置使用 Windows DPAPI CurrentUser 加密，只能由当前 Windows 用户在本机解密。统一 API 地址仍属于全局共享设置。旧全局令牌不会自动复制，必须点击“导入旧全局令牌”并保存。知识库、规则、消息状态、Web 同步、知识云同步和本店云备份均按 ShopKey 隔离；多店铺旧数据必须确认归属后从本页显式迁移。",
+                "每个店铺使用独立 ShopKey、独立 Bot 服务端地址和独立客户端令牌。令牌与店铺设置使用 Windows DPAPI CurrentUser 加密，只能由当前 Windows 用户在本机解密。升级后旧全局服务端地址只用于首次预填，保存后即写入本店独立配置。旧全局令牌不会自动复制，必须点击“导入旧全局令牌”并保存。启用云同步后，Windows 与 Web 端只同步当前 ShopKey 对应的知识库，并在应用云端版本前自动备份本店本机知识。",
                 "店铺绑定帮助",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -121,7 +140,8 @@ namespace Bot.Options
         {
             var root = new ScrollViewer
             {
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled
             };
             var panel = new StackPanel { Margin = new Thickness(18) };
             root.Content = panel;
@@ -129,14 +149,14 @@ namespace Bot.Options
 
             panel.Children.Add(new TextBlock
             {
-                Text = "店铺身份与 Bot 客户端令牌",
+                Text = "店铺身份、Bot 连接与云端知识库",
                 FontSize = 18,
                 FontWeight = FontWeights.SemiBold,
                 Margin = new Thickness(0, 0, 0, 12)
             });
             panel.Children.Add(new TextBlock
             {
-                Text = "令牌和业务设置按 ShopKey 独立加密保存；知识、规则、会话状态和云端链路不会与其他店铺共用。店铺显示名仅用于展示，不参与目录或授权。",
+                Text = "当前页面只配置本店。服务端地址、Bot Token、知识库、规则和运行状态均与其他 ShopKey 隔离；切换到另一家店铺打开设置时会看到另一套配置。",
                 Foreground = Brushes.DimGray,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, 12)
@@ -151,19 +171,26 @@ namespace Bot.Options
             };
             panel.Children.Add(_identity);
 
-            panel.Children.Add(Label("统一 API 地址（全局共享）"));
+            panel.Children.Add(Label("本店 Bot 服务端地址"));
             _serverUrl = new TextBox
             {
-                MinWidth = 520,
-                Margin = new Thickness(0, 4, 0, 12),
-                ToolTip = "例如 https://api.example.com；末尾 /v1 会自动去除。"
+                MinWidth = 420,
+                Margin = new Thickness(0, 4, 0, 4),
+                ToolTip = "例如 https://api.example.com；末尾 /v1 会自动去除。保存后只写入当前 ShopKey。"
             };
             panel.Children.Add(_serverUrl);
+            panel.Children.Add(new TextBlock
+            {
+                Text = "升级旧版本时可能先显示历史全局地址；点击保存后会固定为本店独立地址。",
+                FontSize = 11,
+                Foreground = Brushes.Gray,
+                Margin = new Thickness(0, 0, 0, 12)
+            });
 
             panel.Children.Add(Label("本店 Bot 客户端令牌"));
             _token = new PasswordBox
             {
-                MinWidth = 520,
+                MinWidth = 420,
                 Margin = new Thickness(0, 4, 0, 6),
                 ToolTip = "留空表示保留当前令牌；输入新令牌后保存会覆盖本店令牌。"
             };
@@ -184,11 +211,47 @@ namespace Bot.Options
                     TextWrapping = TextWrapping.Wrap
                 },
                 Foreground = Brushes.DarkOrange,
-                Margin = new Thickness(0, 0, 0, 10)
+                Margin = new Thickness(0, 0, 0, 12)
             };
             panel.Children.Add(_allowNicknameFallback);
 
+            var cloudCard = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(239, 246, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(191, 219, 254)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            var cloudPanel = new StackPanel();
+            cloudCard.Child = cloudPanel;
+            cloudPanel.Children.Add(new TextBlock
+            {
+                Text = "云端知识库",
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 14,
+                Foreground = new SolidColorBrush(Color.FromRgb(30, 64, 175))
+            });
+            _knowledgeCloudSync = new CheckBox
+            {
+                Content = "启用本店知识库云同步",
+                Margin = new Thickness(0, 8, 0, 5),
+                ToolTip = "仅同步当前 ShopKey；云端版本应用前会自动备份本店本机知识。"
+            };
+            cloudPanel.Children.Add(_knowledgeCloudSync);
+            cloudPanel.Children.Add(new TextBlock
+            {
+                Text = "新服务器首次绑定本店 Token 后，可直接点击“保存连接并立即同步知识库”把该店云端知识拉到本机；后续本机与 Web 端修改会继续按 revision 自动同步。",
+                Foreground = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
+                TextWrapping = TextWrapping.Wrap
+            });
+            panel.Children.Add(cloudCard);
+
             var buttons = new WrapPanel { Margin = new Thickness(0, 0, 0, 12) };
+            _syncKnowledge = MakeButton("保存连接并立即同步知识库", 210);
+            _syncKnowledge.Click += async (s, e) => await SyncKnowledge_Click();
+            buttons.Children.Add(_syncKnowledge);
             _importLegacy = MakeButton("导入旧全局令牌", 132);
             _importLegacy.Click += ImportLegacy_Click;
             buttons.Children.Add(_importLegacy);
@@ -203,9 +266,42 @@ namespace Bot.Options
             _status = new TextBlock
             {
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = Brushes.Gray
+                Foreground = Brushes.Gray,
+                Margin = new Thickness(0, 0, 0, 6)
             };
             panel.Children.Add(_status);
+        }
+
+        private async Task SyncKnowledge_Click()
+        {
+            if (_shop == null || _connection == null) return;
+            _syncKnowledge.IsEnabled = false;
+            try
+            {
+                _knowledgeCloudSync.IsChecked = true;
+                SaveConnection(false);
+                if (string.IsNullOrWhiteSpace(_connection.GetServerUrl()))
+                    throw new InvalidOperationException("请先填写本店 Bot 服务端地址。" );
+                if (!_connection.HasToken)
+                    throw new InvalidOperationException("请先输入或导入本店 Bot 客户端令牌。" );
+
+                _status.Text = "正在连接服务端并同步本店云端知识库...";
+                _status.Foreground = Brushes.SteelBlue;
+                await KnowledgeCloudSyncService.SyncNowAsync(_shop);
+                _status.Text = "本店云端知识库同步完成。可以进入“知识库”页面核对条目；本次写入前的本机版本会在本店 backup 目录保留。";
+                _status.Foreground = Brushes.SeaGreen;
+            }
+            catch (Exception ex)
+            {
+                _status.Text = "云端知识库同步失败：" + ex.Message;
+                _status.Foreground = Brushes.IndianRed;
+                Log.Exception(ex);
+            }
+            finally
+            {
+                _syncKnowledge.IsEnabled = true;
+                RefreshTokenStatus(false);
+            }
         }
 
         private void ImportLegacy_Click(object sender, RoutedEventArgs e)
@@ -218,7 +314,7 @@ namespace Bot.Options
                 return;
             }
             _token.Password = legacy;
-            _status.Text = "旧全局令牌已放入输入框，点击窗口底部“保存”后才会写入本店 DPAPI 令牌文件。";
+            _status.Text = "旧全局令牌已放入输入框，点击窗口底部“保存”或“保存连接并立即同步知识库”后才会写入本店 DPAPI 令牌文件。";
             _status.Foreground = Brushes.SteelBlue;
         }
 
@@ -258,7 +354,7 @@ namespace Bot.Options
             }
         }
 
-        private void RefreshTokenStatus()
+        private void RefreshTokenStatus(bool updateMessage = true)
         {
             if (_connection == null)
             {
@@ -270,9 +366,10 @@ namespace Bot.Options
                 ? "状态：本店尚未保存独立令牌"
                 : "状态：已保存本店令牌｜指纹 " + fingerprint + "（不显示令牌原文）";
             _clearToken.IsEnabled = _connection.HasToken;
+            if (!updateMessage) return;
             _status.Text = string.IsNullOrWhiteSpace(fingerprint)
                 ? "可输入本店令牌，或显式导入旧全局令牌。"
-                : "令牌文件：" + _connection.TokenPath;
+                : "连接配置已按 ShopKey 保存；令牌文件：" + _connection.TokenPath;
             _status.Foreground = string.IsNullOrWhiteSpace(fingerprint) ? Brushes.Gray : Brushes.SeaGreen;
         }
 
@@ -282,8 +379,10 @@ namespace Bot.Options
             _token.IsEnabled = enabled;
             _clearToken.IsEnabled = enabled;
             _importLegacy.IsEnabled = enabled;
+            _syncKnowledge.IsEnabled = enabled;
             _openFolder.IsEnabled = enabled;
             _allowNicknameFallback.IsEnabled = enabled;
+            _knowledgeCloudSync.IsEnabled = enabled;
         }
 
         private static string BuildIdentityText(ShopContext shop)
@@ -306,8 +405,8 @@ namespace Bot.Options
             {
                 Content = text,
                 Width = width,
-                Height = 30,
-                Margin = new Thickness(0, 0, 8, 0)
+                Height = 32,
+                Margin = new Thickness(0, 0, 8, 6)
             };
         }
     }

@@ -73,7 +73,7 @@ namespace Bot.Knowledge
             get
             {
                 var shop = ShopSettingsScope.Current;
-                return shop != null && IsEnabledFor(shop);
+                return shop != null && IsEnabledForShop(shop);
             }
         }
 
@@ -85,17 +85,10 @@ namespace Bot.Knowledge
                 Log.Error("无法修改知识库云同步：当前没有店铺作用域。" );
                 return;
             }
-            using (ShopSettingsScope.Enter(shop))
-            {
-                PersistentParams.TrySaveParam2Key(EnabledKey, Scope, enabled ? "true" : "false");
-            }
-            UpdateStatus(shop,
-                enabled ? "本店云同步已启用，正在连接服务端..." : "本店云同步已关闭",
-                enabled ? Brushes.SteelBlue : Brushes.Gray);
-            if (enabled) QueueSync(shop);
+            SetEnabledForShop(shop, enabled, true);
         }
 
-        private static bool IsEnabledFor(ShopContext shop)
+        internal static bool IsEnabledForShop(ShopContext shop)
         {
             if (shop == null) return false;
             using (ShopSettingsScope.Enter(shop))
@@ -104,6 +97,56 @@ namespace Bot.Knowledge
                     PersistentParams.GetParam2Key(EnabledKey, Scope, "false"),
                     "true",
                     StringComparison.OrdinalIgnoreCase);
+            }
+        }
+
+        internal static void SetEnabledForShop(ShopContext shop, bool enabled, bool queueSync)
+        {
+            if (shop == null) return;
+            using (ShopSettingsScope.Enter(shop))
+            {
+                PersistentParams.TrySaveParam2Key(EnabledKey, Scope, enabled ? "true" : "false");
+            }
+            UpdateStatus(shop,
+                enabled ? "本店云同步已启用，正在连接服务端..." : "本店云同步已关闭",
+                enabled ? Brushes.SteelBlue : Brushes.Gray);
+            if (enabled && queueSync) QueueSync(shop);
+        }
+
+        /// <summary>
+        /// Explicit user-triggered sync used by the shop binding page. This waits for a
+        /// currently-running background pass instead of starting two writers for one ShopKey.
+        /// </summary>
+        internal static async Task SyncNowAsync(ShopContext shop)
+        {
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            SetEnabledForShop(shop, true, false);
+            var state = GetState(shop);
+            var acquired = false;
+            for (var i = 0; i < 80; i++)
+            {
+                if (Interlocked.Exchange(ref state.Syncing, 1) == 0)
+                {
+                    acquired = true;
+                    break;
+                }
+                await Task.Delay(125);
+            }
+            if (!acquired) throw new InvalidOperationException("本店知识库正在执行其他同步，请稍后重试。" );
+
+            try
+            {
+                UpdateStatus(shop, "正在立即同步本店云端知识库...", Brushes.SteelBlue);
+                await SyncOnceAsync(shop);
+            }
+            catch (Exception ex)
+            {
+                UpdateStatus(shop, "本店云同步失败：" + Safe(ex.Message, 90), Brushes.IndianRed);
+                throw;
+            }
+            finally
+            {
+                Interlocked.Exchange(ref state.Syncing, 0);
             }
         }
 
@@ -121,7 +164,7 @@ namespace Bot.Knowledge
             var top = root.Children.OfType<WrapPanel>().FirstOrDefault();
             if (top == null) return;
 
-            var enabled = IsEnabledFor(shop);
+            var enabled = IsEnabledForShop(shop);
             var check = new CheckBox
             {
                 Content = "启用本店知识库云同步",
@@ -156,7 +199,7 @@ namespace Bot.Knowledge
         private static void OnKnowledgeBaseChanged(object sender, EventArgs e)
         {
             var shop = ShopSettingsScope.Current;
-            if (shop != null && IsEnabledFor(shop)) QueueSync(shop);
+            if (shop != null && IsEnabledForShop(shop)) QueueSync(shop);
         }
 
         private static void QueueAll()
@@ -168,13 +211,13 @@ namespace Bot.Knowledge
             {
                 if (profile == null) continue;
                 var shop = profile.ToContext();
-                if (IsEnabledFor(shop)) QueueSync(shop);
+                if (IsEnabledForShop(shop)) QueueSync(shop);
             }
         }
 
         private static void QueueSync(ShopContext shop)
         {
-            if (shop == null || !IsEnabledFor(shop)) return;
+            if (shop == null || !IsEnabledForShop(shop)) return;
             var state = GetState(shop);
             if (Interlocked.Exchange(ref state.Syncing, 1) != 0) return;
             Task.Run(async () =>
@@ -207,7 +250,10 @@ namespace Bot.Knowledge
                             ? "等待配置统一 API 服务和本店客户端令牌"
                             : Safe(tokenError, 90),
                         Brushes.DarkOrange);
-                    return;
+                    throw new InvalidOperationException(
+                        string.IsNullOrWhiteSpace(tokenError)
+                            ? "请先在“店铺绑定”中填写本店服务端地址并绑定 Bot 令牌。"
+                            : tokenError);
                 }
 
                 var local = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
