@@ -1,3 +1,4 @@
+using Bot.Automation.ChatDeskNs;
 using Bot.ChromeNs;
 using System;
 
@@ -9,8 +10,8 @@ namespace Bot.AssistWindow.Widget.Robot
         private string _multiShopSessionBuyer = string.Empty;
 
         /// <summary>
-        /// Refreshes this control from the QN belonging to its own Desk. It intentionally
-        /// does not record reception statistics and does not request or send any message.
+        /// Refreshes this control from the QN proven to belong to its own native Desk.
+        /// It does not record reception statistics and does not request or send any message.
         /// </summary>
         internal void SynchronizeSellerSession(QN qn)
         {
@@ -18,9 +19,7 @@ namespace Bot.AssistWindow.Widget.Robot
             var seller = (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0) return;
 
-            // A CtlRobot attached to a Desk must never adopt another seller.
-            if (_desk != null
-                && !string.Equals((_desk.WndTitle ?? string.Empty).Trim(), seller, StringComparison.Ordinal))
+            if (_desk != null && !DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller))
             {
                 return;
             }

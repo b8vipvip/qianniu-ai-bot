@@ -21,12 +21,9 @@ namespace Bot
 namespace Bot.ChromeNs
 {
     /// <summary>
-    /// Compatibility coordinator that turns the historical global-current runtime into
-    /// seller-bound sessions without replacing the existing QN/CDP message pipeline.
-    ///
-    /// QNSet remains authoritative for message connections, Desk.Snapshot() for native
-    /// windows, and ShopKey remains authoritative for persistent data. This class only
-    /// keeps those three identities aligned and refreshes the matching UI/RPA objects.
+    /// Keeps QN/CDP sellers, native Qianniu Desk HWNDs and ShopKeys aligned without
+    /// replacing the existing message pipeline. A seller may own only one native Desk and
+    /// a Desk may own only one seller for the lifetime of that live binding.
     /// </summary>
     internal static class MultiShopRuntimeSessionCoordinator
     {
@@ -62,15 +59,6 @@ namespace Bot.ChromeNs
         {
             try
             {
-                if (Desk.Snapshot().Count > 0)
-                {
-                    // If the program started before Qianniu, the standalone window may have
-                    // been auto-shown as a fallback. Once native desks appear, attached panels
-                    // become the default again. A workbench opened manually from the tray is
-                    // marked user-initiated and is therefore not hidden here.
-                    BotDesktopStartup.HideAutomaticFallbackForAttachedMode();
-                }
-
                 foreach (var qn in QN.GetRuntimeSafetySnapshot())
                 {
                     if (qn == null) continue;
@@ -95,7 +83,13 @@ namespace Bot.ChromeNs
 
         private static void Qn_EvSellerSwitched(object sender, SellerSwitchedEventArgs e)
         {
-            EnsureQn(sender as QN, true);
+            var qn = sender as QN;
+            // EvSellerSwitched is raised by the active chat/dialog switch path. It is the
+            // safest moment to associate an unresolved generic Desk with the seller whose
+            // native Qianniu reception window is currently foreground. Never do this from
+            // background message/status events.
+            DeskSellerBindingRegistry.BindForegroundSeller(qn, "seller-switched-foreground");
+            EnsureQn(qn, true);
         }
 
         private static void Qn_EvBuyerSwitched(object sender, BuyerSwitchedEventArgs e)
@@ -105,8 +99,8 @@ namespace Bot.ChromeNs
 
         private static void Qn_EvRecieveNewMessage(object sender, RecieveNewMessageEventArgs e)
         {
-            // This event is raised before QN processes the payload. Rebinding here means the
-            // upcoming answer/send path is already attached to this seller's native Desk.
+            // Background messages must not create seller-to-HWND associations. They may only
+            // use a relationship that was already proven by native title or active switching.
             EnsureQn(sender as QN, true);
         }
 
@@ -129,7 +123,7 @@ namespace Bot.ChromeNs
         {
             var seller = Seller(qn);
             if (seller.Length == 0) return;
-            var desk = Desk.FindExistingBySellerNick(seller);
+            var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
             if (desk == null) return;
             var assist = desk.AssistWindow;
             if (assist == null || assist.Dispatcher == null) return;

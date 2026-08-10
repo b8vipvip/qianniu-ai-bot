@@ -43,13 +43,10 @@ namespace Bot.Automation.ChatDeskNs.Automators
         }
 
         /// <summary>
-        /// Resolve one native reception window to the authenticated QN seller that owns
-        /// the same AliWorkbench process. The Qt reception window itself is normally named
-        /// only "千牛接待台", so that title must never be used as a seller identity.
-        ///
-        /// Evidence is intentionally fail-closed: we accept a seller only when exactly one
-        /// live QN identity is visible in that AliWorkbench process' window titles. In a
-        /// historical single-QN/single-window session we keep the old safe fallback.
+        /// Resolve one native reception window to the authenticated QN seller. A direct
+        /// seller token in this HWND's own title is the strongest evidence. Process-wide
+        /// evidence is only accepted when exactly one authenticated seller matches, because
+        /// current Qianniu can host several logged-in sellers in one AliWorkbench process.
         /// </summary>
         public static string ResolveSellerNameForWindow(
             int pid,
@@ -57,6 +54,8 @@ namespace Bot.Automation.ChatDeskNs.Automators
             string nativeWindowTitle)
         {
             var qns = GetRuntimeQns();
+            var direct = MatchUniqueSellerFromTitle(nativeWindowTitle, qns);
+            if (direct.Length > 0) return direct;
             if (qns.Count == 0) return (nativeWindowTitle ?? string.Empty).Trim();
 
             var matches = qns
@@ -71,40 +70,17 @@ namespace Bot.Automation.ChatDeskNs.Automators
                 return matches[0];
             }
 
-            // This is the only count-based fallback we permit. It preserves the historical
-            // single-shop behavior but never guesses between two online shops.
-            if (qns.Count == 1)
+            // Preserve the historical single-shop behavior only when there is one live QN
+            // and one visible reception candidate. Never guess between two online shops.
+            if (qns.Count == 1 && GetReceptionCandidateCount() == 1)
             {
-                var openCount = 0;
-                try
-                {
-                    foreach (var workbenchPid in GetAliWorkbenchPids())
-                    {
-                        WinApi.FindAllDesktopWindowByClassNameAndTitlePattern(
-                            "Qt5152QWindowIcon",
-                            "千牛接待台",
-                            (windowHwnd, title) =>
-                            {
-                                if (windowHwnd != 0 && WinApi.IsVisible(windowHwnd)) openCount++;
-                            },
-                            workbenchPid);
-                    }
-                }
-                catch
-                {
-                    openCount = 0;
-                }
-
-                if (openCount == 1)
-                {
-                    return (qns[0].Seller.Nick ?? string.Empty).Trim();
-                }
+                return (qns[0].Seller.Nick ?? string.Empty).Trim();
             }
 
             if (matches.Count > 1)
             {
                 Log.ErrorWithMaxCount(
-                    "同一千牛进程匹配到多个客服身份，已阻止自动绑定: pid=" + pid
+                    "同一千牛进程匹配到多个客服身份，等待窗口级证据后再绑定: pid=" + pid
                     + ", hwnd=" + hwnd
                     + ", sellers=" + string.Join(",", matches),
                     10);
@@ -133,6 +109,8 @@ namespace Bot.Automation.ChatDeskNs.Automators
                         .Where(qn => qn != null
                             && qn.Seller != null
                             && !string.IsNullOrWhiteSpace(qn.Seller.Nick))
+                        .GroupBy(qn => qn.Seller.Nick.Trim(), StringComparer.Ordinal)
+                        .Select(group => group.First())
                         .ToList();
                 }
                 catch
@@ -142,10 +120,24 @@ namespace Bot.Automation.ChatDeskNs.Automators
             }
         }
 
-        private static bool HasSellerWindowEvidence(int pid, QN qn)
+        private static string MatchUniqueSellerFromTitle(string title, IList<QN> qns)
         {
-            if (pid <= 0 || qn == null || qn.Seller == null) return false;
-            var tokens = new[]
+            title = (title ?? string.Empty).Trim();
+            if (title.Length == 0 || qns == null || qns.Count == 0) return string.Empty;
+
+            var matches = qns
+                .Where(qn => SellerTokens(qn).Any(token => ContainsIdentity(title, token)))
+                .Select(qn => (qn.Seller.Nick ?? string.Empty).Trim())
+                .Where(x => x.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            return matches.Count == 1 ? matches[0] : string.Empty;
+        }
+
+        private static IList<string> SellerTokens(QN qn)
+        {
+            if (qn == null || qn.Seller == null) return new List<string>();
+            return new[]
             {
                 qn.Seller.Nick,
                 qn.Seller.Display,
@@ -155,6 +147,12 @@ namespace Bot.Automation.ChatDeskNs.Automators
                 .Where(x => x.Length >= 3 && !IsGenericReceptionTitle(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToList();
+        }
+
+        private static bool HasSellerWindowEvidence(int pid, QN qn)
+        {
+            if (pid <= 0 || qn == null || qn.Seller == null) return false;
+            var tokens = SellerTokens(qn);
             if (tokens.Count == 0) return false;
 
             try
@@ -168,31 +166,29 @@ namespace Bot.Automation.ChatDeskNs.Automators
             {
             }
 
-            // Qianniu may nominate the generic reception window as MainWindow, while its
-            // account/status top-level window still carries the authenticated seller name.
-            // Probe Qt top-level windows in the same process for exact identity evidence.
-            foreach (var token in tokens)
+            // Do not pass seller text as a regex pattern. Enumerate all Qt top-level windows
+            // in this AliWorkbench process and compare their actual text locally.
+            var found = false;
+            try
             {
-                var found = false;
-                try
-                {
-                    WinApi.FindAllDesktopWindowByClassNameAndTitlePattern(
-                        "Qt5152QWindowIcon",
-                        token,
-                        (windowHwnd, title) =>
-                        {
-                            if (windowHwnd == 0) return;
-                            if (ContainsIdentity(title, token)) found = true;
-                        },
-                        pid);
-                }
-                catch
-                {
-                    found = false;
-                }
-                if (found) return true;
+                WinApi.FindAllDesktopWindowByClassNameAndTitlePattern(
+                    "Qt5152QWindowIcon",
+                    null,
+                    (windowHwnd, ignoredTitle) =>
+                    {
+                        if (windowHwnd == 0 || found) return;
+                        string title;
+                        try { title = WinApi.GetText(windowHwnd); }
+                        catch { title = string.Empty; }
+                        if (tokens.Any(token => ContainsIdentity(title, token))) found = true;
+                    },
+                    pid);
             }
-            return false;
+            catch
+            {
+                found = false;
+            }
+            return found;
         }
 
         private static bool ContainsIdentity(string title, string identity)
@@ -204,26 +200,33 @@ namespace Bot.Automation.ChatDeskNs.Automators
         }
 
         /// <summary>
-        /// Returns every visible Qianniu reception window. The runtime must track HWNDs,
-        /// not one process-global "current" window, because several shops can be logged
-        /// in on the same Windows session at the same time.
+        /// Qianniu no longer guarantees that every reception HWND exposes exactly the title
+        /// "千牛接待台". Enumerate all visible Qt top-level windows in AliWorkbench first,
+        /// then retain only reception-sized candidates. This prevents the second shop window
+        /// from disappearing merely because its accessible title is empty or seller-specific.
         /// </summary>
         public virtual IList<QnChatWnd> GetOpenChatWnds()
         {
             var result = new List<QnChatWnd>();
             var handles = new HashSet<int>();
+            var qns = GetRuntimeQns();
             foreach (var pid in GetAliWorkbenchPids().OrderBy(x => x))
             {
                 try
                 {
                     WinApi.FindAllDesktopWindowByClassNameAndTitlePattern(
                         "Qt5152QWindowIcon",
-                        ChatWindowTitlePattern,
-                        (qnHwnd, title) =>
+                        null,
+                        (qnHwnd, ignoredTitle) =>
                         {
                             if (qnHwnd == 0 || !WinApi.IsVisible(qnHwnd)) return;
                             if (!handles.Add(qnHwnd)) return;
-                            var nativeTitle = (title ?? string.Empty).Trim();
+
+                            string nativeTitle;
+                            try { nativeTitle = (WinApi.GetText(qnHwnd) ?? string.Empty).Trim(); }
+                            catch { nativeTitle = string.Empty; }
+                            if (!IsReceptionCandidate(qnHwnd, nativeTitle, qns)) return;
+
                             var seller = ResolveSellerNameForWindow(pid, qnHwnd, nativeTitle);
                             result.Add(new QnChatWnd(seller, qnHwnd, pid));
                         },
@@ -239,6 +242,61 @@ namespace Bot.Automation.ChatDeskNs.Automators
                 .OrderBy(x => x.Pid)
                 .ThenBy(x => x.Hwnd)
                 .ToList();
+        }
+
+        private static bool IsReceptionCandidate(int hwnd, string title, IList<QN> qns)
+        {
+            try
+            {
+                if (!WinApi.IsVisible(hwnd) || WinApi.IsWindowMinimized(hwnd)) return false;
+                var rect = WinApi.GetWindowRectangle(hwnd);
+                if (rect.Width < 560 || rect.Height < 380) return false;
+
+                if (IsGenericReceptionTitle(title)) return true;
+                if (MatchUniqueSellerFromTitle(title, qns).Length > 0) return true;
+
+                title = (title ?? string.Empty).Trim();
+                if (title.IndexOf("千牛", StringComparison.OrdinalIgnoreCase) >= 0
+                    || title.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0
+                    || title.IndexOf("客服", StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+
+                // Some recent Qianniu builds expose an empty accessible title for a full-size
+                // reception window. Tiny account/status floating cards are excluded by size.
+                return title.Length == 0 && rect.Width >= 700 && rect.Height >= 480;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static int GetReceptionCandidateCount()
+        {
+            var count = 0;
+            var qns = GetRuntimeQns();
+            foreach (var pid in GetAliWorkbenchPids())
+            {
+                try
+                {
+                    WinApi.FindAllDesktopWindowByClassNameAndTitlePattern(
+                        "Qt5152QWindowIcon",
+                        null,
+                        (hwnd, ignoredTitle) =>
+                        {
+                            if (hwnd == 0) return;
+                            string title;
+                            try { title = (WinApi.GetText(hwnd) ?? string.Empty).Trim(); }
+                            catch { title = string.Empty; }
+                            if (IsReceptionCandidate(hwnd, title, qns)) count++;
+                        },
+                        pid);
+                }
+                catch
+                {
+                }
+            }
+            return count;
         }
 
         /// <summary>
