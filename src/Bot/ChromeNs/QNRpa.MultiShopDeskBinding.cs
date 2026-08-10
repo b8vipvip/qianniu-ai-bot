@@ -11,22 +11,28 @@ namespace Bot.ChromeNs
         private int _sellerDeskProcessId;
         private int _sellerDeskHwnd;
 
+        internal Desk ResolveSellerDesk()
+        {
+            var seller = SellerNick;
+            if (string.IsNullOrWhiteSpace(seller)) return null;
+            var desk = Desk.FindExistingBySellerNick(seller);
+            if (desk != null) return desk;
+
+            var desks = Desk.Snapshot();
+            if (desks.Count == 1)
+            {
+                // Preserve historical single-shop behavior while refusing to guess when
+                // more than one Qianniu Desk is present.
+                return desks[0];
+            }
+            return null;
+        }
+
         internal bool EnsureSellerDeskBinding(bool force = false)
         {
             var seller = SellerNick;
             if (string.IsNullOrWhiteSpace(seller)) return false;
-
-            var desk = Desk.FindExistingBySellerNick(seller);
-            if (desk == null)
-            {
-                var desks = Desk.Snapshot();
-                if (desks.Count == 1)
-                {
-                    // Preserve the historical single-shop behavior if the visible window title
-                    // has not exposed the seller nickname yet. In multi-shop mode we never guess.
-                    desk = desks[0];
-                }
-            }
+            var desk = ResolveSellerDesk();
 
             if (desk == null)
             {
