@@ -67,25 +67,21 @@ namespace Bot.Options
         private void BuildSettingsPages()
         {
             ShopBindingOptionsControl shopBinding = null;
-            CtlRobotOptions aiSettings = null;
             CtlDataManagement dataManagement = null;
             BotUpdateOptionsControl aboutUpdate = null;
 
             RunInShopScope(delegate
             {
                 shopBinding = new ShopBindingOptionsControl(Seller);
-                aiSettings = new CtlRobotOptions(Seller);
                 _featureSettings = new FeatureSettingsOptionsControl(Seller);
                 dataManagement = new CtlDataManagement();
                 aboutUpdate = new BotUpdateOptionsControl();
             });
 
-            AddPage("店铺与连接", "店铺绑定", "查看 ShopKey、迁移旧数据并管理当前店铺身份。",
+            AddPage("店铺与连接", "店铺绑定", "管理当前店铺身份、Bot 服务端地址、独立令牌和云端知识库同步。",
                 OptionEnum.ShopBinding, shopBinding);
-            AddPage("店铺与连接", "AI 服务", "配置统一 API 服务地址、店铺令牌和文本/视觉路由。",
-                OptionEnum.Robot, aiSettings);
 
-            AddFeaturePage("回复与通知", "知识库", "管理店铺问答、智能导入、搜索和分类。",
+            AddFeaturePage("回复与通知", "知识库", "管理店铺问答、智能导入、搜索、分类和云同步状态。",
                 OptionEnum.GoodsKnowledge, "知识库");
             AddFeaturePage("回复与通知", "自动回复规则", "设置转人工规则、下单回复和关键词边界。",
                 OptionEnum.AutoReplyRules, "自动回复规则");
@@ -263,6 +259,9 @@ namespace Bot.Options
 
         private void ShowPage(OptionEnum showPage)
         {
+            // The historical AI-service page has been consolidated into Shop Binding.
+            // Keep old callers working by routing OptionEnum.Robot to the new page.
+            if (showPage == OptionEnum.Robot) showPage = OptionEnum.ShopBinding;
             _pendingPage = showPage;
             if (!_initialized) return;
             NavigateTo(_pages.FirstOrDefault(x => x.PageType == showPage));
