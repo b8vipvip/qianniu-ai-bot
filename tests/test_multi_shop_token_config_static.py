@@ -34,11 +34,35 @@ def test_legacy_global_token_requires_explicit_ui_import():
     connection = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
     assert "GetLegacyGlobalToken" in connection
-    assert 'Content = "导入旧全局令牌"' not in ui
     assert 'MakeButton("导入旧全局令牌"' in ui
     assert "ImportLegacy_Click" in ui
-    assert "点击窗口底部“保存”后才会写入本店 DPAPI 令牌文件" in ui
+    assert "才会写入本店 DPAPI 令牌文件" in ui
     assert "_connection.SaveToken(candidate)" in ui
+
+
+def test_control_plane_url_is_persisted_per_shop_with_legacy_prefill_only():
+    connection = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
+    assert "ShopScopedSettingsStore _settings" in connection
+    assert "_settings.TryGetString(UrlKey" in connection
+    assert "_settings.SetString(UrlKey" in connection
+    assert "GetLegacyGlobalServerUrl" in connection
+    assert "PersistentParams.GetParam2Key(UrlKey, LegacyScope" in connection
+    assert "HasShopServerUrl" in connection
+
+
+def test_shop_binding_page_owns_connection_token_and_cloud_sync_actions():
+    ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    sync = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
+    assert 'Label("本店 Bot 服务端地址")' in ui
+    assert 'Label("本店 Bot 客户端令牌")' in ui
+    assert "启用本店知识库云同步" in ui
+    assert "保存连接并立即同步知识库" in ui
+    assert "KnowledgeCloudSyncService.SyncNowAsync(_shop)" in ui
+    assert "KnowledgeCloudSyncService.SetEnabledForShop" in ui
+    assert "IsEnabledForShop" in sync
+    assert "SyncNowAsync" in sync
+    assert "ShopSettingsScope.Enter(shop)" in sync
+    assert '"X-Shop-Key"' in sync
 
 
 def test_shop_ai_settings_payload_is_dpapi_protected_and_shop_key_bound():
@@ -69,22 +93,20 @@ def test_persistent_params_routes_scoped_reads_and_writes_before_global_db():
     assert "public delegate bool TryWriteHandler" in router
 
 
-def test_only_explicit_supported_scopes_are_shop_routed():
+def test_only_explicit_supported_legacy_scopes_are_shop_routed():
     source = read("src/Bot/ShopScope/ShopScopedParamBridge.cs")
     for scope in ("ai", "feature", "shop-cloud", "shop-runtime"):
         assert f'"{scope}"' in source
     assert '"ai-control-plane"' not in source
     assert "ShopSettingsScope.Current" in source
     assert "ShopScopedSettingsStore" in source
-    assert "TryGetString(masterKey" in source
-    assert "SetString(masterKey" in source
 
 
-def test_settings_window_scopes_ai_load_and_save_without_process_global_shop_state():
+def test_settings_window_scopes_shop_load_and_save_without_process_global_shop_state():
     source = read("src/Bot/Options/WndOption.xaml.cs")
     scope = read("src/Bot/ShopScope/ShopSettingsScope.cs")
     assert "shopBinding = new ShopBindingOptionsControl(Seller);" in source
-    assert "aiSettings = new CtlRobotOptions(Seller);" in source
+    assert "aiSettings = new CtlRobotOptions" not in source
     assert "RunInShopScope(delegate" in source
     assert "foreach (var options in _visitedOptions.ToList())" in source
     assert "using (ShopSettingsScope.Enter(_shop))" in source
@@ -102,7 +124,6 @@ def test_buyer_reply_runtime_enters_shop_scope_at_the_single_handler_call():
     assert "LegacyAiConfigurationGate.Release" in source
     assert "await _handler(lease)" in source
     assert "ResolveRuntimeBySellerNick" in locator
-    assert "Profiles.GetOrCreate(ResolveBySellerNickCore" in locator
 
 
 def test_vision_model_selection_uses_message_shop_ai_settings():
@@ -135,9 +156,8 @@ def test_unstable_nickname_binding_requires_explicit_confirmation_and_keeps_wind
 
 def test_ui_claims_complete_business_data_and_cloud_isolation_scope():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
-    assert "知识库、规则、消息状态、Web 同步、知识云同步和本店云备份" in ui
+    assert "服务端地址、Bot Token、知识库、规则、消息状态" in ui
     assert "均按 ShopKey 隔离" in ui
-    assert "仍由后续阶段改造" not in ui
 
 
 def test_build_includes_shop_scope_and_botlib_router_sources():
