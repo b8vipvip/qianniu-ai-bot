@@ -7,51 +7,64 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_qianniu_generic_window_title_is_never_treated_as_shop_identity():
+def test_qianniu_reception_discovery_does_not_require_one_exact_window_title():
     finder = read("src/Bot/Automation/ChatDeskNs/Automators/QnAccountFinder.cs")
+
+    assert '"Qt5152QWindowIcon",\n                        null,' in finder
+    assert "IsReceptionCandidate" in finder
+    assert "GetWindowRectangle" in finder
+    assert "rect.Width < 560 || rect.Height < 380" in finder
+    assert "MatchUniqueSellerFromTitle" in finder
+    assert "current Qianniu can host several logged-in sellers in one AliWorkbench process" in finder
+    assert "Never guess between two online shops" in finder
+
+
+def test_one_to_one_registry_prevents_two_sellers_from_sharing_one_hwnd():
+    registry = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
+    rpa = read("src/Bot/ChromeNs/QNRpa.MultiShopDeskBinding.cs")
+
+    assert "SellerToHwnd" in registry
+    assert "HwndToSeller" in registry
+    assert "同一seller不能绑定两个Desk" in registry
+    assert "同一Desk不能绑定两个seller" in registry
+    assert "Desk.Create(new QnChatWnd(seller, hwnd, pid))" in registry
+    assert "BindForegroundSeller" in registry
+
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in rpa
+    assert "desks.Count == 1 && RuntimeSellerCount() <= 1" in rpa
+    assert "RuntimeSellerCount() > 1" in rpa
+    assert "禁止共享或猜测其他店铺" in rpa
+
+
+def test_only_active_seller_switch_can_upgrade_an_ambiguous_foreground_desk():
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
+    scanner = read("src/Bot/ControllerNs/DeskScanner.cs")
     settings = read("src/Bot/AssistWindow/Widget/RightPanel.SettingsEntry.cs")
 
-    assert 'value.Equals("千牛接待台"' in finder
-    assert "ResolveSellerNameForWindow" in finder
-    assert "HasSellerWindowEvidence" in finder
-    assert "Process.GetProcessById(pid)" in finder
-    assert 'FindAllDesktopWindowByClassNameAndTitlePattern(' in finder
-    assert '"Qt5152QWindowIcon"' in finder
-    assert "matches.Count == 1" in finder
-    assert "qns.Count == 1" in finder
-    assert "never guesses between two online shops" in finder
+    assert 'BindForegroundSeller(qn, "seller-switched-foreground")' in coordinator
+    seller_handler = coordinator.split("private static void Qn_EvSellerSwitched", 1)[1].split(
+        "private static void Qn_EvBuyerSwitched", 1
+    )[0]
+    assert "BindForegroundSeller" in seller_handler
+    buyer_handler = coordinator.split("private static void Qn_EvBuyerSwitched", 1)[1].split(
+        "private static void Qn_EvRecieveNewMessage", 1
+    )[0]
+    receive_handler = coordinator.split("private static void Qn_EvRecieveNewMessage", 1)[1].split(
+        "private static void EnsureQn", 1
+    )[0]
+    assert "BindForegroundSeller" not in buyer_handler
+    assert "BindForegroundSeller" not in receive_handler
 
-    assert "ResolveSellerNameForWindow" in settings
-    assert "IsGenericReceptionTitle(seller)" in settings
-    assert "系统不会在多个店铺之间猜测绑定" in settings
-    assert "WndOption.MyShow(seller, Wnd)" in settings
-    assert "WndOption.MyShow(Wnd.Desk.WndTitle" not in settings
+    assert "DeskSellerBindingRegistry.BindResolvedSeller" in scanner
+    assert "EnsureVisibleForMultiShopAttachedMode" in scanner
+    assert "DeskSellerBindingRegistry.GetSeller(desk)" in settings
+    assert "系统不会让两个店铺共享同一个窗口" in settings
 
 
-def test_scanner_upgrades_bootstrap_generic_desk_and_keeps_all_attached_shells_visible():
-    scanner = read("src/Bot/ControllerNs/DeskScanner.cs")
-    assist = read("src/Bot/AssistWindow/WndAssist.MultiShopAttached.cs")
+def test_attached_bot_ui_accepts_only_its_proven_seller():
+    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
     props = read("src/Bot/Directory.Build.props")
 
-    assert "IsGenericReceptionTitle(existing.WndTitle)" in scanner
-    assert "!QnAccountFinder.IsGenericReceptionTitle(chatWnd.Name)" in scanner
-    assert "existing.Dispose();" in scanner
-    assert "Desk.Create(chatWnd)" in scanner
-    assert "EnsureVisibleForMultiShopAttachedMode" in scanner
-
-    assert "Desk.IsVisibleAndNotMinimized" in assist
-    assert "ShowAssist()" in assist
-    assert "it does not" in assist and "enable AI or sending" in assist
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller)" in robot
     assert "AssistWindow\\WndAssist.MultiShopAttached.cs" in props
-
-
-def test_existing_seller_bound_runtime_stays_fail_closed_for_multi_shop():
-    rpa = read("src/Bot/ChromeNs/QNRpa.MultiShopDeskBinding.cs")
-    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
-    robot = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
-
-    assert "Desk.HasMultipleDesks" in rpa
-    assert "禁止猜测其他店铺" in rpa
-    assert "Desk.FindExistingBySellerNick" in rpa
-    assert "Desk.FindExistingBySellerNick" in coordinator
-    assert "_desk.WndTitle" in robot
+    assert "Automation\\ChatDeskNs\\DeskSellerBindingRegistry.cs" in props
