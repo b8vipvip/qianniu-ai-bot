@@ -47,6 +47,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\BotDesktopWindow.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\BotDesktopStartup.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\DesktopBotUiBridge.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\WndAssist.MultiShopAttached.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\Robot\CtlConversation.DesktopMirror.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\Robot\CtlRobot.DesktopMirror.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\Robot\CtlRobot.MultiShopSession.cs" />
