@@ -43,14 +43,41 @@ namespace Bot.ControllerNs
                 foreach (var chatWnd in opened)
                 {
                     if (chatWnd == null || chatWnd.Hwnd == 0) continue;
-                    if (Desk.FindExistingByHwnd(chatWnd.Hwnd) == null)
+                    var existing = Desk.FindExistingByHwnd(chatWnd.Hwnd);
+
+                    // On startup the native Qt window may appear before the injected QN
+                    // identity is ready, so an attached Desk can initially be named only
+                    // "千牛接待台". Once QnAccountFinder has authenticated seller evidence,
+                    // recreate only that Desk so all legacy seller-bound routing sees the
+                    // real seller instead of the generic window title.
+                    if (existing != null
+                        && QnAccountFinder.IsGenericReceptionTitle(existing.WndTitle)
+                        && !QnAccountFinder.IsGenericReceptionTitle(chatWnd.Name))
                     {
-                        var desk = Desk.Create(chatWnd);
+                        Log.Info("千牛窗口身份已解析，升级为卖家专属Desk: old="
+                            + existing.WndTitle + ", seller=" + chatWnd.Name
+                            + ", pid=" + chatWnd.Pid + ", hwnd=" + chatWnd.Hwnd);
+                        existing.Dispose();
+                        existing = null;
+                    }
+
+                    var desk = existing;
+                    if (desk == null)
+                    {
+                        desk = Desk.Create(chatWnd);
                         if (desk != null)
                         {
                             Log.Info("已注册千牛店铺窗口: seller=" + chatWnd.Name
                                 + ", pid=" + chatWnd.Pid + ", hwnd=" + chatWnd.Hwnd);
                         }
+                    }
+
+                    // Every visible reception window gets its own attached Bot shell even
+                    // while seller identity is still being resolved. Business send routing
+                    // remains fail-closed until the seller name is unique.
+                    if (desk != null && desk.AssistWindow != null)
+                    {
+                        desk.AssistWindow.EnsureVisibleForMultiShopAttachedMode();
                     }
                 }
 
