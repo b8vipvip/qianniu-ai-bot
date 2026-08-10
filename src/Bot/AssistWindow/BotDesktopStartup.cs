@@ -26,6 +26,7 @@ namespace Bot.AssistWindow
     internal static class BotDesktopStartup
     {
         private static int _initialized;
+        private static int _automaticFallbackVisible;
         private static DispatcherTimer _startupTimer;
         private static DateTime _waitStartedAt;
 
@@ -40,6 +41,30 @@ namespace Bot.AssistWindow
                     true);
             }
             return new object();
+        }
+
+        internal static void ShowManualWorkbench()
+        {
+            Interlocked.Exchange(ref _automaticFallbackVisible, 0);
+            BotDesktopWindow.ShowMain();
+        }
+
+        internal static void HideAutomaticFallbackForAttachedMode()
+        {
+            if (Interlocked.Exchange(ref _automaticFallbackVisible, 0) == 0) return;
+            if (Application.Current == null) return;
+
+            Action hide = () =>
+            {
+                var current = BotDesktopWindow.Current;
+                if (current != null && current.IsVisible)
+                {
+                    current.Hide();
+                    Log.Info("千牛接待窗口已连接，自动隐藏启动回退工作台，改用每店铺独立贴窗 Bot。" );
+                }
+            };
+            if (Application.Current.Dispatcher.CheckAccess()) hide();
+            else Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Background, hide);
         }
 
         private static void OnTrayWindowLoaded(object sender, RoutedEventArgs e)
@@ -77,12 +102,14 @@ namespace Bot.AssistWindow
                 if ((DateTime.UtcNow - _waitStartedAt).TotalSeconds < 2.5) return;
 
                 StopFallbackTimer();
+                Interlocked.Exchange(ref _automaticFallbackVisible, 1);
                 BotDesktopWindow.ShowMain();
                 Log.Info("启动后未发现千牛接待窗口，显示独立 Bot 工作台作为回退界面。" );
             }
             catch (Exception ex)
             {
                 StopFallbackTimer();
+                Interlocked.Exchange(ref _automaticFallbackVisible, 1);
                 Log.ErrorWithMaxCount("判断 Bot 默认显示模式失败，回退独立工作台: " + ex.Message, 5);
                 BotDesktopWindow.ShowMain();
             }
