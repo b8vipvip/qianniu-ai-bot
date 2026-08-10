@@ -29,25 +29,27 @@ def test_toolbar_settings_button_opens_window_directly_without_visible_dropdown_
     assert 'Header="关于"' not in xaml
 
 
-def test_settings_window_uses_sidebar_and_content_host_instead_of_top_level_tabs():
+def test_settings_window_uses_sidebar_and_constrained_stretch_content_host():
     xaml = read(SETTINGS_XAML)
 
     assert 'x:Name="navPanel"' in xaml
     assert 'x:Name="contentHost"' in xaml
+    assert 'HorizontalContentAlignment="Stretch"' in xaml
+    assert 'VerticalContentAlignment="Stretch"' in xaml
+    assert 'ClipToBounds="True"' in xaml
     assert 'x:Name="txtPageTitle"' in xaml
     assert 'x:Name="txtShopScope"' in xaml
     assert 'Name="tabMain"' not in xaml
     assert "SplitButton" not in xaml
 
 
-def test_navigation_is_grouped_by_user_task():
+def test_navigation_is_grouped_by_user_task_and_ai_service_page_is_removed():
     code = read(SETTINGS_CS)
 
     for group in ("店铺与连接", "回复与通知", "数据与安全", "系统"):
         assert group in code
     for page in (
         "店铺绑定",
-        "AI 服务",
         "知识库",
         "自动回复规则",
         "消息通知",
@@ -58,6 +60,9 @@ def test_navigation_is_grouped_by_user_task():
         "关于与更新",
     ):
         assert page in code
+    assert 'AddPage("店铺与连接", "AI 服务"' not in code
+    assert "aiSettings = new CtlRobotOptions" not in code
+    assert "if (showPage == OptionEnum.Robot) showPage = OptionEnum.ShopBinding;" in code
     assert "账号与授权" not in code
 
 
