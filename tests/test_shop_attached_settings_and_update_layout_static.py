@@ -19,10 +19,13 @@ def test_attached_bot_is_default_when_qianniu_desks_exist():
     assert "WndAssist.CreateAndAttachToDesk(desk);" in desk
 
 
-def test_each_attached_settings_window_uses_its_desk_seller_shopkey():
+def test_each_attached_settings_window_uses_its_resolved_desk_seller_shopkey():
     entry = read("src/Bot/AssistWindow/Widget/RightPanel.SettingsEntry.cs")
     window = read("src/Bot/Options/WndOption.xaml.cs")
-    assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" in entry
+    assert "ResolveSellerNameForWindow" in entry
+    assert "IsGenericReceptionTitle(seller)" in entry
+    assert "WndOption.MyShow(seller, Wnd);" in entry
+    assert "WndOption.MyShow(Wnd.Desk.WndTitle, Wnd);" not in entry
     assert "ShopContextLocator.ResolveBySellerNick(seller)" in window
     assert "ShopKey：" in window
     assert "using (ShopSettingsScope.Enter(_shop))" in window
