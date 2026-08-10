@@ -8,7 +8,7 @@
     Width="1080"
     Height="760"
     MinWidth="900"
-    MinHeight="640"
+    MinHeight="600"
     SizeToContent="Manual"
     ResizeMode="CanResizeWithGrip"
     WindowStartupLocation="CenterOwner">
@@ -130,7 +130,7 @@
             </Border>
 
             <Border Grid.Column="2" Background="White" BorderBrush="{StaticResource SettingsBorder}"
-                    BorderThickness="1" CornerRadius="12">
+                    BorderThickness="1" CornerRadius="12" ClipToBounds="True">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="76" />
@@ -152,7 +152,10 @@
                                     Click="btnHelp_Click" VerticalAlignment="Center" />
                         </Grid>
                     </Border>
-                    <ContentControl Grid.Row="1" x:Name="contentHost" Margin="12" />
+                    <ContentControl Grid.Row="1" x:Name="contentHost" Margin="12"
+                                    HorizontalContentAlignment="Stretch"
+                                    VerticalContentAlignment="Stretch"
+                                    ClipToBounds="True" />
                 </Grid>
             </Border>
         </Grid>
