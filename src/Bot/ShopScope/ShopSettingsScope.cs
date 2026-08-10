@@ -1,3 +1,4 @@
+using Bot.ChromeNs;
 using System;
 using System.Threading;
 
@@ -21,6 +22,16 @@ namespace Bot.ShopScope
             if (shop == null) throw new ArgumentNullException(nameof(shop));
             var previous = CurrentValue.Value;
             CurrentValue.Value = shop;
+            try
+            {
+                // Keep the legacy RPA/UI compatibility layer aligned with the same ShopKey
+                // before any scoped async operation can reach a send or native-window action.
+                MultiShopRuntimeSessionCoordinator.EnsureShopBinding(shop);
+            }
+            catch
+            {
+                // Shop scoping must remain available even when Qianniu is temporarily offline.
+            }
             return new Scope(previous, shop);
         }
 

@@ -1,15 +1,15 @@
-﻿using BotLib.BaseClass;
+﻿using Bot.AssistWindow.NotifyIcon;
+using Bot.Automation.ChatDeskNs;
+using Bot.Automation.ChatDeskNs.Automators;
+using Bot.Common;
+using BotLib;
+using BotLib.BaseClass;
+using BotLib.Extensions;
 using BotLib.Misc;
 using System;
 using System.Collections.Generic;
-using System.Linq;
-using BotLib.Extensions;
-using BotLib;
-using Bot.AssistWindow.NotifyIcon;
-using Bot.Automation.ChatDeskNs.Automators;
-using Bot.Common;
-using Bot.Automation.ChatDeskNs;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading.Tasks;
 
 namespace Bot.ControllerNs
@@ -36,47 +36,48 @@ namespace Bot.ControllerNs
         {
             try
             {
-                //item1 新的千牛接待窗口, item2 关闭的接待窗口
-                var wnd = GetOpenedSingleChatWnd();
-                var newChatWnd = wnd.Item1;
-                var closedChatWnd = wnd.Item2;
+                var opened = GetOpenedChatWnds();
+                DetectQianniu(opened.FirstOrDefault());
 
-                if (newChatWnd == null)
+                var openedHandles = new HashSet<int>(opened.Select(x => x.Hwnd));
+                foreach (var chatWnd in opened)
                 {
-                    await Task.Delay(5000);
-                    return;
-                }
-
-                //检测到退出千牛，程序释放资源
-                if (newChatWnd != null && closedChatWnd != null
-                    && newChatWnd.Pid != wnd.Item2.Pid)
-                {
-                    var desk = Desk.Inst;
-                    if (desk != null)
+                    if (chatWnd == null || chatWnd.Hwnd == 0) continue;
+                    if (Desk.FindExistingByHwnd(chatWnd.Hwnd) == null)
                     {
-                        desk.Dispose();
-                        desk = null;
+                        var desk = Desk.Create(chatWnd);
+                        if (desk != null)
+                        {
+                            Log.Info("已注册千牛店铺窗口: seller=" + chatWnd.Name
+                                + ", pid=" + chatWnd.Pid + ", hwnd=" + chatWnd.Hwnd);
+                        }
                     }
                 }
 
-                
-                if (Desk.Inst == null || newChatWnd != null && Desk.Inst.ProcessId != newChatWnd.Pid)
+                foreach (var desk in Desk.Snapshot().ToList())
                 {
-                    Desk.Create(newChatWnd);
+                    if (desk == null || desk.Hwnd == null) continue;
+                    if (openedHandles.Contains(desk.Hwnd.Handle) && desk.IsAlive) continue;
+                    Log.Info("千牛店铺窗口已关闭，释放独立会话: seller=" + desk.WndTitle
+                        + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
+                    desk.Dispose();
                 }
 
-                
+                if (opened.Count == 0)
+                {
+                    await Task.Delay(1000);
+                }
             }
             catch (Exception e)
             {
                 Log.Exception(e);
             }
         }
-        private static (QnChatWnd, QnChatWnd) GetOpenedSingleChatWnd()
+
+        private static IList<QnChatWnd> GetOpenedChatWnds()
         {
-            var wnd = QnAccountFinderFactory.Finder.GetSingleChatWnd();
-            DetectQianniu(wnd.Item1);
-            return wnd;
+            return QnAccountFinderFactory.Finder.GetOpenChatWnds()
+                ?? new List<QnChatWnd>();
         }
 
         private static void DetectQianniu(QnChatWnd chatWnd)
@@ -109,7 +110,5 @@ namespace Bot.ControllerNs
             _timer.Stop();
             _timer.Dispose();
         }
-
     }
-
 }

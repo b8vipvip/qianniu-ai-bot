@@ -39,6 +39,7 @@ using System.Windows.Media.Imaging;
 using TextBox = FlaUI.Core.AutomationElements.TextBox;
 using FlaUI.UIA3;
 using Bot.AssistWindow.Widget.Robot;
+using Bot.ShopScope;
 
 namespace Bot.Automation.ChatDeskNs
 {
@@ -327,11 +328,70 @@ namespace Bot.Automation.ChatDeskNs
             }
         }
 
+        private static readonly ConcurrentDictionary<int, Desk> DesksByHwnd =
+            new ConcurrentDictionary<int, Desk>();
         private static Desk inst;
 
-        public static Desk Inst { get { return inst; } }
+        public static Desk Inst
+        {
+            get
+            {
+                var scopedShop = ShopSettingsScope.Current;
+                if (scopedShop != null && !string.IsNullOrWhiteSpace(scopedShop.DisplayName))
+                {
+                    var scopedDesk = FindExistingBySellerNick(scopedShop.DisplayName);
+                    if (scopedDesk != null) return scopedDesk;
+                }
 
+                var current = QN.CurQN;
+                if (current != null && current.Seller != null)
+                {
+                    var currentDesk = FindExistingBySellerNick(current.Seller.Nick);
+                    if (currentDesk != null) return currentDesk;
+                }
 
+                var snapshot = Snapshot();
+                if (snapshot.Count == 1) return snapshot[0];
+                if (inst != null && snapshot.Any(x => ReferenceEquals(x, inst))) return inst;
+                return snapshot.FirstOrDefault();
+            }
+        }
+
+        public static IList<Desk> Snapshot()
+        {
+            return DesksByHwnd.Values
+                .Where(x => x != null)
+                .OrderBy(x => x.ProcessId)
+                .ThenBy(x => x.Hwnd == null ? 0 : x.Hwnd.Handle)
+                .ToList();
+        }
+
+        public static Desk FindExistingByHwnd(int hwnd)
+        {
+            Desk desk;
+            return hwnd != 0 && DesksByHwnd.TryGetValue(hwnd, out desk) ? desk : null;
+        }
+
+        public static Desk FindExistingBySellerNick(string sellerNick)
+        {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            if (sellerNick.Length == 0) return null;
+            var matches = DesksByHwnd.Values
+                .Where(x => x != null
+                    && string.Equals((x.WndTitle ?? string.Empty).Trim(), sellerNick, StringComparison.Ordinal))
+                .ToList();
+            if (matches.Count == 1) return matches[0];
+            if (matches.Count > 1)
+            {
+                return matches.FirstOrDefault(x => x.IsForeground) ?? matches[0];
+            }
+            return null;
+        }
+
+        public static bool HasMultipleDesks
+        {
+            get { return DesksByHwnd.Count > 1; }
+        }
 
         public CtlRobot CtlRobot { get; set; }
         private Desk(QnChatWnd chatWnd)
@@ -364,6 +424,7 @@ namespace Bot.Automation.ChatDeskNs
             IsVisible = IsVisible(Hwnd.Handle);
             UpdateRectAndWindowState();
             _timer = new NoReEnterTimer(Loop, 100, 0);
+            DesksByHwnd[Hwnd.Handle] = this;
             inst = this;
             DelayCaller.CallAfterDelay(SetActiveQn, 3000, false);
         }
@@ -372,11 +433,14 @@ namespace Bot.Automation.ChatDeskNs
         {
             DispatcherEx.xInvoke(new Action(() =>
             {
+                var assist = AssistWindow;
+                if (assist == null) return;
                 if (CtlRobot == null)
                 {
-                    CtlRobot = inst.AssistWindow.ctlRightPanel.GetTabItem(Bot.AssistWindow.Widget.RightPanel.TabTypeEnum.Robot).Content as CtlRobot;
+                    var tab = assist.ctlRightPanel.GetTabItem(Bot.AssistWindow.Widget.RightPanel.TabTypeEnum.Robot);
+                    CtlRobot = tab == null ? null : tab.Content as CtlRobot;
                 }
-                CtlRobot.ChangeBuyer(buyer);
+                if (CtlRobot != null) CtlRobot.ChangeBuyer(buyer);
             }));
         }
 
@@ -384,7 +448,8 @@ namespace Bot.Automation.ChatDeskNs
         {
             DispatcherEx.xInvoke(new Action(() =>
             {
-                inst.AssistWindow.ctlRightPanel.ChangeSeller(seller);
+                var assist = AssistWindow;
+                if (assist != null) assist.ctlRightPanel.ChangeSeller(seller);
             }));
         }
 
@@ -399,11 +464,17 @@ namespace Bot.Automation.ChatDeskNs
             CtlConversation ctlConversation = null;
             DispatcherEx.xInvoke(new Action(() =>
             {
+                var assist = AssistWindow;
+                if (assist == null) return;
                 if (CtlRobot == null)
                 {
-                    CtlRobot = inst.AssistWindow.ctlRightPanel.GetTabItem(Bot.AssistWindow.Widget.RightPanel.TabTypeEnum.Robot).Content as CtlRobot;
+                    var tab = assist.ctlRightPanel.GetTabItem(Bot.AssistWindow.Widget.RightPanel.TabTypeEnum.Robot);
+                    CtlRobot = tab == null ? null : tab.Content as CtlRobot;
                 }
-                ctlConversation = CtlRobot.AddConversation(seller, buyer, question, answer, isAutoReply, answerSource);
+                if (CtlRobot != null)
+                {
+                    ctlConversation = CtlRobot.AddConversation(seller, buyer, question, answer, isAutoReply, answerSource);
+                }
             }));
             return ctlConversation;
         }
@@ -457,6 +528,10 @@ namespace Bot.Automation.ChatDeskNs
             Desk desk = null;
             try
             {
+                if (wnd == null || wnd.Hwnd == 0) return null;
+                var existing = FindExistingByHwnd(wnd.Hwnd);
+                if (existing != null) return existing;
+
                 desk = new Desk(wnd);
                 if (desk != null)
                 {
@@ -469,7 +544,8 @@ namespace Bot.Automation.ChatDeskNs
             }
             catch (Exception ex)
             {
-                Log.Error(string.Format("创建desk失败,hwnd={0}", wnd.Hwnd));
+                Log.Error(string.Format("创建desk失败,hwnd={0}", wnd == null ? 0 : wnd.Hwnd));
+                Log.Exception(ex);
             }
             return desk;
         }
@@ -526,7 +602,12 @@ namespace Bot.Automation.ChatDeskNs
             lock (_synObj)
             {
                 _isLocationChanged = true;
-                if (QN.CurQN != null)
+                var qn = QN.FindExistingBySellerNick(WndTitle);
+                if (qn != null)
+                {
+                    qn.Rpa.UpdateChatBrowserRect();
+                }
+                else if (Snapshot().Count == 1 && QN.CurQN != null)
                 {
                     QN.CurQN.Rpa.UpdateChatBrowserRect();
                 }
@@ -752,6 +833,12 @@ namespace Bot.Automation.ChatDeskNs
         {
             Log.Info(string.Format("ChatDesk disposed,seller={0}", WndTitle));
             _isAlive = false;
+            Desk removed;
+            if (Hwnd != null) DesksByHwnd.TryRemove(Hwnd.Handle, out removed);
+            if (ReferenceEquals(inst, this))
+            {
+                inst = DesksByHwnd.Values.FirstOrDefault(x => x != null);
+            }
             if (_timer != null)
             {
                 _timer.Dispose();

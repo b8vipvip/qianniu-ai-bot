@@ -1,13 +1,10 @@
-﻿using BotLib;
+﻿using Bot.Common;
+using BotLib;
+using BotLib.Extensions;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using BotLib.Extensions;
-using Bot.Common;
 
 namespace Bot.Automation.ChatDeskNs.Automators
 {
@@ -15,10 +12,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
     {
         public virtual string ChatWindowTitlePattern
         {
-            get
-            {
-                return "千牛接待台";
-            }
+            get { return "千牛接待台"; }
         }
 
         private static QnChatWnd currenrQNChatWnd;
@@ -27,7 +21,6 @@ namespace Bot.Automation.ChatDeskNs.Automators
         {
             currenrQNChatWnd = null;
         }
-
 
         private static HashSet<int> GetAliWorkbenchPids()
         {
@@ -40,48 +33,61 @@ namespace Bot.Automation.ChatDeskNs.Automators
             return pids;
         }
 
-        public virtual (QnChatWnd, QnChatWnd) GetSingleChatWnd()
+        /// <summary>
+        /// Returns every visible Qianniu reception window. The runtime must track HWNDs,
+        /// not one process-global "current" window, because several shops can be logged
+        /// in on the same Windows session at the same time.
+        /// </summary>
+        public virtual IList<QnChatWnd> GetOpenChatWnds()
         {
-            var closedChatWnd = currenrQNChatWnd;
-            var pids = GetAliWorkbenchPids();
-            if(pids.Any(pid=> currenrQNChatWnd!=null && pid == currenrQNChatWnd.Pid)) {
-                return (currenrQNChatWnd,closedChatWnd);
-            }
-            foreach (var pid in pids.xSafeForEach())
+            var result = new List<QnChatWnd>();
+            var handles = new HashSet<int>();
+            foreach (var pid in GetAliWorkbenchPids().OrderBy(x => x))
             {
-                int hWnd;
-                var title = GetWndTitle(pid, out hWnd);
-                if (!string.IsNullOrEmpty(title) && hWnd != 0)
+                try
                 {
-                    var value = new QnChatWnd(title, hWnd ,pid);
-                    currenrQNChatWnd = value;
-                    break;
+                    WinApi.FindAllDesktopWindowByClassNameAndTitlePattern(
+                        "Qt5152QWindowIcon",
+                        ChatWindowTitlePattern,
+                        (qnHwnd, title) =>
+                        {
+                            if (qnHwnd == 0 || !WinApi.IsVisible(qnHwnd)) return;
+                            if (!handles.Add(qnHwnd)) return;
+                            result.Add(new QnChatWnd((title ?? string.Empty).Trim(), qnHwnd, pid));
+                        },
+                        pid);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("枚举千牛接待窗口失败: pid=" + pid + ", " + ex.Message, 10);
                 }
             }
-            return (currenrQNChatWnd, closedChatWnd);
+
+            return result
+                .OrderBy(x => x.Pid)
+                .ThenBy(x => x.Hwnd)
+                .ToList();
         }
 
-        private string GetWndTitle(int pid, out int hwnd)
-		{
-			var t = string.Empty;
-			var htmp = 0;
-			try
-			{
-			    WinApi.FindAllDesktopWindowByClassNameAndTitlePattern("Qt5152QWindowIcon", this.ChatWindowTitlePattern, (qnHwnd, title) =>
+        /// <summary>
+        /// Legacy compatibility API. New runtime code must use GetOpenChatWnds().
+        /// </summary>
+        public virtual (QnChatWnd, QnChatWnd) GetSingleChatWnd()
+        {
+            var previous = currenrQNChatWnd;
+            var all = GetOpenChatWnds();
+            if (currenrQNChatWnd != null)
+            {
+                var current = all.FirstOrDefault(x => x.Hwnd == currenrQNChatWnd.Hwnd);
+                if (current != null)
                 {
-                    if (WinApi.IsVisible(qnHwnd))
-                    {
-                        t = title;
-                        htmp = qnHwnd;
-                    }
-                }, pid);
-			}
-			catch (Exception e)
-			{
-				Log.Exception(e);
-			}
-			hwnd = htmp;
-			return t;
-		}
+                    currenrQNChatWnd = current;
+                    return (current, previous);
+                }
+            }
+
+            currenrQNChatWnd = all.FirstOrDefault();
+            return (currenrQNChatWnd, previous);
+        }
     }
 }
