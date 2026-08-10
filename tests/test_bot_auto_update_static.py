@@ -34,11 +34,28 @@ def test_runtime_uses_control_plane_cache_then_single_github_latest_fallback():
     assert "releases?per_page=20" not in code
     assert "FetchLatestFromControlPlaneAsync" in code
     assert "FetchLatestFromGitHubAsync" in code
-    assert "服务端更新缓存不可用，切换 GitHub latest" in code
+    assert "服务端更新缓存不可用" in code
 
     assert 'Name="UseOptimizedBotUpdateService"' in props
     assert 'Compile Remove="$(MSBuildThisFileDirectory)Update\\BotUpdateService.cs"' in props
     assert "Update\\BotUpdate*.Fast.cs" in props
+
+
+def test_update_sha_survives_manifest_network_failure_and_shop_scoped_server_urls_are_discovered():
+    network = read("src/Bot/Update/BotUpdateService.Network.Fast.cs")
+
+    assert 'package.Value<string>("digest")' in network
+    assert "NormalizeGitHubAssetDigest" in network
+    assert "ExtractSha256FromReleaseNotes" in network
+    assert "安装包 SHA-256" in network
+    assert "release.Sha256 = IsSha256(fallbackSha)" in network
+    assert "TryBackfillShaFromControlPlaneAsync" in network
+    assert "GetConfiguredControlPlaneUrls" in network
+    assert "ShopSettingsScope.Current" in network
+    assert "new ShopProfileStore(paths)" in network
+    assert "profile.ToContext()" in network
+    assert "ShopControlPlaneConnectionStore.GetLegacyGlobalServerUrl()" in network
+    assert "release.Sha256 = string.Empty;\n                Log.Info(\n                    \"读取更新SHA清单失败" not in network
 
 
 def test_download_prefers_github_then_falls_back_to_verified_server_mirror():
