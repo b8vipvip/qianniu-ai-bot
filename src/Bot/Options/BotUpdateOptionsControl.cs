@@ -46,10 +46,19 @@ namespace Bot.Options
 
         public BotUpdateOptionsControl()
         {
-            MinWidth = 650;
-            MinHeight = 580;
-            var root = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto };
-            var panel = new StackPanel { Margin = new Thickness(16) };
+            MinWidth = 0;
+            MinHeight = 0;
+            HorizontalContentAlignment = HorizontalAlignment.Stretch;
+            VerticalContentAlignment = VerticalAlignment.Stretch;
+
+            var root = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                CanContentScroll = false,
+                PanningMode = PanningMode.VerticalOnly
+            };
+            var panel = new StackPanel { Margin = new Thickness(12, 12, 16, 18) };
             root.Content = panel;
             Content = root;
 
@@ -71,7 +80,7 @@ namespace Bot.Options
             });
             heroPanel.Children.Add(new TextBlock
             {
-                Text = "查看当前构建信息，手动检查 GitHub 正式版本，并安全下载、校验、安装或自动回滚。",
+                Text = "查看当前构建信息，手动检查正式版本，并安全下载、校验、安装或自动回滚。",
                 Margin = new Thickness(0, 7, 0, 0),
                 Foreground = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
                 TextWrapping = TextWrapping.Wrap
@@ -100,7 +109,7 @@ namespace Bot.Options
             AddLabel(versionGrid, 5, "安装目录");
             _installDirectory = AddValue(versionGrid, 5, build.InstallDirectory);
             _installDirectory.TextWrapping = TextWrapping.Wrap;
-            AddLabel(versionGrid, 6, "GitHub最新版本");
+            AddLabel(versionGrid, 6, "最新正式版本");
             _latestVersion = AddValue(versionGrid, 6, "尚未检查");
             AddLabel(versionGrid, 7, "已跳过版本");
             _skipped = AddValue(versionGrid, 7, "无");
@@ -115,6 +124,48 @@ namespace Bot.Options
                 TextWrapping = TextWrapping.Wrap
             });
             panel.Children.Add(versionCard);
+
+            // Put the primary action card before less important auto-check preferences so
+            // remote desktop scaling and small settings windows never hide Check/Install.
+            var actionCard = CreateCard();
+            var actionPanel = (StackPanel)actionCard.Child;
+            actionPanel.Children.Add(CreateTitle("检查与安装"));
+            _status = new TextBlock
+            {
+                Text = "尚未检查更新。",
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 10, 0, 10),
+                Foreground = new SolidColorBrush(Color.FromRgb(71, 85, 105))
+            };
+            actionPanel.Children.Add(_status);
+            var buttons = new WrapPanel();
+            _checkButton = CreateButton("手动检查更新", true);
+            _checkButton.Click += async (s, e) => await CheckAsync();
+            buttons.Children.Add(_checkButton);
+            _installButton = CreateButton("下载并安装", false);
+            _installButton.IsEnabled = false;
+            _installButton.Click += (s, e) =>
+            {
+                var release = BotUpdateService.LatestRelease;
+                if (release != null) BotUpdateService.ShowUpdatePrompt(release, Window.GetWindow(this));
+            };
+            buttons.Children.Add(_installButton);
+            var releaseButton = CreateButton("查看发布页面", false);
+            releaseButton.Click += (s, e) => BotUpdateService.OpenReleasesPage();
+            buttons.Children.Add(releaseButton);
+            var openInstall = CreateButton("打开安装目录", false);
+            openInstall.Click += (s, e) => OpenDirectory(ReadInstalledBuildInfo().InstallDirectory);
+            buttons.Children.Add(openInstall);
+            var clearSkip = CreateButton("取消跳过版本", false);
+            clearSkip.Click += (s, e) =>
+            {
+                BotUpdateService.ClearSkippedVersion();
+                LoadSettings();
+                _status.Text = "已取消跳过版本，下次检查时会重新提示。";
+            };
+            buttons.Children.Add(clearSkip);
+            actionPanel.Children.Add(buttons);
+            panel.Children.Add(actionCard);
 
             var updateCard = CreateCard();
             var updatePanel = (StackPanel)updateCard.Child;
@@ -156,53 +207,14 @@ namespace Bot.Options
             updatePanel.Children.Add(intervalRow);
             panel.Children.Add(updateCard);
 
-            var actionCard = CreateCard();
-            var actionPanel = (StackPanel)actionCard.Child;
-            actionPanel.Children.Add(CreateTitle("检查与安装"));
-            _status = new TextBlock
-            {
-                Text = "尚未检查更新。",
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 10, 0, 10),
-                Foreground = new SolidColorBrush(Color.FromRgb(71, 85, 105))
-            };
-            actionPanel.Children.Add(_status);
-            var buttons = new WrapPanel();
-            _checkButton = CreateButton("手动检查更新", true);
-            _checkButton.Click += async (s, e) => await CheckAsync();
-            buttons.Children.Add(_checkButton);
-            _installButton = CreateButton("下载并安装", false);
-            _installButton.IsEnabled = false;
-            _installButton.Click += (s, e) =>
-            {
-                var release = BotUpdateService.LatestRelease;
-                if (release != null) BotUpdateService.ShowUpdatePrompt(release, Window.GetWindow(this));
-            };
-            buttons.Children.Add(_installButton);
-            var releaseButton = CreateButton("查看发布页面", false);
-            releaseButton.Click += (s, e) => BotUpdateService.OpenReleasesPage();
-            buttons.Children.Add(releaseButton);
-            var openInstall = CreateButton("打开安装目录", false);
-            openInstall.Click += (s, e) => OpenDirectory(ReadInstalledBuildInfo().InstallDirectory);
-            buttons.Children.Add(openInstall);
-            var clearSkip = CreateButton("取消跳过版本", false);
-            clearSkip.Click += (s, e) =>
-            {
-                BotUpdateService.ClearSkippedVersion();
-                LoadSettings();
-                _status.Text = "已取消跳过版本，下次检查时会重新提示。";
-            };
-            buttons.Children.Add(clearSkip);
-            actionPanel.Children.Add(buttons);
-            panel.Children.Add(actionCard);
-
             var note = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(239, 246, 255)),
                 BorderBrush = new SolidColorBrush(Color.FromRgb(191, 219, 254)),
                 BorderThickness = new Thickness(1),
                 CornerRadius = new CornerRadius(9),
-                Padding = new Thickness(14)
+                Padding = new Thickness(14),
+                Margin = new Thickness(0, 0, 0, 4)
             };
             note.Child = new TextBlock
             {
@@ -261,7 +273,7 @@ namespace Bot.Options
         {
             Save(string.Empty);
             _checkButton.IsEnabled = false;
-            _status.Text = "正在连接 GitHub 检查新版本...";
+            _status.Text = "正在检查新版本...";
             try
             {
                 var result = await BotUpdateService.CheckNowAsync(true);
@@ -568,7 +580,7 @@ namespace Bot.Options
                     Width = 760,
                     Height = 720,
                     MinWidth = 680,
-                    MinHeight = 600,
+                    MinHeight = 520,
                     WindowStartupLocation = WindowStartupLocation.CenterScreen,
                     Content = new BotUpdateOptionsControl()
                 };
