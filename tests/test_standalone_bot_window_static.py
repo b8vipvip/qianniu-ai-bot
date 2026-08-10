@@ -15,6 +15,8 @@ def test_desktop_window_is_fallback_when_no_qianniu_desk_exists():
     assert "Desk.Snapshot().Count > 0" in startup
     assert "TotalSeconds < 2.5" in startup
     assert "BotDesktopWindow.ShowMain" in startup
+    assert "_automaticFallbackVisible" in startup
+    assert "HideAutomaticFallbackForAttachedMode" in startup
     assert "默认使用每店铺独立贴窗 Bot" in startup
     assert "独立工作台可从托盘手动打开" in startup
     assert "CreateAndAttachToDesk" not in startup
@@ -55,10 +57,12 @@ def test_qianniu_desk_and_attached_window_pipeline_remains_authoritative_when_de
     desk = read("src/Bot/Automation/ChatDeskNs/Desk.cs")
     assist = read("src/Bot/AssistWindow/WndAssist.xaml.cs")
     scanner = read("src/Bot/ControllerNs/DeskScanner.cs")
+    coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
 
     assert "WndAssist.CreateAndAttachToDesk(desk);" in desk
     assert "GetOpenChatWnds()" in scanner
     assert "Desk.FindExistingByHwnd" in scanner
+    assert "BotDesktopStartup.HideAutomaticFallbackForAttachedMode();" in coordinator
     assert "Desk.EvClosed += Desk_EvClosed;" in assist
     assert "Desk.EvMinimize += Desk_EvMinimize;" in assist
     assert "Desk.EvMoved += Desk_EvMoved;" in assist
@@ -66,12 +70,14 @@ def test_qianniu_desk_and_attached_window_pipeline_remains_authoritative_when_de
     assert "ctlRightPanel.Init(this);" in assist
 
 
-def test_desktop_can_be_reopened_from_tray_and_sources_are_in_wpf_compile_graph():
+def test_desktop_can_be_reopened_manually_from_tray_and_is_not_marked_fallback():
     tray = read("src/Bot/AssistWindow/NotifyIcon/MenuCreator/HelpMenuCreator.cs")
+    startup = read("src/Bot/AssistWindow/BotDesktopStartup.cs")
     props = read("src/Bot/Directory.Build.props")
 
     assert 'CreateItem("打开Bot工作台", OnOpenBotDesktopClicked)' in tray
-    assert "BotDesktopWindow.ShowMain();" in tray
+    assert "BotDesktopStartup.ShowManualWorkbench();" in tray
+    assert "Interlocked.Exchange(ref _automaticFallbackVisible, 0);" in startup
     for name in (
         "AssistWindow\\BotDesktopWindow.cs",
         "AssistWindow\\BotDesktopStartup.cs",
