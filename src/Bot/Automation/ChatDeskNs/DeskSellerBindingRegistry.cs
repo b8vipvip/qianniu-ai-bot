@@ -9,9 +9,9 @@ namespace Bot.Automation.ChatDeskNs
 {
     /// <summary>
     /// Keeps the runtime seller-to-native-window relationship one-to-one.
-    /// A generic "千牛接待台" Desk may exist before the injected QN identity is ready;
-    /// once a unique seller is proven, that Desk is recreated with the real seller name so
-    /// all legacy seller-bound code continues to work without a second routing system.
+    /// A generic reception Desk may exist before the injected QN identity is ready;
+    /// once a unique authenticated seller is proven, that Desk is recreated with the real
+    /// seller name so existing ShopKey/UI/send routing can keep using seller-named Desks.
     /// </summary>
     internal static class DeskSellerBindingRegistry
     {
@@ -24,7 +24,7 @@ namespace Bot.Automation.ChatDeskNs
         internal static Desk FindSellerDesk(string seller)
         {
             seller = NormalizeSeller(seller);
-            if (seller.Length == 0) return null;
+            if (seller.Length == 0 || !IsAuthenticatedSeller(seller)) return null;
 
             var legacy = Desk.FindExistingBySellerNick(seller);
             if (legacy != null)
@@ -46,7 +46,9 @@ namespace Bot.Automation.ChatDeskNs
         {
             if (desk == null || desk.Hwnd == null) return string.Empty;
             var title = NormalizeSeller(desk.WndTitle);
-            if (title.Length > 0 && !QnAccountFinder.IsGenericReceptionTitle(title))
+            if (title.Length > 0
+                && !QnAccountFinder.IsGenericReceptionTitle(title)
+                && IsAuthenticatedSeller(title))
             {
                 Remember(desk, title);
                 return title;
@@ -54,6 +56,7 @@ namespace Bot.Automation.ChatDeskNs
 
             string seller;
             return HwndToSeller.TryGetValue(desk.Hwnd.Handle, out seller)
+                && IsAuthenticatedSeller(seller)
                 ? NormalizeSeller(seller)
                 : string.Empty;
         }
@@ -69,7 +72,8 @@ namespace Bot.Automation.ChatDeskNs
         {
             seller = NormalizeSeller(seller);
             if (desk == null || desk.Hwnd == null || seller.Length == 0
-                || QnAccountFinder.IsGenericReceptionTitle(seller)) return null;
+                || QnAccountFinder.IsGenericReceptionTitle(seller)
+                || !IsAuthenticatedSeller(seller)) return null;
 
             lock (Sync)
             {
@@ -101,6 +105,7 @@ namespace Bot.Automation.ChatDeskNs
                 var currentTitle = NormalizeSeller(desk.WndTitle);
                 if (currentTitle.Length > 0
                     && !QnAccountFinder.IsGenericReceptionTitle(currentTitle)
+                    && IsAuthenticatedSeller(currentTitle)
                     && !string.Equals(currentTitle, seller, StringComparison.Ordinal))
                 {
                     Log.ErrorWithMaxCount("店铺窗口绑定被拒绝：Desk已有不同卖家身份: hwnd=" + hwnd
@@ -143,7 +148,7 @@ namespace Bot.Automation.ChatDeskNs
             var seller = qn == null || qn.Seller == null
                 ? string.Empty
                 : NormalizeSeller(qn.Seller.Nick);
-            if (seller.Length == 0) return null;
+            if (seller.Length == 0 || !IsAuthenticatedSeller(seller)) return null;
 
             var existing = FindSellerDesk(seller);
             if (existing != null) return existing;
@@ -159,9 +164,33 @@ namespace Bot.Automation.ChatDeskNs
         {
             if (desk == null || desk.Hwnd == null) return;
             seller = NormalizeSeller(seller);
-            if (seller.Length == 0 || QnAccountFinder.IsGenericReceptionTitle(seller)) return;
+            if (seller.Length == 0 || QnAccountFinder.IsGenericReceptionTitle(seller)
+                || !IsAuthenticatedSeller(seller)) return;
             SellerToHwnd[seller] = desk.Hwnd.Handle;
             HwndToSeller[desk.Hwnd.Handle] = seller;
+        }
+
+        private static bool IsAuthenticatedSeller(string seller)
+        {
+            seller = NormalizeSeller(seller);
+            if (seller.Length == 0) return false;
+            try
+            {
+                return QN.GetRuntimeSafetySnapshot().Any(qn => qn != null && qn.Seller != null
+                    && string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal));
+            }
+            catch
+            {
+                try
+                {
+                    return QN.QNSet != null && QN.QNSet.Any(qn => qn != null && qn.Seller != null
+                        && string.Equals((qn.Seller.Nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal));
+                }
+                catch
+                {
+                    return false;
+                }
+            }
         }
 
         private static void CleanupStaleBindings()
