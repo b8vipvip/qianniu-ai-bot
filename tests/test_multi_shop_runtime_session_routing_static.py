@@ -13,6 +13,7 @@ def test_scanner_discovers_every_qianniu_window_and_tracks_by_hwnd():
 
     assert "GetOpenChatWnds()" in finder
     assert "HashSet<int>" in finder
+    assert '"Qt5152QWindowIcon",\n                        null,' in finder
     assert "Desk.FindExistingByHwnd(chatWnd.Hwnd)" in scanner
     assert "foreach (var chatWnd in opened)" in scanner
     assert "foreach (var desk in Desk.Snapshot().ToList())" in scanner
@@ -22,6 +23,7 @@ def test_scanner_discovers_every_qianniu_window_and_tracks_by_hwnd():
 
 def test_desk_registry_resolves_scope_and_never_routes_instance_ui_through_last_desk():
     desk = read("src/Bot/Automation/ChatDeskNs/Desk.cs")
+    binding = read("src/Bot/Automation/ChatDeskNs/DeskSellerBindingRegistry.cs")
 
     assert "ConcurrentDictionary<int, Desk> DesksByHwnd" in desk
     assert "FindExistingBySellerNick" in desk
@@ -30,22 +32,23 @@ def test_desk_registry_resolves_scope_and_never_routes_instance_ui_through_last_
     assert "QN.CurQN" in desk
     assert "DesksByHwnd[Hwnd.Handle] = this" in desk
     assert "DesksByHwnd.TryRemove" in desk
+    assert "SellerToHwnd" in binding and "HwndToSeller" in binding
 
     change_area = desk[desk.index("public void ChangeBuyer"):desk.index("public void SetActiveQn")]
     assert "inst.AssistWindow" not in change_area
     assert "var assist = AssistWindow" in change_area
 
 
-def test_rpa_has_explicit_seller_bound_native_window_binding():
+def test_rpa_requires_explicit_seller_bound_native_window_in_multi_shop():
     binding = read("src/Bot/ChromeNs/QNRpa.MultiShopDeskBinding.cs")
     scope = read("src/Bot/ShopScope/ShopSettingsScope.cs")
     coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
 
-    assert "Desk.FindExistingBySellerNick(SellerNick)" in binding
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in binding
     assert "FlaUI.Core.Application.Attach(desk.ProcessId)" in binding
-    assert "if (desks.Count == 1)" in binding
-    assert "if (Desk.HasMultipleDesks)" in binding
-    assert "禁止猜测其他店铺" in binding
+    assert "desks.Count == 1 && RuntimeSellerCount() <= 1" in binding
+    assert "RuntimeSellerCount() > 1" in binding
+    assert "禁止共享或猜测其他店铺" in binding
     assert "MultiShopRuntimeSessionCoordinator.EnsureShopBinding(shop)" in scope
     assert "EvRecieveNewMessage += Qn_EvRecieveNewMessage" in coordinator
     assert "EnsureSellerDeskBinding(force)" in coordinator
@@ -64,17 +67,18 @@ def test_each_attached_robot_is_resynchronized_from_its_own_qn():
     session = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.MultiShopSession.cs")
     coordinator = read("src/Bot/ChromeNs/MultiShopRuntimeSessionCoordinator.cs")
 
-    assert "_desk.WndTitle" in session
+    assert "DeskSellerBindingRegistry.IsSellerForDesk(_desk, seller)" in session
     assert "ReferenceEquals(_preQN, qn)" in session
     assert "_preQN = qn" in session
     assert "RefreshConversations();" in session
     assert "robot.SynchronizeSellerSession(qn)" in coordinator
-    assert "Desk.FindExistingBySellerNick(seller)" in coordinator
+    assert "DeskSellerBindingRegistry.FindSellerDesk(seller)" in coordinator
 
 
 def test_new_multi_shop_sources_are_in_wpf_compile_graph():
     props = read("src/Bot/Directory.Build.props")
     for name in (
+        "Automation\\ChatDeskNs\\DeskSellerBindingRegistry.cs",
         "ChromeNs\\MultiShopRuntimeSessionCoordinator.cs",
         "ChromeNs\\QNRpa.MultiShopDeskBinding.cs",
         "AssistWindow\\Widget\\Robot\\CtlRobot.MultiShopSession.cs",
