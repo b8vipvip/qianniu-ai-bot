@@ -33,7 +33,7 @@ namespace Bot.AssistWindow.NotifyIcon.MenuCreator
 
         private static void OnOpenBotDesktopClicked(object sender, EventArgs e)
         {
-            BotDesktopWindow.ShowMain();
+            BotDesktopStartup.ShowManualWorkbench();
         }
 
         private static void OnComeNoodles(object sender, EventArgs e)
