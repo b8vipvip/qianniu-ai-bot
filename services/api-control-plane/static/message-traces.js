@@ -59,7 +59,7 @@ async function loadMessageTraces(){
     <td>${esc(cnTime(r.occurred_at||r.created_at,""))}</td>
     <td><strong>${esc(r.client_name||("#"+r.client_id))}</strong><div class="hint">${esc(r.shop_key||"-")}</div></td>
     <td>${esc(r.seller||"-")}<div class="hint">→ ${esc(r.buyer||"-")}</div></td>
-    <td><button class="ghost" onclick="filterTrace('${esc(r.trace_id||"")}')">${esc(String(r.trace_id||"").slice(0,10)||"-")}</button></td>
+    <td><button class="ghost" data-trace-id="${esc(r.trace_id||"")}" onclick="filterTrace(this.dataset.traceId)">${esc(String(r.trace_id||"").slice(0,10)||"-")}</button></td>
     <td>${esc(traceStageName(r.stage))}</td>
     <td>${badge(r.status||"-",traceStatusKind(r.status))}</td>
     <td>${Number(r.duration_ms||0)>0?esc(r.duration_ms+"ms"):"-"}</td>
