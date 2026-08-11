@@ -174,8 +174,8 @@ namespace Bot.ChromeNs
                 if (!TryClaimSellerSession(sellerNick, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.InfoWithMaxCount("已忽略同一卖家的重复千牛CDP状态会话，避免重启后反复切换发送通道: seller="
-                        + sellerNick + ", session=" + session.SessionID, 20);
+                    Log.Info("已忽略同一卖家的重复千牛CDP状态会话，避免重启后反复切换发送通道: seller="
+                        + sellerNick + ", session=" + session.SessionID);
                     return;
                 }
 
@@ -213,8 +213,8 @@ namespace Bot.ChromeNs
                 if (!TryClaimSellerSession(sellerNick, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.InfoWithMaxCount("重复千牛CDP会话已完成识别但不接管卖家运行通道: seller="
-                        + sellerNick + ", session=" + session.SessionID, 20);
+                    Log.Info("重复千牛CDP会话已完成识别但不接管卖家运行通道: seller="
+                        + sellerNick + ", session=" + session.SessionID);
                     return;
                 }
 
@@ -302,8 +302,8 @@ namespace Bot.ChromeNs
                                         || TryClaimSellerSession(loginNick, session.SessionID);
                                     if (!authoritative)
                                     {
-                                        Log.InfoWithMaxCount("检测到卖家重复千牛WebSocket页面，保留已稳定的权威CDP会话: seller="
-                                            + loginNick + ", ignoredSession=" + session.SessionID, 20);
+                                        Log.Info("检测到卖家重复千牛WebSocket页面，保留已稳定的权威CDP会话: seller="
+                                            + loginNick + ", ignoredSession=" + session.SessionID);
                                     }
                                     else if (!_initialized.ContainsKey(session.SessionID))
                                     {
@@ -377,7 +377,6 @@ namespace Bot.ChromeNs
             }
         }
     }
-
     public class ConnectionDiagnosticsSnapshot
     {
         public bool WebSocketServerStarted { get; set; }
