@@ -54,8 +54,34 @@ def test_shop_binding_page_replaces_ai_service_navigation_and_can_pull_cloud_kno
 
     assert 'AddPage("店铺与连接", "AI 服务"' not in window
     assert "if (showPage == OptionEnum.Robot) showPage = OptionEnum.ShopBinding;" in window
-    assert "本店 Bot 服务端地址" in binding
+    assert "Bot 服务端（程序内置）" in binding
+    assert "本店 Bot 服务端地址" not in binding
     assert "本店 Bot 客户端令牌" in binding
-    assert "保存连接并立即同步知识库" in binding
+    assert "保存令牌并立即同步知识库" in binding
     assert "await KnowledgeCloudSyncService.SyncNowAsync(_shop)" in binding
     assert "internal static async Task SyncNowAsync(ShopContext shop)" in sync
+
+
+def test_attached_window_tracking_no_longer_periodically_uses_topmost():
+    perf = read("src/Bot/AssistWindow/WndAssist.AttachedPerformance.cs")
+    props = read("src/Bot/Directory.Build.props")
+    assert "SafePeriodicTrack" in perf
+    assert "5000" in perf
+    assert "SwpNoActivate" in perf
+    assert "HwndNotTopmost" in perf
+    assert "Topmost = true" not in perf
+    assert "BringTop()" not in perf
+    assert "WndAssist.AttachedPerformance.cs" in props
+
+
+def test_status_bar_uses_shop_control_plane_status_not_legacy_local_ai_endpoint_count():
+    status = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.ControlPlaneStatus.cs")
+    legacy = read("src/Bot/AssistWindow/Widget/Robot/CtlRobot.DataDesk.cs")
+    props = read("src/Bot/Directory.Build.props")
+    assert 'txtStatusApi.Text = "服务端：" + status' in status
+    assert "ShopTokenBindingService.GetStatusText" in status
+    assert "ShopContextLocator.ResolveBySellerNick" in status
+    assert "_diagnosticsTimer.Interval = TimeSpan.FromSeconds(5)" in status
+    assert "_statsTimer.Interval = TimeSpan.FromSeconds(10)" in status
+    assert "AiEndpointStore.GetEnabledEndpoints" in legacy  # old data-desk metric remains compatibility-only
+    assert "CtlRobot.ControlPlaneStatus.cs" in props
