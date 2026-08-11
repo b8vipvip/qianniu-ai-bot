@@ -58,16 +58,19 @@ def test_update_sha_survives_manifest_network_failure_and_shop_scoped_server_url
     assert "release.Sha256 = string.Empty;\n                Log.Info(\n                    \"读取更新SHA清单失败" not in network
 
 
-def test_download_prefers_github_then_falls_back_to_verified_server_mirror():
+def test_download_prefers_tencent_control_plane_then_falls_back_to_github():
     code = updater_code()
     download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
 
-    assert 'AddDownloadSource(sources, "GitHub", release.PackageUrl)' in code
-    assert 'AddDownloadSource(sources, "服务端镜像", release.MirrorUrl)' in code
+    mirror_line = 'AddDownloadSource(sources, "腾讯云控制台服务器", release.MirrorUrl)'
+    github_line = 'AddDownloadSource(sources, "GitHub", release.PackageUrl)'
+    assert mirror_line in download
+    assert github_line in download
+    assert download.index(mirror_line) < download.index(github_line)
     assert "DownloadConnectTimeoutSeconds = 20" in code
     assert "DownloadReadTimeoutSeconds = 45" in code
     assert "HashFile(partial)" in code
-    assert "GitHub 与服务端镜像均下载失败" in code
+    assert "腾讯云控制台服务器与 GitHub 均下载失败" in code
     assert "release.Sha256" in code
     assert "SHA-256 校验信息" in code
     assert "release-info.json" in code
