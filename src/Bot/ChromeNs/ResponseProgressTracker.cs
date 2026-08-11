@@ -85,6 +85,7 @@ namespace Bot.ChromeNs
                     Entry current;
                     if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) continue;
 
+                    var firstObservation = entry.DetectedAt == DateTime.MinValue;
                     var observedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
                     var newerTurnDuringGeneration = entry.AnswerStartedAt != DateTime.MinValue
                         && entry.DetectedAt != DateTime.MinValue
@@ -127,6 +128,8 @@ namespace Bot.ChromeNs
                         entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
                         entry.Control.SetProcessing("已识别，等待合并本轮消息...");
                     }
+                    if (firstObservation)
+                        MessageProcessingTraceService.RecordQuestion(seller, buyer, entry.Question);
                     return entry.Control;
                 }
             }
@@ -138,8 +141,11 @@ namespace Bot.ChromeNs
             var control = SetExactQuestion(seller, buyer, combinedQuestion, detectedAt);
             var startedAt = MarkAnswerStarted(seller, buyer, DateTime.Now);
             if (control != null) control.SetProcessing("正在获取答案...");
+            var queueMs = Math.Max(0, (long)(startedAt - detectedAt).TotalMilliseconds);
+            MessageProcessingTraceService.RecordGenerationStarted(
+                seller, buyer, combinedQuestion, queueMs);
             Log.Info("本店回复进度进入答案生成: seller=" + seller + ", buyer=" + buyer
-                + ", queueMs=" + Math.Max(0, (long)(startedAt - detectedAt).TotalMilliseconds));
+                + ", queueMs=" + queueMs);
             return control;
         }
 
@@ -182,8 +188,11 @@ namespace Bot.ChromeNs
                     ExpiresAt = DateTime.Now.AddMinutes(3)
                 };
             }
+            var responseMs = Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds);
+            MessageProcessingTraceService.RecordAnswerReady(
+                seller, buyer, question, answer, source, responseMs);
             Log.Info("本店回复进度答案就绪: seller=" + seller + ", buyer=" + buyer
-                + ", responseMs=" + Math.Max(0, (long)(answerReadyAt - detected).TotalMilliseconds)
+                + ", responseMs=" + responseMs
                 + ", source=" + (source ?? string.Empty));
 
             if (!string.IsNullOrWhiteSpace(answer) && !answer.StartsWith("错误：", StringComparison.Ordinal))
@@ -213,6 +222,7 @@ namespace Bot.ChromeNs
             }
             BotConnectionDiagnostics.RecordSendAttempt(true,
                 string.IsNullOrWhiteSpace(detail) ? "卖家消息回显确认真实发送" : detail);
+            MessageProcessingTraceService.RecordDelivery(seller, buyer, true, detail);
             Log.Info("本店回复卡片已按卖家回显恢复为发送成功: seller=" + seller
                 + ", buyer=" + buyer + ", detail=" + (detail ?? string.Empty));
         }
@@ -223,11 +233,13 @@ namespace Bot.ChromeNs
             if (DeliveryUi.TryRemove(DeliveryKey(seller, buyer, answer), out ui)
                 && ui != null && ui.Control != null)
                 ui.Control.SetSendResult(false, "发送失败：" + (detail ?? string.Empty));
+            MessageProcessingTraceService.RecordDelivery(seller, buyer, false, detail);
         }
 
         public static void MarkManualIntervention(string seller, string buyer, string sellerReply)
         {
             SendDeliveryWatchdog.CancelConversation(seller, buyer, "检测到客服人工回复");
+            MessageProcessingTraceService.RecordManualIntervention(seller, buyer, sellerReply);
             Entry entry;
             if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
             lock (entry.Sync)
@@ -244,6 +256,7 @@ namespace Bot.ChromeNs
 
         public static void Fail(string seller, string buyer, string detail)
         {
+            MessageProcessingTraceService.RecordFailure(seller, buyer, detail);
             Entry entry;
             if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
             lock (entry.Sync)
