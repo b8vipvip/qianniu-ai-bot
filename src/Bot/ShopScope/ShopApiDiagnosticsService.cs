@@ -1,3 +1,4 @@
+using Bot.ChromeNs;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Diagnostics;
@@ -90,11 +91,16 @@ namespace Bot.ShopScope
 
         public static async Task<ShopApiDiagnosticReport> TestAnswerChainAsync(
             ShopContext shop,
+            string seller,
             string serverUrl,
             string token,
             CancellationToken cancellationToken = default(CancellationToken))
         {
             ValidateInputs(shop, serverUrl, token);
+            seller = (seller ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(seller))
+                throw new InvalidOperationException("当前店铺没有可用于真实发送测试的客服身份。" );
+
             var baseUrl = ShopControlPlaneConnectionStore.NormalizeUrl(serverUrl);
             var overall = Stopwatch.StartNew();
 
@@ -111,8 +117,8 @@ namespace Bot.ShopScope
             }
 
             var prompt =
-                "这是千牛Bot设置中的诊断请求，不是买家消息，不要调用工具或外部接口。"
-                + "请用一句简短中文回答，并明确说明AI回答链路正常。";
+                "这是千牛Bot设置中的诊断请求，不是买家问题，不要调用工具或外部接口。"
+                + "请只用一句简短中文回复：AI回答链路正常，真实发送测试成功。";
             var payload = new JObject
             {
                 ["model"] = "text-default",
@@ -145,15 +151,17 @@ namespace Bot.ShopScope
                     {
                         var body = await response.Content.ReadAsStringAsync();
                         aiWatch.Stop();
-                        overall.Stop();
                         if (!response.IsSuccessStatusCode)
                         {
+                            overall.Stop();
                             return Failure(
                                 "AI回答链路失败",
-                                "阶段1/5 API网络：通过\n"
-                                + "阶段2/5 Token/ShopKey：通过\n"
-                                + "阶段3/5 Control Plane 路由：已进入\n"
-                                + "阶段4/5 上游供应商/模型调用：失败\n"
+                                "阶段1/6 API网络：通过\n"
+                                + "阶段2/6 Token/ShopKey：通过\n"
+                                + "阶段3/6 Control Plane 路由：已进入\n"
+                                + "阶段4/6 上游供应商/模型调用：失败\n"
+                                + "阶段5/6 AI回复文本解析：未执行\n"
+                                + "阶段6/6 千牛真实发送：未执行\n"
                                 + "HTTP：" + (int)response.StatusCode + " " + response.ReasonPhrase + "\n"
                                 + "AI阶段耗时：" + aiWatch.ElapsedMilliseconds + " ms\n"
                                 + "响应：" + Safe(body, 1800));
@@ -166,9 +174,16 @@ namespace Bot.ShopScope
                         var answer = Convert.ToString(message == null ? null : message["content"]);
                         if (string.IsNullOrWhiteSpace(answer))
                         {
+                            overall.Stop();
                             return Failure(
                                 "AI回答链路失败：未解析到AI文本",
-                                "服务端已返回 HTTP 2xx，但 choices[0].message.content 为空。\n"
+                                "阶段1/6 API网络：通过\n"
+                                + "阶段2/6 Token/ShopKey：通过\n"
+                                + "阶段3/6 Control Plane 路由：通过\n"
+                                + "阶段4/6 上游供应商/模型调用：通过\n"
+                                + "阶段5/6 AI回复文本解析：失败\n"
+                                + "阶段6/6 千牛真实发送：未执行\n"
+                                + "服务端已返回 HTTP 2xx，但 choices[0].message.content 为空。\n"
                                 + "响应：" + Safe(body, 1800));
                         }
 
@@ -179,20 +194,31 @@ namespace Bot.ShopScope
                         var latency = Convert.ToString(routing == null ? null : routing["latency_ms"]);
                         var fallback = Convert.ToString(routing == null ? null : routing["fallback_attempts"]);
 
-                        return Success(
-                            "AI回答链路正常",
-                            "阶段1/5 API网络：通过\n"
-                            + "阶段2/5 Token/ShopKey：通过\n"
-                            + "阶段3/5 Control Plane 路由：通过\n"
-                            + "阶段4/5 上游供应商/模型/协议：通过\n"
-                            + "阶段5/5 AI回复文本解析：通过\n"
+                        var sendResult = await SendDiagnosticAnswerAsync(
+                            shop,
+                            seller,
+                            answer.Trim(),
+                            cancellationToken);
+                        overall.Stop();
+
+                        var common =
+                            "阶段1/6 API网络：通过\n"
+                            + "阶段2/6 Token/ShopKey：通过\n"
+                            + "阶段3/6 Control Plane 路由：通过\n"
+                            + "阶段4/6 上游供应商/模型/协议：通过\n"
+                            + "阶段5/6 AI回复文本解析：通过\n"
                             + "供应商：" + Empty(provider, "未返回") + "\n"
                             + "模型：" + Empty(model, "未返回") + "\n"
                             + "协议：" + Empty(protocol, "未返回") + "\n"
                             + "上游耗时：" + Empty(latency, "-") + " ms\n"
                             + "回退次数：" + Empty(fallback, "0") + "\n"
                             + "链路总耗时：" + overall.ElapsedMilliseconds + " ms\n\n"
-                            + "AI实际回复：\n" + answer.Trim());
+                            + "AI实际回复：\n" + answer.Trim() + "\n\n"
+                            + sendResult.Details;
+
+                        return sendResult.Success
+                            ? Success("AI回答 + 千牛真实发送链路正常", common)
+                            : Failure("AI回答正常，但千牛真实发送失败", common);
                     }
                 }
             }
@@ -206,9 +232,119 @@ namespace Bot.ShopScope
                 overall.Stop();
                 return Failure(
                     "AI回答链路失败",
-                    "API与鉴权已通过，但调用AI路由时发生异常。\n"
+                    "API与鉴权已通过，但调用AI路由或真实发送时发生异常。\n"
                     + "AI阶段耗时：" + aiWatch.ElapsedMilliseconds + " ms\n"
                     + "错误：" + Safe(ex.Message, 1600));
+            }
+        }
+
+        private static async Task<ShopApiDiagnosticReport> SendDiagnosticAnswerAsync(
+            ShopContext shop,
+            string seller,
+            string answer,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            QN qn = null;
+            try
+            {
+                qn = QN.FindExistingBySellerNick(seller);
+            }
+            catch (Exception ex)
+            {
+                return Failure(
+                    "千牛真实发送失败",
+                    "阶段6/6 千牛真实发送：失败\n无法定位当前客服实例：" + Safe(ex.Message, 800));
+            }
+
+            if (qn == null || qn.Seller == null)
+            {
+                return Failure(
+                    "千牛真实发送失败",
+                    "阶段6/6 千牛真实发送：失败\n当前店铺没有在线的千牛客服运行实例，请先保持接待窗口在线。" );
+            }
+
+            try
+            {
+                var resolved = ShopContextLocator.ResolveBySellerNick(qn.Seller.Nick);
+                if (resolved == null
+                    || !string.Equals(resolved.ShopKey, shop.ShopKey, StringComparison.Ordinal))
+                {
+                    return Failure(
+                        "千牛真实发送失败",
+                        "阶段6/6 千牛真实发送：失败\n客服与当前 ShopKey 不一致，已阻止跨店测试发送。" );
+                }
+            }
+            catch (Exception ex)
+            {
+                return Failure(
+                    "千牛真实发送失败",
+                    "阶段6/6 千牛真实发送：失败\n无法验证客服 ShopKey：" + Safe(ex.Message, 800));
+            }
+
+            string buyer = string.Empty;
+            try
+            {
+                var current = await qn.GetCurrentConversationID();
+                buyer = current == null || current.Result == null
+                    ? string.Empty
+                    : (current.Result.Nick ?? string.Empty).Trim();
+            }
+            catch (Exception ex)
+            {
+                return Failure(
+                    "千牛真实发送失败",
+                    "阶段6/6 千牛真实发送：失败\n读取当前买家会话失败：" + Safe(ex.Message, 900));
+            }
+
+            if (string.IsNullOrWhiteSpace(buyer))
+            {
+                return Failure(
+                    "千牛真实发送失败",
+                    "阶段6/6 千牛真实发送：失败\n当前没有可确认的买家会话。请先在千牛中打开一个测试买家，再点击测试。" );
+            }
+
+            var safeAnswer = answer ?? string.Empty;
+            if (safeAnswer.Length > 420) safeAnswer = safeAnswer.Substring(0, 420);
+            var sendText = "【Bot链路测试，可手动撤回】" + safeAnswer;
+            try
+            {
+                KnowledgeLearningService.AllowNextManualSend(seller, buyer, sendText);
+                bool sent;
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    sent = await qn.SendTextWithRetryAsync(buyer, sendText, 1);
+                }
+
+                if (!sent)
+                {
+                    var reason = qn.Rpa == null ? "发送链路返回失败" : qn.Rpa.GetSendFailureReason();
+                    return Failure(
+                        "千牛真实发送失败",
+                        "阶段6/6 千牛真实发送：失败\n"
+                        + "客服：" + seller + "\n"
+                        + "当前买家：" + buyer + "\n"
+                        + "失败阶段：" + Safe(reason, 1200) + "\n"
+                        + "测试文本：" + Safe(sendText, 600));
+                }
+
+                return Success(
+                    "千牛真实发送正常",
+                    "阶段6/6 千牛真实发送：通过\n"
+                    + "客服：" + seller + "\n"
+                    + "当前买家：" + buyer + "\n"
+                    + "发送确认：生产 SendTextWithRetryAsync 已确认成功\n"
+                    + "测试文本：" + Safe(sendText, 600) + "\n"
+                    + "提示：这是一条真实买家消息，可在千牛中手动撤回。" );
+            }
+            catch (Exception ex)
+            {
+                return Failure(
+                    "千牛真实发送失败",
+                    "阶段6/6 千牛真实发送：失败\n"
+                    + "客服：" + seller + "\n"
+                    + "当前买家：" + buyer + "\n"
+                    + "异常：" + Safe(ex.Message, 1200));
             }
         }
 
@@ -238,9 +374,9 @@ namespace Bot.ShopScope
         {
             if (shop == null) throw new ArgumentNullException(nameof(shop));
             if (string.IsNullOrWhiteSpace(serverUrl))
-                throw new InvalidOperationException("程序没有配置 Bot 服务端地址。");
+                throw new InvalidOperationException("程序没有配置 Bot 服务端地址。" );
             if (string.IsNullOrWhiteSpace(token))
-                throw new InvalidOperationException("本店尚未保存 Bot 客户端令牌，请先保存令牌后再测试。");
+                throw new InvalidOperationException("本店尚未保存 Bot 客户端令牌，请先保存令牌后再测试。" );
         }
 
         private static JObject ParseObject(string value)
