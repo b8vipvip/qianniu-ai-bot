@@ -8,6 +8,13 @@ def _source():
     return RELIABLE.read_text(encoding="utf-8-sig")
 
 
+def _code_only(text):
+    return "\n".join(
+        line for line in text.splitlines()
+        if not line.lstrip().startswith("//")
+    )
+
+
 def test_uia_scan_uses_verified_seller_desk_hwnd_not_global_main_window():
     text = _source()
     assert "var sellerDesk = ResolveSellerDesk();" in text
@@ -33,7 +40,7 @@ def test_send_button_fallback_stays_inside_the_same_seller_hwnd_tree():
 
 
 def test_seller_window_scan_remains_fail_closed_when_binding_is_ambiguous():
-    text = _source()
-    assert "未找到当前客服唯一对应的千牛接待窗口" in text
-    assert "当前客服的 RPA/千牛窗口绑定尚未就绪" in text
-    assert "Desk.Inst" not in text
+    code = _code_only(_source())
+    assert "未找到当前客服唯一对应的千牛接待窗口" in code
+    assert "当前客服的 RPA/千牛窗口绑定尚未就绪" in code
+    assert "Desk.Inst" not in code
