@@ -16,7 +16,8 @@ def test_shop_ai_falls_back_to_control_plane_without_persisting_token():
     assert 'text-default' in text
     assert 'JsonConvert.SerializeObject' in text
     assert 'SetString(AiEndpointListKey' not in text
-    assert 'if (hasScopedValue && !string.IsNullOrWhiteSpace(value)) return true;' in text
+    assert 'HasUsableExplicitAiEndpoint(value)' in text
+    assert 'apiKey.Length > 0 && model.Length > 0' in text
 
 
 def test_shop_ai_proxy_enforces_shop_binding_and_reuses_control_plane_dispatch():
