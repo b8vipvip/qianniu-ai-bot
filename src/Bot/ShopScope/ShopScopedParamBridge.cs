@@ -88,9 +88,11 @@ namespace Bot.ShopScope
                     var enabledToken = item["Enabled"] ?? item["enabled"];
                     var enabled = enabledToken == null || enabledToken.Type != JTokenType.Boolean
                         || enabledToken.Value<bool>();
-                    var apiKey = ((item["ApiKey"] ?? item["apiKey"]) ?? string.Empty).ToString().Trim();
-                    var model = ((item["TextModel"] ?? item["textModel"]
-                        ?? item["Model"] ?? item["model"]) ?? string.Empty).ToString().Trim();
+                    var apiKeyToken = item["ApiKey"] ?? item["apiKey"];
+                    var modelToken = item["TextModel"] ?? item["textModel"]
+                        ?? item["Model"] ?? item["model"];
+                    var apiKey = apiKeyToken == null ? string.Empty : apiKeyToken.ToString().Trim();
+                    var model = modelToken == null ? string.Empty : modelToken.ToString().Trim();
                     return enabled && apiKey.Length > 0 && model.Length > 0;
                 });
             }
