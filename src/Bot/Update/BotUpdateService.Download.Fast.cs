@@ -85,10 +85,23 @@ namespace Bot.UpdateNs
                         + ", source=" + source.Key);
                     return target;
                 }
-                catch (OperationCanceledException)
+                catch (OperationCanceledException ex)
                 {
                     try { if (File.Exists(partial)) File.Delete(partial); } catch { }
-                    throw;
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        Log.Info(
+                            "Bot更新下载被用户取消: source=" + source.Key
+                            + ", version=" + release.Version);
+                        throw;
+                    }
+
+                    var message = "下载连接被远端或网络中断";
+                    errors.Add(source.Key + "：" + message);
+                    Log.Info(
+                        "Bot更新下载源发生非用户取消，自动切换下一来源: source=" + source.Key
+                        + ", version=" + release.Version
+                        + ", error=" + Short(ex.Message, 240));
                 }
                 catch (Exception ex)
                 {
@@ -138,10 +151,21 @@ namespace Bot.UpdateNs
                     "application/octet-stream");
                 connectTimeout.CancelAfter(
                     TimeSpan.FromSeconds(DownloadConnectTimeoutSeconds));
-                response = await Http.SendAsync(
-                    request,
-                    HttpCompletionOption.ResponseHeadersRead,
-                    connectTimeout.Token);
+                try
+                {
+                    response = await Http.SendAsync(
+                        request,
+                        HttpCompletionOption.ResponseHeadersRead,
+                        connectTimeout.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    if (cancellationToken.IsCancellationRequested) throw;
+                    throw new TimeoutException(
+                        "连接下载源超过 "
+                        + DownloadConnectTimeoutSeconds
+                        + " 秒，已自动切换备用下载源。");
+                }
             }
 
             using (response)
