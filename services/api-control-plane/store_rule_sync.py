@@ -5,7 +5,7 @@ import re
 import threading
 from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 import bot_web_console as core
@@ -174,8 +174,13 @@ class StoreRuleSyncInput(BaseModel):
 @router.post("/api/runtime/v1/bot-web/store-rule-sync")
 def runtime_store_rule_sync(
     data: StoreRuleSyncInput,
+    request: Request,
     client: Dict[str, Any] = Depends(core._runtime_client),
 ) -> Dict[str, Any]:
+    shop_key = (request.headers.get("x-shop-key") or "").strip()
+    if not shop_key:
+        raise HTTPException(status_code=400, detail="缺少 X-Shop-Key")
+
     client_id = int(client["id"])
     if not data.enabled:
         return {"ok": True, "enabled": False, "revision": _state(client_id)["revision"]}
