@@ -258,6 +258,9 @@ namespace Bot.Knowledge
 
                 var local = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
                 var localJson = JsonConvert.SerializeObject(local, Formatting.None);
+                // The Python control plane hashes JSON with sort_keys=True. Canonicalize every
+                // object key here as well so identical knowledge does not look changed every
+                // eight seconds and repeatedly rewrite 700+ items/backups after a restart.
                 var localHash = Hash(localJson);
                 var lastHash = PersistentParams.GetParam2Key(LastHashKey, Scope, string.Empty);
                 int revision;
@@ -298,6 +301,21 @@ namespace Bot.Knowledge
                         if (items != null && !string.IsNullOrWhiteSpace(cloudHash)
                             && !string.Equals(cloudHash, localHash, StringComparison.OrdinalIgnoreCase))
                         {
+                            var cloudJson = items.ToString(Formatting.None);
+                            var canonicalCloudHash = Hash(cloudJson);
+                            if (string.Equals(canonicalCloudHash, localHash, StringComparison.OrdinalIgnoreCase))
+                            {
+                                // Compatibility bridge for the old non-canonical Windows hash:
+                                // data is already identical, so adopt the server hash/revision
+                                // without rewriting hundreds of records or creating another backup.
+                                PersistentParams.TrySaveParam2Key(LastHashKey, Scope, cloudHash);
+                                PersistentParams.TrySaveParam2Key(RevisionKey, Scope, cloudRevision.ToString());
+                                UpdateStatus(shop, "本店云同步正常 · " + local.Count + " 条 · v" + cloudRevision, Brushes.SeaGreen);
+                                Log.Info("本店知识库云同步哈希已收敛，无需重复覆盖本地: shop="
+                                    + shop.ShopKey + ", revision=" + cloudRevision + ", count=" + local.Count);
+                                return;
+                            }
+
                             var cloud = items.ToObject<List<KnowledgeBaseEntry>>() ?? new List<KnowledgeBaseEntry>();
                             var backup = Backup(shop, localJson);
                             BotFeatureStore.SaveKnowledgeBase(cloud);
@@ -336,11 +354,49 @@ namespace Bot.Knowledge
 
         private static string Hash(string value)
         {
+            var canonical = CanonicalizeJson(value);
             using (var sha = SHA256.Create())
             {
-                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value ?? string.Empty)))
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(canonical)))
                     .Replace("-", string.Empty).ToLowerInvariant();
             }
+        }
+
+        private static string CanonicalizeJson(string value)
+        {
+            try
+            {
+                return CanonicalizeToken(JToken.Parse(value ?? "null")).ToString(Formatting.None);
+            }
+            catch
+            {
+                return value ?? string.Empty;
+            }
+        }
+
+        private static JToken CanonicalizeToken(JToken token)
+        {
+            var obj = token as JObject;
+            if (obj != null)
+            {
+                var sorted = new JObject();
+                foreach (var property in obj.Properties().OrderBy(x => x.Name, StringComparer.Ordinal))
+                {
+                    sorted.Add(property.Name, CanonicalizeToken(property.Value));
+                }
+                return sorted;
+            }
+
+            var array = token as JArray;
+            if (array != null)
+            {
+                var sortedItems = new JArray();
+                foreach (var item in array)
+                    sortedItems.Add(CanonicalizeToken(item));
+                return sortedItems;
+            }
+
+            return token == null ? JValue.CreateNull() : token.DeepClone();
         }
 
         private static void UpdateStatus(ShopContext shop, string text, Brush brush)
