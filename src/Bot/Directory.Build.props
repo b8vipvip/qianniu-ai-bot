@@ -32,6 +32,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedUiBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopSettingsScope.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopTokenStore.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopTokenBindingService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Options\ShopBindingOptionsControl.cs" />
   </ItemGroup>
 
@@ -46,7 +47,9 @@
   <!-- Attached-only Bot UI. These helpers must also be visible to WPF *_wpftmp projects. -->
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\WndAssist.MultiShopAttached.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\WndAssist.MultiShopAttached.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\WndAssist.AttachedPerformance.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\Robot\CtlRobot.MultiShopSession.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\Robot\CtlRobot.ControlPlaneStatus.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Automation\ChatDeskNs\DeskSellerBindingRegistry.cs')">

@@ -40,29 +40,53 @@ def test_legacy_global_token_requires_explicit_ui_import():
     assert "_connection.SaveToken(candidate)" in ui
 
 
-def test_control_plane_url_is_persisted_per_shop_with_legacy_prefill_only():
+def test_control_plane_url_is_program_level_with_built_in_default_and_legacy_migration():
     connection = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
-    assert "ShopScopedSettingsStore _settings" in connection
-    assert "_settings.TryGetString(UrlKey" in connection
-    assert "_settings.SetString(UrlKey" in connection
-    assert "GetLegacyGlobalServerUrl" in connection
+    config = read("src/Bot/App.config")
+    assert 'DefaultUrlSettingKey = "BotControlPlaneDefaultUrl"' in connection
+    assert 'ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL"' in connection
+    assert "GetProgramServerUrl" in connection
+    assert "SaveProgramServerUrl" in connection
     assert "PersistentParams.GetParam2Key(UrlKey, LegacyScope" in connection
-    assert "HasShopServerUrl" in connection
+    assert "_settings.TryGetString(UrlKey" in connection  # one-time migration from PR #89
+    assert "_settings.SetString(UrlKey" not in connection
+    assert 'key="BotControlPlaneDefaultUrl"' in config
+    assert 'value="http://botserver.mv3.cn"' in config
 
 
-def test_shop_binding_page_owns_connection_token_and_cloud_sync_actions():
+def test_shop_binding_page_owns_token_and_cloud_sync_but_not_per_shop_server_url():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
     sync = read("src/Bot/Knowledge/KnowledgeCloudSyncService.cs")
-    assert 'Label("本店 Bot 服务端地址")' in ui
+    assert 'Label("Bot 服务端（程序内置）")' in ui
+    assert 'Label("本店 Bot 服务端地址")' not in ui
+    assert "_connection.SetServerUrl" not in ui
     assert 'Label("本店 Bot 客户端令牌")' in ui
+    assert "一个令牌只能绑定一个 ShopKey" in ui
     assert "启用本店知识库云同步" in ui
-    assert "保存连接并立即同步知识库" in ui
+    assert "保存令牌并立即同步知识库" in ui
     assert "KnowledgeCloudSyncService.SyncNowAsync(_shop)" in ui
     assert "KnowledgeCloudSyncService.SetEnabledForShop" in ui
     assert "IsEnabledForShop" in sync
     assert "SyncNowAsync" in sync
     assert "ShopSettingsScope.Enter(shop)" in sync
     assert '"X-Shop-Key"' in sync
+
+
+def test_token_binding_conflict_is_checked_before_new_token_is_saved():
+    ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
+    client = read("src/Bot/ShopScope/ShopTokenBindingService.cs")
+    server = read("services/api-control-plane/bot_client_shop_binding.py")
+    assert "ValidateTokenBinding(candidate);" in ui
+    assert "ShopTokenBindingService" in ui
+    assert "是否踢出旧店铺" in ui
+    assert "ClaimAsync(_shop, candidate, true)" in ui
+    assert "ClearDuplicateLocalTokenCopies" in ui
+    assert 'CLAIM_PATH = "/api/runtime/v1/shop-binding/claim"' in server
+    assert '"token_bound_to_other_shop"' in server
+    assert "bound_shop_key" in server
+    assert "force" in server
+    assert "_reset_old_shop_server_state" in server
+    assert "QueueConflictPrompt" in client
 
 
 def test_shop_ai_settings_payload_is_dpapi_protected_and_shop_key_bound():
@@ -154,10 +178,10 @@ def test_unstable_nickname_binding_requires_explicit_confirmation_and_keeps_wind
     assert "窗口已保留，请修正后重试" in window
 
 
-def test_ui_claims_complete_business_data_and_cloud_isolation_scope():
+def test_ui_claims_shop_data_isolation_while_service_endpoint_is_shared():
     ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
-    assert "服务端地址、Bot Token、知识库、规则、消息状态" in ui
-    assert "均按 ShopKey 隔离" in ui
+    assert "Bot 服务端地址由程序统一配置" in ui
+    assert "本店 Token、知识库、规则、消息状态和云数据继续按 ShopKey 隔离" in ui
 
 
 def test_build_includes_shop_scope_and_botlib_router_sources():
@@ -173,6 +197,7 @@ def test_build_includes_shop_scope_and_botlib_router_sources():
         "ShopScopedUiBridge.cs",
         "ShopSettingsScope.cs",
         "ShopTokenStore.cs",
+        "ShopTokenBindingService.cs",
         "ShopBindingOptionsControl.cs",
     ):
         assert filename in bot_props

@@ -1,5 +1,6 @@
 using BotLib.Db.Sqlite;
 using System;
+using System.Configuration;
 
 namespace Bot.ShopScope
 {
@@ -8,6 +9,9 @@ namespace Bot.ShopScope
         private const string LegacyScope = "ai-control-plane";
         private const string UrlKey = "ControlPlaneUrl";
         private const string LegacyTokenKey = "ControlPlaneClientToken";
+        private const string DefaultUrlSettingKey = "BotControlPlaneDefaultUrl";
+        private const string ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL";
+        private const string BuiltInDefaultServerUrl = "http://botserver.mv3.cn";
 
         private readonly ShopContext _shop;
         private readonly ShopTokenStore _tokens;
@@ -24,30 +28,37 @@ namespace Bot.ShopScope
 
         public string GetServerUrl()
         {
-            string value;
-            if (_settings.TryGetString(UrlKey, out value))
+            // The API Control Plane is a program/deployment endpoint, not a shop secret.
+            // Every shop on one Bot installation uses the same endpoint; only the token
+            // remains ShopKey-scoped. Preserve existing installs by migrating the first
+            // historical per-shop URL into the old global slot once.
+            var global = GetProgramServerUrl();
+            if (!string.IsNullOrWhiteSpace(global)) return global;
+
+            string scoped;
+            if (_settings.TryGetString(UrlKey, out scoped))
             {
-                return NormalizeUrl(value);
+                scoped = NormalizeUrl(scoped);
+                if (!string.IsNullOrWhiteSpace(scoped))
+                {
+                    SaveProgramServerUrl(scoped);
+                    return scoped;
+                }
             }
 
-            // Backward compatibility only: the first time a shop is opened after upgrade,
-            // prefill the historical global URL. Saving the page writes the value into this
-            // shop's encrypted settings.json and all subsequent reads stay shop-scoped.
-            return GetLegacyGlobalServerUrl();
+            return GetBuiltInServerUrl();
         }
 
+        // Compatibility entry point for older callers. New UI no longer exposes an
+        // editable per-shop server URL; writes here intentionally become program-global.
         public void SetServerUrl(string serverUrl)
         {
-            _settings.SetString(UrlKey, NormalizeUrl(serverUrl));
+            SaveProgramServerUrl(serverUrl);
         }
 
         public bool HasShopServerUrl
         {
-            get
-            {
-                string ignored;
-                return _settings.TryGetString(UrlKey, out ignored);
-            }
+            get { return !string.IsNullOrWhiteSpace(GetServerUrl()); }
         }
 
         public bool TryGetToken(out string token, out string error)
@@ -87,7 +98,36 @@ namespace Bot.ShopScope
 
         public static string GetLegacyGlobalServerUrl()
         {
+            var configured = GetProgramServerUrl();
+            return !string.IsNullOrWhiteSpace(configured)
+                ? configured
+                : GetBuiltInServerUrl();
+        }
+
+        public static string GetProgramServerUrl()
+        {
+            var environment = NormalizeUrl(Environment.GetEnvironmentVariable(ServerUrlEnvironmentKey));
+            if (!string.IsNullOrWhiteSpace(environment)) return environment;
+
             return NormalizeUrl(PersistentParams.GetParam2Key(UrlKey, LegacyScope, string.Empty));
+        }
+
+        public static void SaveProgramServerUrl(string serverUrl)
+        {
+            var normalized = NormalizeUrl(serverUrl);
+            if (string.IsNullOrWhiteSpace(normalized)) return;
+            PersistentParams.TrySaveParam2Key(UrlKey, LegacyScope, normalized);
+        }
+
+        public static string GetBuiltInServerUrl()
+        {
+            try
+            {
+                var configured = NormalizeUrl(ConfigurationManager.AppSettings[DefaultUrlSettingKey]);
+                if (!string.IsNullOrWhiteSpace(configured)) return configured;
+            }
+            catch { }
+            return NormalizeUrl(BuiltInDefaultServerUrl);
         }
 
         public static string NormalizeUrl(string serverUrl)
