@@ -13,6 +13,7 @@ import bot_web_bot_enabled
 import bot_web_bot_qa
 import bot_web_console
 import bot_web_conversation_knowledge
+import chat2api_runtime_guard
 import client_data_backup
 import deep_test_guard
 import recharge_status_query
@@ -28,6 +29,7 @@ from wecom_crypto import install_on_bridge
 
 
 runtime_routing_guard.install(control_plane)
+chat2api_runtime_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
 runtime_embedding_guard.install(control_plane)
 deep_test_guard.install(control_plane)
