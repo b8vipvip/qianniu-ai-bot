@@ -6,6 +6,7 @@ import uvicorn
 
 import app as control_plane
 import bot_update_cache
+import bot_update_prefetch
 import bot_web_admin
 import bot_web_bot_enabled
 import bot_web_bot_qa
@@ -54,11 +55,13 @@ def initialize_control_plane_extensions() -> None:
     bot_web_conversation_knowledge.init_db()
     client_data_backup.init_db()
     bot_update_cache.init_bot_update_cache()
+    bot_update_prefetch.init_bot_update_prefetch()
     wecom_settings.apply_to_bridge(wecom_bridge)
 
 
 @control_plane.app.on_event("shutdown")
 def shutdown_control_plane_extensions() -> None:
+    bot_update_prefetch.stop_bot_update_prefetch()
     bot_update_cache.stop_bot_update_cache()
 
 
