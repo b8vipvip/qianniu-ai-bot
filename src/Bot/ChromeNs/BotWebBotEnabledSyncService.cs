@@ -53,6 +53,7 @@ namespace Bot.ChromeNs
                     try { await SyncOnceAsync(captured); }
                     catch (Exception ex)
                     {
+                        ShopTokenBindingService.ReportFailure(captured, ex.Message);
                         using (ShopSettingsScope.Enter(captured))
                             Log.ErrorWithMaxCount("本店 Web Bot 总开关同步失败：" + Safe(ex.Message, 300), 20);
                     }
@@ -121,8 +122,21 @@ namespace Bot.ChromeNs
                     using (var response = await http.SendAsync(request))
                     {
                         var body = await response.Content.ReadAsStringAsync();
+                        if (response.StatusCode == HttpStatusCode.Conflict)
+                        {
+                            var bound = ExtractBoundShopKey(body);
+                            ShopTokenBindingService.ReportConflict(shop, bound, body);
+                            ShopTokenBindingService.QueueConflictPrompt(shop, token, bound);
+                            return;
+                        }
                         if (!response.IsSuccessStatusCode)
-                            throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
+                        {
+                            var error = "HTTP " + (int)response.StatusCode + " " + Safe(body, 300);
+                            ShopTokenBindingService.ReportFailure(shop, error);
+                            throw new Exception(error);
+                        }
+
+                        ShopTokenBindingService.ReportSuccess(shop);
                         var root = JObject.Parse(body);
                         var desired = root.Value<bool?>("desired_enabled");
                         if (!desired.HasValue || desired.Value == currentEnabled) return;
@@ -132,6 +146,22 @@ namespace Bot.ChromeNs
                             + ", enabled=" + desired.Value);
                     }
                 }
+            }
+        }
+
+        private static string ExtractBoundShopKey(string body)
+        {
+            try
+            {
+                var root = JObject.Parse(body ?? "{}");
+                var detail = root["detail"] as JObject;
+                return detail == null
+                    ? string.Empty
+                    : (detail.Value<string>("bound_shop_key") ?? string.Empty).Trim();
+            }
+            catch
+            {
+                return string.Empty;
             }
         }
 
