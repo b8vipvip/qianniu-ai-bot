@@ -26,6 +26,11 @@ namespace Bot.Options
         private Button _importLegacy;
         private Button _syncKnowledge;
         private Button _openFolder;
+        private Button _testApi;
+        private Button _testAnswerChain;
+        private TextBlock _diagnosticStatus;
+        private TextBox _diagnosticDetails;
+        private bool _diagnosticsRunning;
         private string _seller;
 
         public ShopBindingOptionsControl(string seller)
@@ -54,6 +59,7 @@ namespace Bot.Options
                     : Visibility.Visible;
                 _allowNicknameFallback.IsChecked = false;
                 _knowledgeCloudSync.IsChecked = KnowledgeCloudSyncService.IsEnabledForShop(_shop);
+                ResetDiagnostics();
                 SetEnabled(true);
                 RefreshTokenStatus();
             }
@@ -66,6 +72,8 @@ namespace Bot.Options
                 _fingerprint.Text = "未绑定";
                 _status.Text = "请保持目标千牛店铺在线后重新打开设置。";
                 _status.Foreground = Brushes.IndianRed;
+                _diagnosticStatus.Text = "店铺身份未就绪，无法执行诊断。";
+                _diagnosticStatus.Foreground = Brushes.IndianRed;
                 SetEnabled(false);
             }
         }
@@ -178,6 +186,7 @@ namespace Bot.Options
             _token.Password = string.Empty;
             _allowNicknameFallback.IsChecked = false;
             _knowledgeCloudSync.IsChecked = _shop != null && KnowledgeCloudSyncService.IsEnabledForShop(_shop);
+            ResetDiagnostics();
             _status.Text = "已恢复界面内容；不会删除本店令牌或云端知识。服务端地址由程序统一提供。";
             _status.Foreground = Brushes.Gray;
         }
@@ -185,7 +194,7 @@ namespace Bot.Options
         public void NavHelp()
         {
             MessageBox.Show(
-                "同一台 Windows 上的所有店铺共用一个 Bot API Control Plane 地址；该地址由客户端内置配置提供，不需要每家店重复填写。每个店铺仍使用独立 ShopKey 和独立 Bot 客户端令牌，令牌使用 Windows DPAPI CurrentUser 加密。服务端强制一个令牌只绑定一个 ShopKey；如果令牌已被其他店铺使用，客户端会提示是否踢出旧店铺并重新绑定。启用云同步后，Windows 与 Web 端只同步当前 ShopKey 的知识库。",
+                "同一台 Windows 上的所有店铺共用一个 Bot API Control Plane 地址；该地址由客户端内置配置提供，不需要每家店重复填写。每个店铺仍使用独立 ShopKey 和独立 Bot 客户端令牌，令牌使用 Windows DPAPI CurrentUser 加密。服务端强制一个令牌只绑定一个 ShopKey；如果令牌已被其他店铺使用，客户端会提示是否踢出旧店铺并重新绑定。\n\n“测试 API 连接”会验证网络、Token、ShopKey 和 Control Plane 配置读取；“测试 AI 回答链路”会继续走正式 text-default 路由，实际调用当前供应商/模型并解析 AI 回复，但不会向任何买家发送消息。启用云同步后，Windows 与 Web 端只同步当前 ShopKey 的知识库。",
                 "店铺绑定帮助",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -281,6 +290,67 @@ namespace Bot.Options
             };
             panel.Children.Add(_allowNicknameFallback);
 
+            var diagnosticCard = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 0, 0, 12)
+            };
+            var diagnosticPanel = new StackPanel();
+            diagnosticCard.Child = diagnosticPanel;
+            diagnosticPanel.Children.Add(new TextBlock
+            {
+                Text = "连接与 AI 回答链路诊断",
+                FontWeight = FontWeights.SemiBold,
+                FontSize = 14,
+                Foreground = new SolidColorBrush(Color.FromRgb(15, 23, 42))
+            });
+            diagnosticPanel.Children.Add(new TextBlock
+            {
+                Text = "使用本店已经保存的 Token 测试。AI 链路测试会真实调用 text-default → Control Plane → 当前供应商/模型/协议，并展示 AI 实际回复；只做取答案诊断，不会写入聊天记录，也不会向买家发送消息。",
+                Foreground = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 6, 0, 8)
+            });
+            var diagnosticButtons = new WrapPanel();
+            _testApi = MakeButton("测试 API 连接", 126);
+            _testApi.Click += async (s, e) => await RunDiagnosticAsync(false);
+            diagnosticButtons.Children.Add(_testApi);
+            _testAnswerChain = MakeButton("测试 AI 回答链路", 154);
+            _testAnswerChain.Click += async (s, e) => await RunDiagnosticAsync(true);
+            diagnosticButtons.Children.Add(_testAnswerChain);
+            diagnosticPanel.Children.Add(diagnosticButtons);
+
+            _diagnosticStatus = new TextBlock
+            {
+                Text = "尚未测试。保存本店令牌后即可执行诊断。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.Gray,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 2, 0, 6)
+            };
+            diagnosticPanel.Children.Add(_diagnosticStatus);
+
+            _diagnosticDetails = new TextBox
+            {
+                IsReadOnly = true,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                MinHeight = 90,
+                MaxHeight = 220,
+                Padding = new Thickness(8),
+                Background = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                Text = "测试结果会显示在这里。"
+            };
+            diagnosticPanel.Children.Add(_diagnosticDetails);
+            panel.Children.Add(diagnosticCard);
+
             var cloudCard = new Border
             {
                 Background = new SolidColorBrush(Color.FromRgb(239, 246, 255)),
@@ -336,6 +406,86 @@ namespace Bot.Options
                 Margin = new Thickness(0, 0, 0, 6)
             };
             panel.Children.Add(_status);
+        }
+
+        private async Task RunDiagnosticAsync(bool includeAiAnswer)
+        {
+            if (_shop == null || _connection == null || _diagnosticsRunning) return;
+            _diagnosticsRunning = true;
+            RefreshDiagnosticButtons();
+            _diagnosticStatus.Text = includeAiAnswer
+                ? "正在测试 API、Token、ShopKey、Control Plane 路由、供应商/模型以及 AI 回复..."
+                : "正在测试 API 网络、Token、ShopKey 和 Control Plane...";
+            _diagnosticStatus.Foreground = Brushes.SteelBlue;
+            _diagnosticDetails.Text = "正在执行，请稍候...";
+
+            try
+            {
+                var token = GetSavedTokenForDiagnostics();
+                var serverUrl = _connection.GetServerUrl();
+                var result = includeAiAnswer
+                    ? await ShopApiDiagnosticsService.TestAnswerChainAsync(_shop, serverUrl, token)
+                    : await ShopApiDiagnosticsService.TestConnectionAsync(_shop, serverUrl, token);
+
+                _diagnosticStatus.Text = result.Summary;
+                _diagnosticStatus.Foreground = result.Success ? Brushes.SeaGreen : Brushes.IndianRed;
+                _diagnosticDetails.Text = result.Details ?? string.Empty;
+                Log.Info("店铺API诊断完成: shopKey=" + _shop.ShopKey
+                    + ", kind=" + (includeAiAnswer ? "answer-chain" : "connection")
+                    + ", success=" + result.Success);
+            }
+            catch (Exception ex)
+            {
+                _diagnosticStatus.Text = includeAiAnswer ? "AI回答链路测试失败" : "API连接测试失败";
+                _diagnosticStatus.Foreground = Brushes.IndianRed;
+                _diagnosticDetails.Text = ex.Message;
+                Log.Exception(ex);
+            }
+            finally
+            {
+                _diagnosticsRunning = false;
+                RefreshDiagnosticButtons();
+            }
+        }
+
+        private string GetSavedTokenForDiagnostics()
+        {
+            if (!string.IsNullOrWhiteSpace(_token.Password))
+            {
+                throw new InvalidOperationException(
+                    "令牌输入框里还有尚未保存的内容。请先点击设置窗口底部“保存设置”，再执行诊断，避免测试时产生未保存的服务端绑定。" );
+            }
+
+            string token;
+            string error;
+            if (!_connection.TryGetToken(out token, out error) || string.IsNullOrWhiteSpace(token))
+            {
+                throw new InvalidOperationException(
+                    string.IsNullOrWhiteSpace(error)
+                        ? "本店尚未保存 Bot 客户端令牌，请先保存后再测试。"
+                        : "读取本店 Bot 客户端令牌失败：" + error);
+            }
+            return token;
+        }
+
+        private void ResetDiagnostics()
+        {
+            if (_diagnosticStatus == null || _diagnosticDetails == null) return;
+            _diagnosticStatus.Text = "尚未测试。保存本店令牌后即可执行诊断。";
+            _diagnosticStatus.Foreground = Brushes.Gray;
+            _diagnosticDetails.Text = "测试结果会显示在这里。";
+            RefreshDiagnosticButtons();
+        }
+
+        private void RefreshDiagnosticButtons()
+        {
+            if (_testApi == null || _testAnswerChain == null) return;
+            var enabled = !_diagnosticsRunning
+                && _shop != null
+                && _connection != null
+                && _connection.HasToken;
+            _testApi.IsEnabled = enabled;
+            _testAnswerChain.IsEnabled = enabled;
         }
 
         private async Task SyncKnowledge_Click()
@@ -396,6 +546,7 @@ namespace Bot.Options
             {
                 _connection.ClearToken();
                 _token.Password = string.Empty;
+                ResetDiagnostics();
                 RefreshTokenStatus();
                 _status.Text = "本店令牌及其加密备份副本已清除。";
                 _status.Foreground = Brushes.DarkOrange;
@@ -425,6 +576,7 @@ namespace Bot.Options
             if (_connection == null)
             {
                 _fingerprint.Text = "未绑定";
+                RefreshDiagnosticButtons();
                 return;
             }
             _serverUrl.Text = _connection.GetServerUrl();
@@ -433,10 +585,11 @@ namespace Bot.Options
                 ? "状态：本店尚未保存独立令牌"
                 : "状态：已保存本店令牌｜指纹 " + fingerprint + "（不显示令牌原文）";
             _clearToken.IsEnabled = _connection.HasToken;
+            RefreshDiagnosticButtons();
             if (!updateMessage) return;
             _status.Text = string.IsNullOrWhiteSpace(fingerprint)
                 ? "可输入本店令牌，或显式导入旧全局令牌。"
-                : "本店 Token 已按 ShopKey 保存；服务端连接状态会显示在贴窗 Bot 顶部。";
+                : "本店 Token 已按 ShopKey 保存；可在上方直接测试 API 连接和 AI 回答链路。";
             _status.Foreground = string.IsNullOrWhiteSpace(fingerprint) ? Brushes.Gray : Brushes.SeaGreen;
         }
 
@@ -449,6 +602,15 @@ namespace Bot.Options
             _openFolder.IsEnabled = enabled;
             _allowNicknameFallback.IsEnabled = enabled;
             _knowledgeCloudSync.IsEnabled = enabled;
+            if (!enabled)
+            {
+                _testApi.IsEnabled = false;
+                _testAnswerChain.IsEnabled = false;
+            }
+            else
+            {
+                RefreshDiagnosticButtons();
+            }
         }
 
         private string BuildIdentityText(ShopContext shop)

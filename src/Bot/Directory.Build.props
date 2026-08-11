@@ -24,6 +24,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopContext.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopContextLocator.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopControlPlaneConnectionStore.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopApiDiagnosticsService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopIdentityResolver.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopKeyGenerator.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopLegacyDataMigrationService.cs" />
