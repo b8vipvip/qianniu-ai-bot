@@ -25,6 +25,8 @@ namespace Bot.AssistWindow.NotifyIcon
     {
         private const int WM_HOTKEY = 786;
         private static WndNotifyIcon _inst;
+        private bool _exitRequested;
+
         public static WndNotifyIcon Inst
         {
             get
@@ -50,7 +52,10 @@ namespace Bot.AssistWindow.NotifyIcon
             this.xShowFirstTime();
             DelayCaller.CallAfterDelay(() =>
             {
-                Visibility = Visibility.Collapsed;
+                if (!_exitRequested && IsLoaded)
+                {
+                    Visibility = Visibility.Collapsed;
+                }
             }, 5000, true);
             notifyIcon.Text = string.Format("{0}({1})", Params.AppName, Params.VersionStr);
             CreateHelpMenu();
@@ -58,7 +63,10 @@ namespace Bot.AssistWindow.NotifyIcon
 
             await BootStrap.Init();
             notifyIcon.StopBlink();
-            Visibility = Visibility.Collapsed;
+            if (!_exitRequested && IsLoaded)
+            {
+                Visibility = Visibility.Collapsed;
+            }
         }
 
         private void CreateHelpMenu()
@@ -92,29 +100,32 @@ namespace Bot.AssistWindow.NotifyIcon
             return IntPtr.Zero;
         }
 
-
         private void btnExit_Click(object sender, EventArgs e)
         {
-            DelayCaller.CallAfterDelay(() =>
+            if (_exitRequested) return;
+            _exitRequested = true;
+
+            try { notifyIcon.StopBlink(); }
+            catch (Exception ex) { Log.Exception(ex); }
+
+            var app = System.Windows.Application.Current;
+            if (app == null) return;
+
+            // A WPF Window cannot be shown again after Close().  The tray window may already
+            // have been closed by the attached-only UI lifecycle, so exit must never touch
+            // Visibility/Show/EnsureHandle here.  Shutdown the application directly instead.
+            if (app.Dispatcher.CheckAccess())
             {
-                if (System.Windows.Application.Current != null)
-                {
-                    System.Windows.Application.Current.Shutdown();
-                }
-            }, 5000, false);
-            Visibility = Visibility.Visible;
-            tbkClose.Visibility = Visibility.Visible;
-            this.xMoveToWorkAreaCenter();
-            notifyIcon.StartBlink(base.FindResource("iconGray") as ImageSource);
-            notifyIcon.StopBlink();
-            if (System.Windows.Application.Current != null)
+                app.Shutdown();
+            }
+            else
             {
-                System.Windows.Application.Current.Shutdown();
+                app.Dispatcher.BeginInvoke(new Action(app.Shutdown));
             }
         }
 
         public void AddSellerMenuItem(string nick)
-		{
+        {
             DispatcherEx.xInvoke(() =>
             {
                 try
@@ -126,7 +137,7 @@ namespace Bot.AssistWindow.NotifyIcon
                     Log.Exception(e);
                 }
             });
-		}
+        }
 
         public void RemoveSellerMenuItem(HashSet<string> removeNicks)
         {
@@ -138,7 +149,5 @@ namespace Bot.AssistWindow.NotifyIcon
                 }
             }
         }
-
-
     }
 }

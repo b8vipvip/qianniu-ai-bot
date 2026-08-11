@@ -19,6 +19,7 @@ import runtime_embedding_guard
 import runtime_routing_guard
 import runtime_streaming_guard
 import scheduled_deep_test_retry
+import store_rule_sync
 import wecom_bridge
 import wecom_policy_migration
 import wecom_settings
@@ -45,6 +46,7 @@ bot_web_admin.install(control_plane)
 bot_web_bot_qa.install(control_plane)
 bot_web_conversation_knowledge.install(control_plane)
 client_data_backup.install(control_plane)
+store_rule_sync.install(control_plane)
 
 
 @control_plane.app.on_event("startup")
@@ -57,6 +59,7 @@ def initialize_control_plane_extensions() -> None:
     bot_web_bot_enabled.init_db()
     bot_web_conversation_knowledge.init_db()
     client_data_backup.init_db()
+    store_rule_sync.init_db()
     bot_update_cache.init_bot_update_cache()
     bot_update_prefetch.init_bot_update_prefetch()
     wecom_settings.apply_to_bridge(wecom_bridge)

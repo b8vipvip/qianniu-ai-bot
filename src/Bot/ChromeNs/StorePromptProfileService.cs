@@ -1,7 +1,9 @@
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -76,9 +78,15 @@ namespace Bot.ChromeNs
         private const int MaxVisionRules = 8;
         private const int MaxTextRuleCharacters = 4200;
         private const int MaxVisionRuleCharacters = 6500;
+        private const string ProfileFileName = "store-prompt-profile.json";
 
         private static readonly object Sync = new object();
-        private static StorePromptProfile _cached;
+        private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
+        private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
+        private static readonly ConcurrentDictionary<string, StorePromptProfile> Cache =
+            new ConcurrentDictionary<string, StorePromptProfile>(StringComparer.OrdinalIgnoreCase);
+
+        internal static event Action<ShopContext> ProfileChanged;
 
         private sealed class ScoredRule
         {
@@ -88,11 +96,15 @@ namespace Bot.ChromeNs
 
         public static StorePromptProfile GetProfile()
         {
+            var shop = RequireCurrentShop();
+            var path = GetPath(shop);
             lock (Sync)
             {
-                if (_cached != null) return Clone(_cached);
-                _cached = LoadInternal();
-                return Clone(_cached);
+                StorePromptProfile cached;
+                if (Cache.TryGetValue(path, out cached)) return Clone(cached);
+                cached = LoadInternal(shop, path);
+                Cache[path] = cached;
+                return Clone(cached);
             }
         }
 
@@ -311,6 +323,41 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal static JObject BuildCloudPayload(StorePromptProfile profile)
+        {
+            profile = NormalizeProfile(profile);
+            return new JObject
+            {
+                ["schemaVersion"] = profile.SchemaVersion,
+                ["rawInput"] = profile.RawInput ?? string.Empty,
+                ["standardPrompt"] = profile.StandardPrompt ?? string.Empty,
+                ["corePrompt"] = profile.CorePrompt ?? string.Empty,
+                ["rules"] = JArray.FromObject(profile.Rules ?? new List<StoreContextRule>())
+            };
+        }
+
+        internal static void ApplyCloudPayload(JObject payload)
+        {
+            if (payload == null) throw new ArgumentNullException(nameof(payload));
+            var profile = new StorePromptProfile
+            {
+                SchemaVersion = payload.Value<int?>("schemaVersion") ?? CurrentSchemaVersion,
+                RawInput = Convert.ToString(payload["rawInput"] ?? string.Empty),
+                StandardPrompt = Convert.ToString(payload["standardPrompt"] ?? string.Empty),
+                CorePrompt = Convert.ToString(payload["corePrompt"] ?? string.Empty),
+                Rules = payload["rules"] == null
+                    ? new List<StoreContextRule>()
+                    : payload["rules"].ToObject<List<StoreContextRule>>() ?? new List<StoreContextRule>(),
+                UpdatedAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+            };
+            SaveProfile(profile);
+        }
+
+        internal static string GetCurrentProfilePath()
+        {
+            return GetPath(RequireCurrentShop());
+        }
+
         private static StorePromptProfile ParseGeneratedProfile(string rawAnswer, string rawInput)
         {
             var json = ExtractJsonObject(rawAnswer);
@@ -494,38 +541,88 @@ namespace Bot.ChromeNs
 
         private static void SaveProfile(StorePromptProfile profile)
         {
+            var shop = RequireCurrentShop();
             profile = NormalizeProfile(profile);
-            var path = GetPath();
+            var path = GetPath(shop);
             var directory = Path.GetDirectoryName(path);
             if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-            var temp = path + ".tmp";
+            var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
             var json = JsonConvert.SerializeObject(profile, Formatting.Indented);
             lock (Sync)
             {
                 File.WriteAllText(temp, json, new UTF8Encoding(false));
-                if (File.Exists(path)) File.Delete(path);
-                File.Move(temp, path);
-                _cached = profile;
+                try
+                {
+                    if (File.Exists(path))
+                    {
+                        try { File.Replace(temp, path, null, true); }
+                        catch (PlatformNotSupportedException) { File.Copy(temp, path, true); File.Delete(temp); }
+                        catch (IOException) { File.Copy(temp, path, true); File.Delete(temp); }
+                    }
+                    else File.Move(temp, path);
+                }
+                finally
+                {
+                    if (File.Exists(temp)) File.Delete(temp);
+                }
+                Cache[path] = profile;
             }
-            Log.Info("店铺规则中心已保存: schema=" + profile.SchemaVersion
+            Log.Info("店铺规则中心已保存: shop=" + shop.ShopKey
+                + ", schema=" + profile.SchemaVersion
                 + ", coreChars=" + ResolveCorePrompt(profile).Length
                 + ", rules=" + (profile.Rules == null ? 0 : profile.Rules.Count));
+            var changed = ProfileChanged;
+            if (changed != null) changed(shop);
         }
 
-        private static StorePromptProfile LoadInternal()
+        private static StorePromptProfile LoadInternal(ShopContext shop, string path)
         {
             try
             {
-                var path = GetPath();
+                EnsureLegacyProfileMigrated(shop, path);
                 if (!File.Exists(path)) return NewProfile();
                 var json = File.ReadAllText(path, Encoding.UTF8);
                 return NormalizeProfile(JsonConvert.DeserializeObject<StorePromptProfile>(json));
             }
             catch (Exception ex)
             {
-                Log.Info("读取店铺规则中心失败，使用空配置：" + ex.Message);
+                Log.Info("读取本店规则中心失败，使用空配置: shop=" + shop.ShopKey + ", error=" + ex.Message);
                 return NewProfile();
             }
+        }
+
+        private static void EnsureLegacyProfileMigrated(ShopContext shop, string targetPath)
+        {
+            if (File.Exists(targetPath)) return;
+
+            // 多店铺显式迁移会先把旧 data 文件放进本店兼容目录；只消费当前 ShopKey 的迁移结果。
+            var scopedLegacy = Path.Combine(Paths.GetCompatibilityDataRoot(shop), ProfileFileName);
+            if (File.Exists(scopedLegacy))
+            {
+                CopyLegacyProfile(shop, scopedLegacy, targetPath, "scoped-migration");
+                return;
+            }
+
+            // 仅单店时允许自动继承历史全局规则。多店时绝不猜测归属。
+            IList<ShopProfile> profiles;
+            try { profiles = Profiles.GetAll(); }
+            catch { profiles = new List<ShopProfile>(); }
+            if (profiles.Count != 1 || !string.Equals(profiles[0].ShopKey, shop.ShopKey, StringComparison.Ordinal)) return;
+
+            var globalLegacy = Path.Combine(Paths.LegacyDataRoot, ProfileFileName);
+            if (File.Exists(globalLegacy)) CopyLegacyProfile(shop, globalLegacy, targetPath, "single-shop-global");
+        }
+
+        private static void CopyLegacyProfile(ShopContext shop, string source, string target, string mode)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(target));
+            var backup = Path.Combine(
+                Paths.GetBackupRoot(shop),
+                "store-rule-legacy-before-migrate-" + DateTime.Now.ToString("yyyyMMdd-HHmmssfff") + ".json");
+            File.Copy(source, backup, true);
+            File.Copy(source, target, false);
+            Log.Info("旧店铺规则中心配置已迁移到本店: shop=" + shop.ShopKey
+                + ", mode=" + mode + ", backup=" + backup);
         }
 
         private static StorePromptProfile NormalizeProfile(StorePromptProfile profile)
@@ -541,13 +638,17 @@ namespace Bot.ChromeNs
             return profile;
         }
 
-        private static string GetPath()
+        private static ShopContext RequireCurrentShop()
         {
-            return Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "QianniuAiBot",
-                "data",
-                "store-prompt-profile.json");
+            var shop = ShopSettingsScope.Current;
+            if (shop == null)
+                throw new InvalidOperationException("当前没有店铺作用域，无法读取或保存店铺规则中心配置。");
+            return shop;
+        }
+
+        private static string GetPath(ShopContext shop)
+        {
+            return Path.Combine(Paths.GetRulesRoot(shop), ProfileFileName);
         }
 
         private static StorePromptProfile Clone(StorePromptProfile source)

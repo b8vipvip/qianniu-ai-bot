@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 using System.Linq;
 using System.Threading;
@@ -37,15 +38,28 @@ namespace Bot.Knowledge
                 Height = 28,
                 Margin = new Thickness(0, 0, 8, 6),
                 Tag = "store-rule-center",
-                ToolTip = "把店铺资料拆成短核心规则和按场景动态检索的规则卡，避免每次AI请求都携带整段长提示词。"
+                ToolTip = "只编辑当前 ShopKey 的店铺规则；规则会按店铺独立保存、备份和同步。"
             };
             button.Click += (s, args) =>
             {
-                var window = new StorePromptProfileWindow
+                var owner = Window.GetWindow(manager);
+                var shop = ShopSettingsScope.Current ?? ShopScopedUiBridge.Get(owner);
+                if (shop == null)
                 {
-                    Owner = Window.GetWindow(manager)
-                };
-                window.ShowDialog();
+                    MessageBox.Show(
+                        "当前设置窗口还没有识别到店铺身份，请从对应千牛店铺的 Bot 设置重新进入。",
+                        "店铺规则中心",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                    return;
+                }
+
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    var window = new StorePromptProfileWindow(shop) { Owner = owner };
+                    ShopScopedUiBridge.Attach(window, shop);
+                    window.ShowDialog();
+                }
             };
             top.Children.Add(button);
         }
@@ -73,6 +87,7 @@ namespace Bot.Knowledge
 
     internal sealed class StorePromptProfileWindow : Window
     {
+        private readonly ShopContext _shop;
         private readonly TextBox _raw;
         private readonly TextBox _core;
         private readonly TextBox _rules;
@@ -82,9 +97,12 @@ namespace Bot.Knowledge
         private readonly Button _save;
         private CancellationTokenSource _generationCts;
 
-        public StorePromptProfileWindow()
+        public StorePromptProfileWindow(ShopContext shop)
         {
-            Title = "店铺规则中心";
+            if (shop == null) throw new ArgumentNullException(nameof(shop));
+            _shop = shop;
+
+            Title = "店铺规则中心 · " + (string.IsNullOrWhiteSpace(shop.DisplayName) ? shop.ShopKey : shop.DisplayName);
             Width = 940;
             Height = 760;
             MinWidth = 760;
@@ -108,7 +126,7 @@ namespace Bot.Knowledge
                 Margin = new Thickness(0, 0, 0, 10),
                 Child = new TextBlock
                 {
-                    Text = "这里不再生成一整段每次都发送的固定提示词。AI会把原始资料拆成：① 每次携带的短核心规则；② 文本对话按当前场景选取的Top 3规则；③ 图片分析使用的高优先级视觉规则卡。",
+                    Text = "当前仅编辑本店规则（ShopKey：" + shop.ShopKey + "）。AI会把原始资料拆成：① 每次携带的短核心规则；② 文本对话按当前场景选取的Top 3规则；③ 图片分析使用的高优先级视觉规则卡。",
                     TextWrapping = TextWrapping.Wrap,
                     Foreground = Brushes.DimGray
                 }
@@ -251,24 +269,27 @@ namespace Bot.Knowledge
 
         private void LoadProfile()
         {
-            var profile = StorePromptProfileService.GetProfile();
-            _raw.Text = profile.RawInput ?? string.Empty;
-            _core.Text = !string.IsNullOrWhiteSpace(profile.CorePrompt)
-                ? profile.CorePrompt
-                : profile.StandardPrompt ?? string.Empty;
-            _rules.Text = StorePromptProfileService.SerializeRules(profile.Rules);
-            UpdateSummary(profile);
-            if (StorePromptProfileService.NeedsStructuredMigration(profile))
+            using (ShopSettingsScope.Enter(_shop))
             {
-                _status.Text = "检测到旧版整段提示词，请点击AI生成结构化规则";
-                _status.Foreground = Brushes.DarkOrange;
-            }
-            else
-            {
-                _status.Text = string.IsNullOrWhiteSpace(profile.UpdatedAt)
-                    ? "尚未配置"
-                    : "最后更新：" + profile.UpdatedAt;
-                _status.Foreground = Brushes.DimGray;
+                var profile = StorePromptProfileService.GetProfile();
+                _raw.Text = profile.RawInput ?? string.Empty;
+                _core.Text = !string.IsNullOrWhiteSpace(profile.CorePrompt)
+                    ? profile.CorePrompt
+                    : profile.StandardPrompt ?? string.Empty;
+                _rules.Text = StorePromptProfileService.SerializeRules(profile.Rules);
+                UpdateSummary(profile);
+                if (StorePromptProfileService.NeedsStructuredMigration(profile))
+                {
+                    _status.Text = "检测到旧版整段提示词，请点击AI生成结构化规则";
+                    _status.Foreground = Brushes.DarkOrange;
+                }
+                else
+                {
+                    _status.Text = string.IsNullOrWhiteSpace(profile.UpdatedAt)
+                        ? "尚未配置"
+                        : "最后更新：" + profile.UpdatedAt;
+                    _status.Foreground = Brushes.DimGray;
+                }
             }
         }
 
@@ -299,15 +320,19 @@ namespace Bot.Knowledge
             _status.Foreground = Brushes.DimGray;
             try
             {
-                var profile = await StorePromptProfileService.GenerateStructuredProfileAsync(
-                    _raw.Text,
-                    _generationCts.Token);
+                StorePromptProfile profile;
+                using (ShopSettingsScope.Enter(_shop))
+                {
+                    profile = await StorePromptProfileService.GenerateStructuredProfileAsync(
+                        _raw.Text,
+                        _generationCts.Token);
+                }
                 _core.Text = profile.CorePrompt ?? string.Empty;
                 _rules.Text = StorePromptProfileService.SerializeRules(profile.Rules);
                 UpdateSummary(profile);
                 _status.Text = "已生成并保存 · " + profile.UpdatedAt;
                 MessageBox.Show(
-                    "结构化店铺规则已生成并保存。以后每次AI回复只携带短核心规则，详细规则会按当前场景动态选择。",
+                    "本店结构化规则已生成并保存。后续只会用于当前 ShopKey，并会随本店云备份/同步处理。",
                     "生成完成",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
@@ -339,8 +364,11 @@ namespace Bot.Knowledge
         {
             try
             {
-                var rules = StorePromptProfileService.ParseRulesJson(_rules.Text);
-                StorePromptProfileService.SaveStructured(_raw.Text, _core.Text, rules);
+                using (ShopSettingsScope.Enter(_shop))
+                {
+                    var rules = StorePromptProfileService.ParseRulesJson(_rules.Text);
+                    StorePromptProfileService.SaveStructured(_raw.Text, _core.Text, rules);
+                }
                 Close();
             }
             catch (Exception ex)
