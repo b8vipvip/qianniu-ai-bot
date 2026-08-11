@@ -50,67 +50,193 @@ namespace Bot.ChromeNs
             }
 
             _preUpdateChatBrowserRectTime = DateTime.Now;
-            if (Desk.Inst == null)
+
+            // Multi-shop safety: the process may own several Qianniu top-level windows.
+            // Always resolve the Desk proven for this seller instead of scanning whichever
+            // process window happens to be Desk.Inst / MainWindowHandle.
+            var sellerDesk = ResolveSellerDesk();
+            if (sellerDesk == null)
             {
-                SetSendFailure("UIA扫描", "千牛接待台实例不存在");
-                return false;
-            }
-            if (!Desk.Inst.IsVisibleAndNotMinimized)
-            {
-                try { Desk.Inst.Show(); }
-                catch (Exception ex) { Log.Info("显示千牛接待台失败: " + ex.Message); }
-            }
-            if (automationApplication == null || automationApplication.MainWindowHandle.ToInt64() < 1)
-            {
-                SetSendFailure("UIA扫描", "千牛主窗口句柄无效");
+                InvalidateChatControls();
+                SetSendFailure("UIA扫描", "未找到当前客服唯一对应的千牛接待窗口");
+                BotConnectionDiagnostics.RecordRpaScan(false, false, "seller Desk 未绑定");
                 return false;
             }
 
+            if (!EnsureSellerDeskBinding(false))
+            {
+                InvalidateChatControls();
+                SetSendFailure("UIA扫描", "当前客服的 RPA/千牛窗口绑定尚未就绪");
+                BotConnectionDiagnostics.RecordRpaScan(false, false, "seller RPA 未绑定");
+                return false;
+            }
+
+            if (!sellerDesk.IsVisibleAndNotMinimized)
+            {
+                try { sellerDesk.Show(); }
+                catch (Exception ex) { Log.Info("显示当前客服千牛接待台失败: " + ex.Message); }
+            }
+
+            if (uia3Automation == null || sellerDesk.Hwnd == null || sellerDesk.Hwnd.Handle < 1)
+            {
+                InvalidateChatControls();
+                SetSendFailure("UIA扫描", "当前客服千牛窗口句柄无效");
+                return false;
+            }
+
+            var expectedHwnd = sellerDesk.Hwnd.Handle;
             return await Task.Run(() =>
             {
                 try
                 {
-                    var topWnds = automationApplication.GetAllTopLevelWindows(uia3Automation);
-                    var mainWnd = topWnds.FirstOrDefault(k => string.Equals(k.ClassName, "MutilChatView", StringComparison.Ordinal));
+                    // New Qianniu builds no longer reliably expose a top-level class named
+                    // MutilChatView. Use the already verified seller HWND as the UIA root.
+                    // This also prevents two shops in one AliWorkbench process from sharing
+                    // the same UIAutomation subtree.
+                    var mainWnd = uia3Automation.FromHandle(new IntPtr(expectedHwnd));
                     if (mainWnd == null)
                     {
                         InvalidateChatControls();
-                        SetSendFailure("UIA扫描", "未找到 MutilChatView");
-                        BotConnectionDiagnostics.RecordRpaScan(false, false, "未找到MutilChatView");
+                        SetSendFailure("UIA扫描", "无法从当前客服千牛 HWND 建立 UIA 根节点；hwnd=" + expectedHwnd);
+                        BotConnectionDiagnostics.RecordRpaScan(false, false, "seller HWND UIA root 为空");
                         return false;
                     }
 
                     var descendants = mainWnd.FindAllDescendants();
-                    var inputElement = descendants.FirstOrDefault(k => string.Equals(SafeAutomationId(k), ChatInputAutomationId, StringComparison.Ordinal))
-                        ?? descendants.FirstOrDefault(k => string.Equals(SafeClassName(k), "TextRichEdit", StringComparison.Ordinal));
-                    var sendElement = descendants.FirstOrDefault(k => string.Equals(SafeAutomationId(k), SendButtonAutomationId, StringComparison.Ordinal))
-                        ?? descendants.FirstOrDefault(k => IsSendButtonName(SafeName(k)));
+                    var inputElement = FindChatInputElement(mainWnd, descendants);
+                    var sendElement = FindSendButtonElement(descendants, inputElement);
 
                     _messageInputTextArea = inputElement == null ? null : inputElement.AsTextBox();
                     _sendMessageButton = sendElement;
                     var inputFound = _messageInputTextArea != null;
                     var sendFound = _sendMessageButton != null;
                     BotConnectionDiagnostics.RecordRpaScan(sendFound, inputFound,
-                        "UIA稳定扫描 input=" + inputFound + ", send=" + sendFound);
+                        "seller HWND UIA扫描 hwnd=" + expectedHwnd
+                        + ", input=" + inputFound + ", send=" + sendFound);
+
                     if (!inputFound)
                     {
-                        SetSendFailure("UIA扫描", "未找到聊天输入框；AutomationId=" + ChatInputAutomationId);
+                        SetSendFailure("UIA扫描", "当前客服千牛窗口内未找到聊天输入框；hwnd="
+                            + expectedHwnd + ", descendants=" + descendants.Length);
                     }
                     else
                     {
-                        Log.Info("UIA控件刷新成功: inputAutomationId=" + SafeAutomationId(inputElement)
-                            + ", sendAutomationId=" + SafeAutomationId(sendElement));
+                        Log.Info("UIA控件刷新成功: seller=" + SellerNick
+                            + ", hwnd=" + expectedHwnd
+                            + ", inputAutomationId=" + SafeAutomationId(inputElement)
+                            + ", inputClass=" + SafeClassName(inputElement)
+                            + ", sendAutomationId=" + SafeAutomationId(sendElement)
+                            + ", sendName=" + SafeName(sendElement));
                     }
                     return inputFound;
                 }
                 catch (Exception ex)
                 {
                     InvalidateChatControls();
-                    SetSendFailure("UIA扫描异常", ex.Message);
+                    SetSendFailure("UIA扫描异常", "seller=" + SellerNick
+                        + ", hwnd=" + expectedHwnd + ", " + ex.Message);
                     Log.Exception(ex);
                     return false;
                 }
             });
+        }
+
+        private AutomationElement FindChatInputElement(
+            AutomationElement root,
+            AutomationElement[] descendants)
+        {
+            descendants = descendants ?? new AutomationElement[0];
+
+            // Stable id remains the strongest signal when present.
+            var exact = descendants.FirstOrDefault(k => string.Equals(
+                SafeAutomationId(k), ChatInputAutomationId, StringComparison.Ordinal));
+            if (exact != null) return exact;
+
+            // New Qianniu versions have changed the surrounding top-level/window class while
+            // preserving a rich-edit based composer. Prefer a TextRichEdit in the lower half
+            // of the verified seller window, then the largest/lower candidate.
+            var rootRect = SafeBoundingRectangle(root);
+            var candidates = descendants
+                .Where(k => string.Equals(SafeClassName(k), "TextRichEdit", StringComparison.Ordinal))
+                .Where(k => IsPlausibleChatInput(k, rootRect))
+                .OrderByDescending(k => SafeBoundingRectangle(k).Bottom)
+                .ThenByDescending(k => SafeBoundingRectangle(k).Width)
+                .ToArray();
+            if (candidates.Length > 0) return candidates[0];
+
+            // Last compatibility fallback: an element whose AutomationId still ends with the
+            // historical composer suffix even if Qianniu renamed its prefix hierarchy.
+            return descendants
+                .Where(k => SafeAutomationId(k).EndsWith("sendMsgWidget.chatInputArea.plainTextEdit", StringComparison.Ordinal))
+                .OrderByDescending(k => SafeBoundingRectangle(k).Bottom)
+                .FirstOrDefault();
+        }
+
+        private AutomationElement FindSendButtonElement(
+            AutomationElement[] descendants,
+            AutomationElement inputElement)
+        {
+            descendants = descendants ?? new AutomationElement[0];
+            var exact = descendants.FirstOrDefault(k => string.Equals(
+                SafeAutomationId(k), SendButtonAutomationId, StringComparison.Ordinal));
+            if (exact != null) return exact;
+
+            var named = descendants.Where(k => IsSendButtonName(SafeName(k))).ToArray();
+            if (named.Length == 0)
+            {
+                return descendants.FirstOrDefault(k => SafeAutomationId(k).EndsWith(
+                    "sendMsgWidget.enterAreaKeyWidget.sendMsg", StringComparison.Ordinal));
+            }
+
+            if (inputElement == null) return named[0];
+            var inputRect = SafeBoundingRectangle(inputElement);
+            return named
+                .OrderBy(k => VerticalDistance(SafeBoundingRectangle(k), inputRect))
+                .ThenBy(k => HorizontalDistance(SafeBoundingRectangle(k), inputRect))
+                .FirstOrDefault();
+        }
+
+        private static bool IsPlausibleChatInput(
+            AutomationElement element,
+            System.Drawing.Rectangle rectangleRoot)
+        {
+            var rect = SafeBoundingRectangle(element);
+            if (rect.Width < 120 || rect.Height < 18) return false;
+            if (rectangleRoot.Width <= 0 || rectangleRoot.Height <= 0) return true;
+            var rootMid = rectangleRoot.Top + rectangleRoot.Height * 0.42;
+            return rect.Bottom >= rootMid
+                && rect.Left >= rectangleRoot.Left - 4
+                && rect.Right <= rectangleRoot.Right + 4;
+        }
+
+        private static int VerticalDistance(
+            System.Drawing.Rectangle candidate,
+            System.Drawing.Rectangle input)
+        {
+            var cy = candidate.Top + candidate.Height / 2;
+            var iy = input.Top + input.Height / 2;
+            return Math.Abs(cy - iy);
+        }
+
+        private static int HorizontalDistance(
+            System.Drawing.Rectangle candidate,
+            System.Drawing.Rectangle input)
+        {
+            var cx = candidate.Left + candidate.Width / 2;
+            var ix = input.Left + input.Width / 2;
+            return Math.Abs(cx - ix);
+        }
+
+        private static System.Drawing.Rectangle SafeBoundingRectangle(AutomationElement element)
+        {
+            try
+            {
+                return element == null ? System.Drawing.Rectangle.Empty : element.BoundingRectangle;
+            }
+            catch
+            {
+                return System.Drawing.Rectangle.Empty;
+            }
         }
 
         internal bool TryGetEditorText(out string text)
