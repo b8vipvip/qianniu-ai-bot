@@ -44,6 +44,7 @@ def setup_cp(tmp_path):
             CREATE TABLE bot_conversation_reads(client_id INTEGER);
             CREATE TABLE bot_knowledge_state(client_id INTEGER);
             CREATE TABLE bot_store_rule_state(client_id INTEGER);
+            CREATE TABLE bot_message_processing_traces(client_id INTEGER);
             CREATE TABLE bot_client_bot_enabled(client_id INTEGER PRIMARY KEY,shop_key TEXT);
             CREATE TABLE bot_client_data_backups(client_id INTEGER);
             """
@@ -85,6 +86,7 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_conversation_reads",
             "bot_knowledge_state",
             "bot_store_rule_state",
+            "bot_message_processing_traces",
             "bot_client_data_backups",
         ):
             conn.execute(f"INSERT INTO {table}(client_id) VALUES(1)")
@@ -106,6 +108,7 @@ def test_force_rebind_clears_old_token_scoped_server_state_before_switch(tmp_pat
             "bot_conversation_reads",
             "bot_knowledge_state",
             "bot_store_rule_state",
+            "bot_message_processing_traces",
             "bot_client_bot_enabled",
             "bot_client_data_backups",
         ):
