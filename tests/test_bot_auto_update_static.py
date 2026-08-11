@@ -60,6 +60,7 @@ def test_update_sha_survives_manifest_network_failure_and_shop_scoped_server_url
 
 def test_download_prefers_github_then_falls_back_to_verified_server_mirror():
     code = updater_code()
+    download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
 
     assert 'AddDownloadSource(sources, "GitHub", release.PackageUrl)' in code
     assert 'AddDownloadSource(sources, "服务端镜像", release.MirrorUrl)' in code
@@ -71,10 +72,18 @@ def test_download_prefers_github_then_falls_back_to_verified_server_mirror():
     assert "SHA-256 校验信息" in code
     assert "release-info.json" in code
 
+    # The linked 20-second connect timeout must not be mistaken for a user cancel.
+    assert "if (cancellationToken.IsCancellationRequested) throw;" in download
+    assert "已自动切换备用下载源" in download
+    assert "非用户取消，自动切换下一来源" in download
+    assert "Bot更新下载被用户取消" in download
+
 
 def test_server_caches_latest_metadata_and_verified_packages():
     module = read("services/api-control-plane/bot_update_cache.py")
+    prefetch = read("services/api-control-plane/bot_update_prefetch.py")
     bootstrap = read("services/api-control-plane/bootstrap.py")
+    dockerfile = read("services/api-control-plane/Dockerfile")
     env = read("services/api-control-plane/.env.example")
 
     assert 'GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"' in module
@@ -85,9 +94,20 @@ def test_server_caches_latest_metadata_and_verified_packages():
     assert "ensure_cached_package" in module
     assert "_hash_file(target)" in module
     assert "服务端镜像安装包 SHA-256 校验失败" in module
+
+    assert "bot_update_cache.get_latest_metadata()" in prefetch
+    assert "bot_update_cache.ensure_cached_package(metadata)" in prefetch
+    assert "BOT_UPDATE_PREFETCH_ENABLED" in prefetch
+    assert "BOT_UPDATE_PREFETCH_POLL_SECONDS" in prefetch
+    assert "bot_update_prefetch.init_bot_update_prefetch()" in bootstrap
+    assert "bot_update_prefetch.stop_bot_update_prefetch()" in bootstrap
+    assert "bot_update_prefetch.py" in dockerfile
+
     assert "bot_update_cache.router" in bootstrap
     assert "bot_update_cache.init_bot_update_cache()" in bootstrap
     assert "BOT_UPDATE_METADATA_CACHE_SECONDS=300" in env
+    assert "BOT_UPDATE_PREFETCH_ENABLED=true" in env
+    assert "BOT_UPDATE_PREFETCH_POLL_SECONDS=60" in env
 
 
 def test_update_defaults_are_safe_and_install_still_requires_confirmation():
