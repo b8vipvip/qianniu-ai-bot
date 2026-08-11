@@ -32,8 +32,8 @@ namespace Bot.UpdateNs
                 throw new Exception("发布版本缺少 SHA-256 校验信息，已拒绝自动安装。");
 
             var sources = new List<KeyValuePair<string, string>>();
+            AddDownloadSource(sources, "腾讯云控制台服务器", release.MirrorUrl);
             AddDownloadSource(sources, "GitHub", release.PackageUrl);
-            AddDownloadSource(sources, "服务端镜像", release.MirrorUrl);
             if (sources.Count == 0)
                 throw new Exception("发布版本缺少安装包下载地址。");
 
@@ -115,7 +115,7 @@ namespace Bot.UpdateNs
             }
 
             throw new Exception(
-                "GitHub 与服务端镜像均下载失败。"
+                "腾讯云控制台服务器与 GitHub 均下载失败。"
                 + string.Join("；", errors.ToArray()));
         }
 
