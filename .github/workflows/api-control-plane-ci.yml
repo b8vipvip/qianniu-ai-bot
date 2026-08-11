@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Compile Python
-        run: python -m py_compile app.py bootstrap.py bot_web_bot_enabled.py bot_update_cache.py scheduled_deep_test_retry.py runtime_routing_guard.py runtime_streaming_guard.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_bot_update_cache.py tests/test_control_plane.py tests/test_scheduled_deep_test_retry.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
+        run: python -m py_compile app.py bootstrap.py bot_web_bot_enabled.py deep_test_guard.py bot_update_cache.py scheduled_deep_test_retry.py runtime_routing_guard.py runtime_streaming_guard.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_bot_update_cache.py tests/test_control_plane.py tests/test_deep_test_guard.py tests/test_scheduled_deep_test_retry.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
       - name: Run control plane tests
         run: python -m pytest -q --tb=short 2>&1 | tee pytest.log
       - name: Upload pytest diagnostics
@@ -155,6 +155,7 @@ jobs:
           path: |
             services/api-control-plane/app.py
             services/api-control-plane/bootstrap.py
+            services/api-control-plane/deep_test_guard.py
             services/api-control-plane/bot_update_cache.py
             services/api-control-plane/bot_web_bot_enabled.py
             services/api-control-plane/scheduled_deep_test_retry.py
