@@ -194,7 +194,7 @@ namespace Bot.Options
         public void NavHelp()
         {
             MessageBox.Show(
-                "同一台 Windows 上的所有店铺共用一个 Bot API Control Plane 地址；该地址由客户端内置配置提供，不需要每家店重复填写。每个店铺仍使用独立 ShopKey 和独立 Bot 客户端令牌，令牌使用 Windows DPAPI CurrentUser 加密。服务端强制一个令牌只绑定一个 ShopKey；如果令牌已被其他店铺使用，客户端会提示是否踢出旧店铺并重新绑定。\n\n“测试 API 连接”会验证网络、Token、ShopKey 和 Control Plane 配置读取；“测试 AI 回答链路”会继续走正式 text-default 路由，实际调用当前供应商/模型并解析 AI 回复，但不会向任何买家发送消息。启用云同步后，Windows 与 Web 端只同步当前 ShopKey 的知识库。",
+                "同一台 Windows 上的所有店铺共用一个 Bot API Control Plane 地址；该地址由客户端内置配置提供，不需要每家店重复填写。每个店铺仍使用独立 ShopKey 和独立 Bot 客户端令牌，令牌使用 Windows DPAPI CurrentUser 加密。服务端强制一个令牌只绑定一个 ShopKey；如果令牌已被其他店铺使用，客户端会提示是否踢出旧店铺并重新绑定。\n\n“测试 API 连接”会验证网络、Token、ShopKey 和 Control Plane 配置读取；“测试 AI 回答链路”会走正式 text-default 路由，实际调用当前供应商/模型，取得 AI 回复后继续使用生产 SendTextWithRetryAsync 发送到当前千牛会话买家，并确认发送结果。测试消息带“Bot链路测试”标记，可在千牛中手动撤回。启用云同步后，Windows 与 Web 端只同步当前 ShopKey 的知识库。",
                 "店铺绑定帮助",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
@@ -310,7 +310,7 @@ namespace Bot.Options
             });
             diagnosticPanel.Children.Add(new TextBlock
             {
-                Text = "使用本店已经保存的 Token 测试。AI 链路测试会真实调用 text-default → Control Plane → 当前供应商/模型/协议，并展示 AI 实际回复；只做取答案诊断，不会写入聊天记录，也不会向买家发送消息。",
+                Text = "使用本店已经保存的 Token 测试。AI 链路测试会真实调用 text-default → Control Plane → 当前供应商/模型/协议，取得 AI 回复后继续通过正式千牛发送链路发送给当前会话买家，并验证发送结果。测试消息带“Bot链路测试”标记，可手动撤回。",
                 Foreground = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 6, 0, 8)
@@ -414,29 +414,31 @@ namespace Bot.Options
             _diagnosticsRunning = true;
             RefreshDiagnosticButtons();
             _diagnosticStatus.Text = includeAiAnswer
-                ? "正在测试 API、Token、ShopKey、Control Plane 路由、供应商/模型以及 AI 回复..."
+                ? "正在测试 API、Token、AI 获取答案以及当前买家的千牛真实发送链路..."
                 : "正在测试 API 网络、Token、ShopKey 和 Control Plane...";
             _diagnosticStatus.Foreground = Brushes.SteelBlue;
-            _diagnosticDetails.Text = "正在执行，请稍候...";
+            _diagnosticDetails.Text = includeAiAnswer
+                ? "正在执行完整链路。成功后会向当前千牛会话真实发送一条带“Bot链路测试”标记的消息。"
+                : "正在执行，请稍候...";
 
             try
             {
                 var token = GetSavedTokenForDiagnostics();
                 var serverUrl = _connection.GetServerUrl();
                 var result = includeAiAnswer
-                    ? await ShopApiDiagnosticsService.TestAnswerChainAsync(_shop, serverUrl, token)
+                    ? await ShopApiDiagnosticsService.TestAnswerChainAsync(_shop, _seller, serverUrl, token)
                     : await ShopApiDiagnosticsService.TestConnectionAsync(_shop, serverUrl, token);
 
                 _diagnosticStatus.Text = result.Summary;
                 _diagnosticStatus.Foreground = result.Success ? Brushes.SeaGreen : Brushes.IndianRed;
                 _diagnosticDetails.Text = result.Details ?? string.Empty;
                 Log.Info("店铺API诊断完成: shopKey=" + _shop.ShopKey
-                    + ", kind=" + (includeAiAnswer ? "answer-chain" : "connection")
+                    + ", kind=" + (includeAiAnswer ? "answer-chain-real-send" : "connection")
                     + ", success=" + result.Success);
             }
             catch (Exception ex)
             {
-                _diagnosticStatus.Text = includeAiAnswer ? "AI回答链路测试失败" : "API连接测试失败";
+                _diagnosticStatus.Text = includeAiAnswer ? "AI回答/真实发送链路测试失败" : "API连接测试失败";
                 _diagnosticStatus.Foreground = Brushes.IndianRed;
                 _diagnosticDetails.Text = ex.Message;
                 Log.Exception(ex);
