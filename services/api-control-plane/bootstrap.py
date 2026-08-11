@@ -5,6 +5,7 @@ import os
 import uvicorn
 
 import app as control_plane
+import bot_client_shop_binding
 import bot_update_cache
 import bot_update_prefetch
 import bot_web_admin
@@ -35,6 +36,7 @@ control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(recharge_status_query.router)
 control_plane.app.include_router(bot_update_cache.router)
 bot_web_console.install(control_plane)
+bot_client_shop_binding.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
 # Register Bot-only Q&A routes before the legacy all-chat routes. Starlette
@@ -51,6 +53,7 @@ def initialize_control_plane_extensions() -> None:
     wecom_settings.init_wecom_settings_db()
     recharge_status_query.init_recharge_query_db()
     bot_web_console.init_bot_web_db()
+    bot_client_shop_binding.init_db()
     bot_web_bot_enabled.init_db()
     bot_web_conversation_knowledge.init_db()
     client_data_backup.init_db()
