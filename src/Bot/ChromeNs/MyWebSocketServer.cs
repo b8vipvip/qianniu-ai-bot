@@ -24,6 +24,11 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, CDPClient> _clients = new ConcurrentDictionary<string, CDPClient>();
         private readonly ConcurrentDictionary<string, bool> _initialized = new ConcurrentDictionary<string, bool>();
         private readonly ConcurrentDictionary<string, bool> _initializing = new ConcurrentDictionary<string, bool>();
+        private readonly ConcurrentDictionary<string, bool> _connectedSessions = new ConcurrentDictionary<string, bool>();
+        private readonly ConcurrentDictionary<string, string> _lastStatusBindings = new ConcurrentDictionary<string, string>();
+        private readonly ConcurrentDictionary<string, string> _sellerSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, string> _sessionSellers = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private readonly object _sellerSessionSync = new object();
 
         static MyWebSocketServer()
         {
@@ -42,6 +47,89 @@ namespace Bot.ChromeNs
             if (jo == null) return string.Empty;
             var token = jo[name];
             return token == null ? string.Empty : token.ToString().Trim();
+        }
+
+        private bool TryClaimSellerSession(string sellerNick, string sessionId)
+        {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sellerNick.Length == 0 || sessionId.Length == 0) return false;
+
+            lock (_sellerSessionSync)
+            {
+                string owner;
+                if (_sellerSessions.TryGetValue(sellerNick, out owner))
+                {
+                    if (string.Equals(owner, sessionId, StringComparison.Ordinal))
+                    {
+                        _sessionSellers[sessionId] = sellerNick;
+                        return true;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(owner) && _connectedSessions.ContainsKey(owner))
+                    {
+                        return false;
+                    }
+
+                    string staleOwner;
+                    _sellerSessions.TryRemove(sellerNick, out staleOwner);
+                    if (!string.IsNullOrWhiteSpace(staleOwner))
+                    {
+                        string staleSeller;
+                        _sessionSellers.TryRemove(staleOwner, out staleSeller);
+                    }
+                }
+
+                _sellerSessions[sellerNick] = sessionId;
+                _sessionSellers[sessionId] = sellerNick;
+                Log.Info("已选定卖家权威千牛CDP会话: seller=" + sellerNick + ", session=" + sessionId);
+                return true;
+            }
+        }
+
+        private bool IsAuthoritativeSellerSession(string sellerNick, string sessionId)
+        {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sellerNick.Length == 0 || sessionId.Length == 0) return false;
+            string owner;
+            return _sellerSessions.TryGetValue(sellerNick, out owner)
+                && string.Equals(owner, sessionId, StringComparison.Ordinal);
+        }
+
+        private void ReleaseSellerSession(string sessionId)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return;
+            lock (_sellerSessionSync)
+            {
+                string sellerNick;
+                if (!_sessionSellers.TryRemove(sessionId, out sellerNick)
+                    || string.IsNullOrWhiteSpace(sellerNick)) return;
+
+                string owner;
+                if (_sellerSessions.TryGetValue(sellerNick, out owner)
+                    && string.Equals(owner, sessionId, StringComparison.Ordinal))
+                {
+                    string removed;
+                    _sellerSessions.TryRemove(sellerNick, out removed);
+                    Log.Info("卖家权威千牛CDP会话已释放，等待在线页面自动接管: seller="
+                        + sellerNick + ", session=" + sessionId);
+                }
+            }
+        }
+
+        private bool ShouldRefreshStatusBinding(string sessionId, string loginNick, string conversationNick)
+        {
+            var key = (loginNick ?? string.Empty).Trim() + "\n" + (conversationNick ?? string.Empty).Trim();
+            string previous;
+            if (_lastStatusBindings.TryGetValue(sessionId, out previous)
+                && string.Equals(previous, key, StringComparison.Ordinal))
+            {
+                return false;
+            }
+            _lastStatusBindings[sessionId] = key;
+            return true;
         }
 
         private async Task TryBindStatusConversation(WebSocketSession session, string loginNick, string conversationNick)
@@ -82,8 +170,16 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                qn.CDP = cdp;
                 var sellerNick = qn.Seller == null ? loginNick : qn.Seller.Nick;
+                if (!TryClaimSellerSession(sellerNick, session.SessionID))
+                {
+                    _initialized[session.SessionID] = true;
+                    Log.InfoWithMaxCount("已忽略同一卖家的重复千牛CDP状态会话，避免重启后反复切换发送通道: seller="
+                        + sellerNick + ", session=" + session.SessionID, 20);
+                    return;
+                }
+
+                qn.CDP = cdp;
                 qn.SetActiveConversationByNick(sellerNick, conversationNick, "qnbotStatus");
                 BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", sellerNick, conversationNick);
                 _initialized[session.SessionID] = true;
@@ -110,6 +206,15 @@ namespace Bot.ChromeNs
                 {
                     BotConnectionDiagnostics.RecordCdpStatus(false, "未获取登录用户", string.Empty, string.Empty);
                     Log.Error("千牛CDP初始化跳过：未获取到登录用户, session=" + session.SessionID);
+                    return;
+                }
+
+                var sellerNick = (user.Result.Nick ?? string.Empty).Trim();
+                if (!TryClaimSellerSession(sellerNick, session.SessionID))
+                {
+                    _initialized[session.SessionID] = true;
+                    Log.InfoWithMaxCount("重复千牛CDP会话已完成识别但不接管卖家运行通道: seller="
+                        + sellerNick + ", session=" + session.SessionID, 20);
                     return;
                 }
 
@@ -158,6 +263,7 @@ namespace Bot.ChromeNs
                 {
                     try
                     {
+                        _connectedSessions[session.SessionID] = true;
                         BotConnectionDiagnostics.RecordWebSocketConnect(session.SessionID);
                         Log.Info("千牛注入脚本已连接 Bot WebSocket: " + session.SessionID);
                         GetOrCreateClient(session);
@@ -192,8 +298,22 @@ namespace Bot.ChromeNs
                                 BotConnectionDiagnostics.RecordBuyerSeller(loginNick, conversationNick);
                                 if (hasLoginId || hasImsdk)
                                 {
-                                    Task.Run(() => TryInitSession(session, "status"));
-                                    if (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick))
+                                    var authoritative = string.IsNullOrWhiteSpace(loginNick)
+                                        || TryClaimSellerSession(loginNick, session.SessionID);
+                                    if (!authoritative)
+                                    {
+                                        Log.InfoWithMaxCount("检测到卖家重复千牛WebSocket页面，保留已稳定的权威CDP会话: seller="
+                                            + loginNick + ", ignoredSession=" + session.SessionID, 20);
+                                    }
+                                    else if (!_initialized.ContainsKey(session.SessionID))
+                                    {
+                                        // Do not run TryInitSession and TryBindStatusConversation concurrently.
+                                        // A single authoritative initialization already reads the current buyer.
+                                        Task.Run(() => TryInitSession(session, "status"));
+                                        ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick);
+                                    }
+                                    else if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick)
+                                        && (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick)))
                                     {
                                         Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
                                     }
@@ -227,13 +347,17 @@ namespace Bot.ChromeNs
                 };
                 webSocket.SessionClosed += (session, value) =>
                 {
+                    _connectedSessions.TryRemove(session.SessionID, out _);
+                    ReleaseSellerSession(session.SessionID);
                     BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
                     Log.Info("千牛注入脚本 WebSocket 已断开: " + session.SessionID + ", reason=" + value);
                     CDPClient removed;
                     bool b;
+                    string statusBinding;
                     _clients.TryRemove(session.SessionID, out removed);
                     _initialized.TryRemove(session.SessionID, out b);
                     _initializing.TryRemove(session.SessionID, out b);
+                    _lastStatusBindings.TryRemove(session.SessionID, out statusBinding);
                 };
                 var config = new ServerConfig()
                 {
