@@ -14,6 +14,7 @@ import bot_web_bot_qa
 import bot_web_console
 import bot_web_conversation_knowledge
 import client_data_backup
+import deep_test_guard
 import recharge_status_query
 import runtime_embedding_guard
 import runtime_routing_guard
@@ -29,6 +30,7 @@ from wecom_crypto import install_on_bridge
 runtime_routing_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
 runtime_embedding_guard.install(control_plane)
+deep_test_guard.install(control_plane)
 scheduled_deep_test_retry.install(control_plane)
 wecom_policy_migration.install(control_plane)
 install_on_bridge(wecom_bridge)
