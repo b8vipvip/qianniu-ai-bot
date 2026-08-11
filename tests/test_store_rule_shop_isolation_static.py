@@ -72,9 +72,11 @@ def test_server_store_rule_sync_uses_token_scoped_state_and_rebind_cleanup():
     dockerfile = read("services/api-control-plane/Dockerfile")
     assert "bot_store_rule_state" in server
     assert "client_id INTEGER PRIMARY KEY" in server
+    assert "shop_key TEXT" not in server
     assert "Depends(core._runtime_client)" in server
+    assert 'request.headers.get("x-shop-key")' in server
+    assert 'detail="缺少 X-Shop-Key"' in server
     assert '"/api/runtime/v1/bot-web/store-rule-sync"' in server
-    assert "shop_key" not in server  # shop identity is enforced by runtime binding middleware, not payload storage
     assert '"bot_store_rule_state"' in binding
     assert "import store_rule_sync" in bootstrap
     assert "store_rule_sync.install(control_plane)" in bootstrap
