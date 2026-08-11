@@ -261,7 +261,7 @@ namespace Bot.ShopScope
             }));
         }
 
-        private static void ClearDuplicateLocalTokenCopies(ShopContext currentShop, string token)
+        internal static void ClearDuplicateLocalTokenCopies(ShopContext currentShop, string token)
         {
             foreach (var profile in Profiles.GetAll().Where(x => x != null))
             {
