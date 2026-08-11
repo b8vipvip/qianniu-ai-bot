@@ -118,6 +118,7 @@ def _reset_old_shop_server_state(conn, client_id: int) -> None:
         "bot_client_state",
         "bot_conversation_reads",
         "bot_knowledge_state",
+        "bot_store_rule_state",
         "bot_client_bot_enabled",
         "bot_client_data_backups",
     ):
