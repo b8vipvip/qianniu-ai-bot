@@ -13,7 +13,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY app.py bootstrap.py bot_client_shop_binding.py bot_update_cache.py bot_update_prefetch.py bot_web_console.py bot_web_bot_enabled.py bot_web_admin.py bot_web_bot_qa.py bot_web_bot_qa_logic.py bot_web_conversation_knowledge.py chat2api_runtime_guard.py client_data_backup.py deep_test_guard.py store_rule_sync.py recharge_status_query.py runtime_routing_guard.py runtime_streaming_guard.py runtime_embedding_guard.py scheduled_deep_test_retry.py wecom_bridge.py wecom_crypto.py wecom_settings.py wecom_policy_migration.py ./
+COPY app.py bootstrap.py bot_client_shop_binding.py bot_update_cache.py bot_update_prefetch.py bot_web_console.py bot_web_bot_enabled.py bot_web_admin.py bot_web_bot_qa.py bot_web_bot_qa_logic.py bot_web_conversation_knowledge.py chat2api_runtime_guard.py client_data_backup.py deep_test_guard.py message_processing_traces.py runtime_shop_ai_proxy.py store_rule_sync.py recharge_status_query.py runtime_routing_guard.py runtime_streaming_guard.py runtime_embedding_guard.py scheduled_deep_test_retry.py wecom_bridge.py wecom_crypto.py wecom_settings.py wecom_policy_migration.py ./
 COPY static ./static
 
 RUN useradd --create-home --uid 10001 appuser \
