@@ -16,9 +16,10 @@ def test_shop_binding_exposes_api_and_ai_answer_chain_diagnostics():
     assert "RunDiagnosticAsync(true)" in ui
     assert "GetSavedTokenForDiagnostics" in ui
     assert "尚未保存的内容" in ui
-    assert "不会向买家发送消息" in ui
+    assert "当前千牛会话真实发送" in ui or "正式千牛发送链路" in ui
+    assert "可手动撤回" in ui
     assert "ShopApiDiagnosticsService.TestConnectionAsync" in ui
-    assert "ShopApiDiagnosticsService.TestAnswerChainAsync" in ui
+    assert "ShopApiDiagnosticsService.TestAnswerChainAsync(_shop, _seller" in ui
 
 
 def test_diagnostics_use_shop_auth_and_the_real_text_default_gateway():
@@ -35,14 +36,19 @@ def test_diagnostics_use_shop_auth_and_the_real_text_default_gateway():
     assert "AI实际回复" in service
 
 
-def test_diagnostics_are_dry_run_and_do_not_send_to_buyers():
+def test_ai_chain_diagnostic_sends_to_current_buyer_through_production_path():
     service = read("src/Bot/ShopScope/ShopApiDiagnosticsService.cs")
-    ui = read("src/Bot/Options/ShopBindingOptionsControl.cs")
-    assert "QNRpa" not in service
-    assert "ReliableSend" not in service
-    assert "send_text" not in service
-    assert "/api/bot-web/messages/send" not in service
-    assert "只做取答案诊断" in ui
+    assert "QN.FindExistingBySellerNick(seller)" in service
+    assert "ShopContextLocator.ResolveBySellerNick(qn.Seller.Nick)" in service
+    assert "resolved.ShopKey" in service
+    assert "qn.GetCurrentConversationID()" in service
+    assert '"【Bot链路测试，可手动撤回】"' in service
+    assert "KnowledgeLearningService.AllowNextManualSend" in service
+    assert "ShopSettingsScope.Enter(shop)" in service
+    assert "qn.SendTextWithRetryAsync(buyer, sendText, 1)" in service
+    assert "qn.Rpa.GetSendFailureReason()" in service
+    assert "阶段6/6 千牛真实发送：通过" in service
+    assert "生产 SendTextWithRetryAsync 已确认成功" in service
 
 
 def test_diagnostics_service_is_compiled_for_wpf_temp_projects():
