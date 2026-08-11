@@ -1,7 +1,9 @@
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Bot
 {
@@ -48,15 +50,18 @@ namespace Bot.ShopScope
 
             var store = new ShopScopedSettingsStore(shop, Paths);
             var hasScopedValue = store.TryGetString(masterKey, out value);
-            if (hasScopedValue && !string.IsNullOrWhiteSpace(value)) return true;
+            var isAiEndpointList = string.Equals(subKey, AiSubKey, StringComparison.Ordinal)
+                && string.Equals(masterKey, AiEndpointListKey, StringComparison.Ordinal);
+
+            if (hasScopedValue && !isAiEndpointList) return true;
+            if (hasScopedValue && isAiEndpointList && HasUsableExplicitAiEndpoint(value)) return true;
 
             // The modern product keeps upstream providers/models/keys in the API Control Plane.
-            // Older reply code still reads AiEndpointStore. When this shop has no explicit local
-            // endpoint list, expose an in-memory OpenAI-compatible endpoint that points to the
+            // Older reply code still reads AiEndpointStore. When this shop has no usable explicit
+            // local endpoint, expose an in-memory OpenAI-compatible endpoint that points to the
             // ShopKey-bound Control Plane proxy. The Bot token is never persisted into the AI
             // settings file; it is materialized only for this read.
-            if (string.Equals(subKey, AiSubKey, StringComparison.Ordinal)
-                && string.Equals(masterKey, AiEndpointListKey, StringComparison.Ordinal))
+            if (isAiEndpointList)
             {
                 string generated;
                 if (TryBuildControlPlaneEndpointJson(shop, out generated))
@@ -67,6 +72,32 @@ namespace Bot.ShopScope
             }
 
             return hasScopedValue;
+        }
+
+        private static bool HasUsableExplicitAiEndpoint(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json)) return false;
+            try
+            {
+                var token = JToken.Parse(json);
+                var items = token.Type == JTokenType.Array
+                    ? token.Children<JObject>()
+                    : Enumerable.Empty<JObject>();
+                return items.Any(item =>
+                {
+                    var enabledToken = item["Enabled"] ?? item["enabled"];
+                    var enabled = enabledToken == null || enabledToken.Type != JTokenType.Boolean
+                        || enabledToken.Value<bool>();
+                    var apiKey = ((item["ApiKey"] ?? item["apiKey"]) ?? string.Empty).ToString().Trim();
+                    var model = ((item["TextModel"] ?? item["textModel"]
+                        ?? item["Model"] ?? item["model"]) ?? string.Empty).ToString().Trim();
+                    return enabled && apiKey.Length > 0 && model.Length > 0;
+                });
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private static bool TryBuildControlPlaneEndpointJson(ShopContext shop, out string json)
