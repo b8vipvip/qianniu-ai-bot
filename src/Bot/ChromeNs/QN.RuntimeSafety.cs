@@ -52,12 +52,12 @@ namespace Bot.ChromeNs
                 || string.IsNullOrWhiteSpace(buyer)
                 || string.IsNullOrWhiteSpace(currentQuestion)) return false;
 
-            return RunInShopScope(seller, delegate
+            var resolved = RunInShopScope(seller, delegate
             {
                 var settings = LoadCurrentScope();
                 if (settings == null
                     || !settings.Enabled
-                    || string.IsNullOrWhiteSpace(settings.Answer)) return false;
+                    || string.IsNullOrWhiteSpace(settings.Answer)) return string.Empty;
 
                 var priorTurns = ConversationContextStore.GetRecentTurns(
                     seller,
@@ -74,15 +74,15 @@ namespace Bot.ChromeNs
                 if (latestPrior != null)
                 {
                     // 时间未知时宁可不重复欢迎，也不把历史会话误判为首条咨询。
-                    if (latestPrior.Timestamp == DateTime.MinValue) return false;
-                    if (latestPrior.Timestamp >= DateTime.Now.AddMinutes(-SessionResetMinutes)) return false;
+                    if (latestPrior.Timestamp == DateTime.MinValue) return string.Empty;
+                    if (latestPrior.Timestamp >= DateTime.Now.AddMinutes(-SessionResetMinutes)) return string.Empty;
                 }
 
-                var configured = BotFeatureStore.ApplyOutputPolicy(settings.Answer.Trim());
-                if (string.IsNullOrWhiteSpace(configured)) return false;
-                answer = configured;
-                return true;
+                return BotFeatureStore.ApplyOutputPolicy(settings.Answer.Trim()) ?? string.Empty;
             });
+
+            answer = (resolved ?? string.Empty).Trim();
+            return !string.IsNullOrWhiteSpace(answer);
         }
 
         private static FirstInquiryFixedReplySettings LoadCurrentScope()
