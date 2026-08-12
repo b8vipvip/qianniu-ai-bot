@@ -445,11 +445,33 @@ namespace Bot.ChromeNs
             var aiStartedAt = DateTime.Now;
             Log.Info("文本回复开始: buyer=" + burst.BuyerNick + ", queueMs="
                 + Math.Max(0, (long)(aiStartedAt - detectedAt).TotalMilliseconds));
-            var answer = await Task.Run(() => MyOpenAI.GetAnswer(
+
+            string answer;
+            var usedFirstInquiryFixedReply = FirstInquiryFixedReplyService.TryResolve(
                 burst.SellerNick,
                 burst.BuyerNick,
                 burst.CombinedQuestion,
-                true));
+                out answer);
+            if (usedFirstInquiryFixedReply)
+            {
+                answer = BotOutboundMessageFormatter.EnsureAiMarker(answer);
+                KnowledgeLearningService.RegisterAnswerSource(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    answer,
+                    "首条咨询固定回复");
+                Log.Info("首条咨询固定回复已命中，跳过AI调用: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick);
+            }
+            else
+            {
+                answer = await Task.Run(() => MyOpenAI.GetAnswer(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    true));
+            }
 
             if (!lease.IsCurrent)
             {
@@ -457,12 +479,15 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var deduplication = ReplyDeduplicationService.EnsureDistinct(
-                burst.SellerNick,
-                burst.BuyerNick,
-                burst.CombinedQuestion,
-                answer);
-            answer = deduplication.Answer;
+            if (!usedFirstInquiryFixedReply)
+            {
+                var deduplication = ReplyDeduplicationService.EnsureDistinct(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    burst.CombinedQuestion,
+                    answer);
+                answer = deduplication.Answer;
+            }
 
             if (!await lease.ConfirmStableAsync(220))
             {

@@ -1,3 +1,4 @@
+using Bot.ChromeNs;
 using Bot.Knowledge;
 using BotLib;
 using System;
@@ -21,6 +22,8 @@ namespace Bot.Options
         private readonly FeatureSettingsWindow _legacyWindow;
         private readonly TabControl _tabs;
         private readonly MethodInfo _saveAllMethod;
+        private CheckBox _firstInquiryFixedReplyEnabled;
+        private TextBox _firstInquiryFixedReplyAnswer;
         private string _currentPage;
 
         public FeatureSettingsOptionsControl(string seller)
@@ -39,6 +42,7 @@ namespace Bot.Options
 
             RemoveMeaninglessLicensePage();
             ReplaceKnowledgePageWithEmbeddedLauncher();
+            AddFirstInquiryFixedReplyCard();
             HideLegacyTabHeaders();
 
             var hosted = _legacyWindow.Content as UIElement;
@@ -90,6 +94,13 @@ namespace Bot.Options
             try
             {
                 _saveAllMethod.Invoke(_legacyWindow, null);
+                if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)
+                {
+                    FirstInquiryFixedReplyService.Save(
+                        seller ?? Seller,
+                        _firstInquiryFixedReplyEnabled.IsChecked == true,
+                        _firstInquiryFixedReplyAnswer.Text ?? string.Empty);
+                }
             }
             catch (TargetInvocationException ex)
             {
@@ -183,6 +194,80 @@ namespace Bot.Options
                 Margin = new Thickness(8),
                 Child = panel
             };
+        }
+
+        private void AddFirstInquiryFixedReplyCard()
+        {
+            var autoReplyTab = _tabs.Items
+                .OfType<TabItem>()
+                .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "自动回复规则", StringComparison.Ordinal));
+            if (autoReplyTab == null) return;
+
+            var settings = FirstInquiryFixedReplyService.Load(Seller)
+                ?? new FirstInquiryFixedReplySettings();
+            _firstInquiryFixedReplyEnabled = new CheckBox
+            {
+                Content = "启用首条咨询固定回复",
+                IsChecked = settings.Enabled,
+                FontSize = 14,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            _firstInquiryFixedReplyAnswer = new TextBox
+            {
+                Text = settings.Answer ?? string.Empty,
+                MinHeight = 72,
+                MaxHeight = 110,
+                AcceptsReturn = true,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Padding = new Thickness(10, 8, 10, 8),
+                Margin = new Thickness(0, 8, 0, 0),
+                ToolTip = "填写买家新一轮咨询时要直接发送的固定答案。"
+            };
+
+            var cardPanel = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
+            cardPanel.Children.Add(_firstInquiryFixedReplyEnabled);
+            cardPanel.Children.Add(new TextBlock
+            {
+                Text = "同一买家新一轮咨询的首条消息直接使用下方固定答案，不调用 AI。连续咨询期间只发送一次；超过 30 分钟无互动后再次咨询视为新一轮。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.FromRgb(102, 112, 133)),
+                Margin = new Thickness(0, 7, 0, 0)
+            });
+            cardPanel.Children.Add(new TextBlock
+            {
+                Text = "固定答案",
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(55, 65, 81)),
+                Margin = new Thickness(0, 10, 0, 0)
+            });
+            cardPanel.Children.Add(_firstInquiryFixedReplyAnswer);
+
+            var card = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Margin = new Thickness(8, 8, 8, 6),
+                Child = cardPanel
+            };
+
+            var existing = autoReplyTab.Content as UIElement;
+            autoReplyTab.Content = null;
+            var host = new Grid();
+            host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            Grid.SetRow(card, 0);
+            host.Children.Add(card);
+            if (existing != null)
+            {
+                Grid.SetRow(existing, 1);
+                host.Children.Add(existing);
+            }
+            autoReplyTab.Content = host;
         }
 
         private void HideLegacyTabHeaders()
