@@ -29,20 +29,23 @@ def test_incoming_timeline_is_recorded_before_burst_generation():
     text = read("src/Bot/ChromeNs/QN.cs")
     refresh = text.index("ConversationContextStore.RefreshAndRecord(message, messageText);")
     enqueue = text.index("_buyerMessageBurstCoordinator.Enqueue", refresh)
-    answer = text.index("var answer = await Task.Run(() => MyOpenAI.GetAnswer", enqueue)
-    assert refresh < enqueue < answer
+    reply_decision = text.index("FirstInquiryFixedReplyService.TryResolve(", enqueue)
+    ai = text.index("MyOpenAI.GetAnswer(", reply_decision)
+    assert refresh < enqueue < reply_decision < ai
 
 
 def test_every_text_burst_is_checked_before_display_and_send():
     text = read("src/Bot/ChromeNs/QN.cs")
-    generated = text.index("var answer = await Task.Run(() => MyOpenAI.GetAnswer")
-    stale_check = text.index("if (!lease.IsCurrent)", generated)
-    checked = text.index("ReplyDeduplicationService.EnsureDistinct", stale_check)
+    fixed = text.index("FirstInquiryFixedReplyService.TryResolve(")
+    ai = text.index("MyOpenAI.GetAnswer(", fixed)
+    stale_check = text.index("if (!lease.IsCurrent)", ai)
+    conditional_check = text.index("if (!usedFirstInquiryFixedReply)", stale_check)
+    checked = text.index("ReplyDeduplicationService.EnsureDistinct", conditional_check)
     stable = text.index("ConfirmStableAsync(220)", checked)
     displayed = text.index("ResponseProgressTracker.SetAnswerReady", stable)
     sent = text.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)", displayed)
     remembered = text.index("ReplyDeduplicationService.RememberDelivered", sent)
-    assert generated < stale_check < checked < stable < displayed < sent < remembered
+    assert fixed < ai < stale_check < conditional_check < checked < stable < displayed < sent < remembered
 
 
 def test_duplicate_service_regenerates_and_rejects_same_result():
