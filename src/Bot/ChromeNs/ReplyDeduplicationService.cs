@@ -35,10 +35,33 @@ namespace Bot.ChromeNs
             string question,
             string candidateAnswer)
         {
-            var knowledge = ResolveKnowledge(seller, buyer, question, candidateAnswer);
-            var validationRegenerated = false;
-            var validationSource = string.Empty;
-            var exactTrustedKnowledge = knowledge != null && SameAnswer(knowledge.Answer, candidateAnswer);
+            string aiFailureFallbackAnswer;
+            KnowledgeBaseEntry aiFailureFallbackKnowledge;
+            double aiFailureFallbackScore;
+            var aiFailureFallbackApplied = AiFailureKnowledgeFallbackService.TryResolve(
+                seller,
+                buyer,
+                question,
+                candidateAnswer,
+                out aiFailureFallbackAnswer,
+                out aiFailureFallbackKnowledge,
+                out aiFailureFallbackScore);
+            if (aiFailureFallbackApplied)
+            {
+                candidateAnswer = aiFailureFallbackAnswer;
+                KnowledgeLearningService.RegisterAnswerSource(
+                    seller, buyer, question, candidateAnswer, "AI异常本地兜底");
+            }
+
+            var knowledge = aiFailureFallbackKnowledge
+                ?? ResolveKnowledge(seller, buyer, question, candidateAnswer);
+            var validationRegenerated = aiFailureFallbackApplied;
+            var validationSource = aiFailureFallbackApplied ? "AI异常本地兜底" : string.Empty;
+            // 50%是故障时的应急阈值，低于正常知识直答置信度；即使命中本地知识，
+            // 仍强制走一次发送前事实/风险校验，不能因为答案来自知识库就跳过安全检查。
+            var exactTrustedKnowledge = knowledge != null
+                && SameAnswer(knowledge.Answer, candidateAnswer)
+                && !aiFailureFallbackApplied;
 
             if (!exactTrustedKnowledge
                 && !string.IsNullOrWhiteSpace(candidateAnswer)
