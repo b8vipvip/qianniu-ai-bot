@@ -133,6 +133,7 @@ namespace Bot.UpdateNs
             BotUpdateSettings settings)
         {
             settings = settings ?? new BotUpdateSettings();
+            if (settings.AutoInstall) settings.AutoCheck = true;
             settings.CheckIntervalHours = Math.Max(
                 1,
                 Math.Min(
@@ -160,6 +161,7 @@ namespace Bot.UpdateNs
                 AutoCheck = settings.AutoCheck,
                 NotifyPopup = settings.NotifyPopup,
                 AutoDownload = settings.AutoDownload,
+                AutoInstall = settings.AutoInstall,
                 CheckIntervalHours = settings.CheckIntervalHours,
                 SkippedVersion = settings.SkippedVersion,
                 LastNotifiedVersion = settings.LastNotifiedVersion,
