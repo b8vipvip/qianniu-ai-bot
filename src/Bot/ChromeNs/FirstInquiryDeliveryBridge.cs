@@ -1,6 +1,9 @@
 using Bot.ChatRecord;
+using Bot.Knowledge;
 using Bot.ShopScope;
 using BotLib;
+using DbEntity;
+using DbEntity.Response;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
@@ -221,7 +224,6 @@ namespace Bot.ChromeNs
                     string greeting;
                     if (!FirstInquiryFixedReplyService.TryResolve(snapshot.Seller, buyer, question, out greeting))
                     {
-                        // Ordinary receiveNewMsg may already own the first greeting. Do not race it.
                         return;
                     }
 
