@@ -17,3 +17,11 @@ async function rotateClientToken(id){
   if(!confirm("重新生成后，旧令牌会立即失效，Windows Bot 必须填写新令牌才能重新连接。确认继续？"))return;
   try{const r=await api(`/api/admin/mobile-bot/clients/${id}/rotate`,{method:"POST"});const copied=await copyTextCompat(r.token);alert(`新客户端令牌：\n\n${r.token}\n\n${copied?"已复制到剪贴板。":"请立即手动保存。"}`);await loadClients();await loadDashboard()}catch(err){toast(err.message)}
 }
+
+(function loadUnifiedConsoleSections(){
+  if(document.querySelector('script[data-console-sections="1"]'))return;
+  const script=document.createElement("script");
+  script.src="/static/console-sections.js?v=1";
+  script.dataset.consoleSections="1";
+  document.body.appendChild(script);
+})();
