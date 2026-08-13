@@ -113,15 +113,28 @@ def test_server_caches_latest_metadata_and_verified_packages():
     assert "BOT_UPDATE_PREFETCH_POLL_SECONDS=60" in env
 
 
-def test_update_defaults_are_safe_and_install_still_requires_confirmation():
+def test_update_defaults_keep_auto_install_opt_in_and_remove_second_confirmation():
     code = updater_code()
+    core = read("src/Bot/Update/BotUpdateService.Core.Fast.cs")
+    prompt = read("src/Bot/Update/BotUpdatePromptWindow.Fast.cs")
     ui = read("src/Bot/Options/BotUpdateOptionsControl.cs")
+
     assert "AutoCheck = true" in code
     assert "NotifyPopup = true" in code
     assert "AutoDownload = false" in code
+    assert "AutoInstall = false" in code
     assert "CheckIntervalHours = 6" in code
-    assert "安装前仍需人工确认" in ui
-    assert "MessageBoxButton.YesNo" in code
+
+    assert 'Content = "自动更新（发现新版本后自动下载安装并重启，无需确认）"' in ui
+    assert "settings.AutoInstall = _autoUpdate.IsChecked == true" in ui
+    assert "if (settings.AutoInstall) settings.AutoCheck = true" in ui
+    assert "!result.InstallStarted" in ui
+
+    assert "if (settings.AutoInstall" in core
+    assert "result.InstallStarted = true" in core
+    assert "LaunchInstaller(package, release)" in core
+    assert "MessageBoxButton.YesNo" not in prompt
+    assert '"确认更新"' not in prompt
     assert "Application.Current.Shutdown()" in code
 
 
