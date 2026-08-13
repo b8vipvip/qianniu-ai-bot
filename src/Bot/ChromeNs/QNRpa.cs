@@ -1,4 +1,4 @@
-﻿using BotLib.Extensions;
+using BotLib.Extensions;
 using BotLib.Wpf.Extensions;
 using BotLib;
 using FlaUI.Core.AutomationElements;
@@ -155,11 +155,62 @@ namespace Bot.ChromeNs
 
         private bool IsEditorOrCdpInputboxEmpty()
         {
-            if (_messageInputTextArea != null) return IsEditorEmptySafe();
-
+            // Prefer the same IMSDK/CDP channel that wrote the draft. UIA can block for many
+            // seconds on memory-constrained RDP hosts, so it is only a fallback for confirmation.
             bool cdpEmpty;
             if (TryIsInputboxEmptyByCdp(out cdpEmpty)) return cdpEmpty;
+            if (_messageInputTextArea != null) return IsEditorEmptySafe();
             return false;
+        }
+
+        private bool HasExpectedDraftFast(string text)
+        {
+            text = (text ?? string.Empty).Trim();
+            if (text.Length == 0) return false;
+
+            bool cdpEmpty;
+            if (TryIsInputboxEmptyByCdp(out cdpEmpty))
+            {
+                if (cdpEmpty) return false;
+                var recentOwnDraft = string.Equals((LastSetPlainText ?? string.Empty).Trim(), text, StringComparison.Ordinal)
+                    && LatestSetTextTime != DateTime.MinValue
+                    && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;
+                if (recentOwnDraft) return true;
+            }
+
+            return HasExpectedDraft(text);
+        }
+
+        private bool TryFocusEditorForEnterFast()
+        {
+            try
+            {
+                var sellerDesk = ResolveSellerDesk();
+                if (sellerDesk == null || !EnsureSellerDeskBinding(false)) return false;
+                sellerDesk.BringTop();
+
+                // Use the already cached UIA element first. Do not run a synchronous full control
+                // refresh here: the message is already in the input box and Enter should be fast.
+                if (_messageInputTextArea != null)
+                {
+                    try
+                    {
+                        _messageInputTextArea.Focus();
+                        Thread.Sleep(70);
+                        return true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Info("Enter主发送快速聚焦失败，改用普通聚焦: " + ex.Message);
+                    }
+                }
+                return FocusEditor();
+            }
+            catch (Exception ex)
+            {
+                Log.Info("Enter主发送聚焦异常: " + ex.Message);
+                return false;
+            }
         }
 
         private bool WaitForSendConfirmed(string buyer, string text, DateTime sendStart, string method, int timeoutMs)
@@ -204,16 +255,26 @@ namespace Bot.ChromeNs
         {
             try
             {
-                if (!FocusEditor())
+                // The user's Qianniu is configured as Enter-to-send. Once CDP has placed our own
+                // recent draft in the verified buyer conversation, Enter is the primary action.
+                // Do not make a potentially slow full UIA text read a prerequisite to reaching it.
+                if (!HasExpectedDraftFast(text))
+                {
+                    SetSendFailure("Enter发送", "发送前未确认输入框仍有本次Bot草稿");
+                    return false;
+                }
+                if (!TryFocusEditorForEnterFast())
                 {
                     SetSendFailure("Enter发送", "无法聚焦聊天输入框");
                     return false;
                 }
-                if (!HasExpectedDraft(text))
+                if (!HasExpectedDraftFast(text))
                 {
-                    SetSendFailure("Enter发送", "发送前未确认输入框仍为目标文本");
+                    SetSendFailure("Enter发送", "聚焦后草稿已变化或已被发送");
                     return false;
                 }
+
+                Log.Info("Enter主发送开始: buyer=" + buyer + ", text=" + text);
                 PressEnter();
                 return WaitForSendConfirmed(buyer, text, sendStart, "Enter", 3500);
             }
@@ -256,6 +317,7 @@ namespace Bot.ChromeNs
                     SetSendFailure("发送按钮回退", "发送前无法严格确认输入框仍为目标文本，已阻止点击发送按钮");
                     return false;
                 }
+                Log.Info("Enter未确认送达，回退点击发送按钮: buyer=" + buyer);
                 if (_sendMessageButton != null && TryClickSendButtonLeftPart(buyer, text, sendStart)) return true;
                 SetSendFailure("发送按钮回退", _sendMessageButton == null ? "未找到发送按钮" : "点击后未确认发送");
             }
@@ -520,23 +582,39 @@ namespace Bot.ChromeNs
             {
                 if (_qn == null) return false;
 
+                bool beforeEmpty;
+                if (TryIsInputboxEmptyByCdp(out beforeEmpty) && !beforeEmpty
+                    && !HasExpectedDraftFast(text))
+                {
+                    SetSendFailure("CDP写入输入框", "输入框已有非本次Bot草稿，已阻止覆盖/追加发送");
+                    return false;
+                }
+
                 Log.Info("准备通过CDP写入输入框: buyer=" + buyer + ", text=" + text);
                 _qn.InsertText2Inputbox(buyer, text);
 
                 LastSetPlainText = text;
                 LatestSetTextTime = DateTime.Now;
 
-                await Task.Delay(800);
-                await RefreshChatControlsAsync(true);
-
+                // IMSDK can confirm immediately that the draft exists. Do not synchronously wait
+                // for a full UIA tree/text read before reaching the Enter action; that was the
+                // observed 20+ second stall on the 4 GB Windows Server.
+                await Task.Delay(260);
                 bool cdpEmpty;
                 var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
+                if (hasCdpEmpty && !cdpEmpty)
+                {
+                    Log.Info("CDP写入输入框已由IMSDK确认，直接进入Enter主发送: buyer=" + buyer + ", text=" + text);
+                    return true;
+                }
+
+                await RefreshChatControlsAsync(true);
                 string editorText;
                 var editorReadable = TryGetEditorText(out editorText);
                 var ok = editorReadable && EditorMatchesExpectedText(editorText, text);
                 if (!ok)
                 {
-                    SetSendFailure("CDP写入输入框", "无法通过UIA严格确认目标文本；hasCdpEmpty="
+                    SetSendFailure("CDP写入输入框", "CDP未确认草稿且UIA无法严格确认目标文本；hasCdpEmpty="
                         + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty);
                 }
 
@@ -609,25 +687,22 @@ namespace Bot.ChromeNs
                     Util.WaitFor(new Func<bool>(() => sellerDesk.IsVisible), 3000, 10, false);
                 }
 
-                // Prefer the Qianniu/CDP input path. The legacy clipboard + WPF Dispatcher path can
-                // block for a long time on memory-constrained RDP servers and used to hold the
-                // seller-wide send gate indefinitely. UIA remains the strict verifier and fallback.
                 var setOk = await TrySetPlainTextByCdpAsync(buyer, text);
                 if (!setOk)
                 {
-                    Log.Info("CDP写入输入框未通过严格确认，回退UIA剪贴板写入。buyer=" + buyer + ", text=" + text);
+                    Log.Info("CDP写入输入框未通过确认，回退UIA剪贴板写入。buyer=" + buyer + ", text=" + text);
                     await RefreshChatControlsAsync(true);
                     setOk = SetPlainText(text);
                 }
 
                 if (!setOk)
                 {
-                    SetSendFailure("写入输入框", "CDP与UIA均未严格确认目标文本");
+                    SetSendFailure("写入输入框", "CDP与UIA均未确认目标文本");
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
 
-                await Task.Delay(120);
+                await Task.Delay(80);
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查"))
                 {
                     ClearExpectedDraft(text, GetSendFailureReason());
@@ -640,7 +715,7 @@ namespace Bot.ChromeNs
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
-                if (!HasExpectedDraft(text))
+                if (!HasExpectedDraftFast(text))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
