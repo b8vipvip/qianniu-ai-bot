@@ -23,6 +23,34 @@ namespace Bot.ChromeNs
         {
             if (safetyDecision == null)
                 return Skip("[未知消息]", "已跳过：消息安全检查失败，未调用AI，也未发送给买家。");
+
+            // The first-inquiry fixed reply sits in front of the ordinary content-type router.
+            // Therefore text, images, files, emoji, withdrawal/platform tips and other fresh
+            // buyer-side events can all trigger the same configured greeting. Historical startup
+            // messages remain excluded by FirstInquiryFixedReplyService.TryPrepare.
+            var seller = message == null || message.toid == null
+                ? string.Empty
+                : (message.toid.nick ?? string.Empty).Trim();
+            var buyer = message == null || message.fromid == null
+                ? string.Empty
+                : (message.fromid.nick ?? string.Empty).Trim();
+            var firstQuestion = IncomingMessageSafety.GetDisplayText(message, text);
+            string fixedAnswer;
+            if (FirstInquiryFixedReplyService.TryPrepare(
+                seller,
+                buyer,
+                firstQuestion,
+                safetyDecision,
+                out fixedAnswer))
+            {
+                return new VisionMessageDecision
+                {
+                    Kind = VisionDecisionKind.Text,
+                    QuestionLabel = firstQuestion,
+                    Note = "本轮首条消息使用固定回复，不调用AI或视觉模型。"
+                };
+            }
+
             if (safetyDecision.ShouldCallAi)
                 return new VisionMessageDecision
                 {
