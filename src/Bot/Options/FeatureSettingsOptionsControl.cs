@@ -42,7 +42,7 @@ namespace Bot.Options
 
             RemoveMeaninglessLicensePage();
             ReplaceKnowledgePageWithEmbeddedLauncher();
-            AddFirstInquiryFixedReplyCard();
+            OrganizeAutoReplyRulesPage();
             HideLegacyTabHeaders();
 
             var hosted = _legacyWindow.Content as UIElement;
@@ -139,8 +139,6 @@ namespace Bot.Options
                 _tabs.Items.Remove(licenseTab);
             }
 
-            // The removed page only stored local placeholder values and never validated a license.
-            // Clear its backing controls so SaveAll no longer rewrites those obsolete fields.
             SetPrivateField(_legacyWindow, "_licensee", null);
             SetPrivateField(_legacyWindow, "_licenseKey", null);
             SetPrivateField(_legacyWindow, "_expireDate", null);
@@ -196,12 +194,15 @@ namespace Bot.Options
             };
         }
 
-        private void AddFirstInquiryFixedReplyCard()
+        private void OrganizeAutoReplyRulesPage()
         {
             var autoReplyTab = _tabs.Items
                 .OfType<TabItem>()
                 .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "自动回复规则", StringComparison.Ordinal));
             if (autoReplyTab == null) return;
+
+            var existing = autoReplyTab.Content as UIElement;
+            autoReplyTab.Content = null;
 
             var settings = FirstInquiryFixedReplyService.Load(Seller)
                 ?? new FirstInquiryFixedReplySettings();
@@ -217,57 +218,155 @@ namespace Bot.Options
             _firstInquiryFixedReplyAnswer = new TextBox
             {
                 Text = settings.Answer ?? string.Empty,
-                MinHeight = 72,
-                MaxHeight = 110,
+                MinHeight = 64,
+                MaxHeight = 96,
                 AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Padding = new Thickness(10, 8, 10, 8),
                 Margin = new Thickness(0, 8, 0, 0),
-                ToolTip = "填写买家新一轮咨询首个事件触发时要直接发送的固定答案。默认：在的，亲！"
+                ToolTip = "新一轮咨询第一个事件触发时直接发送。默认：在的，亲！"
             };
 
-            var cardPanel = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
-            cardPanel.Children.Add(_firstInquiryFixedReplyEnabled);
-            cardPanel.Children.Add(new TextBlock
+            var pageHeader = new StackPanel { Margin = new Thickness(8, 4, 8, 12) };
+            pageHeader.Children.Add(new TextBlock
             {
-                Text = "默认开启。新一轮咨询收到的第一个事件就触发固定答案：包括买家文字、图片、文件、表情等任意消息，以及淘宝/千牛系统提示；不调用 AI。连续咨询期间只触发一次，超过 30 分钟无互动后再次咨询视为新一轮。",
+                Text = "自动回复规则",
+                FontSize = 20,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(17, 24, 39))
+            });
+            pageHeader.Children.Add(new TextBlock
+            {
+                Text = "按实际触发顺序整理：先处理首条咨询，再处理下单/付款及其他高级规则。所有设置均按当前店铺独立保存。",
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(102, 112, 133)),
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                Margin = new Thickness(0, 5, 0, 0)
+            });
+
+            var summary = new WrapPanel { Margin = new Thickness(0, 9, 0, 0) };
+            summary.Children.Add(CreateRuleChip("首条咨询默认开启"));
+            summary.Children.Add(CreateRuleChip("30分钟一轮"));
+            summary.Children.Add(CreateRuleChip("固定回复不调用AI"));
+            pageHeader.Children.Add(summary);
+
+            var firstPanel = new StackPanel { Margin = new Thickness(16, 13, 16, 14) };
+            var firstTitleRow = new Grid();
+            firstTitleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            firstTitleRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var firstTitle = new TextBlock
+            {
+                Text = "① 首条咨询固定回复",
+                FontSize = 15,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(30, 64, 175)),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            Grid.SetColumn(firstTitle, 0);
+            firstTitleRow.Children.Add(firstTitle);
+            Grid.SetColumn(_firstInquiryFixedReplyEnabled, 1);
+            firstTitleRow.Children.Add(_firstInquiryFixedReplyEnabled);
+            firstPanel.Children.Add(firstTitleRow);
+            firstPanel.Children.Add(new TextBlock
+            {
+                Text = "买家本轮咨询的第一个事件即可触发，包括文字、图片、文件、表情、商品卡片和淘宝/千牛系统提示。真实发送成功后才进入30分钟去重；发送失败不会消耗首条资格。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
                 Margin = new Thickness(0, 7, 0, 0)
             });
-            cardPanel.Children.Add(new TextBlock
+            firstPanel.Children.Add(new TextBlock
             {
                 Text = "固定答案",
                 FontWeight = FontWeights.SemiBold,
                 Foreground = new SolidColorBrush(Color.FromRgb(55, 65, 81)),
                 Margin = new Thickness(0, 10, 0, 0)
             });
-            cardPanel.Children.Add(_firstInquiryFixedReplyAnswer);
+            firstPanel.Children.Add(_firstInquiryFixedReplyAnswer);
 
-            var card = new Border
+            var firstCard = new Border
             {
-                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
-                BorderBrush = new SolidColorBrush(Color.FromRgb(203, 213, 225)),
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(191, 219, 254)),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(8),
-                Margin = new Thickness(8, 8, 8, 6),
-                Child = cardPanel
+                CornerRadius = new CornerRadius(9),
+                Margin = new Thickness(8, 0, 8, 10),
+                Child = firstPanel
             };
 
-            var existing = autoReplyTab.Content as UIElement;
-            autoReplyTab.Content = null;
+            var advancedHeader = new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 252)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                BorderThickness = new Thickness(1, 1, 1, 0),
+                CornerRadius = new CornerRadius(9, 9, 0, 0),
+                Margin = new Thickness(8, 0, 8, 0),
+                Padding = new Thickness(14, 10, 14, 9),
+                Child = new StackPanel
+                {
+                    Children =
+                    {
+                        new TextBlock
+                        {
+                            Text = "② 下单后及高级自动回复",
+                            FontSize = 15,
+                            FontWeight = FontWeights.SemiBold,
+                            Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55))
+                        },
+                        new TextBlock
+                        {
+                            Text = "集中设置买家下单/付款后的固定回复或 HTTP 回复，以及转人工、关键词等原有高级规则。",
+                            TextWrapping = TextWrapping.Wrap,
+                            Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
+                            Margin = new Thickness(0, 4, 0, 0)
+                        }
+                    }
+                }
+            };
+
+            var advancedHost = new Border
+            {
+                Background = Brushes.White,
+                BorderBrush = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(0, 0, 9, 9),
+                Margin = new Thickness(8, 0, 8, 6),
+                Padding = new Thickness(2),
+                Child = existing
+            };
+
             var host = new Grid();
             host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            host.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
             host.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
-            Grid.SetRow(card, 0);
-            host.Children.Add(card);
-            if (existing != null)
-            {
-                Grid.SetRow(existing, 1);
-                host.Children.Add(existing);
-            }
+            Grid.SetRow(pageHeader, 0);
+            Grid.SetRow(firstCard, 1);
+            Grid.SetRow(advancedHeader, 2);
+            Grid.SetRow(advancedHost, 3);
+            host.Children.Add(pageHeader);
+            host.Children.Add(firstCard);
+            host.Children.Add(advancedHeader);
+            host.Children.Add(advancedHost);
             autoReplyTab.Content = host;
+        }
+
+        private static Border CreateRuleChip(string text)
+        {
+            return new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(239, 246, 255)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(219, 234, 254)),
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(10),
+                Margin = new Thickness(0, 0, 7, 0),
+                Padding = new Thickness(8, 3, 8, 3),
+                Child = new TextBlock
+                {
+                    Text = text,
+                    FontSize = 11,
+                    Foreground = new SolidColorBrush(Color.FromRgb(37, 99, 235))
+                }
+            };
         }
 
         private void HideLegacyTabHeaders()
