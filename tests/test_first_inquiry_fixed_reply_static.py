@@ -10,10 +10,12 @@ def read(path: str) -> str:
 
 def test_auto_reply_rules_expose_custom_first_inquiry_reply():
     source = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
-    assert "AddFirstInquiryFixedReplyCard" in source
+    assert "OrganizeAutoReplyRulesPage" in source
     assert '"自动回复规则"' in source
     assert '"启用首条咨询固定回复"' in source
     assert '"固定答案"' in source
+    assert '"① 首条咨询固定回复"' in source
+    assert '"② 下单后及高级自动回复"' in source
     assert "FirstInquiryFixedReplyService.Load(Seller)" in source
     assert "FirstInquiryFixedReplyService.Save(" in source
     assert "_firstInquiryFixedReplyAnswer.Text" in source
@@ -32,9 +34,10 @@ def test_first_inquiry_reply_is_shop_scoped_and_customizable():
 
 def test_first_inquiry_defaults_to_enabled_and_expected_answer():
     source = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
+    compact = "".join(source.split())
     assert 'DefaultAnswer = "在的，亲！"' in source
-    assert 'EnabledKey,\n                SettingsScope,\n                "true"' in source
-    assert 'AnswerKey,\n                SettingsScope,\n                DefaultAnswer' in source
+    assert 'GetParam2Key(EnabledKey,SettingsScope,"true")' in compact
+    assert 'GetParam2Key(AnswerKey,SettingsScope,DefaultAnswer)' in compact
 
 
 def test_first_inquiry_is_once_per_30_minute_consultation_session():
@@ -46,6 +49,17 @@ def test_first_inquiry_is_once_per_30_minute_consultation_session():
     assert "latestPrior.Timestamp >= now.AddMinutes(-SessionResetMinutes)" in source
     assert "TriggeredAt" in source
     assert "PendingReplies" in source
+
+
+def test_first_inquiry_session_is_committed_after_real_delivery():
+    source = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
+    assert "public static void MarkDelivered" in source
+    assert "public static void ReleaseReservation" in source
+    assert "InFlight" in source
+    resolve = source[source.index("public static bool TryResolve"):source.index("public static void MarkDelivered")]
+    assert "TriggeredAt[key] = now" not in resolve
+    delivered = source[source.index("public static void MarkDelivered"):source.index("public static void ReleaseReservation")]
+    assert "TriggeredAt[key] = DateTime.Now" in delivered
 
 
 def test_any_fresh_buyer_or_system_message_can_prepare_fixed_reply():
@@ -89,3 +103,23 @@ def test_fixed_reply_does_not_enter_ai_learning_path():
     assert 'if (string.Equals(answerSource, "AI生成", StringComparison.Ordinal))' in source
     assert 'KnowledgeLearningService.RegisterAnswerSource(' in source
     assert '"首条咨询固定回复"' in source
+
+
+def test_qnrpa_no_longer_requires_global_desk_at_constructor_and_prefers_cdp():
+    source = read("src/Bot/ChromeNs/QNRpa.cs")
+    ctor = source[source.index("public QNRpa(QN qn)"):source.index("private bool IsSendButtonName")]
+    assert "Application.Attach(Desk.Inst.ProcessId)" not in ctor
+    assert "EnsureSellerDeskBinding(false)" in ctor
+    send = source[source.index("private async Task<bool> OpenAndSendText"):source.index("private bool SetPlainText")]
+    assert send.index("TrySetPlainTextByCdpAsync") < send.index("SetPlainText(text)")
+
+
+def test_order_first_event_has_first_inquiry_delivery_bridge():
+    source = read("src/Bot/ChromeNs/FirstInquiryDeliveryBridge.cs")
+    assert "EvRecieveNewMessage += Qn_EvRecieveNewMessage" in source
+    assert "FirstInquiryFixedReplyService.HasPending" in source
+    assert "FirstInquiryFixedReplyService.MarkDelivered" in source
+    assert "OrderEventType.Created" in source
+    assert "OrderEventType.Paid" in source
+    assert "SendOrderFirstGreetingAsync" in source
+    assert "qn.SendTextWithRetryAsync" in source
