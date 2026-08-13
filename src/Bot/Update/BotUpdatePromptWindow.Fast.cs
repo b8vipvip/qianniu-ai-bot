@@ -225,14 +225,6 @@ namespace Bot.UpdateNs
 
         private async Task InstallAsync()
         {
-            var confirm = MessageBox.Show(
-                "更新会关闭当前 Bot，备份现有程序和用户数据，安装成功后自动重启。\n\n"
-                + "请确认当前没有正在发送的消息，然后继续。",
-                "确认更新",
-                MessageBoxButton.YesNo,
-                MessageBoxImage.Question);
-            if (confirm != MessageBoxResult.Yes) return;
-
             _installButton.IsEnabled = false;
             _laterButton.IsEnabled = false;
             _skipButton.IsEnabled = false;
