@@ -224,14 +224,14 @@ namespace Bot.Options
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
                 Padding = new Thickness(10, 8, 10, 8),
                 Margin = new Thickness(0, 8, 0, 0),
-                ToolTip = "填写买家新一轮咨询时要直接发送的固定答案。"
+                ToolTip = "填写买家新一轮咨询首个事件触发时要直接发送的固定答案。默认：在的，亲！"
             };
 
             var cardPanel = new StackPanel { Margin = new Thickness(16, 14, 16, 14) };
             cardPanel.Children.Add(_firstInquiryFixedReplyEnabled);
             cardPanel.Children.Add(new TextBlock
             {
-                Text = "同一买家新一轮咨询的首条消息直接使用下方固定答案，不调用 AI。连续咨询期间只发送一次；超过 30 分钟无互动后再次咨询视为新一轮。",
+                Text = "默认开启。新一轮咨询收到的第一个事件就触发固定答案：包括买家文字、图片、文件、表情等任意消息，以及淘宝/千牛系统提示；不调用 AI。连续咨询期间只触发一次，超过 30 分钟无互动后再次咨询视为新一轮。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(102, 112, 133)),
                 Margin = new Thickness(0, 7, 0, 0)
