@@ -64,6 +64,7 @@ namespace Bot.UpdateNs
                 "Bot自动更新服务已启动: version=" + CurrentVersion
                 + ", mode=control-plane-cache-first"
                 + ", autoCheck=" + GetSettings().AutoCheck
+                + ", autoInstall=" + GetSettings().AutoInstall
                 + ", intervalHours=" + GetSettings().CheckIntervalHours);
         }
 
@@ -145,7 +146,39 @@ namespace Bot.UpdateNs
                 if (available)
                 {
                     var settings = GetSettings();
-                    if (settings.AutoDownload && !string.IsNullOrWhiteSpace(release.Sha256))
+                    var skipped = string.Equals(
+                        settings.SkippedVersion,
+                        release.Version,
+                        StringComparison.OrdinalIgnoreCase);
+                    if (settings.AutoInstall
+                        && !skipped
+                        && !string.IsNullOrWhiteSpace(release.Sha256))
+                    {
+                        try
+                        {
+                            result.Message += "，已启用自动更新，正在下载安装包...";
+                            RaiseStatus(result);
+                            var package = await DownloadPackageAsync(
+                                release,
+                                null,
+                                CancellationToken.None);
+                            result.InstallStarted = true;
+                            result.Message = "发现新版本 " + release.Version
+                                + "（" + sourceText + "），已自动启动更新，Bot 将自动重启。";
+                            RaiseStatus(result);
+                            LaunchInstaller(package, release);
+                            return result;
+                        }
+                        catch (Exception ex)
+                        {
+                            result.InstallStarted = false;
+                            result.Message += "，自动更新失败：" + Short(ex.Message, 180);
+                            Log.Info(
+                                "Bot自动更新失败，保留人工更新入口: version=" + release.Version
+                                + ", error=" + Short(ex.Message, 260));
+                        }
+                    }
+                    else if (settings.AutoDownload && !string.IsNullOrWhiteSpace(release.Sha256))
                     {
                         try
                         {
@@ -166,7 +199,7 @@ namespace Bot.UpdateNs
                 }
 
                 RaiseStatus(result);
-                if (!interactive && available) MaybeShowBackgroundPrompt(release);
+                if (!interactive && available && !result.InstallStarted) MaybeShowBackgroundPrompt(release);
                 return result;
             }
             catch (Exception ex)
