@@ -11,11 +11,15 @@ def read(path: str) -> str:
 def test_auto_reply_rules_expose_custom_first_inquiry_reply():
     source = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
     assert "OrganizeAutoReplyRulesPage" in source
-    assert '"自动回复规则"' in source
+    assert '"自动回复规则"' in source  # tab lookup only; the settings shell owns the visible page title
+    assert 'Text = "自动回复规则"' not in source
     assert '"启用首条咨询固定回复"' in source
     assert '"固定答案"' in source
-    assert '"① 首条咨询固定回复"' in source
-    assert '"② 下单后及高级自动回复"' in source
+    assert '"① 首条咨询固定回复"' not in source
+    assert '"② 下单后及高级自动回复"' not in source
+    assert "DetachLegacyScrollHost" in source
+    assert "new ScrollViewer" in source
+    assert "VerticalScrollBarVisibility = ScrollBarVisibility.Auto" in source
     assert "FirstInquiryFixedReplyService.Load(Seller)" in source
     assert "FirstInquiryFixedReplyService.Save(" in source
     assert "_firstInquiryFixedReplyAnswer.Text" in source
@@ -105,13 +109,31 @@ def test_fixed_reply_does_not_enter_ai_learning_path():
     assert '"首条咨询固定回复"' in source
 
 
-def test_qnrpa_no_longer_requires_global_desk_at_constructor_and_prefers_cdp():
+def test_qnrpa_no_longer_requires_global_desk_and_enter_is_primary_fast_send():
     source = read("src/Bot/ChromeNs/QNRpa.cs")
     ctor = source[source.index("public QNRpa(QN qn)"):source.index("private bool IsSendButtonName")]
     assert "Application.Attach(Desk.Inst.ProcessId)" not in ctor
     assert "EnsureSellerDeskBinding(false)" in ctor
-    send = source[source.index("private async Task<bool> OpenAndSendText"):source.index("private bool SetPlainText")]
-    assert send.index("TrySetPlainTextByCdpAsync") < send.index("SetPlainText(text)")
+
+    empty_check = source[source.index("private bool IsEditorOrCdpInputboxEmpty"):source.index("private bool HasExpectedDraftFast")]
+    assert empty_check.index("TryIsInputboxEmptyByCdp") < empty_check.index("IsEditorEmptySafe")
+    assert "HasExpectedDraftFast" in source
+
+    cdp = source[source.index("private async Task<bool> TrySetPlainTextByCdpAsync"):source.index("private async Task<bool> OpenAndSendText")]
+    assert "hasCdpEmpty && !cdpEmpty" in cdp
+    assert "直接进入Enter主发送" in cdp
+
+    enter = source[source.index("private bool TryPressEnterSend"):source.index("private bool TryClickSendButtonLeftPart")]
+    assert "HasExpectedDraftFast(text)" in enter
+    assert "TryFocusEditorForEnterFast" in enter
+    assert "PressEnter();" in enter
+    assert '"Enter主发送开始' in enter
+
+    send_choice = source[source.index("private bool TryClickSendButton(string buyer"):source.index("private bool SetAndSendImage")]
+    assert send_choice.index("TryPressEnterSend") < send_choice.index("TryClickSendButtonLeftPart")
+
+    open_send = source[source.index("private async Task<bool> OpenAndSendText"):source.index("private bool SetPlainText")]
+    assert "HasExpectedDraftFast(text)" in open_send
 
 
 def test_order_first_event_has_first_inquiry_delivery_bridge():
