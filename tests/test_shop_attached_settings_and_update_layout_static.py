@@ -41,7 +41,7 @@ def test_update_page_has_no_fixed_minheight_and_primary_actions_are_before_prefe
     assert "MinWidth = 650" not in ui
     assert "CanContentScroll = false" in ui
     assert "PanningMode = PanningMode.VerticalOnly" in ui
-    assert ui.index('CreateTitle("检查与安装")') < ui.index('CreateTitle("自动检查设置")')
+    assert ui.index('CreateTitle("检查与安装")') < ui.index('CreateTitle("自动检查与更新设置")')
     assert 'HorizontalContentAlignment="Stretch"' in xaml
     assert 'VerticalContentAlignment="Stretch"' in xaml
     assert 'ClipToBounds="True"' in xaml
