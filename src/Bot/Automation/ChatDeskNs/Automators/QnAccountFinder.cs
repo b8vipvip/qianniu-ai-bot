@@ -42,6 +42,15 @@ namespace Bot.Automation.ChatDeskNs.Automators
                 || value.Equals("千牛工作台", StringComparison.OrdinalIgnoreCase);
         }
 
+        public static bool IsSystemNotificationTitle(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length == 0) return false;
+            return value.Equals("千牛系统消息", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("千牛系统通知", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("千牛消息通知", StringComparison.OrdinalIgnoreCase);
+        }
+
         /// <summary>
         /// Resolve one native reception window to the authenticated QN seller. A direct
         /// seller token in this HWND's own title is the strongest evidence. Process-wide
@@ -53,6 +62,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
             int hwnd,
             string nativeWindowTitle)
         {
+            if (IsSystemNotificationTitle(nativeWindowTitle)) return string.Empty;
             var qns = GetRuntimeQns();
             var direct = MatchUniqueSellerFromTitle(nativeWindowTitle, qns);
             if (direct.Length > 0) return direct;
@@ -228,6 +238,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
                             if (!IsReceptionCandidate(qnHwnd, nativeTitle, qns)) return;
 
                             var seller = ResolveSellerNameForWindow(pid, qnHwnd, nativeTitle);
+                            if (string.IsNullOrWhiteSpace(seller)) return;
                             result.Add(new QnChatWnd(seller, qnHwnd, pid));
                         },
                         pid);
@@ -249,6 +260,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
             try
             {
                 if (!WinApi.IsVisible(hwnd) || WinApi.IsWindowMinimized(hwnd)) return false;
+                if (IsSystemNotificationTitle(title)) return false;
                 var rect = WinApi.GetWindowRectangle(hwnd);
                 if (rect.Width < 560 || rect.Height < 380) return false;
 
