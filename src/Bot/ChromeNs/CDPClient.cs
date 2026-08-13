@@ -73,28 +73,33 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            DispatchInboundEvent(e.Type, response);
+        }
+
+        internal void DispatchInboundEvent(string type, string response)
+        {
             if (string.IsNullOrEmpty(response)) return;
-            if (e.Type == "receiveNewMsg")
+            if (type == "receiveNewMsg")
             {
                 RecieveNewMessage(response);
             }
-            else if (e.Type == "onConversationChange")
+            else if (type == "onConversationChange")
             {
                 BuyerSwitched(response);
             }
-            else if (e.Type == "onShopRobotReceriveNewMsgs")
+            else if (type == "onShopRobotReceriveNewMsgs")
             {
                 ShopRobotReceriveNewMessage(response);
             }
-            else if (e.Type == "onChatDlgActive")
+            else if (type == "onChatDlgActive")
             {
                 SellerSwitched(response);
             }
-            else if (e.Type == "messageCenterNotify")
+            else if (type == "messageCenterNotify")
             {
                 BenchMessageNotify(response);
             }
-            else if (e.Type == "qnbotStatus")
+            else if (type == "qnbotStatus")
             {
                 Log.Info("千牛注入状态: " + response);
             }
