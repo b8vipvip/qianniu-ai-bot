@@ -40,9 +40,15 @@ namespace Bot.ChromeNs
 
         public QNRpa(QN qn)
         {
-            _qn = qn;
-            automationApplication = FlaUI.Core.Application.Attach(Desk.Inst.ProcessId);
+            _qn = qn ?? throw new ArgumentNullException("qn");
             uia3Automation = new UIA3Automation();
+            // A QN can be created by a WebSocket session before the Qianniu desktop window has
+            // been registered. Never dereference the legacy global Desk.Inst here. The seller-
+            // scoped binding can safely be established now if available, or later by refresh/send.
+            if (!EnsureSellerDeskBinding(false))
+            {
+                Log.Info("RPA初始化时卖家窗口尚未就绪，延后绑定: seller=" + SellerNick);
+            }
             UpdateChatBrowserRect(true);
         }
 
@@ -73,14 +79,20 @@ namespace Bot.ChromeNs
             {
                 _qn.OpenChat(buyer);
                 Thread.Sleep(500);
-                Util.WaitFor(() => _qn.Buyer.Nick == buyer, 5000, 10, false);
+                Util.WaitFor(() => _qn.Buyer != null && _qn.Buyer.Nick == buyer, 5000, 10, false);
             }
-            if (_qn.Buyer.Nick == buyer)
+            if (_qn.Buyer != null && _qn.Buyer.Nick == buyer)
             {
-                if (!Desk.Inst.IsVisible)
+                var sellerDesk = ResolveSellerDesk();
+                if (sellerDesk == null || !EnsureSellerDeskBinding(false))
                 {
-                    Desk.Inst.Show();
-                    Util.WaitFor(new Func<bool>(() => Desk.Inst.IsVisible), 3000, 10, false);
+                    SetSendFailure("图片发送", "未找到当前卖家对应千牛窗口");
+                    return false;
+                }
+                if (!sellerDesk.IsVisible)
+                {
+                    sellerDesk.Show();
+                    Util.WaitFor(new Func<bool>(() => sellerDesk.IsVisible), 3000, 10, false);
                 }
                 SetAndSendImage(image);
             }
@@ -302,7 +314,13 @@ namespace Bot.ChromeNs
             bool isok = false;
             DispatcherEx.xInvoke(() =>
             {
-                Desk.Inst.BringTop();
+                var sellerDesk = ResolveSellerDesk();
+                if (sellerDesk == null || !EnsureSellerDeskBinding(false))
+                {
+                    SetSendFailure("聚焦输入框", "未找到当前卖家对应千牛窗口");
+                    return;
+                }
+                sellerDesk.BringTop();
                 try
                 {
                     if (_messageInputTextArea == null)
@@ -578,23 +596,33 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                if (!Desk.Inst.IsVisible)
+                var sellerDesk = ResolveSellerDesk();
+                if (sellerDesk == null || !EnsureSellerDeskBinding(false))
                 {
-                    Desk.Inst.Show();
-                    Util.WaitFor(new Func<bool>(() => Desk.Inst.IsVisible), 3000, 10, false);
+                    SetSendFailure("发送窗口", "未找到当前卖家对应千牛窗口");
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    return false;
+                }
+                if (!sellerDesk.IsVisible)
+                {
+                    sellerDesk.Show();
+                    Util.WaitFor(new Func<bool>(() => sellerDesk.IsVisible), 3000, 10, false);
                 }
 
-                await RefreshChatControlsAsync(true);
-                var setOk = SetPlainText(text);
+                // Prefer the Qianniu/CDP input path. The legacy clipboard + WPF Dispatcher path can
+                // block for a long time on memory-constrained RDP servers and used to hold the
+                // seller-wide send gate indefinitely. UIA remains the strict verifier and fallback.
+                var setOk = await TrySetPlainTextByCdpAsync(buyer, text);
                 if (!setOk)
                 {
-                    Log.Info("RPA写入输入框失败，改用CDP insertText2Inputbox。buyer=" + buyer + ", text=" + text);
-                    setOk = await TrySetPlainTextByCdpAsync(buyer, text);
+                    Log.Info("CDP写入输入框未通过严格确认，回退UIA剪贴板写入。buyer=" + buyer + ", text=" + text);
+                    await RefreshChatControlsAsync(true);
+                    setOk = SetPlainText(text);
                 }
 
                 if (!setOk)
                 {
-                    SetSendFailure("写入输入框", "UIA与CDP均未严格确认目标文本");
+                    SetSendFailure("写入输入框", "CDP与UIA均未严格确认目标文本");
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
