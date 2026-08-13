@@ -37,6 +37,7 @@ namespace Bot.Options
         private readonly TextBlock _buildRun;
         private readonly TextBlock _installDirectory;
         private readonly CheckBox _autoCheck;
+        private readonly CheckBox _autoUpdate;
         private readonly CheckBox _notifyPopup;
         private readonly CheckBox _autoDownload;
         private readonly ComboBox _interval;
@@ -169,13 +170,20 @@ namespace Bot.Options
 
             var updateCard = CreateCard();
             var updatePanel = (StackPanel)updateCard.Child;
-            updatePanel.Children.Add(CreateTitle("自动检查设置"));
+            updatePanel.Children.Add(CreateTitle("自动检查与更新设置"));
             _autoCheck = new CheckBox
             {
                 Content = "启动后和运行期间自动检查新版本",
                 Margin = new Thickness(0, 12, 0, 5)
             };
             updatePanel.Children.Add(_autoCheck);
+            _autoUpdate = new CheckBox
+            {
+                Content = "自动更新（发现新版本后自动下载安装并重启，无需确认）",
+                Margin = new Thickness(0, 5, 0, 5)
+            };
+            _autoUpdate.Checked += (s, e) => _autoCheck.IsChecked = true;
+            updatePanel.Children.Add(_autoUpdate);
             _notifyPopup = new CheckBox
             {
                 Content = "发现新版本时弹窗通知（同一版本24小时内最多提醒一次）",
@@ -184,7 +192,7 @@ namespace Bot.Options
             updatePanel.Children.Add(_notifyPopup);
             _autoDownload = new CheckBox
             {
-                Content = "后台自动下载安装包并校验（安装前仍需人工确认）",
+                Content = "后台自动下载安装包并校验（不自动重启）",
                 Margin = new Thickness(0, 5, 0, 10)
             };
             updatePanel.Children.Add(_autoDownload);
@@ -218,7 +226,7 @@ namespace Bot.Options
             };
             note.Child = new TextBlock
             {
-                Text = "安全机制：只接受本仓库 bot-v* 正式 Release；安装包必须通过 update.json 的 SHA-256 校验；更新前备份程序和永久用户数据；新版本无法启动时自动回滚。自动下载不等于静默安装，安装前始终需要人工确认。",
+                Text = "安全机制：只接受本仓库 bot-v* 正式 Release；安装包必须通过 update.json 的 SHA-256 校验；更新前备份程序和永久用户数据；新版本无法启动时自动回滚。手动点击“立即更新”不再弹出二次确认；开启“自动更新”后，发现新版本会自动下载安装并重启 Bot。",
                 TextWrapping = TextWrapping.Wrap,
                 Foreground = new SolidColorBrush(Color.FromRgb(30, 64, 175))
             };
@@ -243,6 +251,8 @@ namespace Bot.Options
         {
             var settings = BotUpdateService.GetSettings();
             settings.AutoCheck = _autoCheck.IsChecked == true;
+            settings.AutoInstall = _autoUpdate.IsChecked == true;
+            if (settings.AutoInstall) settings.AutoCheck = true;
             settings.NotifyPopup = _notifyPopup.IsChecked == true;
             settings.AutoDownload = _autoDownload.IsChecked == true;
             var item = _interval.SelectedItem as ComboBoxItem;
@@ -253,6 +263,7 @@ namespace Bot.Options
         public void RestoreDefault()
         {
             _autoCheck.IsChecked = true;
+            _autoUpdate.IsChecked = false;
             _notifyPopup.IsChecked = true;
             _autoDownload.IsChecked = false;
             SelectInterval(6);
@@ -278,11 +289,14 @@ namespace Bot.Options
             {
                 var result = await BotUpdateService.CheckNowAsync(true);
                 ApplyResult(result);
-                if (result.Success && result.UpdateAvailable && result.Release != null)
+                if (result.Success
+                    && result.UpdateAvailable
+                    && result.Release != null
+                    && !result.InstallStarted)
                 {
                     BotUpdateService.ShowUpdatePrompt(result.Release, Window.GetWindow(this));
                 }
-                else
+                else if (!result.InstallStarted)
                 {
                     MessageBox.Show(result.Message, "检查更新", MessageBoxButton.OK,
                         result.Success ? MessageBoxImage.Information : MessageBoxImage.Warning);
@@ -326,14 +340,15 @@ namespace Bot.Options
             }
             _status.Text = result.Message;
             _latestVersion.Text = result.Release == null ? "未找到正式版本" : result.Release.Version;
-            _installButton.IsEnabled = result.UpdateAvailable && result.Release != null;
+            _installButton.IsEnabled = result.UpdateAvailable && result.Release != null && !result.InstallStarted;
             LoadSkippedVersionOnly();
         }
 
         private void LoadSettings()
         {
             var settings = BotUpdateService.GetSettings();
-            _autoCheck.IsChecked = settings.AutoCheck;
+            _autoCheck.IsChecked = settings.AutoCheck || settings.AutoInstall;
+            _autoUpdate.IsChecked = settings.AutoInstall;
             _notifyPopup.IsChecked = settings.NotifyPopup;
             _autoDownload.IsChecked = settings.AutoDownload;
             SelectInterval(settings.CheckIntervalHours);
