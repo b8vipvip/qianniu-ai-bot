@@ -26,6 +26,7 @@ namespace Bot.UpdateNs
         public bool AutoCheck { get; set; }
         public bool NotifyPopup { get; set; }
         public bool AutoDownload { get; set; }
+        public bool AutoInstall { get; set; }
         public int CheckIntervalHours { get; set; }
         public string SkippedVersion { get; set; }
         public string LastNotifiedVersion { get; set; }
@@ -37,6 +38,7 @@ namespace Bot.UpdateNs
             AutoCheck = true;
             NotifyPopup = true;
             AutoDownload = false;
+            AutoInstall = false;
             CheckIntervalHours = 6;
             SkippedVersion = string.Empty;
             LastNotifiedVersion = string.Empty;
@@ -81,6 +83,7 @@ namespace Bot.UpdateNs
     {
         public bool Success { get; set; }
         public bool UpdateAvailable { get; set; }
+        public bool InstallStarted { get; set; }
         public string CurrentVersion { get; set; }
         public string Message { get; set; }
         public BotReleaseInfo Release { get; set; }
