@@ -43,10 +43,11 @@ def test_mandatory_order_preset_keeps_priority_when_buyer_sends_follow_up():
 def test_delivery_watchdog_starts_only_after_session_draft_checks_and_is_shop_bound():
     qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
     watchdog = text("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
-    ensure_index = qnrpa.index("SendDeliveryWatchdog.EnsurePending")
-    session_index = qnrpa.index('VerifyCurrentBuyerAsync(buyer, "发送前会话确认")')
-    draft_index = qnrpa.index("HasExpectedDraftFastAsync(text, 1200)")
-    send_index = qnrpa.index("sendResult = await TrySendTextDraftAsync")
+    open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):qnrpa.index("private bool SetPlainText")]
+    session_index = open_send.index('VerifyCurrentBuyerAsync(buyer, "发送前会话确认")')
+    draft_index = open_send.index("HasExpectedDraftFastAsync(text, 1200)", session_index)
+    ensure_index = open_send.index("SendDeliveryWatchdog.EnsurePending", draft_index)
+    send_index = open_send.index("sendResult = await TrySendTextDraftAsync", ensure_index)
     assert session_index < draft_index < ensure_index < send_index
     assert "已准备本店真实发送回显监控（尚未开始计时）" in watchdog
     assert "Interlocked.CompareExchange(ref pending.Started, 1, 0)" in watchdog
