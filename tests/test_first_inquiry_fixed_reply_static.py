@@ -109,31 +109,38 @@ def test_fixed_reply_does_not_enter_ai_learning_path():
     assert '"首条咨询固定回复"' in source
 
 
-def test_qnrpa_no_longer_requires_global_desk_and_enter_is_primary_fast_send():
+def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking():
     source = read("src/Bot/ChromeNs/QNRpa.cs")
     ctor = source[source.index("public QNRpa(QN qn)"):source.index("private bool IsSendButtonName")]
     assert "Application.Attach(Desk.Inst.ProcessId)" not in ctor
     assert "EnsureSellerDeskBinding(false)" in ctor
 
-    empty_check = source[source.index("private bool IsEditorOrCdpInputboxEmpty"):source.index("private bool HasExpectedDraftFast")]
-    assert empty_check.index("TryIsInputboxEmptyByCdp") < empty_check.index("IsEditorEmptySafe")
-    assert "HasExpectedDraftFast" in source
+    assert ".GetAwaiter().GetResult()" not in source
+    assert "ProbeInputboxEmptyAsync" in source
+    assert "Task.WhenAny" in source
+    assert "ConfigureAwait(false)" in source
+    assert "已放弃等待且不会阻塞UI线程" in source
 
     cdp = source[source.index("private async Task<bool> TrySetPlainTextByCdpAsync"):source.index("private async Task<bool> OpenAndSendText")]
-    assert "hasCdpEmpty && !cdpEmpty" in cdp
-    assert "直接进入Enter主发送" in cdp
+    assert "RunCdpActionAsync" in cdp
+    assert "application.insertText2Inputbox" not in cdp  # QN wrapper owns protocol details
+    assert "CDP写入由UIA严格确认" in cdp
 
-    enter = source[source.index("private bool TryPressEnterSend"):source.index("private bool TryClickSendButtonLeftPart")]
-    assert "HasExpectedDraftFast(text)" in enter
+    enter = source[source.index("private async Task<bool> TryPressEnterTextSendAsync"):source.index("private bool TryInvokeCachedSendButtonNow")]
+    assert "HasExpectedDraftFastAsync" in enter
     assert "TryFocusEditorForEnterFast" in enter
     assert "PressEnter();" in enter
     assert '"Enter主发送开始' in enter
 
-    send_choice = source[source.index("private bool TryClickSendButton(string buyer"):source.index("private bool SetAndSendImage")]
-    assert send_choice.index("TryPressEnterSend") < send_choice.index("TryClickSendButtonLeftPart")
+    button = source[source.index("private async Task<bool> TrySendTextByButtonAsync"):source.index("private async Task<bool> TrySendTextDraftAsync")]
+    assert "TryInvokeCachedSendButtonNow" in button
+    assert "TryClickCachedSendButtonNow" in button
+    assert button.index("TryInvokeCachedSendButtonNow") < button.index("TryClickCachedSendButtonNow")
 
     open_send = source[source.index("private async Task<bool> OpenAndSendText"):source.index("private bool SetPlainText")]
-    assert "HasExpectedDraftFast(text)" in open_send
+    assert "HasExpectedDraftFastAsync" in open_send
+    assert "TrySendTextDraftAsync" in open_send
+    assert "SetPlainText(text)" not in open_send
 
 
 def test_order_first_event_has_first_inquiry_delivery_bridge():

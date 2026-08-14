@@ -31,8 +31,18 @@ namespace Bot.ChromeNs
         private FlaUI.Core.Application automationApplication;
         private UIA3Automation uia3Automation;
 
+        private const int CdpQuickProbeTimeoutMs = 2200;
+        private const int CdpActionTimeoutMs = 9000;
+        private const int UiActionTimeoutMs = 1800;
+
         private static readonly ConcurrentDictionary<string, DateTime> AnswerAttemptStartedAt =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+
+        private sealed class CdpInputboxProbe
+        {
+            public bool Completed { get; set; }
+            public bool IsEmpty { get; set; }
+        }
 
         public string LastSetPlainText { get; private set; }
 
@@ -94,9 +104,8 @@ namespace Bot.ChromeNs
                     sellerDesk.Show();
                     Util.WaitFor(new Func<bool>(() => sellerDesk.IsVisible), 3000, 10, false);
                 }
-                SetAndSendImage(image);
+                sendResult = SetAndSendImage(image);
             }
-            sendResult = true;
             return sendResult;
         }
 
@@ -137,48 +146,142 @@ namespace Bot.ChromeNs
             return TryGetEditorText(out text) && string.IsNullOrWhiteSpace(text);
         }
 
-        private bool TryIsInputboxEmptyByCdp(out bool isEmpty)
+        private bool HasOwnedRecentDraft(string text)
         {
-            isEmpty = false;
+            text = (text ?? string.Empty).Trim();
+            return text.Length > 0
+                && string.Equals((LastSetPlainText ?? string.Empty).Trim(), text, StringComparison.Ordinal)
+                && LatestSetTextTime != DateTime.MinValue
+                && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;
+        }
+
+        private async Task<CdpInputboxProbe> ProbeInputboxEmptyAsync(string stage, int timeoutMs)
+        {
+            var result = new CdpInputboxProbe();
+            if (_qn == null || _qn.CDP == null) return result;
+
+            Task<bool> probeTask;
             try
             {
-                if (_qn == null) return false;
-                isEmpty = _qn.IsInputboxEmpty().GetAwaiter().GetResult();
+                // This method is deliberately entered only from the background text-send path.
+                // The dump from the real hang proved that synchronously waiting for this task on
+                // the WPF STA dispatcher can deadlock the entire Bot window.
+                probeTask = _qn.IsInputboxEmpty();
+            }
+            catch (Exception ex)
+            {
+                Log.Info("CDP检查输入框启动失败: stage=" + stage + ", " + ex.Message);
+                return result;
+            }
+
+            var winner = await Task.WhenAny(probeTask, Task.Delay(Math.Max(250, timeoutMs))).ConfigureAwait(false);
+            if (winner != probeTask)
+            {
+                Log.Info("CDP检查输入框超时，已放弃等待且不会阻塞UI线程: stage=" + stage
+                    + ", timeoutMs=" + timeoutMs + ", seller=" + SellerNick);
+                return result;
+            }
+
+            try
+            {
+                result.IsEmpty = await probeTask.ConfigureAwait(false);
+                result.Completed = true;
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("CDP检查输入框失败: stage=" + stage + ", " + ex.Message);
+                return result;
+            }
+        }
+
+        private async Task<bool> RunCdpActionAsync(Action action, string stage, int timeoutMs)
+        {
+            if (action == null) return false;
+            Task worker;
+            try
+            {
+                // Legacy QN wrappers for insert/open are synchronous. Keep them behind a worker
+                // firewall so their internal GetResult cannot ever pin the WPF dispatcher.
+                worker = Task.Run(action);
+            }
+            catch (Exception ex)
+            {
+                SetSendFailure(stage, ex.Message);
+                return false;
+            }
+
+            var winner = await Task.WhenAny(worker, Task.Delay(Math.Max(500, timeoutMs))).ConfigureAwait(false);
+            if (winner != worker)
+            {
+                SetSendFailure(stage, "千牛CDP调用超时，已停止等待以保护Bot界面");
+                Log.Info(stage + "超时，后台调用后续由CDP自身超时/重连机制回收。seller=" + SellerNick);
+                return false;
+            }
+
+            try
+            {
+                await worker.ConfigureAwait(false);
                 return true;
             }
             catch (Exception ex)
             {
-                Log.Info("CDP检查输入框是否为空失败: " + ex.Message);
+                SetSendFailure(stage, ex.Message);
+                Log.Exception(ex);
                 return false;
             }
         }
 
-        private bool IsEditorOrCdpInputboxEmpty()
+        private async Task<bool> RunUiActionAsync(Func<bool> action, string stage, int timeoutMs)
         {
-            // Prefer the same IMSDK/CDP channel that wrote the draft. UIA can block for many
-            // seconds on memory-constrained RDP hosts, so it is only a fallback for confirmation.
-            bool cdpEmpty;
-            if (TryIsInputboxEmptyByCdp(out cdpEmpty)) return cdpEmpty;
-            if (_messageInputTextArea != null) return IsEditorEmptySafe();
-            return false;
+            if (action == null) return false;
+            Task<bool> worker;
+            try
+            {
+                worker = Task.Run(action);
+            }
+            catch (Exception ex)
+            {
+                SetSendFailure(stage, ex.Message);
+                return false;
+            }
+
+            var winner = await Task.WhenAny(worker, Task.Delay(Math.Max(250, timeoutMs))).ConfigureAwait(false);
+            if (winner != worker)
+            {
+                SetSendFailure(stage, "千牛UI操作超时，已停止等待以保护Bot界面");
+                return false;
+            }
+
+            try { return await worker.ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                SetSendFailure(stage, ex.Message);
+                return false;
+            }
         }
 
-        private bool HasExpectedDraftFast(string text)
+        private async Task<bool> HasExpectedDraftFastAsync(string text, int probeTimeoutMs)
         {
             text = (text ?? string.Empty).Trim();
             if (text.Length == 0) return false;
 
-            bool cdpEmpty;
-            if (TryIsInputboxEmptyByCdp(out cdpEmpty))
+            var probe = await ProbeInputboxEmptyAsync("草稿确认", probeTimeoutMs).ConfigureAwait(false);
+            if (probe.Completed)
             {
-                if (cdpEmpty) return false;
-                var recentOwnDraft = string.Equals((LastSetPlainText ?? string.Empty).Trim(), text, StringComparison.Ordinal)
-                    && LatestSetTextTime != DateTime.MinValue
-                    && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;
-                if (recentOwnDraft) return true;
+                if (probe.IsEmpty) return false;
+                if (HasOwnedRecentDraft(text)) return true;
+            }
+            else if (HasOwnedRecentDraft(text))
+            {
+                // The insert operation already completed and this exact draft is still inside its
+                // short ownership lease. A temporarily slow isInputboxEmpty must not freeze send.
+                Log.Info("CDP草稿检查超时，使用本次Bot草稿租约继续发送: buyer="
+                    + (_qn == null || _qn.Buyer == null ? string.Empty : _qn.Buyer.Nick));
+                return true;
             }
 
-            return HasExpectedDraft(text);
+            return await RunUiActionAsync(() => HasExpectedDraft(text), "UIA草稿确认", UiActionTimeoutMs).ConfigureAwait(false);
         }
 
         private bool TryFocusEditorForEnterFast()
@@ -189,8 +292,6 @@ namespace Bot.ChromeNs
                 if (sellerDesk == null || !EnsureSellerDeskBinding(false)) return false;
                 sellerDesk.BringTop();
 
-                // Use the already cached UIA element first. Do not run a synchronous full control
-                // refresh here: the message is already in the input box and Enter should be fast.
                 if (_messageInputTextArea != null)
                 {
                     try
@@ -213,18 +314,12 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool WaitForSendConfirmed(string buyer, string text, DateTime sendStart, string method, int timeoutMs)
+        private async Task<bool> WaitForTextSendConfirmedAsync(string buyer, string text, DateTime sendStart, string method, int timeoutMs)
         {
             var end = DateTime.Now.AddMilliseconds(timeoutMs);
+            var cdpAvailable = true;
             while (DateTime.Now < end)
             {
-                if (IsEditorOrCdpInputboxEmpty())
-                {
-                    BotConnectionDiagnostics.RecordSendAttempt(true, method + "，输入框已清空");
-                    Log.Info(method + "发送确认成功：输入框已清空。text=" + text);
-                    return true;
-                }
-
                 try
                 {
                     if (_qn != null && _qn.HasRecentSellerEcho(buyer, text, sendStart))
@@ -239,36 +334,55 @@ namespace Bot.ChromeNs
                     Log.Info("检查卖家消息回显失败: " + ex.Message);
                 }
 
-                Thread.Sleep(150);
+                if (cdpAvailable)
+                {
+                    var remaining = Math.Max(250, (int)(end - DateTime.Now).TotalMilliseconds);
+                    var probe = await ProbeInputboxEmptyAsync(method + "发送确认", Math.Min(1000, remaining)).ConfigureAwait(false);
+                    if (probe.Completed)
+                    {
+                        if (probe.IsEmpty)
+                        {
+                            BotConnectionDiagnostics.RecordSendAttempt(true, method + "，输入框已清空");
+                            Log.Info(method + "发送确认成功：输入框已清空。text=" + text);
+                            return true;
+                        }
+                    }
+                    else
+                    {
+                        // Do not queue more probes behind a slow execute gate. Seller echo can still
+                        // prove delivery without touching CDP again during this confirmation window.
+                        cdpAvailable = false;
+                    }
+                }
+
+                await Task.Delay(150).ConfigureAwait(false);
             }
 
-            var editorText = GetEditorTextSafe();
-            bool cdpEmpty;
-            var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
-            SetSendFailure("发送确认", method + "后未确认发送；editorText=" + editorText
-                + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty);
-            Log.Info(method + "发送未确认，editorText=" + editorText + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty + ", text=" + text);
+            SetSendFailure("发送确认", method + "后未确认送达；cdpAvailable=" + cdpAvailable);
+            Log.Info(method + "发送未确认，buyer=" + buyer + ", text=" + text);
             return false;
         }
 
-        private bool TryPressEnterSend(string buyer, string text, DateTime sendStart)
+        private async Task<bool> TryPressEnterTextSendAsync(string buyer, string text, DateTime sendStart)
         {
             try
             {
-                // The user's Qianniu is configured as Enter-to-send. Once CDP has placed our own
-                // recent draft in the verified buyer conversation, Enter is the primary action.
-                // Do not make a potentially slow full UIA text read a prerequisite to reaching it.
-                if (!HasExpectedDraftFast(text))
+                if (!await HasExpectedDraftFastAsync(text, 1200).ConfigureAwait(false))
                 {
                     SetSendFailure("Enter发送", "发送前未确认输入框仍有本次Bot草稿");
                     return false;
                 }
-                if (!TryFocusEditorForEnterFast())
+
+                if (_messageInputTextArea == null)
                 {
-                    SetSendFailure("Enter发送", "无法聚焦聊天输入框");
+                    await RefreshChatControlsAsync(true).ConfigureAwait(false);
+                }
+
+                if (!await RunUiActionAsync(() => TryFocusEditorForEnterFast(), "Enter发送聚焦", UiActionTimeoutMs).ConfigureAwait(false))
+                {
                     return false;
                 }
-                if (!HasExpectedDraftFast(text))
+                if (!await HasExpectedDraftFastAsync(text, 1000).ConfigureAwait(false))
                 {
                     SetSendFailure("Enter发送", "聚焦后草稿已变化或已被发送");
                     return false;
@@ -276,7 +390,7 @@ namespace Bot.ChromeNs
 
                 Log.Info("Enter主发送开始: buyer=" + buyer + ", text=" + text);
                 PressEnter();
-                return WaitForSendConfirmed(buyer, text, sendStart, "Enter", 3500);
+                return await WaitForTextSendConfirmedAsync(buyer, text, sendStart, "Enter", 3500).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -286,47 +400,96 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool TryClickSendButtonLeftPart(string buyer, string text, DateTime sendStart)
+        private bool TryInvokeCachedSendButtonNow()
+        {
+            if (_sendMessageButton == null) return false;
+            try
+            {
+                _sendMessageButton.AsButton().Invoke();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("发送按钮UIA Invoke失败，将回退坐标点击: " + ex.Message);
+                return false;
+            }
+        }
+
+        private bool TryClickCachedSendButtonNow()
         {
             if (_sendMessageButton == null) return false;
             try
             {
                 var rect = _sendMessageButton.BoundingRectangle;
+                if (rect.Width <= 0 || rect.Height <= 0) return false;
                 var x = (int)(rect.Left + Math.Min(Math.Max(rect.Width * 0.35, 10), Math.Max(rect.Width - 32, 10)));
                 var y = (int)(rect.Top + rect.Height / 2);
                 FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = x, Y = y });
-                return WaitForSendConfirmed(buyer, text, sendStart, "按钮左侧点击", 4000);
+                return true;
             }
             catch (Exception ex)
             {
-                SetSendFailure("发送按钮点击异常", ex.Message);
-                Log.Exception(ex);
+                Log.Info("发送按钮坐标点击异常: " + ex.Message);
                 return false;
             }
         }
 
-        private bool TryClickSendButton(string buyer, string text, DateTime sendStart)
+        private async Task<bool> TrySendTextByButtonAsync(string buyer, string text, DateTime sendStart)
         {
-            if (TryPressEnterSend(buyer, text, sendStart)) return true;
-
             try
             {
-                RefreshChatControlsAsync(true).GetAwaiter().GetResult();
-                if (!HasExpectedDraft(text))
+                if (_sendMessageButton == null)
                 {
-                    SetSendFailure("发送按钮回退", "发送前无法严格确认输入框仍为目标文本，已阻止点击发送按钮");
+                    await RefreshChatControlsAsync(true).ConfigureAwait(false);
+                }
+                if (_sendMessageButton == null)
+                {
+                    SetSendFailure("发送按钮回退", "未找到发送按钮");
                     return false;
                 }
-                Log.Info("Enter未确认送达，回退点击发送按钮: buyer=" + buyer);
-                if (_sendMessageButton != null && TryClickSendButtonLeftPart(buyer, text, sendStart)) return true;
-                SetSendFailure("发送按钮回退", _sendMessageButton == null ? "未找到发送按钮" : "点击后未确认发送");
+                if (!await HasExpectedDraftFastAsync(text, 1000).ConfigureAwait(false))
+                {
+                    SetSendFailure("发送按钮回退", "发送前无法确认输入框仍为目标文本");
+                    return false;
+                }
+
+                Log.Info("Enter未确认送达，回退UIA语义调用发送按钮: buyer=" + buyer);
+                var invoked = await RunUiActionAsync(() => TryInvokeCachedSendButtonNow(), "发送按钮UIA调用", UiActionTimeoutMs).ConfigureAwait(false);
+                if (invoked && await WaitForTextSendConfirmedAsync(buyer, text, sendStart, "发送按钮UIA", 3000).ConfigureAwait(false))
+                    return true;
+
+                if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false)) return false;
+                Log.Info("发送按钮UIA调用未确认，最后回退已缓存按钮坐标点击: buyer=" + buyer);
+                var clicked = await RunUiActionAsync(() => TryClickCachedSendButtonNow(), "发送按钮坐标点击", UiActionTimeoutMs).ConfigureAwait(false);
+                return clicked && await WaitForTextSendConfirmedAsync(buyer, text, sendStart, "发送按钮坐标", 3000).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
                 SetSendFailure("发送按钮回退异常", ex.Message);
                 Log.Exception(ex);
+                return false;
             }
+        }
 
+        private async Task<bool> TrySendTextDraftAsync(string buyer, string text, DateTime sendStart)
+        {
+            if (await TryPressEnterTextSendAsync(buyer, text, sendStart).ConfigureAwait(false)) return true;
+            return await TrySendTextByButtonAsync(buyer, text, sendStart).ConfigureAwait(false);
+        }
+
+        private bool TryClickSendButtonForImage(string buyer)
+        {
+            if (!FocusEditor()) return false;
+            PressEnter();
+            Thread.Sleep(450);
+            if (IsEditorEmptySafe()) return true;
+
+            if (_sendMessageButton != null && (TryInvokeCachedSendButtonNow() || TryClickCachedSendButtonNow()))
+            {
+                Thread.Sleep(500);
+                if (IsEditorEmptySafe()) return true;
+            }
+            SetSendFailure("图片发送", "Enter与发送按钮均未确认图片草稿已发送");
             return false;
         }
 
@@ -341,7 +504,7 @@ namespace Bot.ChromeNs
             {
                 _preSendPlainTextAndImageTime = DateTime.Now;
                 _preSendPlainTextAndImageImage = image;
-                if (SetImage(image)) rt = TryClickSendButton(_qn == null || _qn.Buyer == null ? string.Empty : _qn.Buyer.Nick, string.Empty, DateTime.Now);
+                if (SetImage(image)) rt = TryClickSendButtonForImage(_qn == null || _qn.Buyer == null ? string.Empty : _qn.Buyer.Nick);
                 else rt = false;
             }
             return rt;
@@ -385,13 +548,11 @@ namespace Bot.ChromeNs
                 sellerDesk.BringTop();
                 try
                 {
+                    // Never start/await an asynchronous UIA scan from inside the WPF dispatcher.
+                    // Callers that need a fresh control must await RefreshChatControlsAsync first.
                     if (_messageInputTextArea == null)
                     {
-                        RefreshChatControlsAsync(true).GetAwaiter().GetResult();
-                    }
-                    if (_messageInputTextArea == null)
-                    {
-                        SetSendFailure("聚焦输入框", "未找到聊天输入框");
+                        SetSendFailure("聚焦输入框", "聊天输入框尚未异步刷新完成");
                         return;
                     }
 
@@ -423,11 +584,15 @@ namespace Bot.ChromeNs
 
         public async Task<bool> SendTextAsync(string buyer, string text)
         {
-            await Task.Delay(180);
+            // First suspension explicitly drops the caller's SynchronizationContext. Every text
+            // send continuation therefore runs away from the WPF STA dispatcher. This is the
+            // runtime firewall for the exact production dump where TryIsInputboxEmptyByCdp
+            // synchronously pinned the UI thread.
+            await Task.Delay(180).ConfigureAwait(false);
             string manualQuestion;
             string manualAnswer;
             if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer)) return false;
-            return await OpenAndSendText(buyer, text);
+            return await OpenAndSendText(buyer, text).ConfigureAwait(false);
         }
 
         private string SellerNick
@@ -490,7 +655,7 @@ namespace Bot.ChromeNs
 
         private async Task<string> ReadCurrentBuyerNickAsync()
         {
-            var current = await _qn.GetCurrentConversationID();
+            var current = await _qn.GetCurrentConversationID().ConfigureAwait(false);
             return current == null || current.Result == null
                 ? string.Empty
                 : (current.Result.Nick ?? string.Empty).Trim();
@@ -509,7 +674,7 @@ namespace Bot.ChromeNs
 
                 for (var attempt = 0; attempt < 7; attempt++)
                 {
-                    var currentNick = await ReadCurrentBuyerNickAsync();
+                    var currentNick = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
                     if (IsExpectedBuyer(buyer, currentNick))
                     {
                         _qn.SetActiveConversationByNick(SellerNick,
@@ -523,15 +688,16 @@ namespace Bot.ChromeNs
                     }
                     Log.Info("会话确认暂时为空，等待稳定: stage=" + stage + ", buyer=" + buyer
                         + ", attempt=" + (attempt + 1) + "/7");
-                    await Task.Delay(180);
+                    await Task.Delay(180).ConfigureAwait(false);
                 }
 
                 Log.Info("会话持续为空，重新打开目标买家后再次确认: stage=" + stage + ", buyer=" + buyer);
-                _qn.OpenChat(buyer);
-                await Task.Delay(500);
+                if (!await RunCdpActionAsync(() => _qn.OpenChat(buyer), "重开目标买家", CdpActionTimeoutMs).ConfigureAwait(false))
+                    return false;
+                await Task.Delay(500).ConfigureAwait(false);
                 for (var attempt = 0; attempt < 5; attempt++)
                 {
-                    var currentNick = await ReadCurrentBuyerNickAsync();
+                    var currentNick = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
                     if (IsExpectedBuyer(buyer, currentNick))
                     {
                         _qn.SetActiveConversationByNick(SellerNick,
@@ -543,7 +709,7 @@ namespace Bot.ChromeNs
                         SetSendFailure(stage, "目标买家=" + buyer + "，重开后当前买家=" + currentNick);
                         return false;
                     }
-                    await Task.Delay(200);
+                    await Task.Delay(200).ConfigureAwait(false);
                 }
 
                 SetSendFailure(stage, "目标买家=" + buyer + "，当前会话持续为空");
@@ -582,46 +748,45 @@ namespace Bot.ChromeNs
             {
                 if (_qn == null) return false;
 
-                bool beforeEmpty;
-                if (TryIsInputboxEmptyByCdp(out beforeEmpty) && !beforeEmpty
-                    && !HasExpectedDraftFast(text))
+                var before = await ProbeInputboxEmptyAsync("写入前输入框检查", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
+                if (!before.Completed)
+                {
+                    SetSendFailure("CDP写入输入框", "写入前无法确认输入框是否为空，为避免覆盖人工草稿已停止发送");
+                    return false;
+                }
+                if (!before.IsEmpty && !HasOwnedRecentDraft(text))
                 {
                     SetSendFailure("CDP写入输入框", "输入框已有非本次Bot草稿，已阻止覆盖/追加发送");
                     return false;
                 }
 
                 Log.Info("准备通过CDP写入输入框: buyer=" + buyer + ", text=" + text);
-                _qn.InsertText2Inputbox(buyer, text);
+                if (!await RunCdpActionAsync(() => _qn.InsertText2Inputbox(buyer, text), "CDP写入输入框", CdpActionTimeoutMs).ConfigureAwait(false))
+                    return false;
 
                 LastSetPlainText = text;
                 LatestSetTextTime = DateTime.Now;
 
-                // IMSDK can confirm immediately that the draft exists. Do not synchronously wait
-                // for a full UIA tree/text read before reaching the Enter action; that was the
-                // observed 20+ second stall on the 4 GB Windows Server.
-                await Task.Delay(260);
-                bool cdpEmpty;
-                var hasCdpEmpty = TryIsInputboxEmptyByCdp(out cdpEmpty);
-                if (hasCdpEmpty && !cdpEmpty)
+                await Task.Delay(260).ConfigureAwait(false);
+                var after = await ProbeInputboxEmptyAsync("写入后输入框检查", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
+                if (after.Completed && !after.IsEmpty)
                 {
-                    Log.Info("CDP写入输入框已由IMSDK确认，直接进入Enter主发送: buyer=" + buyer + ", text=" + text);
+                    Log.Info("CDP写入输入框已由IMSDK确认，进入发送动作: buyer=" + buyer + ", text=" + text);
                     return true;
                 }
 
-                await RefreshChatControlsAsync(true);
-                string editorText;
-                var editorReadable = TryGetEditorText(out editorText);
-                var ok = editorReadable && EditorMatchesExpectedText(editorText, text);
-                if (!ok)
+                // UIA is verifier only. Never paste through Clipboard on automatic text sends:
+                // clipboard/WPF dispatch was another fragile path on low-memory RDP sessions.
+                await RefreshChatControlsAsync(true).ConfigureAwait(false);
+                var uiVerified = await RunUiActionAsync(() => HasExpectedDraft(text), "UIA写入确认", UiActionTimeoutMs).ConfigureAwait(false);
+                if (uiVerified)
                 {
-                    SetSendFailure("CDP写入输入框", "CDP未确认草稿且UIA无法严格确认目标文本；hasCdpEmpty="
-                        + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty);
+                    Log.Info("CDP写入由UIA严格确认: buyer=" + buyer + ", text=" + text);
+                    return true;
                 }
 
-                Log.Info("CDP写入输入框结果=" + ok + ", editorReadable=" + editorReadable
-                    + ", hasCdpEmpty=" + hasCdpEmpty + ", cdpEmpty=" + cdpEmpty
-                    + ", editorText=" + editorText + ", text=" + text);
-                return ok;
+                SetSendFailure("CDP写入输入框", "写入后CDP/UIA均未确认本次目标草稿");
+                return false;
             }
             catch (Exception ex)
             {
@@ -644,9 +809,10 @@ namespace Bot.ChromeNs
 
                 if (_qn.Buyer == null || !IsExpectedBuyer(buyer, _qn.Buyer.Nick))
                 {
-                    _qn.OpenChat(buyer);
-                    await Task.Delay(500);
-                    var conv = await _qn.GetCurrentConversationID();
+                    if (!await RunCdpActionAsync(() => _qn.OpenChat(buyer), "打开目标买家", CdpActionTimeoutMs).ConfigureAwait(false))
+                        return false;
+                    await Task.Delay(500).ConfigureAwait(false);
+                    var conv = await _qn.GetCurrentConversationID().ConfigureAwait(false);
                     if (conv != null && conv.Result != null && !string.IsNullOrWhiteSpace(conv.Result.Nick))
                     {
                         _qn.SetActiveConversationByNick(SellerNick,
@@ -662,7 +828,7 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                if (!await VerifyCurrentBuyerAsync(buyer, "写入前会话确认"))
+                if (!await VerifyCurrentBuyerAsync(buyer, "写入前会话确认").ConfigureAwait(false))
                 {
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
@@ -687,35 +853,29 @@ namespace Bot.ChromeNs
                     Util.WaitFor(new Func<bool>(() => sellerDesk.IsVisible), 3000, 10, false);
                 }
 
-                var setOk = await TrySetPlainTextByCdpAsync(buyer, text);
+                var setOk = await TrySetPlainTextByCdpAsync(buyer, text).ConfigureAwait(false);
                 if (!setOk)
                 {
-                    Log.Info("CDP写入输入框未通过确认，回退UIA剪贴板写入。buyer=" + buyer + ", text=" + text);
-                    await RefreshChatControlsAsync(true);
-                    setOk = SetPlainText(text);
-                }
-
-                if (!setOk)
-                {
-                    SetSendFailure("写入输入框", "CDP与UIA均未确认目标文本");
+                    // Do not auto-paste through Clipboard/UIA. A failed CDP write is safer as a
+                    // visible send failure than risking a blocked dispatcher or mixed human draft.
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
 
-                await Task.Delay(80);
+                await Task.Delay(80).ConfigureAwait(false);
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查"))
                 {
                     ClearExpectedDraft(text, GetSendFailureReason());
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
-                if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认"))
+                if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认").ConfigureAwait(false))
                 {
                     ClearExpectedDraft(text, GetSendFailureReason());
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
-                if (!HasExpectedDraftFast(text))
+                if (!await HasExpectedDraftFastAsync(text, 1200).ConfigureAwait(false))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
@@ -724,7 +884,7 @@ namespace Bot.ChromeNs
 
                 SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text);
                 var sendStart = DateTime.Now;
-                sendResult = TryClickSendButton(buyer, text, sendStart);
+                sendResult = await TrySendTextDraftAsync(buyer, text, sendStart).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
                     SetSendFailure("发送确认", "Enter与发送按钮均未确认消息送达");
@@ -748,6 +908,8 @@ namespace Bot.ChromeNs
 
         private bool SetPlainText(string text)
         {
+            // Retained for explicit/manual compatibility paths only. Automatic text sends no
+            // longer call this clipboard-based implementation.
             text = text ?? string.Empty;
             var isok = false;
             try

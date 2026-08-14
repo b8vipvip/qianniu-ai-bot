@@ -16,10 +16,12 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     assert '"写入前会话确认"' in qnrpa
     assert '"发送前会话确认"' in qnrpa
     assert '"发送前文本确认"' in qnrpa
-    assert "if (!HasExpectedDraft(text))" in qnrpa
-    assert "发送前无法严格确认输入框仍为目标文本" in qnrpa
-    assert "var ok = editorReadable && EditorMatchesExpectedText(editorText, text);" in qnrpa
-    assert "|| (hasCdpEmpty && !cdpEmpty)" not in qnrpa
+    assert "HasExpectedDraftFastAsync" in qnrpa
+    assert "输入框内容已变化或无法确认，已阻止发送" in qnrpa
+    assert "写入前无法确认输入框是否为空，为避免覆盖人工草稿已停止发送" in qnrpa
+    assert "输入框已有非本次Bot草稿，已阻止覆盖/追加发送" in qnrpa
+    assert "UIA写入确认" in qnrpa
+    assert "SetPlainText(text)" not in qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):qnrpa.index("private bool SetPlainText")]
     assert "if (string.IsNullOrEmpty(expected))" in reliable
 
 
