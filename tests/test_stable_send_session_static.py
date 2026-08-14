@@ -43,24 +43,28 @@ def test_mandatory_order_preset_keeps_priority_when_buyer_sends_follow_up():
 def test_delivery_watchdog_starts_only_after_session_draft_checks_and_is_shop_bound():
     qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
     watchdog = text("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
-    open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):qnrpa.index("private bool SetPlainText")]
+    open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]
     session_index = open_send.index('VerifyCurrentBuyerAsync(buyer, "发送前会话确认")')
     draft_index = open_send.index("HasExpectedDraftFastAsync(text, 1200)", session_index)
-    ensure_index = open_send.index("SendDeliveryWatchdog.EnsurePending", draft_index)
-    send_index = open_send.index("sendResult = await TrySendTextDraftAsync", ensure_index)
-    assert session_index < draft_index < ensure_index < send_index
+    refresh_index = open_send.index("RefreshChatControlsAsync(true)", draft_index)
+    ensure_index = open_send.index("SendDeliveryWatchdog.EnsurePending", refresh_index)
+    send_index = open_send.index("sendResult = await TrySendTextViaUiaAsync", ensure_index)
+    assert session_index < draft_index < refresh_index < ensure_index < send_index
     assert "已准备本店真实发送回显监控（尚未开始计时）" in watchdog
     assert "Interlocked.CompareExchange(ref pending.Started, 1, 0)" in watchdog
     assert "pair.Value.Started == 0" in watchdog
     assert "pending.Shop.ShopKey" in watchdog
 
 
-def test_send_path_drops_wpf_context_before_any_cdp_send_work():
+def test_send_path_drops_wpf_context_and_never_uses_enter_for_delivery():
     qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
     send = qnrpa[qnrpa.index("public async Task<bool> SendTextAsync"):qnrpa.index("private string SellerNick")]
     assert "Task.Delay(180).ConfigureAwait(false)" in send
     assert "OpenAndSendText(buyer, text).ConfigureAwait(false)" in send
     assert ".GetAwaiter().GetResult()" not in qnrpa
+    assert "keybd_event(0x0D" not in qnrpa
+    assert "PressEnter" not in qnrpa
+    assert "TrySendTextViaUiaAsync" in qnrpa
 
 
 def test_late_seller_echo_recovers_original_reply_card():
