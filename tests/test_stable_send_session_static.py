@@ -45,14 +45,21 @@ def test_delivery_watchdog_starts_only_after_session_draft_checks_and_is_shop_bo
     watchdog = text("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     ensure_index = qnrpa.index("SendDeliveryWatchdog.EnsurePending")
     session_index = qnrpa.index('VerifyCurrentBuyerAsync(buyer, "发送前会话确认")')
-    draft_index = qnrpa.index("if (!HasExpectedDraft(text))")
-    click_index = qnrpa.index("sendResult = TryClickSendButton")
-    assert session_index < ensure_index < click_index
-    assert draft_index < ensure_index
+    draft_index = qnrpa.index("HasExpectedDraftFastAsync(text, 1200)")
+    send_index = qnrpa.index("sendResult = await TrySendTextDraftAsync")
+    assert session_index < draft_index < ensure_index < send_index
     assert "已准备本店真实发送回显监控（尚未开始计时）" in watchdog
     assert "Interlocked.CompareExchange(ref pending.Started, 1, 0)" in watchdog
     assert "pair.Value.Started == 0" in watchdog
     assert "pending.Shop.ShopKey" in watchdog
+
+
+def test_send_path_drops_wpf_context_before_any_cdp_send_work():
+    qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
+    send = qnrpa[qnrpa.index("public async Task<bool> SendTextAsync"):qnrpa.index("private string SellerNick")]
+    assert "Task.Delay(180).ConfigureAwait(false)" in send
+    assert "OpenAndSendText(buyer, text).ConfigureAwait(false)" in send
+    assert ".GetAwaiter().GetResult()" not in qnrpa
 
 
 def test_late_seller_echo_recovers_original_reply_card():
