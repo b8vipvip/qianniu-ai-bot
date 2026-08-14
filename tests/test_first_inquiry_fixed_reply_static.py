@@ -11,7 +11,7 @@ def read(path: str) -> str:
 def test_auto_reply_rules_expose_custom_first_inquiry_reply():
     source = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
     assert "OrganizeAutoReplyRulesPage" in source
-    assert '"自动回复规则"' in source  # tab lookup only; the settings shell owns the visible page title
+    assert '"自动回复规则"' in source
     assert 'Text = "自动回复规则"' not in source
     assert '"启用首条咨询固定回复"' in source
     assert '"固定答案"' in source
@@ -109,7 +109,7 @@ def test_fixed_reply_does_not_enter_ai_learning_path():
     assert '"首条咨询固定回复"' in source
 
 
-def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking():
+def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_uia_primary():
     source = read("src/Bot/ChromeNs/QNRpa.cs")
     ctor = source[source.index("public QNRpa(QN qn)"):source.index("private bool IsSendButtonName")]
     assert "Application.Attach(Desk.Inst.ProcessId)" not in ctor
@@ -123,24 +123,27 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking():
 
     cdp = source[source.index("private async Task<bool> TrySetPlainTextByCdpAsync"):source.index("private async Task<bool> OpenAndSendText")]
     assert "RunCdpActionAsync" in cdp
-    assert "application.insertText2Inputbox" not in cdp  # QN wrapper owns protocol details
     assert "CDP写入由UIA严格确认" in cdp
+    assert "进入UIA发送动作" in cdp
 
-    enter = source[source.index("private async Task<bool> TryPressEnterTextSendAsync"):source.index("private bool TryInvokeCachedSendButtonNow")]
-    assert "HasExpectedDraftFastAsync" in enter
-    assert "TryFocusEditorForEnterFast" in enter
-    assert "PressEnter();" in enter
-    assert '"Enter主发送开始' in enter
+    assert "TryPressEnterTextSendAsync" not in source
+    assert "TryFocusEditorForEnterFast" not in source
+    assert "PressEnter()" not in source
+    assert "keybd_event(0x0D" not in source
+    assert "Enter主发送开始" not in source
 
-    button = source[source.index("private async Task<bool> TrySendTextByButtonAsync"):source.index("private async Task<bool> TrySendTextDraftAsync")]
+    button = source[source.index("private async Task<bool> TrySendTextViaUiaAsync"):source.index("public async Task SendImageAsync")]
     assert "TryInvokeCachedSendButtonNow" in button
     assert "TryClickCachedSendButtonNow" in button
     assert button.index("TryInvokeCachedSendButtonNow") < button.index("TryClickCachedSendButtonNow")
+    assert '"UIA主发送开始' in button
+    assert "foreground/topmost" in button
 
-    open_send = source[source.index("private async Task<bool> OpenAndSendText"):source.index("private bool SetPlainText")]
+    open_send = source[source.index("private async Task<bool> OpenAndSendText"):]
     assert "HasExpectedDraftFastAsync" in open_send
-    assert "TrySendTextDraftAsync" in open_send
+    assert "TrySendTextViaUiaAsync" in open_send
     assert "SetPlainText(text)" not in open_send
+    assert "method=UIA" in open_send
 
 
 def test_order_first_event_has_first_inquiry_delivery_bridge():
