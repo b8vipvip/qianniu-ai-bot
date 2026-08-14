@@ -124,7 +124,12 @@
   function emit(payload) {
     try {
       if (window.chatWebsocket && window.chatWebsocket.readyState === 1) {
-        window.chatWebsocket.send(JSON.stringify({ type: 'imsdkSendDiscoveryV2', payload: payload }));
+        // Reuse the production injection channel that MyWebSocketServer already records with
+        // full response payloads. scanKind differentiates v2 from the legacy shallow scan.
+        window.chatWebsocket.send(JSON.stringify({
+          type: 'imsdkApiScan',
+          payload: { scanKind: 'directSendV2', result: payload }
+        }));
       }
     } catch (_) {}
     try { console.log('[qnbot][imsdk-send-discovery-v2]', payload); } catch (_) {}
@@ -162,6 +167,7 @@
     var candidates = rows.filter(function (row) { return row.kind === 'function' && row.score > 0; });
     var payload = {
       version: VERSION,
+      scanKind: 'directSendV2',
       passiveOnly: true,
       candidateInvocationDisabled: true,
       href: String(location.href || ''),
