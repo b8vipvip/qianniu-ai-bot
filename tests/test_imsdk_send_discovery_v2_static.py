@@ -5,6 +5,7 @@ import importlib.util
 ROOT = Path(__file__).resolve().parents[1]
 PROBE = ROOT / "tools" / "qn_discovery_lab" / "imsdk_send_discovery_v2.js"
 ANALYZER = ROOT / "tools" / "qn_discovery_lab" / "analyze_imsdk_send_trace.py"
+SERVER = ROOT / "src" / "Bot" / "ChromeNs" / "MyWebSocketServer.cs"
 
 
 def read(path: Path) -> str:
@@ -32,7 +33,9 @@ def test_send_discovery_is_passive_and_recurses_high_value_roots():
     assert "window.imsdk" in source
     assert "Object.getOwnPropertyNames" in source
     assert "__qnbotRunImsdkSendDiscoveryV2" in source
-    assert "imsdkSendDiscoveryV2" in source
+    assert "'imsdkApiScan'" in source
+    assert "directSendV2" in source
+    assert 'wMsg.Type == "imsdkApiScan"' in read(SERVER)
 
     # Candidate APIs are metadata only. The probe must not dispatch through known invoke entrypoints.
     code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("*"))
@@ -69,10 +72,10 @@ def test_trace_analyzer_marks_smart_tip_as_text_capable_but_not_canonical():
 def test_trace_analyzer_accepts_recursive_discovery_candidates_without_invoking_them():
     analyzer = load_analyzer()
     sample = (
-        'Info: {"type":"imsdkSendDiscoveryV2","payload":{"candidates":['
+        'Info: {"type":"imsdkApiScan","payload":{"scanKind":"directSendV2","result":{"candidates":['
         '{"path":"window.QN.wangwang.sendMsg","kind":"function","score":300},'
         '{"path":"window._vs.SDK.im.singlemsg.SendMessage","kind":"function","score":250}'
-        ']}}\n'
+        ']}}}\n'
     )
     report = analyzer.analyze_text(sample)
     paths = {item["path"] for item in report["discovery_paths"]}
