@@ -21,7 +21,9 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     assert "写入前无法确认输入框是否为空，为避免覆盖人工草稿已停止发送" in qnrpa
     assert "输入框已有非本次Bot草稿，已阻止覆盖/追加发送" in qnrpa
     assert "UIA写入确认" in qnrpa
-    assert "SetPlainText(text)" not in qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):qnrpa.index("private bool SetPlainText")]
+    open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]
+    assert "SetPlainText(text)" not in open_send
+    assert "TrySendTextViaUiaAsync" in open_send
     assert "if (string.IsNullOrEmpty(expected))" in reliable
 
 
