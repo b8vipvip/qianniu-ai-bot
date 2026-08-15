@@ -258,12 +258,45 @@ namespace Bot.ChromeNs
                 return true;
             }
 
-            Log.Info("后台消息补偿找回 " + recovered.Count + " 条候选消息/订单卡片。seller=" + seller + ", buyer=" + buyer);
+            var recoveredBuyerMessages = recovered
+                .Where(m => IsBuyerMessage(m)
+                    && m.fromid != null
+                    && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer))
+                .ToList();
+            var bypassBuyerDedup = false;
+            if (recoveredBuyerMessages.Count > 0)
+            {
+                // 与正常 receiveNewMsg 使用同一把入站锁完成最后一次判定。这样如果详细事件刚好在
+                // 补抓历史期间到达，它会先设置 observed 标记，补偿路径立即退出；反之则由补偿
+                // 路径声明本轮买家消息，避免“重复CDP页先占去重key，但权威处理未发生”把消息永久吃掉。
+                await _incomingMessageGate.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    DateTime observedAt;
+                    if (_latestBuyerMessageObserved.TryGetValue(key, out observedAt)
+                        && observedAt >= scheduledAt.AddMilliseconds(-250))
+                    {
+                        Log.Info("后台消息补偿处理前检测到详细买家事件已到，取消历史重放: seller="
+                            + seller + ", buyer=" + buyer);
+                        return true;
+                    }
+                    MarkBuyerMessageObserved(seller, buyer);
+                    bypassBuyerDedup = true;
+                }
+                finally
+                {
+                    _incomingMessageGate.Release();
+                }
+            }
+
+            Log.Info("后台消息补偿找回 " + recovered.Count + " 条候选消息/订单卡片。seller=" + seller + ", buyer=" + buyer
+                + ", bypassBuyerDedup=" + bypassBuyerDedup);
             foreach (var message in recovered)
             {
                 try
                 {
-                    await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer).ConfigureAwait(false);
+                    await ProcessRecoveredMessageWithKnownBuyerAsync(
+                        message, seller, buyer, bypassBuyerDedup).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -278,7 +311,8 @@ namespace Bot.ChromeNs
         private async Task ProcessRecoveredMessageWithKnownBuyerAsync(
             QNChatMessage message,
             string seller,
-            string buyer)
+            string buyer,
+            bool bypassBuyerDedup)
         {
             if (message == null) return;
             var text = GetMessageText(message);
@@ -302,7 +336,88 @@ namespace Bot.ChromeNs
                     return;
                 }
             }
+
+            if (bypassBuyerDedup
+                && IsBuyerMessage(message)
+                && message.fromid != null
+                && BuyerIdentityAliasService.AreEquivalent(seller, message.fromid.nick, buyer))
+            {
+                await ProcessRecoveredBuyerMessageAfterMissAsync(message, seller, buyer).ConfigureAwait(false);
+                return;
+            }
+
             await ProcessIncomingMessageAsync(message).ConfigureAwait(false);
+        }
+
+        private Task ProcessRecoveredBuyerMessageAfterMissAsync(
+            QNChatMessage message,
+            string sellerNick,
+            string buyerNick)
+        {
+            if (message == null) return Task.CompletedTask;
+            var messageText = GetMessageText(message);
+            var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
+            var detectedAt = DateTime.Now;
+            MarkBuyerMessageObserved(sellerNick, buyerNick);
+
+            OrderPlacedReplyPlan orderPlan;
+            if (OrderPlacedAutoReplyService.TryCreatePlan(
+                message,
+                messageText,
+                sellerNick,
+                buyerNick,
+                _messageSafetyStartedAt,
+                out orderPlan))
+            {
+                return orderPlan == null
+                    ? Task.CompletedTask
+                    : ProcessOrderPlacedReplyAsync(orderPlan);
+            }
+
+            var decision = IncomingMessageSafety.Evaluate(message, messageText, _messageSafetyStartedAt);
+            var displayQuestion = IncomingMessageSafety.GetDisplayText(message, messageText);
+            var visionDecision = VisionMessageDecision.Decide(
+                message,
+                messageText,
+                decision,
+                AiEndpointStore.GetVisionEnabledEndpoints());
+
+            if (!Params.Robot.CanUseRobotReal)
+            {
+                AddSkippedConversation(sellerNick, buyerNick, displayQuestion, "Bot已停用，未调用AI，也未发送给买家。");
+                return Task.CompletedTask;
+            }
+
+            if (visionDecision.Kind == VisionDecisionKind.Skip
+                && !IncomingMessageSafety.IsMediaPlaceholder(displayQuestion))
+            {
+                AddSkippedConversation(sellerNick, buyerNick, visionDecision.QuestionLabel, visionDecision.Note);
+                Log.Info("后台补偿买家消息安全跳过: buyer=" + buyerNick + ", reason=" + visionDecision.Note);
+                return Task.CompletedTask;
+            }
+
+            ResponseProgressTracker.ObserveQuestion(sellerNick, buyerNick, displayQuestion, detectedAt);
+            if (visionDecision.Kind == VisionDecisionKind.Text)
+            {
+                BotFlowTestService.RecordCandidate(sellerNick, buyerNick, displayQuestion, detectedAt);
+            }
+            Log.Info("后台补偿买家消息已进入权威回复队列: seller=" + sellerNick + ", buyer=" + buyerNick
+                + ", detectedAt=" + detectedAt.ToString("HH:mm:ss.fff") + ", question=" + displayQuestion
+                + ", key=" + messageKey);
+
+            _buyerMessageBurstCoordinator.Enqueue(new BuyerMessageBurstItem
+            {
+                SellerNick = sellerNick,
+                BuyerNick = buyerNick,
+                MessageKey = messageKey,
+                DisplayText = displayQuestion,
+                Message = message,
+                SafetyDecision = decision,
+                VisionDecision = visionDecision,
+                SortValue = IncomingMessageSafety.GetSortValue(message),
+                ReceivedAt = detectedAt
+            });
+            return Task.CompletedTask;
         }
 
         private static bool IsPotentialRecoveredOrderCard(QNChatMessage message)
