@@ -1,4 +1,4 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -144,14 +144,23 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_
     assert "Enter主发送开始" not in source
 
     button = source[source.index("private async Task<bool> TrySendTextViaUiaAsync"):source.index("public async Task SendImageAsync")]
-    assert "TryInvokeCachedSendButtonNow" not in source
-    assert "AsButton().Invoke()" not in source
+    assert "TryInvokeCachedSendButtonNow" in source
+    assert "AsButton().Invoke()" in source
     assert "TryClickCachedSendButtonNow" in button
     assert "_sendMessageButtonRect" in source
     assert "arrowGuard" in source
     assert "发送主按钮左侧区域坐标点击" in source
     assert "sellerDesk.BringTop()" in source
     assert "发送主按钮坐标" in button
+    assert "_lastSendButtonCoordinateClickRejected" in source
+    assert "发送主按钮坐标输入被系统拒绝，准备仅回退一次UIA Invoke" in button
+    assert "if (!_lastSendButtonCoordinateClickRejected)" in button
+    assert "HasExpectedDraftFastAsync(text, 900)" in button
+    assert "坐标点击异常后目标草稿已不存在或无法确认，禁止UIA二次动作" in button
+    assert button.index("TryClickCachedSendButtonNow") < button.index("TryInvokeCachedSendButtonNow")
+    click_method = source[source.index("private bool TryClickCachedSendButtonNow"):source.index("private bool TryInvokeCachedSendButtonNow")]
+    assert "_lastSendButtonCoordinateClickRejected = false" in click_method
+    assert "_lastSendButtonCoordinateClickRejected = true" in click_method
     assert "sendRect=" in reliable
 
     open_send = source[source.index("private async Task<bool> OpenAndSendText"):]
