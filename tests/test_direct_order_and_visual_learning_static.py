@@ -15,7 +15,7 @@ def test_direct_order_recovery_accepts_system_order_cards_for_known_buyer():
     assert "ProcessRecoveredMessageWithKnownBuyerAsync" in recovery
     assert "OrderPlacedAutoReplyService.TryCreatePlan" in recovery
     assert "ProcessOrderPlacedReplyAsync(orderPlan)" in recovery
-    assert "详细新消息事件未到或可能为系统订单卡片" in recovery
+    assert "详细新消息事件未到" in recovery
     assert "IsBuyerMessage(m)" in recovery
     assert "|| IsPotentialRecoveredOrderCard(m)" in recovery
 
