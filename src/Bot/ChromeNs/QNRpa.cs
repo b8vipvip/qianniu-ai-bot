@@ -32,6 +32,7 @@ namespace Bot.ChromeNs
         public DateTime LatestSetTextTime;
 
         private AutomationElement _sendMessageButton;
+        private System.Drawing.Rectangle _sendMessageButtonRect;
         private AutomationElement _closeContactButton;
         private TextBox _messageInputTextArea;
 
@@ -278,36 +279,53 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        private bool TryInvokeCachedSendButtonNow()
-        {
-            if (_sendMessageButton == null) return false;
-            try
-            {
-                _sendMessageButton.AsButton().Invoke();
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log.Info("发送按钮UIA Invoke失败，将回退卖家窗口内按钮坐标点击: " + ex.Message);
-                return false;
-            }
-        }
-
         private bool TryClickCachedSendButtonNow()
         {
-            if (_sendMessageButton == null) return false;
+            if (_sendMessageButton == null && _sendMessageButtonRect.IsEmpty) return false;
             try
             {
-                var rect = _sendMessageButton.BoundingRectangle;
+                var sellerDesk = ResolveSellerDesk();
+                if (sellerDesk == null || !EnsureSellerDeskBinding(false))
+                {
+                    Log.Info("发送主按钮点击失败：当前卖家千牛窗口未绑定。seller=" + SellerNick);
+                    return false;
+                }
+
+                // Coordinate clicks are only safe when the verified seller window is actually on
+                // top. Bring that exact seller window forward immediately before clicking; unlike
+                // Enter this does not depend on whichever application previously owned keyboard focus.
+                sellerDesk.BringTop();
+                Thread.Sleep(120);
+
+                var rect = _sendMessageButtonRect;
+                if ((rect.Width <= 0 || rect.Height <= 0) && _sendMessageButton != null)
+                {
+                    rect = _sendMessageButton.BoundingRectangle;
+                }
                 if (rect.Width <= 0 || rect.Height <= 0) return false;
-                var x = (int)(rect.Left + Math.Min(Math.Max(rect.Width * 0.35, 10), Math.Max(rect.Width - 32, 10)));
-                var y = (int)(rect.Top + rect.Height / 2);
+
+                // Qianniu's blue control is a split button: the right edge opens the Enter/Ctrl+Enter
+                // menu. Never click its center/right edge. Reserve the right-most arrow zone and aim
+                // at the middle of the left "发送" main-action area.
+                var arrowGuard = Math.Max(18, Math.Min(30, rect.Width / 3));
+                var mainWidth = rect.Width - arrowGuard;
+                if (mainWidth < 16)
+                {
+                    Log.Info("发送按钮区域过窄，已阻止可能误点下拉箭头: rect="
+                        + rect.Left + "," + rect.Top + "," + rect.Width + "x" + rect.Height);
+                    return false;
+                }
+                var x = rect.Left + Math.Max(8, Math.Min(mainWidth / 2, mainWidth - 8));
+                var y = rect.Top + rect.Height / 2;
+                Log.Info("发送主按钮左侧区域坐标点击: seller=" + SellerNick
+                    + ", rect=" + rect.Left + "," + rect.Top + "," + rect.Width + "x" + rect.Height
+                    + ", click=" + x + "," + y + ", arrowGuard=" + arrowGuard);
                 FlaUI.Core.Input.Mouse.Click(new System.Drawing.Point { X = x, Y = y });
                 return true;
             }
             catch (Exception ex)
             {
-                Log.Info("发送按钮坐标点击异常: " + ex.Message);
+                Log.Info("发送主按钮坐标点击异常: " + ex.Message);
                 return false;
             }
         }
@@ -316,16 +334,17 @@ namespace Bot.ChromeNs
         {
             try
             {
-                // UIA is the primary send action until a canonical normal-chat IMSDK send API is
-                // proven. Unlike a physical Enter key this targets the verified seller HWND tree
-                // and does not depend on Qianniu being the foreground/topmost window.
-                if (_sendMessageButton == null)
+                // UIA is used only to locate and cache the verified seller-window send rectangle.
+                // Do not call Invoke() on Qianniu's split button: on current builds that semantic
+                // action can block and/or open the send-mode dropdown instead of sending.
+                if ((_sendMessageButton == null || _sendMessageButtonRect.IsEmpty)
+                    && !await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
-                    await RefreshChatControlsAsync(true).ConfigureAwait(false);
+                    return false;
                 }
-                if (_sendMessageButton == null)
+                if (_sendMessageButton == null || _sendMessageButtonRect.IsEmpty)
                 {
-                    SetSendFailure("UIA主发送", "当前卖家千牛窗口内未找到发送按钮");
+                    SetSendFailure("UIA主发送", "当前卖家千牛窗口内未找到可点击的发送主按钮区域");
                     return false;
                 }
                 if (!await HasExpectedDraftFastAsync(text, 1000).ConfigureAwait(false))
@@ -334,32 +353,19 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                Log.Info("UIA主发送开始: seller=" + SellerNick + ", buyer=" + buyer + ", text=" + text);
-                var invoked = await RunUiActionAsync(
-                    () => TryInvokeCachedSendButtonNow(),
-                    "发送按钮UIA调用",
-                    UiActionTimeoutMs).ConfigureAwait(false);
-                if (invoked && await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "发送按钮UIA", 3200).ConfigureAwait(false))
-                {
-                    return true;
-                }
-
-                // If Invoke actually sent the message but the confirmation path was late, the
-                // draft will be gone. Never click again in that case or a duplicate may be sent.
-                if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
-                {
-                    Log.Info("UIA Invoke后目标草稿已不存在，停止坐标回退以避免重复发送: buyer=" + buyer);
-                    return false;
-                }
-
-                Log.Info("UIA语义调用未确认，回退当前卖家窗口内已缓存发送按钮坐标点击: buyer=" + buyer);
+                Log.Info("UIA定位完成，开始点击发送主按钮左侧区域: seller=" + SellerNick
+                    + ", buyer=" + buyer + ", text=" + text);
                 var clicked = await RunUiActionAsync(
                     () => TryClickCachedSendButtonNow(),
-                    "发送按钮坐标点击",
+                    "发送主按钮坐标点击",
                     UiActionTimeoutMs).ConfigureAwait(false);
-                return clicked && await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "发送按钮坐标", 3200).ConfigureAwait(false);
+                if (!clicked)
+                {
+                    SetSendFailure("发送主按钮坐标点击", "未能点击已验证发送按钮的左侧主操作区域");
+                    return false;
+                }
+                return await WaitForTextSendConfirmedAsync(
+                    buyer, text, sendStart, "发送主按钮坐标", 3600).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -410,39 +416,27 @@ namespace Bot.ChromeNs
 
         private async Task<bool> TrySendImageViaUiaAsync(string buyer)
         {
-            if (_sendMessageButton == null)
+            if ((_sendMessageButton == null || _sendMessageButtonRect.IsEmpty)
+                && !await RefreshChatControlsAsync(true).ConfigureAwait(false))
             {
-                await RefreshChatControlsAsync(true).ConfigureAwait(false);
+                return false;
             }
-            if (_sendMessageButton == null)
+            if (_sendMessageButton == null || _sendMessageButtonRect.IsEmpty)
             {
-                SetSendFailure("图片UIA发送", "当前卖家窗口内未找到发送按钮");
+                SetSendFailure("图片UIA发送", "当前卖家窗口内未找到可点击的发送主按钮区域");
                 return false;
             }
 
-            Log.Info("图片UIA主发送开始: seller=" + SellerNick + ", buyer=" + buyer);
-            var invoked = await RunUiActionAsync(() => TryInvokeCachedSendButtonNow(), "图片发送按钮UIA调用", UiActionTimeoutMs).ConfigureAwait(false);
-            if (invoked)
-            {
-                await Task.Delay(450).ConfigureAwait(false);
-                if (await RunUiActionAsync(() => IsEditorEmptySafe(), "图片发送确认", UiActionTimeoutMs).ConfigureAwait(false))
-                {
-                    BotConnectionDiagnostics.RecordSendAttempt(true, "图片发送按钮UIA，输入框已清空");
-                    return true;
-                }
-            }
-
-            // Do not issue a second click if the image draft disappeared after Invoke.
-            var draftStillPresent = await RunUiActionAsync(() => HasExpectedDraft(string.Empty), "图片草稿二次确认", UiActionTimeoutMs).ConfigureAwait(false);
-            if (!draftStillPresent) return false;
-
-            Log.Info("图片UIA调用未确认，回退当前卖家窗口内发送按钮坐标点击: buyer=" + buyer);
-            var clicked = await RunUiActionAsync(() => TryClickCachedSendButtonNow(), "图片发送按钮坐标点击", UiActionTimeoutMs).ConfigureAwait(false);
+            Log.Info("图片发送开始点击发送主按钮左侧区域: seller=" + SellerNick + ", buyer=" + buyer);
+            var clicked = await RunUiActionAsync(
+                () => TryClickCachedSendButtonNow(),
+                "图片发送主按钮坐标点击",
+                UiActionTimeoutMs).ConfigureAwait(false);
             if (!clicked) return false;
             await Task.Delay(500).ConfigureAwait(false);
             var empty = await RunUiActionAsync(() => IsEditorEmptySafe(), "图片坐标发送确认", UiActionTimeoutMs).ConfigureAwait(false);
-            if (empty) BotConnectionDiagnostics.RecordSendAttempt(true, "图片发送按钮坐标，输入框已清空");
-            else SetSendFailure("图片发送", "UIA Invoke与卖家窗口内按钮坐标均未确认图片草稿已发送");
+            if (empty) BotConnectionDiagnostics.RecordSendAttempt(true, "图片发送主按钮坐标，输入框已清空");
+            else SetSendFailure("图片发送", "发送主按钮坐标点击后未确认图片草稿已发送");
             return empty;
         }
 
@@ -527,8 +521,8 @@ namespace Bot.ChromeNs
         public async Task<bool> SendTextAsync(string buyer, string text)
         {
             // Drop the caller's WPF SynchronizationContext before any CDP/UIA operation. Text
-            // sending itself never presses Enter; the verified seller-window UIA button is the
-            // primary action until a canonical IMSDK normal-chat send method is proven.
+            // sending itself never presses Enter. UIA locates the verified seller-window split
+            // button and the actual action clicks only its left "发送" region.
             await Task.Delay(180).ConfigureAwait(false);
             string manualQuestion;
             string manualAnswer;
@@ -695,8 +689,34 @@ namespace Bot.ChromeNs
                     SetSendFailure("CDP写入输入框", "写入前无法确认输入框是否为空，为避免覆盖人工草稿已停止发送");
                     return false;
                 }
-                if (!before.IsEmpty && !HasOwnedRecentDraft(text))
+
+                if (!before.IsEmpty)
                 {
+                    // A failed send attempt leaves the exact Bot draft in the composer. The old
+                    // retry path called insertText2Inputbox again, which appends the same answer and
+                    // produced the duplicated seller echo seen in the field log. Reuse, never append.
+                    if (HasOwnedRecentDraft(text))
+                    {
+                        Log.Info("检测到本次Bot草稿仍在输入框，重试直接复用且不再次追加: buyer=" + buyer);
+                        return true;
+                    }
+
+                    if (_messageInputTextArea == null)
+                    {
+                        await RefreshChatControlsAsync(false).ConfigureAwait(false);
+                    }
+                    var exactExisting = await RunUiActionAsync(
+                        () => HasExpectedDraft(text),
+                        "已有草稿严格确认",
+                        UiActionTimeoutMs).ConfigureAwait(false);
+                    if (exactExisting)
+                    {
+                        LastSetPlainText = text;
+                        LatestSetTextTime = DateTime.Now;
+                        Log.Info("输入框已存在与本次答案完全一致的草稿，直接接管发送且不追加: buyer=" + buyer);
+                        return true;
+                    }
+
                     SetSendFailure("CDP写入输入框", "输入框已有非本次Bot草稿，已阻止覆盖/追加发送");
                     return false;
                 }
@@ -712,7 +732,7 @@ namespace Bot.ChromeNs
                 var after = await ProbeInputboxEmptyAsync("写入后输入框检查", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
                 if (after.Completed && !after.IsEmpty)
                 {
-                    Log.Info("CDP写入输入框已由IMSDK确认，进入UIA发送动作: buyer=" + buyer + ", text=" + text);
+                    Log.Info("CDP写入输入框已由IMSDK确认，进入UIA定位发送主按钮动作: buyer=" + buyer + ", text=" + text);
                     return true;
                 }
 
@@ -818,8 +838,8 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                // Ensure seller-window UIA controls are fresh immediately before the action.
-                // There is intentionally no physical Enter/keybd_event send path here.
+                // Refresh once immediately before the action so the cached split-button rectangle
+                // belongs to the current seller/window. There is no Enter or UIA Invoke send path.
                 if (!await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
@@ -831,14 +851,14 @@ namespace Bot.ChromeNs
                 sendResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
-                    SetSendFailure("发送确认", "UIA发送按钮未确认消息送达");
+                    SetSendFailure("发送确认", "发送主按钮坐标点击后未确认消息送达");
                 }
                 if (sendResult)
                 {
                     CompleteAttemptLease(buyer, text);
                 }
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer
-                    + ", method=UIA, failure=" + GetSendFailureReason() + ", text=" + text);
+                    + ", method=UIA定位+发送主按钮坐标, failure=" + GetSendFailureReason() + ", text=" + text);
             }
             catch (Exception ex)
             {
