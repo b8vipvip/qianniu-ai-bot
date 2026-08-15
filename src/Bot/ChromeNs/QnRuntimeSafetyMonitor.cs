@@ -1,3 +1,4 @@
+using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using BotLib;
 using DbEntity;
@@ -70,6 +71,13 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+            if (!HasVerifiedReceptionDesk(seller))
+            {
+                RecordNoActiveChat(qn, seller, "未检测到已验证的千牛接待聊天窗口，暂停当前买家探测");
+                return;
+            }
+
             var now = DateTime.UtcNow;
             DateTime next;
             if (NextConversationProbeAt.TryGetValue(qn, out next) && next > now) return;
@@ -98,12 +106,20 @@ namespace Bot.ChromeNs
         {
             var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
             if (seller.Length == 0 || qn.CDP == null) return;
+            if (!HasVerifiedReceptionDesk(seller))
+            {
+                RecordNoActiveChat(qn, seller, "接待聊天窗口已离开，暂停当前买家探测");
+                return;
+            }
 
             var first = await qn.GetCurrentConversationID();
             var firstNick = ReadConversationNick(first);
             if (firstNick.Length == 0)
             {
-                RecordProbeFailure(qn, "im.uiutil.GetCurrentConversationID 返回空值");
+                // 在接待窗口没有选中任何买家、千牛正在切页，或用户停留在非会话区域时，
+                // GetCurrentConversationID 返回空是合法状态，不等于 CDP/注入失效。旧逻辑把
+                // 这个状态累计成故障，最终会被自动恢复逻辑误判为“千牛参数未获取”。
+                RecordNoActiveChat(qn, seller, "接待窗口在线，但当前没有选中的买家会话");
                 return;
             }
 
@@ -119,7 +135,12 @@ namespace Bot.ChromeNs
             await Task.Delay(220);
             var second = await qn.GetCurrentConversationID();
             var secondNick = ReadConversationNick(second);
-            if (secondNick.Length == 0 || !AreSameBuyer(seller, firstNick, secondNick))
+            if (secondNick.Length == 0)
+            {
+                RecordNoActiveChat(qn, seller, "当前会话切换中，第二次探测暂时为空");
+                return;
+            }
+            if (!AreSameBuyer(seller, firstNick, secondNick))
             {
                 RecordProbeFailure(qn, "当前会话连续两次读取不稳定: first=" + firstNick + ", second=" + secondNick);
                 return;
@@ -130,6 +151,37 @@ namespace Bot.ChromeNs
             Log.Info("当前买家由主动探测修正: seller=" + seller
                 + ", previous=" + currentNick + ", current=" + resolved);
             RecordProbeSuccess(qn, seller, resolved, true);
+        }
+
+        private static bool HasVerifiedReceptionDesk(string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return false;
+            try
+            {
+                var desk = DeskSellerBindingRegistry.FindSellerDesk(seller);
+                return desk != null && desk.IsAlive;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static void RecordNoActiveChat(QN qn, string seller, string reason)
+        {
+            int failures;
+            ConsecutiveProbeFailures.TryRemove(qn, out failures);
+            var buyer = qn == null || qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
+            BotConnectionDiagnostics.RecordCdpStatus(true,
+                reason ?? "当前没有活动买家会话",
+                seller,
+                buyer);
+            if (failures > 0)
+            {
+                Log.Info("当前买家主动探测故障计数已清除：当前没有需要探测的活动聊天会话。seller="
+                    + seller + ", previousFailures=" + failures);
+            }
         }
 
         private static string ReadConversationNick(ConversationResponse response)
