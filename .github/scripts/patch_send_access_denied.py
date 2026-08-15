@@ -42,4 +42,35 @@ source = replace_once(source, old_send, new_send, "text send fallback")
 QNRPA.write_text(source, encoding="utf-8-sig")
 
 
-test = TEST.read_text(encoding="utf-8-sig")n
+test = TEST.read_text(encoding="utf-8-sig")
+test = replace_once(
+    test,
+    """    assert \"TryInvokeCachedSendButtonNow\" not in source\n    assert \"AsButton().Invoke()\" not in source""",
+    """    assert \"TryInvokeCachedSendButtonNow\" in source\n    assert \"AsButton().Invoke()\" in source""",
+    "test expects guarded invoke fallback",
+)
+test = replace_once(
+    test,
+    """    assert \"发送主按钮坐标\" in button\n    assert \"sendRect=\" in reliable""",
+    """    assert \"发送主按钮坐标\" in button\n    assert \"_lastSendButtonCoordinateClickRejected\" in source\n    assert \"发送主按钮坐标输入被系统拒绝，准备仅回退一次UIA Invoke\" in button\n    assert \"if (!_lastSendButtonCoordinateClickRejected)\" in button\n    assert \"HasExpectedDraftFastAsync(text, 900)\" in button\n    assert \"坐标点击异常后目标草稿已不存在或无法确认，禁止UIA二次动作\" in button\n    assert button.index(\"TryClickCachedSendButtonNow\") < button.index(\"TryInvokeCachedSendButtonNow\")\n    click_method = source[source.index(\"private bool TryClickCachedSendButtonNow\"):source.index(\"private bool TryInvokeCachedSendButtonNow\")]\n    assert \"_lastSendButtonCoordinateClickRejected = false\" in click_method\n    assert \"_lastSendButtonCoordinateClickRejected = true\" in click_method\n    assert \"sendRect=\" in reliable""",
+    "test guarded coordinate fallback ordering",
+)
+TEST.write_text(test, encoding="utf-8-sig")
+
+
+doc = DOC.read_text(encoding="utf-8-sig")
+doc = replace_once(
+    doc,
+    """5. 对该卖家窗口内已经识别的“发送”按钮执行 UIA `Invoke()`。\n6. UIA `Invoke()` 未确认且目标草稿仍存在时，才回退该卖家窗口内已缓存发送按钮坐标点击。\n7. 用卖家消息真实回显优先确认送达；CDP 输入框清空只作为辅助确认。""",
+    """5. 对该卖家窗口内已经识别的“发送”按钮，只点击 UIA `BoundingRectangle` 推导出的左侧主操作区域；不使用固定屏幕坐标。\n6. 如果坐标输入动作被 Windows 在执行阶段直接拒绝/抛异常（例如 Win32 Access Denied），并且目标草稿仍逐字存在，才单次回退 UIA `Invoke()`；如果坐标动作已经发出但只是送达确认延迟/不明确，则禁止再做第二次发送动作。\n7. 用卖家消息真实回显优先确认送达；CDP 输入框清空只作为辅助确认。""",
+    "document production send strategy",
+)
+doc = replace_once(
+    doc,
+    """满足这些条件后，再把它提升为：`IMSDK 直发 -> UIA Invoke -> 卖家窗口内坐标点击`。在此之前保持 `UIA Invoke -> 卖家窗口内坐标点击`。""",
+    """满足这些条件后，再把它提升为：`IMSDK 直发 -> 卖家窗口内主按钮左侧坐标 -> 坐标输入被系统拒绝时 UIA Invoke`。在此之前保持同样的 UIA/坐标安全边界，并继续以真实卖家回显确认送达。""",
+    "document fallback summary",
+)
+DOC.write_text(doc, encoding="utf-8-sig")
+
+print("Applied guarded AccessDenied send fallback patch")
