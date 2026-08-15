@@ -277,7 +277,6 @@ namespace Bot.Options
             Util.Assert(!string.IsNullOrEmpty(seller));
             try
             {
-                Hide();
                 RunInShopScope(delegate
                 {
                     foreach (var options in _visitedOptions.ToList())
@@ -285,7 +284,7 @@ namespace Bot.Options
                         options.Save(seller);
                     }
                 });
-                Close();
+                Log.Info("设置已保存，保留设置窗口继续编辑: seller=" + seller);
             }
             catch (Exception ex)
             {
