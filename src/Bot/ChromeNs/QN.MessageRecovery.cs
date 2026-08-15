@@ -258,10 +258,18 @@ namespace Bot.ChromeNs
                 return true;
             }
 
+            // 只有紧贴本次后台通知的买家消息允许绕过全局入站去重。两分钟前的历史消息仍走
+            // 正常去重路径，避免为了修复漏答而把已经处理过的旧问题重新回复一次。
+            var bypassThreshold = scheduledAt.AddSeconds(-8).Ticks;
             var recoveredBuyerMessages = recovered
                 .Where(m => IsBuyerMessage(m)
                     && m.fromid != null
                     && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer))
+                .Where(m =>
+                {
+                    var sort = IncomingMessageSafety.GetSortValue(m);
+                    return sort > 0 && sort >= bypassThreshold;
+                })
                 .ToList();
             var bypassBuyerDedup = false;
             if (recoveredBuyerMessages.Count > 0)
@@ -290,13 +298,14 @@ namespace Bot.ChromeNs
             }
 
             Log.Info("后台消息补偿找回 " + recovered.Count + " 条候选消息/订单卡片。seller=" + seller + ", buyer=" + buyer
-                + ", bypassBuyerDedup=" + bypassBuyerDedup);
+                + ", bypassBuyerDedupCount=" + (bypassBuyerDedup ? recoveredBuyerMessages.Count : 0));
             foreach (var message in recovered)
             {
                 try
                 {
+                    var bypassThisBuyerDedup = bypassBuyerDedup && recoveredBuyerMessages.Contains(message);
                     await ProcessRecoveredMessageWithKnownBuyerAsync(
-                        message, seller, buyer, bypassBuyerDedup).ConfigureAwait(false);
+                        message, seller, buyer, bypassThisBuyerDedup).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
