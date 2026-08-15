@@ -32,6 +32,7 @@ namespace Bot.ChromeNs
         {
             _messageInputTextArea = null;
             _sendMessageButton = null;
+            _sendMessageButtonRect = System.Drawing.Rectangle.Empty;
             _preUpdateChatBrowserRectTime = DateTime.MinValue;
         }
 
@@ -108,8 +109,9 @@ namespace Bot.ChromeNs
 
                     _messageInputTextArea = inputElement == null ? null : inputElement.AsTextBox();
                     _sendMessageButton = sendElement;
+                    _sendMessageButtonRect = SafeBoundingRectangle(sendElement);
                     var inputFound = _messageInputTextArea != null;
-                    var sendFound = _sendMessageButton != null;
+                    var sendFound = _sendMessageButton != null && _sendMessageButtonRect.Width > 0 && _sendMessageButtonRect.Height > 0;
                     BotConnectionDiagnostics.RecordRpaScan(sendFound, inputFound,
                         "seller HWND UIA扫描 hwnd=" + expectedHwnd
                         + ", input=" + inputFound + ", send=" + sendFound);
@@ -126,7 +128,8 @@ namespace Bot.ChromeNs
                             + ", inputAutomationId=" + SafeAutomationId(inputElement)
                             + ", inputClass=" + SafeClassName(inputElement)
                             + ", sendAutomationId=" + SafeAutomationId(sendElement)
-                            + ", sendName=" + SafeName(sendElement));
+                            + ", sendName=" + SafeName(sendElement)
+                            + ", sendRect=" + FormatRect(_sendMessageButtonRect));
                     }
                     return inputFound;
                 }
@@ -237,6 +240,13 @@ namespace Bot.ChromeNs
             {
                 return System.Drawing.Rectangle.Empty;
             }
+        }
+
+        private static string FormatRect(System.Drawing.Rectangle rect)
+        {
+            return rect.Width <= 0 || rect.Height <= 0
+                ? "empty"
+                : rect.Left + "," + rect.Top + "," + rect.Width + "x" + rect.Height;
         }
 
         internal bool TryGetEditorText(out string text)

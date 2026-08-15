@@ -53,6 +53,11 @@ def test_first_inquiry_is_once_per_30_minute_consultation_session():
     assert "latestPrior.Timestamp >= now.AddMinutes(-SessionResetMinutes)" in source
     assert "TriggeredAt" in source
     assert "PendingReplies" in source
+    assert "SameBurstHistoryGraceSeconds = 8" in source
+    assert "IsIgnorableFirstInquiryHistoryTurn" in source
+    assert 'text.StartsWith("当前用户来自"' in source
+    assert 'text.StartsWith("系统提示"' in source
+    assert 'string.Equals(turn.Role, "user", StringComparison.Ordinal)' in source
 
 
 def test_first_inquiry_session_is_committed_after_real_delivery():
@@ -78,6 +83,7 @@ def test_any_fresh_buyer_or_system_message_can_prepare_fixed_reply():
     assert prepare < ordinary_text < image_route
     assert "IncomingMessageSafety.GetDisplayText(message, text)" in router
     assert "Kind = VisionDecisionKind.Text" in router[prepare:ordinary_text]
+    assert "首条咨询固定回复已预留" in service
 
 
 def test_platform_system_tips_are_eligible_before_normal_skip_routing():
@@ -109,8 +115,9 @@ def test_fixed_reply_does_not_enter_ai_learning_path():
     assert '"首条咨询固定回复"' in source
 
 
-def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_uia_primary():
+def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_area_click():
     source = read("src/Bot/ChromeNs/QNRpa.cs")
+    reliable = read("src/Bot/ChromeNs/QNRpa.ReliableSend.cs")
     ctor = source[source.index("public QNRpa(QN qn)"):source.index("private bool IsSendButtonName")]
     assert "Application.Attach(Desk.Inst.ProcessId)" not in ctor
     assert "EnsureSellerDeskBinding(false)" in ctor
@@ -124,7 +131,11 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_uia_p
     cdp = source[source.index("private async Task<bool> TrySetPlainTextByCdpAsync"):source.index("private async Task<bool> OpenAndSendText")]
     assert "RunCdpActionAsync" in cdp
     assert "CDP写入由UIA严格确认" in cdp
-    assert "进入UIA发送动作" in cdp
+    assert "进入UIA定位发送主按钮动作" in cdp
+    assert "检测到本次Bot草稿仍在输入框，重试直接复用且不再次追加" in cdp
+    nonempty = cdp.index("if (!before.IsEmpty)")
+    insert = cdp.index("准备通过CDP写入输入框")
+    assert nonempty < insert
 
     assert "TryPressEnterTextSendAsync" not in source
     assert "TryFocusEditorForEnterFast" not in source
@@ -133,17 +144,21 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_uia_p
     assert "Enter主发送开始" not in source
 
     button = source[source.index("private async Task<bool> TrySendTextViaUiaAsync"):source.index("public async Task SendImageAsync")]
-    assert "TryInvokeCachedSendButtonNow" in button
+    assert "TryInvokeCachedSendButtonNow" not in source
+    assert "AsButton().Invoke()" not in source
     assert "TryClickCachedSendButtonNow" in button
-    assert button.index("TryInvokeCachedSendButtonNow") < button.index("TryClickCachedSendButtonNow")
-    assert '"UIA主发送开始' in button
-    assert "foreground/topmost" in button
+    assert "_sendMessageButtonRect" in source
+    assert "arrowGuard" in source
+    assert "发送主按钮左侧区域坐标点击" in source
+    assert "sellerDesk.BringTop()" in source
+    assert "发送主按钮坐标" in button
+    assert "sendRect=" in reliable
 
     open_send = source[source.index("private async Task<bool> OpenAndSendText"):]
     assert "HasExpectedDraftFastAsync" in open_send
     assert "TrySendTextViaUiaAsync" in open_send
     assert "SetPlainText(text)" not in open_send
-    assert "method=UIA" in open_send
+    assert "method=UIA定位+发送主按钮坐标" in open_send
 
 
 def test_order_first_event_has_first_inquiry_delivery_bridge():
