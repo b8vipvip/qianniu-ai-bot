@@ -117,9 +117,6 @@ namespace Bot.ControllerNs
                 if (title.Equals("千牛接待台", StringComparison.OrdinalIgnoreCase)) return true;
                 if (title.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0) return true;
                 if (title.IndexOf("客服", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-
-                Log.InfoWithMaxCount("忽略非千牛接待聊天窗口，不挂载Bot界面: pid=" + chatWnd.Pid
-                    + ", hwnd=" + chatWnd.Hwnd + ", title=" + title, 20);
                 return false;
             }
             catch (Exception ex)
