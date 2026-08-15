@@ -1,4 +1,4 @@
-﻿using BotLib;
+using BotLib;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -161,6 +161,14 @@ namespace Bot.ChromeNs
             {
                 _executeGate.Release();
             }
+        }
+
+        internal Task<string> EvaluateExpressionAsync(string expression, string description)
+        {
+            if (string.IsNullOrWhiteSpace(expression)) return Task.FromResult(string.Empty);
+            return SendExecuteAndWaitAsync(
+                expression,
+                string.IsNullOrWhiteSpace(description) ? "EvaluateExpression" : description);
         }
 
         private string SendExecuteAndWait(string cmd, string desc)

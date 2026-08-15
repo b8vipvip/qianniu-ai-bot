@@ -1,4 +1,4 @@
-﻿using Bot.ChatRecord;
+using Bot.ChatRecord;
 using BotLib;
 using DbEntity;
 using Newtonsoft.Json;
@@ -6,6 +6,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
@@ -18,6 +19,7 @@ namespace Bot.ChromeNs
     /// <summary>
     /// 直接下单/付款可能以千牛系统卡片或 messageCenterNotify 到达，而不是普通 buyer -> seller 消息。
     /// 本桥接器订阅 QN 暴露的原始事件，在原有 IsBuyerMessage 过滤之前处理订单。
+    /// 当新版千牛只刷新右侧“近3个月订单”而不投递订单卡片时，也会对当前已验证买家做被动面板兜底。
     /// </summary>
     internal static class DirectOrderEventBridge
     {
@@ -40,6 +42,10 @@ namespace Bot.ChromeNs
         private static readonly HashSet<QN> Attached = new HashSet<QN>();
         private static readonly ConcurrentDictionary<string, DateTime> RawReservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, long> VisiblePanelScanVersions =
+            new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
+        private static readonly int[] VisiblePanelScanDelaysMs = { 250, 900, 1800, 3200, 5200, 8000 };
+        private static long _visiblePanelScanVersion;
         private static Timer _timer;
         private static bool _initialized;
 
@@ -111,6 +117,7 @@ namespace Bot.ChromeNs
                 qn.EvRecieveNewMessage += OnReceiveNewMessage;
                 qn.EvMessageNotity += OnMessageCenterNotify;
                 qn.EvShopRobotReceriveNewMessage += OnShopRobotNewMessage;
+                qn.EvBuyerSwitched += OnBuyerSwitched;
                 Log.Info("直接下单系统事件桥接已绑定: seller="
                     + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
             }
@@ -186,9 +193,74 @@ namespace Bot.ChromeNs
 
         private static void OnShopRobotNewMessage(object sender, ShopRobotReceriveNewMessageEventArgs e)
         {
-            if (e == null || e.Seller == null || e.Buyer == null) return;
-            Log.Info("直接下单桥接观察到后台会话通知: seller=" + (e.Seller.Nick ?? string.Empty)
-                + ", buyer=" + (e.Buyer.Nick ?? string.Empty));
+            var qn = sender as QN;
+            if (qn == null || e == null || e.Seller == null || e.Buyer == null) return;
+            var seller = (e.Seller.Nick ?? string.Empty).Trim();
+            var buyer = (e.Buyer.Nick ?? string.Empty).Trim();
+            Log.Info("直接下单桥接观察到后台会话通知: seller=" + seller + ", buyer=" + buyer);
+            ScheduleVisibleOrderPanelScan(qn, seller, buyer, "shopRobotNotify");
+        }
+
+        private static void OnBuyerSwitched(object sender, BuyerSwitchedEventArgs e)
+        {
+            var qn = sender as QN;
+            if (qn == null || e == null || e.Seller == null || e.Buyer == null) return;
+            ScheduleVisibleOrderPanelScan(
+                qn,
+                e.Seller.Nick,
+                e.Buyer.Nick,
+                "buyerSwitched");
+        }
+
+        private static void ScheduleVisibleOrderPanelScan(QN qn, string seller, string buyer, string source)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            if (qn == null || seller.Length == 0 || buyer.Length == 0) return;
+
+            var normalizedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            if (!string.IsNullOrWhiteSpace(normalizedBuyer)) buyer = normalizedBuyer;
+            var key = NormalizeIdentityKey(seller) + "#" + NormalizeIdentityKey(buyer);
+            if (key == "#") return;
+
+            var version = Interlocked.Increment(ref _visiblePanelScanVersion);
+            VisiblePanelScanVersions[key] = version;
+            Task.Run(async () =>
+            {
+                var elapsed = 0;
+                try
+                {
+                    foreach (var targetDelay in VisiblePanelScanDelaysMs)
+                    {
+                        var wait = Math.Max(0, targetDelay - elapsed);
+                        if (wait > 0) await Task.Delay(wait).ConfigureAwait(false);
+                        elapsed = targetDelay;
+
+                        long latest;
+                        if (!VisiblePanelScanVersions.TryGetValue(key, out latest) || latest != version) return;
+                        if (await qn.TryRecoverVisibleOrderPanelAsync(seller, buyer, source).ConfigureAwait(false)) return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("右侧订单面板兜底调度异常: seller=" + seller + ", buyer=" + buyer
+                        + ", source=" + source + ", error=" + ex.Message);
+                }
+                finally
+                {
+                    long latest;
+                    if (VisiblePanelScanVersions.TryGetValue(key, out latest) && latest == version)
+                    {
+                        long ignored;
+                        VisiblePanelScanVersions.TryRemove(key, out ignored);
+                    }
+                }
+            });
+        }
+
+        private static string NormalizeIdentityKey(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty);
         }
 
         private static bool MessageLooksPotential(QNChatMessage message)
@@ -467,6 +539,333 @@ namespace Bot.ChromeNs
 
     public partial class QN
     {
+        private sealed class VisibleOrderPanelCandidate
+        {
+            public string OrderId;
+            public string TradeStatus;
+            public DateTime? CreatedAt;
+            public DateTime? PaidAt;
+            public string Segment;
+        }
+
+        private static readonly Regex VisiblePanelOrderIdRegex = new Regex(
+            @"(?<!\d)(\d{16,24})(?!\d)",
+            RegexOptions.Compiled);
+        private static readonly Regex VisiblePanelCreatedAtRegex = new Regex(
+            @"(?<time>20\d{2}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?)\s*下单",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex VisiblePanelPaidAtRegex = new Regex(
+            @"(?<time>20\d{2}[-/]\d{1,2}[-/]\d{1,2}\s+\d{1,2}:\d{2}(?::\d{2})?)\s*(?:付款|支付)",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly string[] VisiblePanelPaidStatuses =
+        {
+            "待发货", "已付款", "已发货", "交易成功", "已完成"
+        };
+        private static readonly string[] VisiblePanelUnsupportedStatuses =
+        {
+            "退款中", "订单关闭", "交易关闭", "已关闭", "已取消"
+        };
+        private static readonly string[] VisiblePanelStatuses =
+        {
+            "等待买家付款", "待付款", "待发货", "已付款", "已发货", "交易成功", "已完成",
+            "退款中", "订单关闭", "交易关闭", "已关闭", "已取消"
+        };
+
+        // 只读取带“近3个月订单/近三个月订单”锚点的局部 DOM。用文本节点定位后仅向上找有限层祖先，
+        // 避免遍历整页元素反复读取 innerText，在低内存 Windows Server 上也保持轻量。
+        private const string VisibleOrderPanelExpression = @"(function(){
+var anchors=['近3个月订单','近三个月订单'];
+var orderRe=/(?:订单号\s*[:：]?\s*)?\d{16,24}/;
+var strongRe=/(?:下单|付款|支付|待发货|待付款|已付款|已发货|交易成功|已完成|订单关闭|交易关闭|退款中)/;
+var best='';
+function norm(v){return (v||'').replace(/\s+/g,' ').trim();}
+function hasAnchor(v){for(var i=0;i<anchors.length;i++){if(v.indexOf(anchors[i])>=0)return true;}return false;}
+function consider(v){
+  v=norm(v);
+  if(v.length<24||v.length>16000||!hasAnchor(v)||!orderRe.test(v)||!strongRe.test(v))return;
+  if(!best||v.length<best.length)best=v;
+}
+function scan(doc,depth){
+  if(!doc||depth>3)return;
+  var root=doc.body||doc.documentElement;
+  if(!root)return;
+  try{
+    var walker=doc.createTreeWalker(root,4,null,false),node,visited=0;
+    while((node=walker.nextNode())&&visited++<12000){
+      var raw=norm(node.nodeValue);
+      if(!hasAnchor(raw))continue;
+      var el=node.parentElement;
+      for(var level=0;el&&level<10;level++,el=el.parentElement){
+        var text=norm(el.innerText||el.textContent);
+        if(text.length>16000)break;
+        consider(text);
+      }
+    }
+  }catch(e){}
+  try{
+    var frames=doc.querySelectorAll('iframe,frame');
+    for(var i=0;i<frames.length&&i<12;i++){
+      try{scan(frames[i].contentDocument,depth+1);}catch(e){}
+    }
+  }catch(e){}
+}
+scan(document,0);
+return JSON.stringify({ok:!!best,text:best});
+})()";
+
+        internal async Task<bool> TryRecoverVisibleOrderPanelAsync(string sellerHint, string buyerHint, string source)
+        {
+            var runtimeSeller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+            sellerHint = (sellerHint ?? string.Empty).Trim();
+            buyerHint = (buyerHint ?? string.Empty).Trim();
+            if (runtimeSeller.Length == 0 || buyerHint.Length == 0 || cdp == null) return false;
+            if (sellerHint.Length > 0 && !DirectOrderIdentityResolver.IdentityEquals(runtimeSeller, sellerHint)) return true;
+
+            DbEntity.Conversation before;
+            try
+            {
+                var current = await GetCurrentConversationID().ConfigureAwait(false);
+                before = current == null ? null : current.Result;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("右侧订单面板兜底读取前会话确认失败: seller=" + runtimeSeller
+                    + ", buyer=" + buyerHint + ", error=" + ex.Message);
+                return false;
+            }
+            if (before == null || string.IsNullOrWhiteSpace(before.Nick)
+                || !BuyerIdentityAliasService.AreEquivalent(runtimeSeller, before.Nick, buyerHint))
+            {
+                return false;
+            }
+
+            BuyerIdentityAliasService.Observe(runtimeSeller, before.Nick, before.Display, before.TargetId);
+            var verifiedBuyer = BuyerIdentityAliasService.ResolveInternalNick(runtimeSeller, before.Nick);
+            if (string.IsNullOrWhiteSpace(verifiedBuyer)) verifiedBuyer = buyerHint;
+
+            string raw;
+            try
+            {
+                raw = await cdp.EvaluateExpressionAsync(
+                    VisibleOrderPanelExpression,
+                    "读取当前买家右侧近3个月订单面板").ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("右侧订单面板兜底DOM读取失败: seller=" + runtimeSeller
+                    + ", buyer=" + verifiedBuyer + ", error=" + ex.Message);
+                return false;
+            }
+
+            var panelText = ExtractVisibleOrderPanelText(raw);
+            if (string.IsNullOrWhiteSpace(panelText)) return false;
+
+            // DOM读取期间人工可能切换会话。发布订单前必须再次确认仍然是同一买家。
+            DbEntity.Conversation after;
+            try
+            {
+                var current = await GetCurrentConversationID().ConfigureAwait(false);
+                after = current == null ? null : current.Result;
+            }
+            catch
+            {
+                return false;
+            }
+            if (after == null || string.IsNullOrWhiteSpace(after.Nick)
+                || !BuyerIdentityAliasService.AreEquivalent(runtimeSeller, after.Nick, verifiedBuyer))
+            {
+                Log.Info("右侧订单面板兜底已取消：DOM读取期间当前买家发生变化。seller="
+                    + runtimeSeller + ", expectedBuyer=" + verifiedBuyer
+                    + ", currentBuyer=" + (after == null ? string.Empty : after.Nick));
+                return false;
+            }
+
+            var candidates = ParseVisibleOrderPanelCandidates(panelText)
+                .OrderByDescending(x => x.PaidAt ?? x.CreatedAt ?? DateTime.MinValue)
+                .Take(3)
+                .ToList();
+            if (candidates.Count == 0) return false;
+
+            var now = DateTime.Now;
+            var freshFloor = _messageSafetyStartedAt.AddSeconds(-8);
+            var sawFreshSupportedOrder = false;
+            var sawFreshUnsupportedOrder = false;
+            foreach (var candidate in candidates)
+            {
+                if (candidate == null || string.IsNullOrWhiteSpace(candidate.OrderId)) continue;
+                var eventTime = candidate.PaidAt ?? candidate.CreatedAt;
+                if (!eventTime.HasValue)
+                {
+                    Log.Info("右侧订单面板兜底暂缺少可验证下单/付款时间，将等待面板继续加载: seller="
+                        + runtimeSeller + ", buyer=" + verifiedBuyer + ", orderId=" + candidate.OrderId);
+                    continue;
+                }
+                if (eventTime.Value > now.AddMinutes(2)) continue;
+                if (eventTime.Value < freshFloor)
+                {
+                    Log.Info("右侧订单面板兜底跳过历史订单: seller=" + runtimeSeller
+                        + ", buyer=" + verifiedBuyer + ", orderId=" + candidate.OrderId
+                        + ", eventTime=" + eventTime.Value.ToString("yyyy-MM-dd HH:mm:ss")
+                        + ", botStartedAt=" + _messageSafetyStartedAt.ToString("yyyy-MM-dd HH:mm:ss"));
+                    continue;
+                }
+
+                if (VisiblePanelUnsupportedStatuses.Any(x => string.Equals(x, candidate.TradeStatus, StringComparison.Ordinal)))
+                {
+                    sawFreshUnsupportedOrder = true;
+                    continue;
+                }
+
+                var paid = candidate.PaidAt.HasValue
+                    || VisiblePanelPaidStatuses.Any(x => string.Equals(x, candidate.TradeStatus, StringComparison.Ordinal));
+                var eventType = paid ? OrderEventType.Paid : OrderEventType.Created;
+                var text = new StringBuilder();
+                text.Append(paid ? "买家已付款 " : "买家已下单 ")
+                    .Append("订单号：").Append(candidate.OrderId);
+                if (!string.IsNullOrWhiteSpace(candidate.TradeStatus))
+                    text.Append(" 订单状态：").Append(candidate.TradeStatus);
+                if (candidate.CreatedAt.HasValue)
+                    text.Append(" 下单时间：").Append(candidate.CreatedAt.Value.ToString("yyyy-MM-dd HH:mm:ss"));
+                if (candidate.PaidAt.HasValue)
+                    text.Append(" 付款时间：").Append(candidate.PaidAt.Value.ToString("yyyy-MM-dd HH:mm:ss"));
+
+                var snapshot = new OrderSnapshot
+                {
+                    Seller = runtimeSeller,
+                    Buyer = verifiedBuyer,
+                    OrderId = candidate.OrderId,
+                    TradeStatus = candidate.TradeStatus,
+                    IsPaid = paid,
+                    CreatedAt = candidate.CreatedAt,
+                    PaidAt = candidate.PaidAt,
+                    Source = "千牛右侧订单面板兜底",
+                    DetectedAt = now,
+                    EventTime = eventTime.Value,
+                    EventType = eventType,
+                    EventText = text.ToString()
+                };
+
+                var publish = OrderEventHub.Publish(snapshot);
+                if (publish != null && publish.Detected)
+                {
+                    sawFreshSupportedOrder = true;
+                    if (publish.Accepted)
+                    {
+                        Log.Info("右侧订单面板兜底识别并发布: seller=" + runtimeSeller
+                            + ", buyer=" + verifiedBuyer + ", orderId=" + candidate.OrderId
+                            + ", status=" + candidate.TradeStatus + ", event=" + eventType
+                            + ", trigger=" + (source ?? string.Empty));
+                    }
+                    else
+                    {
+                        Log.Info("右侧订单面板兜底订单已由其他通道处理/去重: seller=" + runtimeSeller
+                            + ", buyer=" + verifiedBuyer + ", orderId=" + candidate.OrderId
+                            + ", event=" + eventType);
+                    }
+                }
+            }
+
+            // 找到并发布（或确认已去重）的新订单即可停止本轮重试；若当前只看到历史订单，
+            // 继续短暂重试，给新版千牛右侧面板时间把刚产生的新订单渲染出来。
+            return sawFreshSupportedOrder || sawFreshUnsupportedOrder;
+        }
+
+        private static string ExtractVisibleOrderPanelText(string raw)
+        {
+            var value = (raw ?? string.Empty).Trim();
+            if (value.Length == 0) return string.Empty;
+            for (var i = 0; i < 3; i++)
+            {
+                JToken token;
+                try { token = JToken.Parse(value); }
+                catch { break; }
+
+                if (token.Type == JTokenType.String)
+                {
+                    value = token.ToString().Trim();
+                    continue;
+                }
+
+                var obj = token as JObject;
+                if (obj == null) break;
+                var direct = obj["text"];
+                if (direct != null && direct.Type != JTokenType.Null)
+                {
+                    value = direct.ToString().Trim();
+                    break;
+                }
+                var nested = obj.SelectToken("result.value") ?? obj.SelectToken("value");
+                if (nested == null) break;
+                value = nested.ToString().Trim();
+            }
+
+            return value.Contains("近3个月订单") || value.Contains("近三个月订单")
+                ? Regex.Replace(value.Replace('\u00a0', ' '), @"\s+", " ").Trim()
+                : string.Empty;
+        }
+
+        private static List<VisibleOrderPanelCandidate> ParseVisibleOrderPanelCandidates(string panelText)
+        {
+            var result = new List<VisibleOrderPanelCandidate>();
+            panelText = Regex.Replace((panelText ?? string.Empty).Replace('\u00a0', ' '), @"\s+", " ").Trim();
+            if (panelText.Length == 0) return result;
+            var matches = VisiblePanelOrderIdRegex.Matches(panelText).Cast<Match>().ToList();
+            for (var i = 0; i < matches.Count; i++)
+            {
+                var match = matches[i];
+                if (!match.Success) continue;
+                var start = Math.Max(0, match.Index - 140);
+                var nextStart = i + 1 < matches.Count ? matches[i + 1].Index : panelText.Length;
+                var end = Math.Min(panelText.Length, Math.Max(match.Index + match.Length + 160, Math.Min(nextStart + 80, match.Index + 900)));
+                if (end <= start) continue;
+                var segment = panelText.Substring(start, end - start);
+                var createdAt = ParseVisiblePanelTime(VisiblePanelCreatedAtRegex.Match(segment));
+                var paidAt = ParseVisiblePanelTime(VisiblePanelPaidAtRegex.Match(segment));
+                var status = ResolveVisiblePanelStatus(segment);
+
+                // 右侧面板兜底比聊天卡解析更严格：必须是 16~24 位真实订单号，且至少
+                // 有订单状态或下单/付款时间之一；仅凭任意长数字绝不发布订单事件。
+                if (!createdAt.HasValue && !paidAt.HasValue && string.IsNullOrWhiteSpace(status)) continue;
+                result.Add(new VisibleOrderPanelCandidate
+                {
+                    OrderId = match.Groups[1].Value,
+                    TradeStatus = status,
+                    CreatedAt = createdAt,
+                    PaidAt = paidAt,
+                    Segment = segment
+                });
+            }
+            return result
+                .GroupBy(x => x.OrderId, StringComparer.Ordinal)
+                .Select(g => g.OrderByDescending(x => x.PaidAt ?? x.CreatedAt ?? DateTime.MinValue).First())
+                .ToList();
+        }
+
+        private static DateTime? ParseVisiblePanelTime(Match match)
+        {
+            if (match == null || !match.Success) return null;
+            DateTime value;
+            var text = match.Groups["time"].Value.Trim();
+            if (DateTime.TryParseExact(
+                text,
+                new[] { "yyyy-M-d H:mm:ss", "yyyy-M-d H:mm", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd HH:mm" },
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeLocal,
+                out value)) return value;
+            if (DateTime.TryParse(text, CultureInfo.CurrentCulture, DateTimeStyles.AssumeLocal, out value)) return value;
+            return null;
+        }
+
+        private static string ResolveVisiblePanelStatus(string segment)
+        {
+            segment = segment ?? string.Empty;
+            foreach (var status in VisiblePanelStatuses)
+            {
+                if (segment.IndexOf(status, StringComparison.Ordinal) >= 0) return status;
+            }
+            return string.Empty;
+        }
+
         internal async Task ProcessDirectOrderMessageAsync(
             QNChatMessage message,
             string sellerHint,
