@@ -1,4 +1,4 @@
-using BotLib.Extensions;
+﻿using BotLib.Extensions;
 using BotLib.Wpf.Extensions;
 using BotLib;
 using FlaUI.Core.AutomationElements;
@@ -33,6 +33,7 @@ namespace Bot.ChromeNs
 
         private AutomationElement _sendMessageButton;
         private System.Drawing.Rectangle _sendMessageButtonRect;
+        private bool _lastSendButtonCoordinateClickRejected;
         private AutomationElement _closeContactButton;
         private TextBox _messageInputTextArea;
 
@@ -281,6 +282,7 @@ namespace Bot.ChromeNs
 
         private bool TryClickCachedSendButtonNow()
         {
+            _lastSendButtonCoordinateClickRejected = false;
             if (_sendMessageButton == null && _sendMessageButtonRect.IsEmpty) return false;
             try
             {
@@ -325,7 +327,27 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.Info("发送主按钮坐标点击异常: " + ex.Message);
+                _lastSendButtonCoordinateClickRejected = true;
+                Log.Info("发送主按钮坐标点击异常: " + ex.Message
+                    + ", type=" + ex.GetType().FullName
+                    + ", hresult=0x" + ex.HResult.ToString("X8"));
+                return false;
+            }
+        }
+
+        private bool TryInvokeCachedSendButtonNow()
+        {
+            if (_sendMessageButton == null) return false;
+            try
+            {
+                _sendMessageButton.AsButton().Invoke();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("发送按钮UIA回退Invoke失败: " + ex.Message
+                    + ", type=" + ex.GetType().FullName
+                    + ", hresult=0x" + ex.HResult.ToString("X8"));
                 return false;
             }
         }
@@ -334,9 +356,12 @@ namespace Bot.ChromeNs
         {
             try
             {
-                // UIA is used only to locate and cache the verified seller-window send rectangle.
-                // Do not call Invoke() on Qianniu's split button: on current builds that semantic
-                // action can block and/or open the send-mode dropdown instead of sending.
+                // Keep the verified left side of Qianniu's split send button as the primary
+                // action. Some Windows integrity/session combinations reject FlaUI's physical
+                // coordinate injection with Win32 access denied even though UIA read/write works.
+                // In that specific pre-action failure only, revalidate the owned draft and use a
+                // single UIA Invoke fallback. Never issue a second action after a coordinate click
+                // was accepted but delivery confirmation is merely late/ambiguous.
                 if ((_sendMessageButton == null || _sendMessageButtonRect.IsEmpty)
                     && !await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
@@ -359,13 +384,43 @@ namespace Bot.ChromeNs
                     () => TryClickCachedSendButtonNow(),
                     "发送主按钮坐标点击",
                     UiActionTimeoutMs).ConfigureAwait(false);
-                if (!clicked)
+                if (clicked)
+                {
+                    return await WaitForTextSendConfirmedAsync(
+                        buyer, text, sendStart, "发送主按钮坐标", 3600).ConfigureAwait(false);
+                }
+
+                if (!_lastSendButtonCoordinateClickRejected)
                 {
                     SetSendFailure("发送主按钮坐标点击", "未能点击已验证发送按钮的左侧主操作区域");
                     return false;
                 }
+
+                Log.Info("发送主按钮坐标输入被系统拒绝，准备仅回退一次UIA Invoke: seller="
+                    + SellerNick + ", buyer=" + buyer);
+
+                // Fail closed if the draft changed/disappeared while the coordinate action failed.
+                // It may mean the click actually reached Qianniu before the input API reported an
+                // exception. In that case only observe delivery; never perform a second send action.
+                if (!await HasExpectedDraftFastAsync(text, 900).ConfigureAwait(false))
+                {
+                    Log.Info("坐标点击异常后目标草稿已不存在或无法确认，禁止UIA二次动作: buyer=" + buyer);
+                    return await WaitForTextSendConfirmedAsync(
+                        buyer, text, sendStart, "坐标点击异常后确认", 1800).ConfigureAwait(false);
+                }
+
+                var invoked = await RunUiActionAsync(
+                    () => TryInvokeCachedSendButtonNow(),
+                    "发送按钮UIA回退调用",
+                    UiActionTimeoutMs).ConfigureAwait(false);
+                if (!invoked)
+                {
+                    SetSendFailure("发送按钮UIA回退", "坐标输入被系统拒绝且UIA Invoke未完成");
+                    return false;
+                }
+
                 return await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "发送主按钮坐标", 3600).ConfigureAwait(false);
+                    buyer, text, sendStart, "发送按钮UIA回退", 3600).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
