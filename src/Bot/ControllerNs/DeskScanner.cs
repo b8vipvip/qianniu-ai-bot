@@ -1,4 +1,5 @@
 ﻿using Bot.AssistWindow.NotifyIcon;
+using Bot.Automation;
 using Bot.Automation.ChatDeskNs;
 using Bot.Automation.ChatDeskNs.Automators;
 using Bot.Common;
@@ -74,7 +75,7 @@ namespace Bot.ControllerNs
                 {
                     if (desk == null || desk.Hwnd == null) continue;
                     if (openedHandles.Contains(desk.Hwnd.Handle) && desk.IsAlive) continue;
-                    Log.Info("千牛店铺窗口已关闭，释放独立会话: seller=" + desk.WndTitle
+                    Log.Info("千牛店铺窗口已关闭或已离开接待聊天窗口，释放独立会话: seller=" + desk.WndTitle
                         + ", pid=" + desk.ProcessId + ", hwnd=" + desk.Hwnd.Handle);
                     desk.Dispose();
                 }
@@ -92,8 +93,38 @@ namespace Bot.ControllerNs
 
         private static IList<QnChatWnd> GetOpenedChatWnds()
         {
-            return QnAccountFinderFactory.Finder.GetOpenChatWnds()
+            var candidates = QnAccountFinderFactory.Finder.GetOpenChatWnds()
                 ?? new List<QnChatWnd>();
+            return candidates
+                .Where(IsVerifiedReceptionChatWindow)
+                .ToList();
+        }
+
+        private static bool IsVerifiedReceptionChatWindow(QnChatWnd chatWnd)
+        {
+            if (chatWnd == null || chatWnd.Hwnd == 0 || chatWnd.Pid <= 0) return false;
+            try
+            {
+                if (!WinApi.IsVisible(chatWnd.Hwnd) || WinApi.IsWindowMinimized(chatWnd.Hwnd)) return false;
+                var title = (WinApi.GetText(chatWnd.Hwnd) ?? string.Empty).Trim();
+                if (QnAccountFinder.IsSystemNotificationTitle(title)) return false;
+
+                // Account/login pickers, the generic workbench home page and other full-size
+                // Qt windows can share the same AliWorkbench class and can even expose a seller
+                // nickname. Seller identity and window size are therefore NOT sufficient proof
+                // that this is the reception chat window. Only reception/customer-service title
+                // evidence is allowed to host the attached Bot UI.
+                if (title.Equals("千牛接待台", StringComparison.OrdinalIgnoreCase)) return true;
+                if (title.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                if (title.IndexOf("客服", StringComparison.OrdinalIgnoreCase) >= 0) return true;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("验证千牛接待聊天窗口失败: pid=" + chatWnd.Pid
+                    + ", hwnd=" + chatWnd.Hwnd + ", " + ex.Message, 10);
+                return false;
+            }
         }
 
         private static void DetectQianniu(QnChatWnd chatWnd)
