@@ -19,6 +19,7 @@ namespace Bot.ChromeNs
         internal const int SessionResetMinutes = 30;
         internal const string DefaultAnswer = "在的，亲！";
         private const int PendingReplySeconds = 45;
+        private const int SameBurstHistoryGraceSeconds = 8;
         private const string SettingsScope = "feature";
         private const string EnabledKey = "FirstInquiryFixedReplyEnabled";
         private const string AnswerKey = "FirstInquiryFixedReplyAnswer";
@@ -76,7 +77,13 @@ namespace Bot.ChromeNs
                 return PendingReplies.TryGetValue(key, out stored) && stored != null ? (stored.Answer ?? string.Empty) : candidate;
             });
             answer = (resolved ?? string.Empty).Trim();
-            return !string.IsNullOrWhiteSpace(answer);
+            var prepared = !string.IsNullOrWhiteSpace(answer);
+            if (prepared)
+            {
+                Log.Info("首条咨询固定回复已预留: seller=" + seller + ", buyer=" + buyer
+                    + ", trigger=" + (currentQuestion ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim());
+            }
+            return prepared;
         }
 
         public static bool TryResolve(string seller, string buyer, string currentQuestion, out string answer)
@@ -153,7 +160,9 @@ namespace Bot.ChromeNs
             var settings = LoadCurrentScope();
             if (settings == null || !settings.Enabled || string.IsNullOrWhiteSpace(settings.Answer)) return string.Empty;
             var priorTurns = ConversationContextStore.GetRecentTurns(seller, buyer, currentQuestion, 24);
-            var latestPrior = priorTurns.Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text))
+            var latestPrior = priorTurns
+                .Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text))
+                .Where(x => !IsIgnorableFirstInquiryHistoryTurn(x, now))
                 .OrderByDescending(x => x.Timestamp).FirstOrDefault();
             if (latestPrior != null)
             {
@@ -161,6 +170,43 @@ namespace Bot.ChromeNs
                 if (latestPrior.Timestamp >= now.AddMinutes(-SessionResetMinutes)) return string.Empty;
             }
             return BotFeatureStore.ApplyOutputPolicy(settings.Answer.Trim()) ?? string.Empty;
+        }
+
+        private static bool IsIgnorableFirstInquiryHistoryTurn(ConversationContextTurn turn, DateTime now)
+        {
+            if (turn == null) return true;
+            var text = Compact(turn.Text);
+            if (string.IsNullOrWhiteSpace(text)) return true;
+
+            // Product-detail entry tips are emitted as separate buyer-side/system records around the
+            // same instant as the product card. They are not a previous consultation and must not
+            // suppress the configured first greeting.
+            if (text.StartsWith("当前用户来自", StringComparison.Ordinal)
+                || text.StartsWith("该用户来自", StringComparison.Ordinal)
+                || text.StartsWith("买家正在浏览", StringComparison.Ordinal)
+                || text.StartsWith("买家从商品详情页进入", StringComparison.Ordinal)
+                || text.StartsWith("平台提示", StringComparison.Ordinal)
+                || text.StartsWith("系统提示", StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            // One product card can surface as several user-side records (title/url/system tip).
+            // Ignore only very recent user turns from the same incoming burst; a recent seller
+            // reply still blocks a second first-greeting as expected.
+            return string.Equals(turn.Role, "user", StringComparison.Ordinal)
+                && turn.Timestamp != DateTime.MinValue
+                && turn.Timestamp >= now.AddSeconds(-SameBurstHistoryGraceSeconds);
+        }
+
+        private static string Compact(string value)
+        {
+            return (value ?? string.Empty)
+                .Replace("\r", string.Empty)
+                .Replace("\n", string.Empty)
+                .Replace(" ", string.Empty)
+                .Replace("\t", string.Empty)
+                .Trim();
         }
 
         private static FirstInquiryFixedReplySettings LoadCurrentScope()
