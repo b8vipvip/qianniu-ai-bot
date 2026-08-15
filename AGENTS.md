@@ -4,10 +4,13 @@ Before modifying this repository, read in order:
 
 1. `docs/PROJECT_HANDOFF_CONTEXT.md`
 2. `docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md`
+3. `docs/QIANNIU_SEND_RELIABILITY_INCIDENTS.md` when touching real-send, auto-reply, UIA/CDP/IMSDK, retry, or delivery-confirmation code
 
 `PROJECT_HANDOFF_CONTEXT.md` records the full project goal, current repository baseline, code architecture, completed knowledge-base work, confirmed Qianniu automation findings, known problems, unfinished tasks, local synchronization procedure, and the next development plan.
 
 `QIANNIU_CHAT_AUTOMATION_PROGRESS.md` is the detailed evidence log for the verified Qianniu 9.97.56N chat-automation findings, failed experiments, current automation architecture, safety rules, and next tasks.
+
+`QIANNIU_SEND_RELIABILITY_INCIDENTS.md` records the recurring “answer/draft exists but real seller message is not delivered” incidents, the different historical root causes, current fallback policy, regression rules, and the boundary between Bot auto-update and source-code modification.
 
 Do not repeat experiments already marked as ineffective unless new evidence justifies doing so.
 
