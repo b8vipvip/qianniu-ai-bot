@@ -108,6 +108,42 @@ namespace Bot.ChromeNs
             }
         }
 
+        internal bool TryClearCanceledBotDraft(string buyer, string reason)
+        {
+            buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
+            if (string.IsNullOrWhiteSpace(buyer) || _qn == null || _qn.Buyer == null) return false;
+
+            var currentBuyer = BuyerIdentityAliasService.ResolveInternalNick(
+                SellerNick,
+                _qn.Buyer.Nick);
+            if (!BuyerIdentityAliasService.AreEquivalent(SellerNick, currentBuyer, buyer)) return false;
+
+            var expected = (LastSetPlainText ?? string.Empty).Trim();
+            if (expected.Length == 0 || !HasExpectedDraft(expected)) return false;
+
+            // Recheck the conversation immediately before touching the composer. A human reply can
+            // arrive while Qianniu is switching conversations; only clear the draft when both buyer
+            // identity and exact editor contents still prove that this composer belongs to the Bot.
+            currentBuyer = _qn.Buyer == null
+                ? string.Empty
+                : BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _qn.Buyer.Nick);
+            if (!BuyerIdentityAliasService.AreEquivalent(SellerNick, currentBuyer, buyer)) return false;
+
+            ClearExpectedDraft(expected,
+                string.IsNullOrWhiteSpace(reason) ? "Bot草稿已取消" : reason);
+
+            string remaining;
+            var cleared = !TryGetEditorText(out remaining)
+                || !EditorMatchesExpectedText(remaining, expected);
+            if (cleared)
+            {
+                LatestSetTextTime = DateTime.MinValue;
+                Log.Info("已清除已取消的Bot专属草稿: seller=" + SellerNick
+                    + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
+            }
+            return cleared;
+        }
+
         private static int RuntimeSellerCount()
         {
             try
