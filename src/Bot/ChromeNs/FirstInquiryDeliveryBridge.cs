@@ -97,7 +97,20 @@ namespace Bot.ChromeNs
                 {
                     if (!string.Equals((message.fromid.nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)) continue;
                     var buyer = (message.toid.nick ?? string.Empty).Trim();
-                    if (buyer.Length == 0 || !FirstInquiryFixedReplyService.HasPending(seller, buyer)) continue;
+                    if (buyer.Length == 0) continue;
+
+                    // A genuine seller message means this conversation has advanced on the seller side.
+                    // If the composer still contains the exact draft that this Bot previously wrote,
+                    // clear only that owned draft. The RPA helper verifies both the active buyer and
+                    // exact editor contents, so human typing or a different conversation is untouched.
+                    if (qn.Rpa != null)
+                    {
+                        qn.Rpa.TryClearCanceledBotDraft(
+                            buyer,
+                            "检测到同会话卖家消息，清理已取消但仍残留在输入框的Bot草稿");
+                    }
+
+                    if (!FirstInquiryFixedReplyService.HasPending(seller, buyer)) continue;
 
                     var text = ExtractMessageText(message);
                     var settings = FirstInquiryFixedReplyService.Load(seller);
