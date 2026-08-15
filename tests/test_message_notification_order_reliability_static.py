@@ -30,11 +30,16 @@ def test_reliable_send_uses_stable_automation_ids_and_exact_draft_check():
 def test_background_notification_only_recovers_when_detailed_event_is_missing():
     source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
     qn = read("src/Bot/ChromeNs/QN.cs")
-    assert "Task.Delay(1800)" in source
+    assert "BackgroundRecoveryInitialDelayMs = 1000" in source
+    assert "Task.Delay(BackgroundRecoveryInitialDelayMs)" in source
     assert "_latestBuyerMessageObserved" in source
     assert "im.singlemsg.GetRemoteHisMsg" in source
-    assert "await _sendGate.WaitAsync()" in source
-    assert "await ProcessIncomingMessageAsync(message)" in source
+    assert "_sendGate.WaitAsync(BackgroundRecoverySendGateWaitMs)" in source
+    assert "_backgroundRecoveryGate.WaitAsync(BackgroundRecoveryGateWaitMs)" in source
+    assert "OpenChat(buyer);" in source
+    assert "await ProcessIncomingMessageAsync(message).ConfigureAwait(false)" in source
+    assert "await _sendGate.WaitAsync();" not in source
+    assert "await _backgroundRecoveryGate.WaitAsync();" not in source
     assert "ScheduleBackgroundMessageRecovery(e)" in qn
     assert "MarkBuyerMessageObserved(sellerNick, buyerNick)" in qn
 
