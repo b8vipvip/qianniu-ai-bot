@@ -82,6 +82,21 @@ def test_download_prefers_tencent_control_plane_then_falls_back_to_github():
     assert "Bot更新下载被用户取消" in download
 
 
+def test_update_download_is_single_flight_and_auto_install_disables_redundant_prefetch():
+    download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
+    state = read("src/Bot/Update/BotUpdateService.State.Fast.cs")
+
+    assert "private static readonly SemaphoreSlim DownloadGate" in download
+    assert "DownloadGate.WaitAsync(cancellationToken)" in download
+    assert "DownloadGate.Release()" in download
+    assert "已有Bot更新下载任务正在进行，当前请求等待复用结果" in download
+    assert "Bot更新下载任务已复用已完成安装包" in download
+
+    assert "if (settings.AutoInstall)" in state
+    assert "settings.AutoCheck = true" in state
+    assert "settings.AutoDownload = false" in state
+
+
 def test_server_caches_latest_metadata_and_verified_packages():
     module = read("services/api-control-plane/bot_update_cache.py")
     prefetch = read("services/api-control-plane/bot_update_prefetch.py")
