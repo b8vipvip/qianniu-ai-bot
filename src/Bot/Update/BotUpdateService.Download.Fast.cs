@@ -1,4 +1,4 @@
-﻿using BotLib;
+using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -22,6 +22,8 @@ namespace Bot.UpdateNs
 {
     internal static partial class BotUpdateService
     {
+        private static readonly SemaphoreSlim DownloadGate = new SemaphoreSlim(1, 1);
+
         public static async Task<string> DownloadPackageAsync(
             BotReleaseInfo release,
             IProgress<int> progress,
@@ -31,92 +33,114 @@ namespace Bot.UpdateNs
             if (string.IsNullOrWhiteSpace(release.Sha256))
                 throw new Exception("发布版本缺少 SHA-256 校验信息，已拒绝自动安装。");
 
-            var sources = new List<KeyValuePair<string, string>>();
-            AddDownloadSource(sources, "腾讯云控制台服务器", release.MirrorUrl);
-            AddDownloadSource(sources, "GitHub", release.PackageUrl);
-            if (sources.Count == 0)
-                throw new Exception("发布版本缺少安装包下载地址。");
-
-            var directory = Path.Combine(
-                GetUpdateRoot(),
-                SanitizeFileName(release.Version));
-            Directory.CreateDirectory(directory);
-            var target = Path.Combine(directory, PackageAssetName);
-            if (File.Exists(target)
-                && HashFile(target).Equals(
-                    release.Sha256,
-                    StringComparison.OrdinalIgnoreCase))
+            var waitingForExistingDownload = DownloadGate.CurrentCount == 0;
+            if (waitingForExistingDownload)
             {
-                if (progress != null) progress.Report(100);
-                return target;
+                Log.Info(
+                    "已有Bot更新下载任务正在进行，当前请求等待复用结果: version="
+                    + release.Version);
             }
 
-            var errors = new List<string>();
-            foreach (var source in sources)
+            await DownloadGate.WaitAsync(cancellationToken);
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                var partial = target + ".partial";
-                try
-                {
-                    if (File.Exists(partial)) File.Delete(partial);
-                    if (progress != null) progress.Report(0);
-                    await DownloadFromUrlAsync(
-                        source.Value,
-                        partial,
-                        release.PackageSize,
-                        progress,
-                        cancellationToken);
+                var sources = new List<KeyValuePair<string, string>>();
+                AddDownloadSource(sources, "腾讯云控制台服务器", release.MirrorUrl);
+                AddDownloadSource(sources, "GitHub", release.PackageUrl);
+                if (sources.Count == 0)
+                    throw new Exception("发布版本缺少安装包下载地址。");
 
-                    var actual = HashFile(partial);
-                    if (!actual.Equals(
+                var directory = Path.Combine(
+                    GetUpdateRoot(),
+                    SanitizeFileName(release.Version));
+                Directory.CreateDirectory(directory);
+                var target = Path.Combine(directory, PackageAssetName);
+                if (File.Exists(target)
+                    && HashFile(target).Equals(
                         release.Sha256,
                         StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new Exception(
-                            "安装包 SHA-256 不一致，期望 "
-                            + release.Sha256 + "，实际 " + actual);
-                    }
-
-                    if (File.Exists(target)) File.Delete(target);
-                    File.Move(partial, target);
-                    if (progress != null) progress.Report(100);
-                    Log.Info(
-                        "Bot更新安装包下载成功: version=" + release.Version
-                        + ", source=" + source.Key);
-                    return target;
-                }
-                catch (OperationCanceledException ex)
                 {
-                    try { if (File.Exists(partial)) File.Delete(partial); } catch { }
-                    if (cancellationToken.IsCancellationRequested)
+                    if (progress != null) progress.Report(100);
+                    if (waitingForExistingDownload)
                     {
                         Log.Info(
-                            "Bot更新下载被用户取消: source=" + source.Key
-                            + ", version=" + release.Version);
-                        throw;
+                            "Bot更新下载任务已复用已完成安装包: version="
+                            + release.Version);
                     }
-
-                    var message = "下载连接被远端或网络中断";
-                    errors.Add(source.Key + "：" + message);
-                    Log.Info(
-                        "Bot更新下载源发生非用户取消，自动切换下一来源: source=" + source.Key
-                        + ", version=" + release.Version
-                        + ", error=" + Short(ex.Message, 240));
+                    return target;
                 }
-                catch (Exception ex)
+
+                var errors = new List<string>();
+                foreach (var source in sources)
                 {
-                    try { if (File.Exists(partial)) File.Delete(partial); } catch { }
-                    errors.Add(source.Key + "：" + Short(ex.Message, 140));
-                    Log.Info(
-                        "Bot更新下载源失败，准备尝试下一来源: source=" + source.Key
-                        + ", version=" + release.Version
-                        + ", error=" + Short(ex.Message, 240));
-                }
-            }
+                    cancellationToken.ThrowIfCancellationRequested();
+                    var partial = target + ".partial";
+                    try
+                    {
+                        if (File.Exists(partial)) File.Delete(partial);
+                        if (progress != null) progress.Report(0);
+                        await DownloadFromUrlAsync(
+                            source.Value,
+                            partial,
+                            release.PackageSize,
+                            progress,
+                            cancellationToken);
 
-            throw new Exception(
-                "腾讯云控制台服务器与 GitHub 均下载失败。"
-                + string.Join("；", errors.ToArray()));
+                        var actual = HashFile(partial);
+                        if (!actual.Equals(
+                            release.Sha256,
+                            StringComparison.OrdinalIgnoreCase))
+                        {
+                            throw new Exception(
+                                "安装包 SHA-256 不一致，期望 "
+                                + release.Sha256 + "，实际 " + actual);
+                        }
+
+                        if (File.Exists(target)) File.Delete(target);
+                        File.Move(partial, target);
+                        if (progress != null) progress.Report(100);
+                        Log.Info(
+                            "Bot更新安装包下载成功: version=" + release.Version
+                            + ", source=" + source.Key);
+                        return target;
+                    }
+                    catch (OperationCanceledException ex)
+                    {
+                        try { if (File.Exists(partial)) File.Delete(partial); } catch { }
+                        if (cancellationToken.IsCancellationRequested)
+                        {
+                            Log.Info(
+                                "Bot更新下载被用户取消: source=" + source.Key
+                                + ", version=" + release.Version);
+                            throw;
+                        }
+
+                        var message = "下载连接被远端或网络中断";
+                        errors.Add(source.Key + "：" + message);
+                        Log.Info(
+                            "Bot更新下载源发生非用户取消，自动切换下一来源: source=" + source.Key
+                            + ", version=" + release.Version
+                            + ", error=" + Short(ex.Message, 240));
+                    }
+                    catch (Exception ex)
+                    {
+                        try { if (File.Exists(partial)) File.Delete(partial); } catch { }
+                        errors.Add(source.Key + "：" + Short(ex.Message, 140));
+                        Log.Info(
+                            "Bot更新下载源失败，准备尝试下一来源: source=" + source.Key
+                            + ", version=" + release.Version
+                            + ", error=" + Short(ex.Message, 240));
+                    }
+                }
+
+                throw new Exception(
+                    "腾讯云控制台服务器与 GitHub 均下载失败。"
+                    + string.Join("；", errors.ToArray()));
+            }
+            finally
+            {
+                DownloadGate.Release();
+            }
         }
 
         private static void AddDownloadSource(

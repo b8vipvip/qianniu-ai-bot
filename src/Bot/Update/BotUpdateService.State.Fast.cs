@@ -1,4 +1,4 @@
-﻿using BotLib;
+using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -133,7 +133,14 @@ namespace Bot.UpdateNs
             BotUpdateSettings settings)
         {
             settings = settings ?? new BotUpdateSettings();
-            if (settings.AutoInstall) settings.AutoCheck = true;
+            if (settings.AutoInstall)
+            {
+                settings.AutoCheck = true;
+                // AutoInstall already includes downloading the package. Keep AutoDownload
+                // mutually exclusive so one saved configuration cannot schedule two
+                // background paths for the same release.
+                settings.AutoDownload = false;
+            }
             settings.CheckIntervalHours = Math.Max(
                 1,
                 Math.Min(
