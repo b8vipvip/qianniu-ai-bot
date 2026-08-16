@@ -132,16 +132,16 @@ namespace Bot.ChromeNs
                 || string.IsNullOrWhiteSpace(burst.SellerNick)
                 || string.IsNullOrWhiteSpace(burst.BuyerNick)
                 || string.IsNullOrWhiteSpace(burst.CombinedQuestion)
-                || !burst.HasReplyableItem
-                || !FirstInquiryFixedReplyService.HasPending(
-                    burst.SellerNick,
-                    burst.BuyerNick))
+                || !burst.HasReplyableItem)
             {
                 await downstream(lease);
                 return;
             }
 
             string answer;
+            // Do not gate this with HasPending. If an older superseded burst just released its
+            // reservation, the newest burst must be able to reconstruct and acquire the same
+            // first-inquiry reply instead of falling through to Smart Reply AI.
             if (!FirstInquiryFixedReplyService.TryResolve(
                 burst.SellerNick,
                 burst.BuyerNick,
