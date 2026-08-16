@@ -26,18 +26,27 @@ def test_first_inquiry_guard_is_compiled_and_wraps_live_runtime_handler():
     assert "wrapped = lease => HandleAsync(qn, original, lease)" in streaming
 
 
-def test_prepared_first_inquiry_is_consumed_before_any_ai_or_vision_downstream():
+def test_first_inquiry_is_resolved_before_any_ai_or_vision_downstream():
     guard = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
 
-    pending = guard.index("FirstInquiryFixedReplyService.HasPending(")
-    resolve = guard.index("FirstInquiryFixedReplyService.TryResolve(", pending)
+    resolve = guard.index("FirstInquiryFixedReplyService.TryResolve(")
     downstream_after_resolve = guard.index("await downstream(lease);", resolve)
     ownership_comment = guard.index("From this point the first-inquiry reply owns this burst", resolve)
 
-    assert pending < resolve < downstream_after_resolve < ownership_comment
+    assert resolve < downstream_after_resolve < ownership_comment
+    assert "FirstInquiryFixedReplyService.HasPending(" not in guard
     assert "burst.LatestVisionItem != null" not in guard[:resolve]
     assert "首条咨询固定回复已在AI路由前命中" in guard
     assert "未调用AI" in guard
+
+
+def test_latest_burst_can_reacquire_after_an_older_burst_is_superseded():
+    guard = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
+
+    assert "Do not gate this with HasPending" in guard
+    assert "latest burst must be able to reconstruct and acquire" in guard
+    assert "FirstInquiryFixedReplyService.ReleaseReservation(" in guard
+    assert "FirstInquiryFixedReplyService.TryResolve(" in guard
 
 
 def test_first_inquiry_delivery_commits_only_after_send_and_releases_on_failure():
