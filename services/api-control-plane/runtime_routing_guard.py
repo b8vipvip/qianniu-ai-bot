@@ -218,11 +218,18 @@ def dispatch_chat(
     vision = control_plane.messages_have_image(messages)
     attempts: List[Dict[str, Any]] = []
     profile, budget_cap, attempt_cap = _routing_policy(max_tokens)
+    routes = _build_routes(control_plane, requested_model, messages)
+    if profile == "realtime":
+        budget_resolver = globals().get("_realtime_total_budget_resolver")
+        if callable(budget_resolver):
+            try:
+                budget_cap = max(budget_cap, int(budget_resolver(routes, budget_cap)))
+            except Exception:
+                pass
     requested_budget = max(5, int(timeout or budget_cap))
     total_budget = min(requested_budget, budget_cap)
     deadline = time.monotonic() + total_budget
 
-    routes = _build_routes(control_plane, requested_model, messages)
     blocked_provider_ids = set()
     for provider, model, protocol in routes:
         provider_id = provider.get("id")

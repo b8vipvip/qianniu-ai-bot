@@ -15,6 +15,7 @@ def test_chat2api_provider_detection() -> None:
 def test_chat2api_gets_longer_realtime_timeout_without_slowing_other_relays() -> None:
     original_timeout = runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS
     original_total_budget = runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS
+    original_budget_resolver = getattr(runtime_routing_guard, "_realtime_total_budget_resolver", None)
     original_call = runtime_routing_guard.fast_upstream_call
     original_installed = getattr(runtime_routing_guard, "_chat2api_runtime_guard_installed", False)
     seen: list[int] = []
@@ -41,11 +42,14 @@ def test_chat2api_gets_longer_realtime_timeout_without_slowing_other_relays() ->
         chat2api_runtime_guard.install(fake_control_plane)
 
         assert runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS >= chat2api_runtime_guard.CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS
-        assert runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS >= chat2api_runtime_guard.CHAT2API_REALTIME_TOTAL_BUDGET_SECONDS
+        assert runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS == 45
         assert chat2api_runtime_guard.CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS >= 60
 
-        chat_provider = {"name": "chat2api", "base_url": "https://chat2api.mv3.cn"}
-        normal_provider = {"name": "normal", "base_url": "https://relay.example.test/v1"}
+        chat_provider = {"id": 4, "name": "chat2api", "base_url": "https://chat2api.mv3.cn"}
+        normal_provider = {"id": 5, "name": "normal", "base_url": "https://relay.example.test/v1"}
+        resolver = runtime_routing_guard._realtime_total_budget_resolver
+        assert resolver([(chat_provider, "gpt-5.5-mini", "responses")], 45) >= chat2api_runtime_guard.CHAT2API_REALTIME_TOTAL_BUDGET_SECONDS
+        assert resolver([(normal_provider, "some-model", "chat")], 45) == 45
 
         result = runtime_routing_guard.fast_upstream_call(
             fake_control_plane,
@@ -90,6 +94,13 @@ def test_chat2api_gets_longer_realtime_timeout_without_slowing_other_relays() ->
     finally:
         runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS = original_timeout
         runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS = original_total_budget
+        if original_budget_resolver is None:
+            try:
+                delattr(runtime_routing_guard, "_realtime_total_budget_resolver")
+            except AttributeError:
+                pass
+        else:
+            runtime_routing_guard._realtime_total_budget_resolver = original_budget_resolver
         runtime_routing_guard.fast_upstream_call = original_call
         runtime_routing_guard._chat2api_runtime_guard_installed = original_installed
 
@@ -97,6 +108,7 @@ def test_chat2api_gets_longer_realtime_timeout_without_slowing_other_relays() ->
 def test_chat2api_timeout_is_terminal_for_same_serialized_provider() -> None:
     original_timeout = runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS
     original_total_budget = runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS
+    original_budget_resolver = getattr(runtime_routing_guard, "_realtime_total_budget_resolver", None)
     original_call = runtime_routing_guard.fast_upstream_call
     original_installed = getattr(runtime_routing_guard, "_chat2api_runtime_guard_installed", False)
 
@@ -125,5 +137,12 @@ def test_chat2api_timeout_is_terminal_for_same_serialized_provider() -> None:
     finally:
         runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS = original_timeout
         runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS = original_total_budget
+        if original_budget_resolver is None:
+            try:
+                delattr(runtime_routing_guard, "_realtime_total_budget_resolver")
+            except AttributeError:
+                pass
+        else:
+            runtime_routing_guard._realtime_total_budget_resolver = original_budget_resolver
         runtime_routing_guard.fast_upstream_call = original_call
         runtime_routing_guard._chat2api_runtime_guard_installed = original_installed

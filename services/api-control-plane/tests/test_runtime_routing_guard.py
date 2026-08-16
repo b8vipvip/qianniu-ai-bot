@@ -233,3 +233,48 @@ def test_terminal_provider_failure_skips_secondary_protocol_for_same_provider(mo
     assert result["success"] is False
     assert len(calls) == 1
     assert calls[0] == (1, "main-model", "chat")
+
+
+def test_realtime_budget_resolver_is_route_scoped(monkeypatch):
+    cp = FakeControlPlane()
+    original_resolver = getattr(guard, "_realtime_total_budget_resolver", None)
+    seen = []
+
+    def resolver(routes, default_budget):
+        seen.append((len(routes), default_budget))
+        return 90
+
+    def fake_call(control_plane, provider, model, protocol, messages, max_tokens, temperature, timeout):
+        return {
+            "provider_id": provider["id"],
+            "provider_name": provider["name"],
+            "model": model,
+            "protocol": protocol,
+            "url": "https://example.invalid",
+            "latency_ms": 10,
+            "success": True,
+            "answer": "ok",
+        }
+
+    try:
+        guard._realtime_total_budget_resolver = resolver
+        monkeypatch.setattr(guard, "fast_upstream_call", fake_call)
+        result = guard.dispatch_chat(
+            cp,
+            "client",
+            "text-default",
+            [{"role": "user", "content": "hi"}],
+            128,
+            0.1,
+            90,
+        )
+        assert result["success"] is True
+        assert seen and seen[0][1] == guard.RUNTIME_TOTAL_BUDGET_SECONDS
+    finally:
+        if original_resolver is None:
+            try:
+                delattr(guard, "_realtime_total_budget_resolver")
+            except AttributeError:
+                pass
+        else:
+            guard._realtime_total_budget_resolver = original_resolver

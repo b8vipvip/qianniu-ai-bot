@@ -47,15 +47,21 @@ def install(control_plane: Any) -> None:
     runtime_routing_guard._chat2api_runtime_guard_installed = True
 
     base_realtime_timeout = int(runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS)
-    base_total_budget = int(runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS)
     runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS = max(
         base_realtime_timeout,
         CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS,
     )
-    runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS = max(
-        base_total_budget,
-        CHAT2API_REALTIME_TOTAL_BUDGET_SECONDS,
-    )
+    base_budget_resolver = getattr(runtime_routing_guard, "_realtime_total_budget_resolver", None)
+
+    def guarded_total_budget(routes: Sequence[Any], default_budget: int) -> int:
+        resolved = int(default_budget)
+        if callable(base_budget_resolver):
+            resolved = max(resolved, int(base_budget_resolver(routes, default_budget)))
+        if any(_is_chat2api_provider(provider) for provider, _model, _protocol in routes):
+            resolved = max(resolved, CHAT2API_REALTIME_TOTAL_BUDGET_SECONDS)
+        return resolved
+
+    runtime_routing_guard._realtime_total_budget_resolver = guarded_total_budget
     base_call = runtime_routing_guard.fast_upstream_call
 
     def guarded_fast_upstream_call(
