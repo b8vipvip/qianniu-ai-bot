@@ -70,6 +70,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\DuplicateCdpInboundRecoveryBridge.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\FirstInquiryStreamingGuard.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\FirstInquiryStreamingGuard.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs" />
   </ItemGroup>
