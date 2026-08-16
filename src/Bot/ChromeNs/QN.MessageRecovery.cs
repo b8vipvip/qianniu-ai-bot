@@ -15,6 +15,7 @@ namespace Bot.ChromeNs
         private const int BackgroundRecoveryInitialDelayMs = 1000;
         private const int BackgroundRecoverySendGateWaitMs = 1200;
         private const int BackgroundRecoveryGateWaitMs = 900;
+        private const int BackgroundRecoveryPostSwitchHydrationDelayMs = 450;
         private const int BackgroundRecoveryMaxAttempts = 8;
 
         private readonly SemaphoreSlim _backgroundRecoveryGate = new SemaphoreSlim(1, 1);
@@ -84,13 +85,15 @@ namespace Bot.ChromeNs
                         if (attempt < BackgroundRecoveryMaxAttempts)
                         {
                             var retryDelayMs = Math.Min(2000, 500 + attempt * 250);
-                            Log.Info("后台消息补偿暂未取得安全切换机会，将重试: seller=" + seller
-                                + ", buyer=" + buyer + ", delayMs=" + retryDelayMs);
+                            Log.Info("后台消息补偿本轮尚未恢复到可处理消息，将重试: seller=" + seller
+                                + ", buyer=" + buyer + ", attempt=" + attempt + "/" + BackgroundRecoveryMaxAttempts
+                                + ", delayMs=" + retryDelayMs);
                             await Task.Delay(retryDelayMs).ConfigureAwait(false);
                         }
                     }
 
-                    Log.Info("后台消息补偿多次重试仍未完成，保留明确日志等待下一条后台通知重新触发: seller="
+                    Log.Info("后台消息补偿已耗尽 " + BackgroundRecoveryMaxAttempts
+                        + " 次重试仍未恢复到可处理消息，等待下一条后台通知重新触发: seller="
                         + seller + ", buyer=" + buyer);
                 }
                 catch (Exception ex)
@@ -198,6 +201,27 @@ namespace Bot.ChromeNs
                         BuyerIdentityAliasService.ResolveConversationKey(seller, current.Nick),
                         "backgroundRecoveryAutoSwitch");
 
+                    // 会话 ID 切换成功只代表导航完成，不代表远端历史已经完成装载。
+                    // 给千牛短暂的 hydration 窗口，然后再抓历史；如果本轮仍为空，外层继续 2..N 次重试。
+                    Log.Info("后台消息补偿等待会话消息加载后补抓历史: seller=" + seller
+                        + ", buyer=" + buyer + ", attempt=" + attempt
+                        + ", delayMs=" + BackgroundRecoveryPostSwitchHydrationDelayMs);
+                    await Task.Delay(BackgroundRecoveryPostSwitchHydrationDelayMs).ConfigureAwait(false);
+
+                    long postSwitchVersion;
+                    if (!_backgroundRecoveryVersions.TryGetValue(key, out postSwitchVersion) || postSwitchVersion != version)
+                    {
+                        return true;
+                    }
+                    DateTime postSwitchObservedAt;
+                    if (_latestBuyerMessageObserved.TryGetValue(key, out postSwitchObservedAt)
+                        && postSwitchObservedAt >= scheduledAt.AddMilliseconds(-250))
+                    {
+                        Log.Info("后台消息补偿等待会话加载期间详细买家事件已到，取消历史补抓: seller="
+                            + seller + ", buyer=" + buyer + ", attempt=" + attempt);
+                        return true;
+                    }
+
                     var ccode = (current.Ccode ?? string.Empty).Trim();
                     if (string.IsNullOrWhiteSpace(ccode))
                     {
@@ -252,10 +276,13 @@ namespace Bot.ChromeNs
             }
 
             // 抓取完成后立即释放会话/发送锁，再处理消息和生成答案，避免 AI/规则处理继续占锁。
+            // 关键：切换成功不等于补偿成功。千牛会话刚切换时历史列表可能尚未 hydrated，
+            // 本轮没有候选消息必须返回 false 让调度器继续 attempt 2..N，而不是提前结束任务。
             if (recovered == null || recovered.Count < 1)
             {
-                Log.Info("后台消息补偿完成，但没有发现最近买家消息或订单卡片。seller=" + seller + ", buyer=" + buyer);
-                return true;
+                Log.Info("后台消息补偿完成但没有发现最近买家消息或订单卡片，将继续重试: seller="
+                    + seller + ", buyer=" + buyer + ", attempt=" + attempt + "/" + BackgroundRecoveryMaxAttempts);
+                return false;
             }
 
             // 只有紧贴本次后台通知的买家消息允许绕过全局入站去重。两分钟前的历史消息仍走
