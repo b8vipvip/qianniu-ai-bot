@@ -20,7 +20,7 @@ namespace Bot.ShopScope
 
     internal static class ShopApiDiagnosticsService
     {
-        private const int RequestTimeoutSeconds = 70;
+        private const int RequestTimeoutSeconds = 105;
 
         public static async Task<ShopApiDiagnosticReport> TestConnectionAsync(
             ShopContext shop,
@@ -132,7 +132,7 @@ namespace Bot.ShopScope
                 },
                 ["max_tokens"] = 96,
                 ["temperature"] = 0.1,
-                ["timeout_seconds"] = 45
+                ["timeout_seconds"] = 90
             };
 
             var aiWatch = Stopwatch.StartNew();
@@ -153,18 +153,19 @@ namespace Bot.ShopScope
                         aiWatch.Stop();
                         if (!response.IsSuccessStatusCode)
                         {
-                            overall.Stop();
-                            return Failure(
-                                "AI回答链路失败",
+                            return await ContinueAfterAiFailureAsync(
+                                shop,
+                                seller,
                                 "阶段1/6 API网络：通过\n"
                                 + "阶段2/6 Token/ShopKey：通过\n"
                                 + "阶段3/6 Control Plane 路由：已进入\n"
                                 + "阶段4/6 上游供应商/模型调用：失败\n"
                                 + "阶段5/6 AI回复文本解析：未执行\n"
-                                + "阶段6/6 千牛真实发送：未执行\n"
                                 + "HTTP：" + (int)response.StatusCode + " " + response.ReasonPhrase + "\n"
                                 + "AI阶段耗时：" + aiWatch.ElapsedMilliseconds + " ms\n"
-                                + "响应：" + Safe(body, 1800));
+                                + "响应：" + Safe(body, 1800),
+                                overall,
+                                cancellationToken);
                         }
 
                         var root = ParseObject(body);
@@ -174,17 +175,18 @@ namespace Bot.ShopScope
                         var answer = Convert.ToString(message == null ? null : message["content"]);
                         if (string.IsNullOrWhiteSpace(answer))
                         {
-                            overall.Stop();
-                            return Failure(
-                                "AI回答链路失败：未解析到AI文本",
+                            return await ContinueAfterAiFailureAsync(
+                                shop,
+                                seller,
                                 "阶段1/6 API网络：通过\n"
                                 + "阶段2/6 Token/ShopKey：通过\n"
                                 + "阶段3/6 Control Plane 路由：通过\n"
                                 + "阶段4/6 上游供应商/模型调用：通过\n"
                                 + "阶段5/6 AI回复文本解析：失败\n"
-                                + "阶段6/6 千牛真实发送：未执行\n"
                                 + "服务端已返回 HTTP 2xx，但 choices[0].message.content 为空。\n"
-                                + "响应：" + Safe(body, 1800));
+                                + "响应：" + Safe(body, 1800),
+                                overall,
+                                cancellationToken);
                         }
 
                         var routing = root["qianniu_routing"] as JObject;
@@ -222,20 +224,72 @@ namespace Bot.ShopScope
                     }
                 }
             }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                aiWatch.Stop();
+                return await ContinueAfterAiFailureAsync(
+                    shop,
+                    seller,
+                    "阶段1/6 API网络：通过\n"
+                    + "阶段2/6 Token/ShopKey：通过\n"
+                    + "阶段3/6 Control Plane 路由：已进入\n"
+                    + "阶段4/6 上游供应商/模型调用：超时\n"
+                    + "阶段5/6 AI回复文本解析：未执行\n"
+                    + "AI阶段耗时：" + aiWatch.ElapsedMilliseconds + " ms\n"
+                    + "错误：" + Safe(ex.Message, 1600),
+                    overall,
+                    cancellationToken);
+            }
             catch (OperationCanceledException)
             {
+                // Only an explicit caller/user cancellation is allowed to stop the diagnostic.
                 throw;
             }
             catch (Exception ex)
             {
                 aiWatch.Stop();
-                overall.Stop();
-                return Failure(
-                    "AI回答链路失败",
-                    "API与鉴权已通过，但调用AI路由或真实发送时发生异常。\n"
+                return await ContinueAfterAiFailureAsync(
+                    shop,
+                    seller,
+                    "阶段1/6 API网络：通过\n"
+                    + "阶段2/6 Token/ShopKey：通过\n"
+                    + "阶段3/6 Control Plane 路由：已进入\n"
+                    + "阶段4/6 上游供应商/模型调用：异常\n"
+                    + "阶段5/6 AI回复文本解析：未执行\n"
                     + "AI阶段耗时：" + aiWatch.ElapsedMilliseconds + " ms\n"
-                    + "错误：" + Safe(ex.Message, 1600));
+                    + "错误：" + Safe(ex.Message, 1600),
+                    overall,
+                    cancellationToken);
             }
+        }
+
+        private static async Task<ShopApiDiagnosticReport> ContinueAfterAiFailureAsync(
+            ShopContext shop,
+            string seller,
+            string aiFailureDetails,
+            Stopwatch overall,
+            CancellationToken cancellationToken)
+        {
+            const string sendOnlyProbe = "AI阶段异常，本条仅用于独立验证千牛真实发送链路。";
+            var sendResult = await SendDiagnosticAnswerAsync(
+                shop,
+                seller,
+                sendOnlyProbe,
+                cancellationToken);
+            if (overall.IsRunning) overall.Stop();
+
+            var details =
+                (aiFailureDetails ?? string.Empty).TrimEnd()
+                + "\n\nAI阶段没有产出可用文本；诊断测试未中断。"
+                + "已改用本地固定测试文本继续阶段6，不会把上游错误正文发送给买家。\n"
+                + sendResult.Details
+                + "\n链路总耗时：" + overall.ElapsedMilliseconds + " ms";
+
+            return Failure(
+                sendResult.Success
+                    ? "AI回答链路失败，但千牛真实发送链路已独立验证通过"
+                    : "AI回答链路失败，千牛真实发送链路也失败",
+                details);
         }
 
         private static async Task<ShopApiDiagnosticReport> SendDiagnosticAnswerAsync(
