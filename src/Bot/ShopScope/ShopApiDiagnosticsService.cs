@@ -224,8 +224,25 @@ namespace Bot.ShopScope
                     }
                 }
             }
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                aiWatch.Stop();
+                return await ContinueAfterAiFailureAsync(
+                    shop,
+                    seller,
+                    "阶段1/6 API网络：通过\n"
+                    + "阶段2/6 Token/ShopKey：通过\n"
+                    + "阶段3/6 Control Plane 路由：已进入\n"
+                    + "阶段4/6 上游供应商/模型调用：超时\n"
+                    + "阶段5/6 AI回复文本解析：未执行\n"
+                    + "AI阶段耗时：" + aiWatch.ElapsedMilliseconds + " ms\n"
+                    + "错误：" + Safe(ex.Message, 1600),
+                    overall,
+                    cancellationToken);
+            }
             catch (OperationCanceledException)
             {
+                // Only an explicit caller/user cancellation is allowed to stop the diagnostic.
                 throw;
             }
             catch (Exception ex)
