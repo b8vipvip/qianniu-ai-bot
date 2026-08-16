@@ -1,0 +1,42 @@
+name: Fix diagnostic HTTP timeout continuation
+
+on:
+  push:
+    branches:
+      - agent/chat2api-long-latency-diagnostic-chain
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/chat2api-long-latency-diagnostic-chain
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply targeted C# patch
+        run: python tools/agent_fix_diagnostic_http_timeout.py
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: nuget restore src/Bot.sln -PackagesDirectory src/packages -NonInteractive
+      - name: Build Bot solution x64
+        shell: pwsh
+        run: msbuild src/Bot.sln /t:Build /m /nologo /verbosity:minimal /p:Configuration=Release /p:Platform=x64
+      - name: Commit patch and remove one-shot helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm tools/agent_fix_diagnostic_http_timeout.py .github/workflows/agent-fix-diagnostic-http-timeout.yml
+          git add src/Bot/ShopScope/ShopApiDiagnosticsService.cs
+          git commit -m "fix: continue send diagnostic after AI HTTP timeout"
+          git push origin HEAD:agent/chat2api-long-latency-diagnostic-chain
