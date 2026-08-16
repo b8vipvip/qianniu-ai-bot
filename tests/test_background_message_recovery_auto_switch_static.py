@@ -16,7 +16,7 @@ def test_background_recovery_waits_are_bounded_and_retryable():
     assert "BackgroundRecoveryMaxAttempts" in source
     assert "_sendGate.WaitAsync(BackgroundRecoverySendGateWaitMs)" in source
     assert "_backgroundRecoveryGate.WaitAsync(BackgroundRecoveryGateWaitMs)" in source
-    assert "后台消息补偿暂未取得安全切换机会，将重试" in source
+    assert "后台消息补偿本轮尚未恢复到可处理消息，将重试" in source
     assert "await _backgroundRecoveryGate.WaitAsync();" not in source
     assert "await _sendGate.WaitAsync();" not in source
 
@@ -25,11 +25,31 @@ def test_missing_detailed_event_auto_switches_and_refetches_history():
     source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
 
     assert "BackgroundRecoveryInitialDelayMs = 1000" in source
+    assert "BackgroundRecoveryPostSwitchHydrationDelayMs" in source
     assert "Bot准备自动切换目标买家并补抓历史" in source
     assert "OpenChat(buyer);" in source
     assert '"backgroundRecoveryAutoSwitch"' in source
     assert 'cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg"' in source
     assert "后台消息补偿已自动切换到目标买家" in source
+    assert "等待会话消息加载后补抓历史" in source
+
+
+def test_empty_history_after_successful_switch_does_not_complete_recovery():
+    source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+
+    start = source.index("if (recovered == null || recovered.Count < 1)")
+    block = source[start: start + 700]
+    assert "没有发现最近买家消息或订单卡片，将继续重试" in block
+    assert "return false;" in block
+    assert "return true;" not in block
+
+
+def test_live_detailed_event_still_cancels_pending_recovery_without_replay():
+    source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+
+    assert "MarkBuyerMessageObserved" in source
+    assert "_backgroundRecoveryVersions.TryRemove" in source
+    assert "后台消息补偿处理前检测到详细买家事件已到，取消历史重放" in source
 
 
 def test_recovery_does_not_hold_navigation_locks_while_processing_answers():
