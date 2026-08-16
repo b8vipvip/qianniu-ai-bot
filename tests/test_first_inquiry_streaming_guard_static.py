@@ -44,7 +44,7 @@ def test_latest_burst_can_reacquire_after_an_older_burst_is_superseded():
     guard = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
 
     assert "Do not gate this with HasPending" in guard
-    assert "latest burst must be able to reconstruct and acquire" in guard
+    assert "reconstruct and acquire the same" in guard
     assert "FirstInquiryFixedReplyService.ReleaseReservation(" in guard
     assert "FirstInquiryFixedReplyService.TryResolve(" in guard
 
