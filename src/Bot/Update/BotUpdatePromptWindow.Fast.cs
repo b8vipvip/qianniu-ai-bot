@@ -1,4 +1,4 @@
-﻿using BotLib;
+using BotLib;
 using BotLib.Db.Sqlite;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -131,7 +131,7 @@ namespace Bot.UpdateNs
                     ? "安装包已下载并通过 SHA-256 校验，可以立即更新。"
                     : (string.IsNullOrWhiteSpace(release.Sha256)
                         ? "该版本缺少 SHA-256 清单，只能打开发布页面手动下载。"
-                        : "点击“立即更新”后优先从 GitHub 下载；失败时自动切换服务端镜像。"),
+                        : "点击“立即更新”后优先从服务端下载安装包；服务端超时或下载失败时自动切换 GitHub。"),
                 TextWrapping = TextWrapping.Wrap
             };
             statusPanel.Children.Add(_status);
