@@ -14,6 +14,7 @@ def test_chat2api_provider_detection() -> None:
 
 def test_chat2api_gets_longer_realtime_timeout_without_slowing_other_relays() -> None:
     original_timeout = runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS
+    original_total_budget = runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS
     original_call = runtime_routing_guard.fast_upstream_call
     original_installed = getattr(runtime_routing_guard, "_chat2api_runtime_guard_installed", False)
     seen: list[int] = []
@@ -40,6 +41,8 @@ def test_chat2api_gets_longer_realtime_timeout_without_slowing_other_relays() ->
         chat2api_runtime_guard.install(fake_control_plane)
 
         assert runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS >= chat2api_runtime_guard.CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS
+        assert runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS >= chat2api_runtime_guard.CHAT2API_REALTIME_TOTAL_BUDGET_SECONDS
+        assert chat2api_runtime_guard.CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS >= 60
 
         chat_provider = {"name": "chat2api", "base_url": "https://chat2api.mv3.cn"}
         normal_provider = {"name": "normal", "base_url": "https://relay.example.test/v1"}
@@ -86,5 +89,41 @@ def test_chat2api_gets_longer_realtime_timeout_without_slowing_other_relays() ->
         assert result["attempt_timeout_seconds"] == 90
     finally:
         runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS = original_timeout
+        runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS = original_total_budget
+        runtime_routing_guard.fast_upstream_call = original_call
+        runtime_routing_guard._chat2api_runtime_guard_installed = original_installed
+
+
+def test_chat2api_timeout_is_terminal_for_same_serialized_provider() -> None:
+    original_timeout = runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS
+    original_total_budget = runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS
+    original_call = runtime_routing_guard.fast_upstream_call
+    original_installed = getattr(runtime_routing_guard, "_chat2api_runtime_guard_installed", False)
+
+    def fake_timeout(*_args, **_kwargs):
+        return {"success": False, "error": "Failed to perform, curl: (28) Operation timed out"}
+
+    try:
+        runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS = 6
+        runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS = 45
+        runtime_routing_guard.fast_upstream_call = fake_timeout
+        runtime_routing_guard._chat2api_runtime_guard_installed = False
+        chat2api_runtime_guard.install(SimpleNamespace())
+
+        result = runtime_routing_guard.fast_upstream_call(
+            SimpleNamespace(),
+            {"id": 4, "name": "chat2api", "base_url": "https://chat2api.mv3.cn"},
+            "gpt-5.5-mini",
+            "responses",
+            [],
+            96,
+            0.1,
+            chat2api_runtime_guard.CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS,
+        )
+        assert result["terminal_provider_failure"] is True
+        assert result["terminal_provider_failure_reason"] == "serialized_browser_bridge_timeout"
+    finally:
+        runtime_routing_guard.RUNTIME_ATTEMPT_TIMEOUT_SECONDS = original_timeout
+        runtime_routing_guard.RUNTIME_TOTAL_BUDGET_SECONDS = original_total_budget
         runtime_routing_guard.fast_upstream_call = original_call
         runtime_routing_guard._chat2api_runtime_guard_installed = original_installed

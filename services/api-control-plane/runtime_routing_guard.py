@@ -223,7 +223,11 @@ def dispatch_chat(
     deadline = time.monotonic() + total_budget
 
     routes = _build_routes(control_plane, requested_model, messages)
+    blocked_provider_ids = set()
     for provider, model, protocol in routes:
+        provider_id = provider.get("id")
+        if provider_id in blocked_provider_ids:
+            continue
         remaining = deadline - time.monotonic()
         minimum_remaining = 10 if profile == "background" else 5
         if remaining < minimum_remaining:
@@ -255,6 +259,8 @@ def dispatch_chat(
                 "vision": vision,
                 "routing_profile": profile,
             }
+        if attempt.get("terminal_provider_failure") and provider_id is not None:
+            blocked_provider_ids.add(provider_id)
 
     if routes and time.monotonic() >= deadline - 1:
         attempts.append(
