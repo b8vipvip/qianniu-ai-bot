@@ -6,11 +6,15 @@ from typing import Any, Dict, Sequence
 import runtime_routing_guard
 
 
+# Older deployments may still have the previous 20-second value persisted in .env.
+# Clamp it upward so deploying this code actually fixes those installations instead of
+# silently preserving the stale override.
 CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS = max(
-    20,
+    75,
     min(150, int(os.getenv("CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS", "75"))),
 )
 CHAT2API_REALTIME_TOTAL_BUDGET_SECONDS = max(
+    90,
     CHAT2API_REALTIME_ATTEMPT_TIMEOUT_SECONDS + 5,
     min(180, int(os.getenv("CHAT2API_REALTIME_TOTAL_BUDGET_SECONDS", "90"))),
 )
