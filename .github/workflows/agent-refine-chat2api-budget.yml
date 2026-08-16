@@ -1,0 +1,40 @@
+name: Refine chat2api timeout budget
+
+on:
+  push:
+    branches:
+      - agent/chat2api-long-latency-diagnostic-chain
+
+permissions:
+  contents: write
+
+jobs:
+  refine:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/chat2api-long-latency-diagnostic-chain
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Apply provider-scoped refinement
+        run: python tools/agent_refine_chat2api_budget.py
+      - name: Run targeted tests
+        run: |
+          python -m pip install --disable-pip-version-check pytest
+          cd services/api-control-plane
+          python -m py_compile chat2api_runtime_guard.py runtime_routing_guard.py tests/test_chat2api_runtime_guard.py tests/test_runtime_routing_guard.py
+          python -m pytest -q tests/test_chat2api_runtime_guard.py tests/test_runtime_routing_guard.py
+      - name: Commit refinement and remove helper
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm tools/agent_refine_chat2api_budget.py .github/workflows/agent-refine-chat2api-budget.yml
+          git add services/api-control-plane/chat2api_runtime_guard.py services/api-control-plane/runtime_routing_guard.py services/api-control-plane/tests/test_chat2api_runtime_guard.py services/api-control-plane/tests/test_runtime_routing_guard.py
+          git commit -m "fix: scope slow bridge budget to chat2api routes"
+          git push origin HEAD:agent/chat2api-long-latency-diagnostic-chain
