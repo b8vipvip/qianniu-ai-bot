@@ -83,10 +83,10 @@ namespace Bot.Options
 
             AddFeaturePage("回复与通知", "知识库", "管理店铺问答、智能导入、搜索、分类和云同步状态。",
                 OptionEnum.GoodsKnowledge, "知识库");
-            AddFeaturePage("回复与通知", "自动回复规则", "设置转人工规则、下单回复和关键词边界。",
+            AddFeaturePage("回复与通知", "自动回复规则", "设置首条咨询、下班、下单回复和关键词边界。",
                 OptionEnum.AutoReplyRules, "自动回复规则");
-            AddFeaturePage("回复与通知", "消息通知", "配置工作时间、转人工通知和通知渠道。",
-                OptionEnum.Notifications, "消息通知");
+            AddFeaturePage("回复与通知", "转人工策略", "配置转人工规则、转人工通知和通知渠道。",
+                OptionEnum.Notifications, "转人工策略");
             AddFeaturePage("回复与通知", "消息策略", "控制语气、长度、禁用词和知识使用方式。",
                 OptionEnum.MessagePolicy, "消息策略");
 
