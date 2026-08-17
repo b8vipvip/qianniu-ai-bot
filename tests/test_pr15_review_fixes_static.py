@@ -10,6 +10,7 @@ def read(path: str) -> str:
 
 def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     reliable = read("src/Bot/ChromeNs/QNRpa.ReliableSend.cs")
 
     assert "VerifyCurrentBuyerAsync" in qnrpa
@@ -23,7 +24,9 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     assert "UIA写入确认" in qnrpa
     open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]
     assert "SetPlainText(text)" not in open_send
-    assert "TrySendTextViaUiaAsync" in open_send
+    assert "TrySendTextNativeFirstAsync" in open_send
+    assert "TrySendTextViaUiaAsync(buyer, text, sendStart)" in native
+    assert native.count("HasExpectedDraftFastAsync(text") >= 4
     assert "if (string.IsNullOrEmpty(expected))" in reliable
 
 
