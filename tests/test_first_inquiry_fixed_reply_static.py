@@ -117,6 +117,7 @@ def test_fixed_reply_does_not_enter_ai_learning_path():
 
 def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_area_click():
     source = read("src/Bot/ChromeNs/QNRpa.cs")
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     reliable = read("src/Bot/ChromeNs/QNRpa.ReliableSend.cs")
     ctor = source[source.index("public QNRpa(QN qn)"):source.index("private bool IsSendButtonName")]
     assert "Application.Attach(Desk.Inst.ProcessId)" not in ctor
@@ -168,9 +169,10 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_
 
     open_send = source[source.index("private async Task<bool> OpenAndSendText"):]
     assert "HasExpectedDraftFastAsync" in open_send
-    assert "TrySendTextViaUiaAsync" in open_send
+    assert "TrySendTextNativeFirstAsync" in open_send
+    assert "TrySendTextViaUiaAsync(buyer, text, sendStart)" in native
     assert "SetPlainText(text)" not in open_send
-    assert "method=UIA定位+发送主按钮坐标" in open_send
+    assert "method=CDP页面按钮+HWND安全消息+UIA安全回退" in open_send
 
 
 def test_order_first_event_has_first_inquiry_delivery_bridge():
@@ -182,6 +184,7 @@ def test_order_first_event_has_first_inquiry_delivery_bridge():
     assert "OrderEventType.Paid" in source
     assert "SendOrderFirstGreetingAsync" in source
     assert "qn.SendTextWithRetryAsync" in source
+
 
 def test_delayed_exact_seller_echo_cancels_retry_and_false_failure():
     source = read("src/Bot/ChromeNs/QN.cs")
