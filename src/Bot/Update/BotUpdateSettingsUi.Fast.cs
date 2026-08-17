@@ -5,14 +5,25 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 
+namespace Bot
+{
+    public partial class App
+    {
+        private readonly object _botUpdateSettingsUiBootstrap =
+            UpdateNs.BotUpdateSettingsUi.InitializeForApp();
+    }
+}
+
 namespace Bot.UpdateNs
 {
     internal static class BotUpdateSettingsUi
     {
-        private static readonly object Bootstrap = Initialize();
+        private static bool _initialized;
 
-        private static object Initialize()
+        public static object InitializeForApp()
         {
+            if (_initialized) return new object();
+            _initialized = true;
             EventManager.RegisterClassHandler(
                 typeof(BotUpdateOptionsControl),
                 FrameworkElement.LoadedEvent,
