@@ -184,6 +184,31 @@ def test_updater_backs_up_validates_restarts_and_rolls_back():
     assert "Select-Object -Skip 8" in script
 
 
+def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_copy():
+    script = read("src/Bot/Update/BotAutoUpdater.ps1")
+
+    assert '$partialBackupDir = "$backupDir.partial"' in script
+    assert "$persistentNames = @('data', 'global', 'shops')" in script
+    assert "Get-DirectoryFingerprint" in script
+    assert "Assert-DirectoryCopyMatches" in script
+    assert "backup-manifest.json" in script
+    assert "Test-BackupComplete" in script
+    assert ".EndsWith('.partial', [StringComparison]::OrdinalIgnoreCase)" in script
+    assert "Join-Path $partialBackupDir '.complete'" in script
+    assert "Move-Item -LiteralPath $partialBackupDir -Destination $backupDir" in script
+    assert "$backupFinalized = $true" in script
+    assert "$installMutationStarted = $false" in script
+    assert "$installMutationStarted = $true" in script
+    assert "Install directory was not modified; destructive rollback is skipped." in script
+    assert "No .partial backup will be used." in script
+    assert "Restore-PersistentData $backupDir $persistentRoot" in script
+
+    finalized_guard = script.index("if (-not $backupFinalized -or -not (Test-BackupComplete $backupDir))")
+    mutation_flag = script.index("$installMutationStarted = $true")
+    destructive_clear = script.index("Clear-DirectoryContentsWithRetry $InstallDir", mutation_flag)
+    assert finalized_guard < mutation_flag < destructive_clear
+
+
 def test_updaters_keep_locked_install_root_and_retry_only_child_cleanup():
     auto = read("src/Bot/Update/BotAutoUpdater.ps1")
     manual = read("scripts/update-bot.ps1")
