@@ -8,6 +8,7 @@ import app as control_plane
 import bot_client_shop_binding
 import bot_update_cache
 import bot_update_prefetch
+import bot_update_push
 import bot_web_admin
 import bot_web_bot_enabled
 import bot_web_bot_qa
@@ -42,6 +43,7 @@ control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(recharge_status_query.router)
 control_plane.app.include_router(bot_update_cache.router)
+control_plane.app.include_router(bot_update_push.router)
 bot_web_console.install(control_plane)
 bot_client_shop_binding.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
