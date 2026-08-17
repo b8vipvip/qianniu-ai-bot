@@ -335,19 +335,153 @@ namespace Bot.ChromeNs
             }
         }
 
+
         private bool TryInvokeCachedSendButtonNow()
         {
-            if (_sendMessageButton == null) return false;
+            if (_sendMessageButton == null || uia3Automation == null) return false;
             try
             {
-                _sendMessageButton.AsButton().Invoke();
+                var splitRect = _sendMessageButtonRect;
+                if ((splitRect.Width <= 0 || splitRect.Height <= 0) && _sendMessageButton != null)
+                {
+                    splitRect = _sendMessageButton.BoundingRectangle;
+                }
+                if (splitRect.Width <= 0 || splitRect.Height <= 0) return false;
+
+                var arrowGuard = Math.Max(18, Math.Min(30, splitRect.Width / 3));
+                var mainWidth = splitRect.Width - arrowGuard;
+                if (mainWidth < 16) return false;
+                var x = splitRect.Left + Math.Max(8, Math.Min(mainWidth / 2, mainWidth - 8));
+                var y = splitRect.Top + splitRect.Height / 2;
+
+                // Resolve UIA at the exact same verified left/main-action point. We may invoke
+                // only a distinct child that is geometrically confined to the left send area.
+                // Invoking the whole Qt split-button parent is forbidden because its default
+                // action can open the Enter/Ctrl+Enter dropdown instead of sending the draft.
+                AutomationElement candidate = null;
+                try
+                {
+                    candidate = uia3Automation.FromPoint(new System.Drawing.Point(x, y));
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("发送主按钮左侧UIA命中测试失败: " + ex.Message);
+                }
+
+                for (var depth = 0; candidate != null && depth < 7; depth++)
+                {
+                    if (TryInvokeSafeMainSendCandidate(candidate, splitRect, x, y, arrowGuard))
+                    {
+                        return true;
+                    }
+                    try { candidate = candidate.Parent; }
+                    catch { candidate = null; }
+                }
+
+                // Some Qt accessibility trees return a non-action text node from FromPoint.
+                // Scan descendants as a second discovery path, but keep the same geometry gate.
+                try
+                {
+                    foreach (var child in _sendMessageButton.FindAllDescendants())
+                    {
+                        if (TryInvokeSafeMainSendCandidate(child, splitRect, x, y, arrowGuard))
+                        {
+                            return true;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("发送主按钮左侧UIA子控件扫描失败: " + ex.Message);
+                }
+
+                Log.Info("未找到可证明属于左侧主发送区域的UIA子控件，禁止Invoke整块分裂按钮: seller="
+                    + SellerNick + ", rect=" + splitRect.Left + "," + splitRect.Top + ","
+                    + splitRect.Width + "x" + splitRect.Height + ", safePoint=" + x + "," + y);
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.Info("发送按钮左侧UIA安全调用失败: " + ex.Message
+                    + ", type=" + ex.GetType().FullName
+                    + ", hresult=0x" + ex.HResult.ToString("X8"));
+                return false;
+            }
+        }
+
+        private bool TryInvokeSafeMainSendCandidate(
+            AutomationElement candidate,
+            System.Drawing.Rectangle splitRect,
+            int safeX,
+            int safeY,
+            int arrowGuard)
+        {
+            if (!IsSafeMainSendInvokeCandidate(candidate, splitRect, safeX, safeY, arrowGuard))
+            {
+                return false;
+            }
+
+            try
+            {
+                var rect = candidate.BoundingRectangle;
+                var name = candidate.Name ?? string.Empty;
+                var automationId = candidate.AutomationId ?? string.Empty;
+                candidate.AsButton().Invoke();
+                Log.Info("已通过左侧主发送UIA子控件执行发送: seller=" + SellerNick
+                    + ", name=" + name + ", automationId=" + automationId
+                    + ", rect=" + rect.Left + "," + rect.Top + "," + rect.Width + "x" + rect.Height);
                 return true;
             }
             catch (Exception ex)
             {
-                Log.Info("发送按钮UIA回退Invoke失败: " + ex.Message
-                    + ", type=" + ex.GetType().FullName
-                    + ", hresult=0x" + ex.HResult.ToString("X8"));
+                Log.Info("左侧主发送UIA候选不可Invoke，继续寻找父级/兄弟候选: " + ex.Message);
+                return false;
+            }
+        }
+
+        private static bool IsSafeMainSendInvokeCandidate(
+            AutomationElement candidate,
+            System.Drawing.Rectangle splitRect,
+            int safeX,
+            int safeY,
+            int arrowGuard)
+        {
+            if (candidate == null) return false;
+            try
+            {
+                var rect = candidate.BoundingRectangle;
+                if (rect.Width <= 0 || rect.Height <= 0 || !rect.Contains(safeX, safeY)) return false;
+
+                var name = candidate.Name ?? string.Empty;
+                var automationId = candidate.AutomationId ?? string.Empty;
+                var identity = (name + " " + automationId).ToLowerInvariant();
+                if (identity.Contains("arrow")
+                    || identity.Contains("dropdown")
+                    || identity.Contains("drop-down")
+                    || identity.Contains("menu")
+                    || identity.Contains("downbutton")
+                    || identity.Contains("下拉")
+                    || identity.Contains("展开"))
+                {
+                    return false;
+                }
+
+                // Never invoke the full split-button parent (or an almost-identical wrapper).
+                var almostWholeSplit = Math.Abs(rect.Left - splitRect.Left) <= 2
+                    && Math.Abs(rect.Top - splitRect.Top) <= 2
+                    && rect.Width >= splitRect.Width - 3
+                    && rect.Height >= splitRect.Height - 3;
+                if (almostWholeSplit) return false;
+
+                var protectedArrowStart = splitRect.Right - arrowGuard;
+                if (rect.Left >= protectedArrowStart) return false;
+                if (rect.Right > splitRect.Right - Math.Max(4, arrowGuard / 5)) return false;
+                if (rect.Left < splitRect.Left - 3 || rect.Top < splitRect.Top - 3) return false;
+                if (rect.Bottom > splitRect.Bottom + 3) return false;
+                return true;
+            }
+            catch
+            {
                 return false;
             }
         }
@@ -360,7 +494,7 @@ namespace Bot.ChromeNs
                 // action. Some Windows integrity/session combinations reject FlaUI's physical
                 // coordinate injection with Win32 access denied even though UIA read/write works.
                 // In that specific pre-action failure only, revalidate the owned draft and use a
-                // single UIA Invoke fallback. Never issue a second action after a coordinate click
+                // single left-main-area UIA child fallback. Never invoke the whole split button.
                 // was accepted but delivery confirmation is merely late/ambiguous.
                 if ((_sendMessageButton == null || _sendMessageButtonRect.IsEmpty)
                     && !await RefreshChatControlsAsync(true).ConfigureAwait(false))
@@ -396,7 +530,7 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                Log.Info("发送主按钮坐标输入被系统拒绝，准备仅回退一次UIA Invoke: seller="
+                Log.Info("发送主按钮坐标输入被系统拒绝，准备定位左侧主发送UIA子控件；禁止Invoke整块分裂按钮: seller="
                     + SellerNick + ", buyer=" + buyer);
 
                 // Fail closed if the draft changed/disappeared while the coordinate action failed.
@@ -411,16 +545,16 @@ namespace Bot.ChromeNs
 
                 var invoked = await RunUiActionAsync(
                     () => TryInvokeCachedSendButtonNow(),
-                    "发送按钮UIA回退调用",
+                    "发送按钮左侧UIA安全调用",
                     UiActionTimeoutMs).ConfigureAwait(false);
                 if (!invoked)
                 {
-                    SetSendFailure("发送按钮UIA回退", "坐标输入被系统拒绝且UIA Invoke未完成");
+                    SetSendFailure("发送按钮UIA回退", "坐标输入被系统拒绝且未找到安全主发送UIA子控件（已禁止整块分裂按钮Invoke）");
                     return false;
                 }
 
                 return await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "发送按钮UIA回退", 3600).ConfigureAwait(false);
+                    buyer, text, sendStart, "发送按钮左侧UIA安全调用", 3600).ConfigureAwait(false);
             }
             catch (Exception ex)
             {

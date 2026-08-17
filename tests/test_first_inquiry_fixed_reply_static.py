@@ -145,7 +145,10 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_
 
     button = source[source.index("private async Task<bool> TrySendTextViaUiaAsync"):source.index("public async Task SendImageAsync")]
     assert "TryInvokeCachedSendButtonNow" in source
-    assert "AsButton().Invoke()" in source
+    assert "_sendMessageButton.AsButton().Invoke()" not in source
+    assert "uia3Automation.FromPoint(new System.Drawing.Point(x, y))" in source
+    assert "IsSafeMainSendInvokeCandidate" in source
+    assert "禁止Invoke整块分裂按钮" in source
     assert "TryClickCachedSendButtonNow" in button
     assert "_sendMessageButtonRect" in source
     assert "arrowGuard" in source
@@ -153,7 +156,7 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_
     assert "sellerDesk.BringTop()" in source
     assert "发送主按钮坐标" in button
     assert "_lastSendButtonCoordinateClickRejected" in source
-    assert "发送主按钮坐标输入被系统拒绝，准备仅回退一次UIA Invoke" in button
+    assert "发送主按钮坐标输入被系统拒绝，准备定位左侧主发送UIA子控件" in button
     assert "if (!_lastSendButtonCoordinateClickRejected)" in button
     assert "HasExpectedDraftFastAsync(text, 900)" in button
     assert "坐标点击异常后目标草稿已不存在或无法确认，禁止UIA二次动作" in button
@@ -179,3 +182,13 @@ def test_order_first_event_has_first_inquiry_delivery_bridge():
     assert "OrderEventType.Paid" in source
     assert "SendOrderFirstGreetingAsync" in source
     assert "qn.SendTextWithRetryAsync" in source
+
+def test_delayed_exact_seller_echo_cancels_retry_and_false_failure():
+    source = read("src/Bot/ChromeNs/QN.cs")
+    retry = source[source.index("public async Task<bool> SendTextWithRetryAsync"):source.index("private async Task<bool> EnsureActiveBuyerForSendAsync")]
+    assert "WaitForSellerEchoGraceAsync" in retry
+    assert "HasRecentSellerEcho(buyer, text, sendStartedAt)" in retry
+    assert "按真实送达处理并取消重试" in retry
+    assert "按真实送达处理并取消重复发送" in retry
+    assert "最终失败判定前收到延迟卖家回显，改判真实送达" in retry
+    assert retry.index("HasRecentSellerEcho(buyer, text, sendStartedAt)") < retry.index("ok = await SendTextAsync(buyer, text);", retry.index("for (var i = 0"))
