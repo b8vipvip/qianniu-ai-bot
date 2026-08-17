@@ -22,58 +22,34 @@ namespace Bot.UpdateNs
 {
     internal static partial class BotUpdateService
     {
+        // Compatibility hook retained for older call sites. It no longer creates a timer or
+        // invokes CheckNowAsync. Background release discovery is server-side; the client only
+        // keeps the SSE notification channel connected.
         private static void RestartTimer()
         {
-            try
+            if (_timer != null)
             {
-                if (_timer != null)
-                {
-                    _timer.Dispose();
-                    _timer = null;
-                }
-                var settings = GetSettings();
-                if (!settings.AutoCheck) return;
-                _timer = new Timer(
-                    async state => await TimerTickAsync(),
-                    null,
-                    TimeSpan.FromSeconds(20),
-                    TimeSpan.FromMinutes(30));
+                try { _timer.Dispose(); } catch { }
+                _timer = null;
             }
-            catch (Exception ex)
-            {
-                Log.Info("启动自动更新定时器失败: " + ex.Message);
-            }
+            RestartServerPushListener();
         }
 
-        private static async Task TimerTickAsync()
+        private static Task TimerTickAsync()
         {
-            try
-            {
-                var settings = GetSettings();
-                if (!settings.AutoCheck) return;
-                DateTime lastCheck;
-                if (DateTime.TryParse(
-                        settings.LastCheckAt,
-                        out lastCheck)
-                    && lastCheck.AddHours(settings.CheckIntervalHours)
-                        > DateTime.Now)
-                {
-                    return;
-                }
-                await CheckNowAsync(false);
-            }
-            catch (Exception ex)
-            {
-                Log.Info(
-                    "自动检查更新任务异常，已忽略: " + ex.Message);
-            }
+            // Intentionally disabled. Never reintroduce a client-side periodic version check here.
+            return Task.CompletedTask;
         }
 
         private static void UpdateLastCheckTime()
         {
             var settings = GetSettings();
             settings.LastCheckAt = DateTime.Now.ToString("o");
-            SaveSettings(settings);
+            lock (SettingsSync)
+            {
+                _settings = CloneSettings(settings);
+                SaveSettingsInternal(_settings);
+            }
         }
 
         private static void RaiseStatus(BotUpdateCheckResult result)
@@ -135,10 +111,9 @@ namespace Bot.UpdateNs
             settings = settings ?? new BotUpdateSettings();
             if (settings.AutoInstall)
             {
+                // AutoCheck is retained as the persisted compatibility name for receiving the
+                // server push stream. It never enables a client-side version polling timer.
                 settings.AutoCheck = true;
-                // AutoInstall already includes downloading the package. Keep AutoDownload
-                // mutually exclusive so one saved configuration cannot schedule two
-                // background paths for the same release.
                 settings.AutoDownload = false;
             }
             settings.CheckIntervalHours = Math.Max(
@@ -250,7 +225,7 @@ namespace Bot.UpdateNs
             var client = new HttpClient();
             client.Timeout = Timeout.InfiniteTimeSpan;
             client.DefaultRequestHeaders.UserAgent.ParseAdd(
-                "QianniuAiBot-Updater/1.2");
+                "QianniuAiBot-Updater/1.3");
             client.DefaultRequestHeaders.Accept.Add(
                 new MediaTypeWithQualityHeaderValue(
                     "application/json"));
