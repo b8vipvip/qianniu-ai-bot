@@ -54,7 +54,7 @@ def test_navigation_is_grouped_by_user_task_and_ai_service_page_is_removed():
         "店铺绑定",
         "知识库",
         "自动回复规则",
-        "消息通知",
+        "转人工策略",
         "消息策略",
         "数据管理",
         "日志与调试",
@@ -62,6 +62,7 @@ def test_navigation_is_grouped_by_user_task_and_ai_service_page_is_removed():
         "关于与更新",
     ):
         assert page in code
+    assert 'AddFeaturePage("回复与通知", "消息通知"' not in code
     assert 'AddPage("店铺与连接", "AI 服务"' not in code
     assert "aiSettings = new CtlRobotOptions" not in code
     assert "if (showPage == OptionEnum.Robot) showPage = OptionEnum.ShopBinding;" in code
