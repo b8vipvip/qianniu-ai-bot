@@ -35,7 +35,8 @@ namespace Bot.UpdateNs
         private const int GitHubMetadataTimeoutSeconds = 12;
         private const int ManifestTimeoutSeconds = 8;
         private const int DownloadConnectTimeoutSeconds = 20;
-        private const int DownloadReadTimeoutSeconds = 45;
+        private const int GitHubDownloadConnectTimeoutSeconds = 60;
+        private const int DownloadReadTimeoutSeconds = 60;
 
         private static readonly object SettingsSync = new object();
         private static readonly HttpClient Http = CreateHttpClient();
