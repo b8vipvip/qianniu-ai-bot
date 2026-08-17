@@ -7,6 +7,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Windows;
+using System.Windows.Controls;
 
 namespace Bot.AssistWindow
 {
@@ -15,10 +16,15 @@ namespace Bot.AssistWindow
         private static readonly object AttachedPerformanceBootstrap = InitializeAttachedPerformance();
         private static int _lowChurnTimerInstalled;
         private bool _lowChurnTrackingInstalled;
+        private bool _normalZOrderInitialized;
+        private DateTime _lastZOrderFollowAt = DateTime.MinValue;
+        private Point? _lastRightPanelPoint;
+        private Point? _lastShowButtonPoint;
 
         private const uint SwpNoSize = 0x0001;
         private const uint SwpNoMove = 0x0002;
         private const uint SwpNoActivate = 0x0010;
+        private const uint SwpNoSendChanging = 0x0400;
         private static readonly IntPtr HwndNotTopmost = new IntPtr(-2);
 
         [DllImport("user32.dll", SetLastError = true)]
@@ -60,7 +66,7 @@ namespace Bot.AssistWindow
                     var oldTimer = _timer;
                     _timer = new NoReEnterTimer(SafePeriodicTrack, 5000, 1500);
                     if (oldTimer != null) oldTimer.Stop();
-                    Log.Info("贴窗Bot已切换低刷新跟随：5秒兜底校准，禁用周期性Topmost抢焦点。" );
+                    Log.Info("贴窗Bot已切换无闪烁跟随：5秒仅做几何兜底，不再周期抢Topmost，也不再移动前隐藏控件。" );
                 }
                 catch (Exception ex)
                 {
@@ -90,6 +96,7 @@ namespace Bot.AssistWindow
             Desk.EvGetForeground += SafeDesk_EvGetForeground;
             Closed += SafeTrackingClosed;
 
+            NormalizeAttachedWindowZOrderOnce();
             SafeTrackGeometry(false, false);
         }
 
@@ -162,7 +169,8 @@ namespace Bot.AssistWindow
             if (!IsVisible) Show();
             SafeTrackGeometry(false, false);
             WakeUpAssist();
-            FollowDeskZOrderWithoutActivation();
+            if (Desk != null && Desk.IsForeground)
+                FollowDeskZOrderWithoutActivation();
         }
 
         private void SafeTrackGeometry(bool adjustDeskLocation, bool periodic)
@@ -177,6 +185,8 @@ namespace Bot.AssistWindow
                     {
                         if (!IsLoaded || IsHidden())
                         {
+                            // Avoid repeated Hide calls; changing WPF visibility unnecessarily is
+                            // one of the main causes of the attached panel flashing behind Qianniu.
                             if (IsVisible) Hide();
                             return;
                         }
@@ -191,7 +201,12 @@ namespace Bot.AssistWindow
                             _isFirstTrack = false;
                             SetDeskLocation();
                         }
-                        SetRightPanelPosition();
+
+                        // Do not call the historical SetRightPanelPosition here. Its MoveUIElement
+                        // implementation hides a visible control, moves it, then shows it again.
+                        // Small Win32 rectangle jitter therefore becomes a visible flash. Update
+                        // Canvas coordinates directly and only when the position really changed.
+                        SetRightPanelPositionWithoutVisibilityToggle();
 
                         // Z-order is only corrected on real foreground/move/show events.
                         // The periodic fallback never raises the Bot window.
@@ -210,18 +225,93 @@ namespace Bot.AssistWindow
             }
         }
 
+        private void SetRightPanelPositionWithoutVisibilityToggle()
+        {
+            try
+            {
+                if (Desk == null) return;
+                if (IsShowRightPanel)
+                {
+                    var point = PointFromScreen(new Point(
+                        Desk.Rect.Left + Desk.Rect.Width + 6,
+                        Desk.Rect.Top));
+                    if (HasMeaningfulPositionChange(_lastRightPanelPoint, point))
+                    {
+                        Canvas.SetLeft(ctlRightPanel, point.X);
+                        Canvas.SetTop(ctlRightPanel, point.Y);
+                        _lastRightPanelPoint = point;
+                    }
+                    if (ctlRightPanel.Visibility != Visibility.Visible)
+                        ctlRightPanel.Visibility = Visibility.Visible;
+                }
+                else
+                {
+                    var point = PointFromScreen(new Point(
+                        Desk.Rect.Left + Desk.Rect.Width - (int)btnShowRight.Width - 5,
+                        Desk.Rect.Top - (int)btnShowRight.Height - 5));
+                    if (HasMeaningfulPositionChange(_lastShowButtonPoint, point))
+                    {
+                        Canvas.SetLeft(btnShowRight, point.X);
+                        Canvas.SetTop(btnShowRight, point.Y);
+                        _lastShowButtonPoint = point;
+                    }
+                    if (btnShowRight.Visibility != Visibility.Visible)
+                        btnShowRight.Visibility = Visibility.Visible;
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
+        }
+
+        private static bool HasMeaningfulPositionChange(Point? previous, Point current)
+        {
+            if (!previous.HasValue) return true;
+            return Math.Abs(previous.Value.X - current.X) >= 0.75
+                || Math.Abs(previous.Value.Y - current.Y) >= 0.75;
+        }
+
+        private void NormalizeAttachedWindowZOrderOnce()
+        {
+            if (_normalZOrderInitialized) return;
+            try
+            {
+                if (!IsLoaded || Handle == 0) return;
+                _normalZOrderInitialized = true;
+                SetWindowPos(
+                    new IntPtr(Handle),
+                    HwndNotTopmost,
+                    0,
+                    0,
+                    0,
+                    0,
+                    SwpNoMove | SwpNoSize | SwpNoActivate | SwpNoSendChanging);
+            }
+            catch (Exception ex)
+            {
+                Log.Exception(ex);
+            }
+        }
+
         private void FollowDeskZOrderWithoutActivation()
         {
             try
             {
                 if (!IsLoaded || Desk == null || Desk.Hwnd == null || Desk.Hwnd.Handle == 0) return;
-                var hwnd = new IntPtr(Handle);
-                var flags = SwpNoMove | SwpNoSize | SwpNoActivate;
+                if (!Desk.IsForeground) return;
+                if (DateTime.Now - _lastZOrderFollowAt < TimeSpan.FromMilliseconds(150)) return;
+                _lastZOrderFollowAt = DateTime.Now;
 
-                // Explicitly remove accidental topmost state left by historical versions,
-                // then place the attached panel next to its Qianniu Desk in normal z-order.
-                SetWindowPos(hwnd, HwndNotTopmost, 0, 0, 0, 0, flags);
-                SetWindowPos(hwnd, new IntPtr(Desk.Hwnd.Handle), 0, 0, 0, 0, flags);
+                NormalizeAttachedWindowZOrderOnce();
+                SetWindowPos(
+                    new IntPtr(Handle),
+                    new IntPtr(Desk.Hwnd.Handle),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SwpNoMove | SwpNoSize | SwpNoActivate | SwpNoSendChanging);
             }
             catch (Exception ex)
             {

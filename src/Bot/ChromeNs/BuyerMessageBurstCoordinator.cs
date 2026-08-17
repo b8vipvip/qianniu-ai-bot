@@ -169,6 +169,10 @@ namespace Bot.ChromeNs
             public BotActivityLease ActivityLease;
         }
 
+        // Only unresolved legacy/global configuration needs serialization. Shop-scoped runtime
+        // work uses AsyncLocal<ShopContext> and is safe to dispatch concurrently; keeping every
+        // buyer behind one semaphore let one slow AI request block fixed replies and all other
+        // buyers for tens of seconds.
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
@@ -355,21 +359,29 @@ namespace Bot.ChromeNs
 
             if (shop == null)
             {
-                await _handler(lease);
-                return;
-            }
+                // Even the legacy path gets one deterministic chance before waiting for an AI
+                // configuration lock. It does not read or mutate AI endpoint state.
+                if (await DeterministicAutoReplyService.TryHandleAsync(burst, lease)) return;
 
-            await LegacyAiConfigurationGate.WaitAsync();
-            try
-            {
-                using (ShopSettingsScope.Enter(shop))
+                await LegacyAiConfigurationGate.WaitAsync();
+                try
                 {
                     await _handler(lease);
                 }
+                finally
+                {
+                    LegacyAiConfigurationGate.Release();
+                }
+                return;
             }
-            finally
+
+            // ShopSettingsScope is AsyncLocal. Fixed replies and normal per-shop AI work can run
+            // concurrently without a process-wide gate. This prevents a 60-90 second upstream
+            // timeout for one buyer from freezing every other buyer of the same running Bot.
+            using (ShopSettingsScope.Enter(shop))
             {
-                LegacyAiConfigurationGate.Release();
+                if (await DeterministicAutoReplyService.TryHandleAsync(burst, lease)) return;
+                await _handler(lease);
             }
         }
 
