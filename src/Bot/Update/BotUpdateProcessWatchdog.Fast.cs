@@ -133,7 +133,7 @@ if (Test-Path -LiteralPath $ExpectedExitMarker) {
     exit 0
 }
 try {
-    $same = Get-CimInstance Win32_Process -Filter "Name='Bot.exe'" | Where-Object {
+    $same = Get-CimInstance Win32_Process -Filter 'Name=''Bot.exe''' | Where-Object {
         $_.ExecutablePath -and ([string]::Equals($_.ExecutablePath, $ExePath, [System.StringComparison]::OrdinalIgnoreCase))
     }
     if ($same) {
