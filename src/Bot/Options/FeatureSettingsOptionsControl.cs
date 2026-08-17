@@ -54,6 +54,7 @@ namespace Bot.Options
             ReplaceKnowledgePageWithEmbeddedLauncher();
             OrganizeAutoReplyRulesPage();
             RemoveLegacyOffHoursFromNotificationPage();
+            OrganizeHandoffStrategyPage();
             HideLegacyTabHeaders();
 
             var hosted = _legacyWindow.Content as UIElement;
@@ -83,6 +84,11 @@ namespace Bot.Options
         {
             pageTitle = (pageTitle ?? string.Empty).Trim();
             if (pageTitle.Length == 0) return;
+
+            // Compatibility alias for old callers/bookmarks. The user-visible and real tab name is
+            // now “转人工策略”; “消息通知” is no longer used as a displayed page title.
+            if (string.Equals(pageTitle, "消息通知", StringComparison.Ordinal))
+                pageTitle = "转人工策略";
 
             foreach (TabItem tab in _tabs.Items)
             {
@@ -467,6 +473,149 @@ namespace Bot.Options
                 Log.Info("设置界面已将“人工客服工作时间与下班回复”迁移为自动回复规则中的“下班自动回复”。");
                 return;
             }
+        }
+
+        private void OrganizeHandoffStrategyPage()
+        {
+            var notificationTab = _tabs.Items
+                .OfType<TabItem>()
+                .FirstOrDefault(x =>
+                    string.Equals(Convert.ToString(x.Header), "消息通知", StringComparison.Ordinal)
+                    || string.Equals(Convert.ToString(x.Header), "转人工策略", StringComparison.Ordinal));
+            if (notificationTab == null) return;
+
+            // Rename the real source tab during construction. Do not rely on a Loaded/VisualTree
+            // patch because WndOption builds its navigation before this control may ever be Loaded.
+            notificationTab.Header = "转人工策略";
+
+            var autoReplyTab = _tabs.Items
+                .OfType<TabItem>()
+                .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "自动回复规则", StringComparison.Ordinal));
+            if (autoReplyTab == null) return;
+
+            var rulesEnabled = GetPrivateField<CheckBox>(_legacyWindow, "_rulesEnabled");
+            var manualKeywords = GetPrivateField<TextBox>(_legacyWindow, "_manualKeywords");
+            var noAutoKeywords = GetPrivateField<TextBox>(_legacyWindow, "_noAutoKeywords");
+            var handoffText = GetPrivateField<TextBox>(_legacyWindow, "_handoffText");
+            if (rulesEnabled == null) return;
+
+            var moved = new List<UIElement>();
+            AddDetachedContainingBlock(autoReplyTab.Content as UIElement, rulesEnabled, moved);
+            AddDetachedContainingBlock(autoReplyTab.Content as UIElement, manualKeywords, moved);
+            AddDetachedContainingBlock(autoReplyTab.Content as UIElement, noAutoKeywords, moved);
+            AddDetachedContainingBlock(autoReplyTab.Content as UIElement, handoffText, moved);
+            if (moved.Count == 0) return;
+
+            var destination = FindPrimaryRuleStack(notificationTab.Content as UIElement);
+            if (destination == null)
+            {
+                // A future/older legacy layout may not expose the expected StackPanel. Put the
+                // moved controls in a stable host rather than silently losing them.
+                var body = new StackPanel { Margin = new Thickness(12, 8, 12, 14) };
+                body.Children.Add(MakeSectionTitle("转人工规则"));
+                foreach (var element in moved) body.Children.Add(element);
+                if (notificationTab.Content is UIElement oldContent) body.Children.Add(oldContent);
+                notificationTab.Content = new ScrollViewer
+                {
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    CanContentScroll = false,
+                    Content = body
+                };
+                Log.Info("设置界面已直接构造“转人工策略”页面并迁移转人工规则（兼容布局）。");
+                return;
+            }
+
+            destination.Children.Insert(0, new Border
+            {
+                Height = 1,
+                Background = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                Margin = new Thickness(0, 8, 0, 14)
+            });
+            for (var i = moved.Count - 1; i >= 0; i--)
+                destination.Children.Insert(0, moved[i]);
+            destination.Children.Insert(0, MakeSectionTitle("转人工规则"));
+            Log.Info("设置界面已在构造阶段将“启用转人工规则”及关键词/话术移动到“转人工策略”。");
+        }
+
+        private static void AddDetachedContainingBlock(
+            UIElement root,
+            DependencyObject target,
+            IList<UIElement> output)
+        {
+            if (root == null || target == null || output == null) return;
+            UIElement detached;
+            if (TryDetachContainingBlock(root, target, out detached)
+                && detached != null
+                && !output.Contains(detached))
+            {
+                output.Add(detached);
+            }
+        }
+
+        private static bool TryDetachContainingBlock(
+            UIElement root,
+            DependencyObject target,
+            out UIElement detached)
+        {
+            detached = null;
+            if (root == null || target == null) return false;
+
+            var panel = root as Panel;
+            if (panel != null)
+            {
+                foreach (var child in panel.Children.Cast<UIElement>().ToList())
+                {
+                    if (ReferenceEquals(child, target) || ContainsElement(child, target))
+                    {
+                        panel.Children.Remove(child);
+                        detached = child;
+                        return true;
+                    }
+                }
+                foreach (var child in panel.Children.Cast<UIElement>().ToList())
+                {
+                    if (TryDetachContainingBlock(child, target, out detached)) return true;
+                }
+            }
+
+            var border = root as Border;
+            if (border != null)
+                return TryDetachContainingBlock(border.Child, target, out detached);
+
+            var scroll = root as ScrollViewer;
+            if (scroll != null)
+                return TryDetachContainingBlock(scroll.Content as UIElement, target, out detached);
+
+            var content = root as ContentControl;
+            if (content != null)
+                return TryDetachContainingBlock(content.Content as UIElement, target, out detached);
+
+            return false;
+        }
+
+        private static bool ContainsElement(DependencyObject root, DependencyObject target)
+        {
+            if (root == null || target == null) return false;
+            if (ReferenceEquals(root, target)) return true;
+
+            var panel = root as Panel;
+            if (panel != null)
+            {
+                foreach (UIElement child in panel.Children)
+                    if (ContainsElement(child, target)) return true;
+            }
+
+            var border = root as Border;
+            if (border != null && ContainsElement(border.Child, target)) return true;
+
+            var scroll = root as ScrollViewer;
+            if (scroll != null && ContainsElement(scroll.Content as DependencyObject, target)) return true;
+
+            var content = root as ContentControl;
+            if (content != null && ContainsElement(content.Content as DependencyObject, target)) return true;
+
+            return false;
         }
 
         private static IEnumerable<StackPanel> EnumerateStacks(UIElement element)
