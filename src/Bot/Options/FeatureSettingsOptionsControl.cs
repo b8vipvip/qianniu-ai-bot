@@ -24,6 +24,15 @@ namespace Bot.Options
         private readonly MethodInfo _saveAllMethod;
         private CheckBox _firstInquiryFixedReplyEnabled;
         private TextBox _firstInquiryFixedReplyAnswer;
+        private CheckBox _offHoursEnabled;
+        private TextBox _offHoursStartTime;
+        private TextBox _offHoursEndTime;
+        private TextBox _offHoursFixedAnswer;
+        private CheckBox _legacyWorkHoursEnabled;
+        private TextBox _legacyWorkStartTime;
+        private TextBox _legacyWorkEndTime;
+        private ComboBox _legacyOffHoursMode;
+        private TextBox _legacyOffHoursFixedText;
         private string _currentPage;
 
         public FeatureSettingsOptionsControl(string seller)
@@ -40,9 +49,11 @@ namespace Bot.Options
                 throw new InvalidOperationException("无法初始化功能设置页面。请重新安装完整版本。 ");
             }
 
+            CaptureLegacyOffHoursControls();
             RemoveMeaninglessLicensePage();
             ReplaceKnowledgePageWithEmbeddedLauncher();
             OrganizeAutoReplyRulesPage();
+            RemoveLegacyOffHoursFromNotificationPage();
             HideLegacyTabHeaders();
 
             var hosted = _legacyWindow.Content as UIElement;
@@ -93,6 +104,7 @@ namespace Bot.Options
         {
             try
             {
+                SyncOffHoursToLegacyControls();
                 _saveAllMethod.Invoke(_legacyWindow, null);
                 if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)
                 {
@@ -127,6 +139,15 @@ namespace Bot.Options
                 "设置帮助",
                 MessageBoxButton.OK,
                 MessageBoxImage.Information);
+        }
+
+        private void CaptureLegacyOffHoursControls()
+        {
+            _legacyWorkHoursEnabled = GetPrivateField<CheckBox>(_legacyWindow, "_workHoursEnabled");
+            _legacyWorkStartTime = GetPrivateField<TextBox>(_legacyWindow, "_workStartTime");
+            _legacyWorkEndTime = GetPrivateField<TextBox>(_legacyWindow, "_workEndTime");
+            _legacyOffHoursMode = GetPrivateField<ComboBox>(_legacyWindow, "_offHoursMode");
+            _legacyOffHoursFixedText = GetPrivateField<TextBox>(_legacyWindow, "_offHoursFixedText");
         }
 
         private void RemoveMeaninglessLicensePage()
@@ -204,69 +225,80 @@ namespace Bot.Options
             var legacyContent = DetachLegacyScrollHost(autoReplyTab.Content as UIElement);
             autoReplyTab.Content = null;
 
-            var settings = FirstInquiryFixedReplyService.Load(Seller)
+            var firstSettings = FirstInquiryFixedReplyService.Load(Seller)
                 ?? new FirstInquiryFixedReplySettings();
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+
             _firstInquiryFixedReplyEnabled = new CheckBox
             {
                 Content = "启用首条咨询固定回复",
-                IsChecked = settings.Enabled,
-                FontSize = 14,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
-                VerticalAlignment = VerticalAlignment.Center
+                IsChecked = firstSettings.Enabled,
+                Margin = new Thickness(0, 0, 0, 8),
+                FontWeight = FontWeights.SemiBold
             };
             _firstInquiryFixedReplyAnswer = new TextBox
             {
-                Text = settings.Answer ?? string.Empty,
+                Text = firstSettings.Answer ?? string.Empty,
                 MinHeight = 64,
                 MaxHeight = 96,
                 AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Padding = new Thickness(10, 8, 10, 8),
-                Margin = new Thickness(0, 8, 0, 0),
-                ToolTip = "新一轮咨询第一个事件触发时直接发送。默认：在的，亲！"
+                Padding = new Thickness(8, 6, 8, 6)
             };
 
-            // The unified settings shell already renders the page title. Keep the auto-reply
-            // controls in one continuous scroll surface instead of splitting the page into two
-            // numbered cards with an inner legacy scrollbar.
-            var body = new StackPanel { Margin = new Thickness(12, 8, 12, 14) };
-            body.Children.Add(new TextBlock
+            _offHoursEnabled = new CheckBox
             {
-                Text = "首条咨询固定回复",
-                FontSize = 15,
-                FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55))
-            });
-
-            var enabledRow = new DockPanel { Margin = new Thickness(0, 9, 0, 0) };
-            DockPanel.SetDock(_firstInquiryFixedReplyEnabled, Dock.Right);
-            enabledRow.Children.Add(_firstInquiryFixedReplyEnabled);
-            enabledRow.Children.Add(new TextBlock
+                Content = "启用下班自动回复",
+                IsChecked = cfg != null && cfg.EnableWorkHours,
+                Margin = new Thickness(0, 0, 0, 8),
+                FontWeight = FontWeights.SemiBold
+            };
+            _offHoursStartTime = new TextBox
             {
-                Text = "新买家或超过 10 分钟未互动后再次来询，都可重新触发。固定回复真实发送成功后才记录本轮已回复。",
+                Text = cfg == null || string.IsNullOrWhiteSpace(cfg.WorkStartTime) ? "09:00" : cfg.WorkStartTime,
+                Width = 80,
+                Height = 26
+            };
+            _offHoursEndTime = new TextBox
+            {
+                Text = cfg == null || string.IsNullOrWhiteSpace(cfg.WorkEndTime) ? "18:00" : cfg.WorkEndTime,
+                Width = 80,
+                Height = 26
+            };
+            _offHoursFixedAnswer = new TextBox
+            {
+                Text = cfg == null ? string.Empty : (cfg.OffHoursFixedText ?? string.Empty),
+                MinHeight = 68,
+                MaxHeight = 110,
+                AcceptsReturn = true,
                 TextWrapping = TextWrapping.Wrap,
-                Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
-                Margin = new Thickness(0, 2, 18, 0)
-            });
-            body.Children.Add(enabledRow);
-            body.Children.Add(new TextBlock
-            {
-                Text = "固定答案",
-                FontWeight = FontWeights.SemiBold,
-                Foreground = new SolidColorBrush(Color.FromRgb(55, 65, 81)),
-                Margin = new Thickness(0, 12, 0, 0)
-            });
-            body.Children.Add(_firstInquiryFixedReplyAnswer);
-            body.Children.Add(new Border
-            {
-                Height = 1,
-                Background = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
-                Margin = new Thickness(0, 18, 0, 14)
-            });
-            if (legacyContent != null) body.Children.Add(legacyContent);
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                Padding = new Thickness(8, 6, 8, 6)
+            };
 
+            var inserted = BuildDeterministicRuleControls();
+            var legacyStack = FindPrimaryRuleStack(legacyContent);
+            if (legacyStack != null)
+            {
+                for (var i = inserted.Count - 1; i >= 0; i--)
+                {
+                    legacyStack.Children.Insert(0, inserted[i]);
+                }
+                autoReplyTab.Content = new ScrollViewer
+                {
+                    VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                    HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                    CanContentScroll = false,
+                    Content = legacyContent
+                };
+                return;
+            }
+
+            // Compatibility fallback for an older settings layout.
+            var body = new StackPanel { Margin = new Thickness(12, 8, 12, 14) };
+            foreach (var control in inserted) body.Children.Add(control);
+            if (legacyContent != null) body.Children.Add(legacyContent);
             autoReplyTab.Content = new ScrollViewer
             {
                 VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
@@ -274,6 +306,214 @@ namespace Bot.Options
                 CanContentScroll = false,
                 Content = body
             };
+        }
+
+        private List<UIElement> BuildDeterministicRuleControls()
+        {
+            var result = new List<UIElement>();
+
+            result.Add(MakeSectionTitle("首条咨询固定回复"));
+            result.Add(_firstInquiryFixedReplyEnabled);
+            result.Add(MakeLabeledControl(
+                "固定答案",
+                _firstInquiryFixedReplyAnswer,
+                "新买家或超过 10 分钟未互动后再次来询可重新触发。真实发送成功后才记录本轮已回复。"));
+
+            result.Add(MakeSectionTitle("下班自动回复"));
+            result.Add(_offHoursEnabled);
+
+            var workRow = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            workRow.Children.Add(new TextBlock
+            {
+                Text = "工作时间",
+                Width = 90,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            workRow.Children.Add(_offHoursStartTime);
+            workRow.Children.Add(new TextBlock
+            {
+                Text = "  至  ",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            workRow.Children.Add(_offHoursEndTime);
+            workRow.Children.Add(new TextBlock
+            {
+                Text = "   HH:mm；支持跨夜，例如 18:00-09:00",
+                Margin = new Thickness(8, 4, 0, 0),
+                Foreground = Brushes.Gray
+            });
+            result.Add(workRow);
+            result.Add(MakeLabeledControl(
+                "固定答案",
+                _offHoursFixedAnswer,
+                "支持 {工作时间} 占位符。下班自动回复直接本地发送，不调用也不等待 AI 接口。"));
+
+            result.Add(new Border
+            {
+                Height = 1,
+                Background = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                Margin = new Thickness(0, 10, 0, 14)
+            });
+            return result;
+        }
+
+        private static TextBlock MakeSectionTitle(string text)
+        {
+            return new TextBlock
+            {
+                Text = text,
+                FontSize = 15,
+                FontWeight = FontWeights.SemiBold,
+                Foreground = new SolidColorBrush(Color.FromRgb(31, 41, 55)),
+                Margin = new Thickness(0, 8, 0, 10)
+            };
+        }
+
+        private static UIElement MakeLabeledControl(
+            string label,
+            Control control,
+            string hint)
+        {
+            var wrapper = new StackPanel { Margin = new Thickness(0, 0, 0, 10) };
+            var row = new Grid();
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(90) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var labelBlock = new TextBlock
+            {
+                Text = label,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 7, 8, 0)
+            };
+            Grid.SetColumn(labelBlock, 0);
+            Grid.SetColumn(control, 1);
+            row.Children.Add(labelBlock);
+            row.Children.Add(control);
+            wrapper.Children.Add(row);
+            if (!string.IsNullOrWhiteSpace(hint))
+            {
+                wrapper.Children.Add(new TextBlock
+                {
+                    Text = hint,
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = Brushes.Gray,
+                    Margin = new Thickness(90, 4, 0, 0)
+                });
+            }
+            return wrapper;
+        }
+
+        private static StackPanel FindPrimaryRuleStack(UIElement element)
+        {
+            if (element == null) return null;
+            var stack = element as StackPanel;
+            if (stack != null && stack.Children.Count >= 3) return stack;
+
+            var border = element as Border;
+            if (border != null) return FindPrimaryRuleStack(border.Child);
+
+            var scroll = element as ScrollViewer;
+            if (scroll != null) return FindPrimaryRuleStack(scroll.Content as UIElement);
+
+            var panel = element as Panel;
+            if (panel != null)
+            {
+                foreach (UIElement child in panel.Children)
+                {
+                    var found = FindPrimaryRuleStack(child);
+                    if (found != null) return found;
+                }
+            }
+            return null;
+        }
+
+        private void RemoveLegacyOffHoursFromNotificationPage()
+        {
+            var notificationTab = _tabs.Items
+                .OfType<TabItem>()
+                .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "消息通知", StringComparison.Ordinal));
+            if (notificationTab == null) return;
+
+            foreach (var stack in EnumerateStacks(notificationTab.Content as UIElement))
+            {
+                var start = -1;
+                var end = -1;
+                for (var i = 0; i < stack.Children.Count; i++)
+                {
+                    var text = stack.Children[i] as TextBlock;
+                    var value = text == null ? string.Empty : (text.Text ?? string.Empty).Trim();
+                    if (start < 0 && value == "人工客服工作时间与下班回复")
+                    {
+                        start = i;
+                        continue;
+                    }
+                    if (start >= 0 && value == "转人工通知")
+                    {
+                        end = i;
+                        break;
+                    }
+                }
+
+                if (start < 0) continue;
+                if (end < 0) end = stack.Children.Count;
+                while (end > start)
+                {
+                    stack.Children.RemoveAt(start);
+                    end--;
+                }
+                Log.Info("设置界面已将“人工客服工作时间与下班回复”迁移为自动回复规则中的“下班自动回复”。");
+                return;
+            }
+        }
+
+        private static IEnumerable<StackPanel> EnumerateStacks(UIElement element)
+        {
+            if (element == null) yield break;
+            var stack = element as StackPanel;
+            if (stack != null) yield return stack;
+
+            var border = element as Border;
+            if (border != null)
+            {
+                foreach (var child in EnumerateStacks(border.Child)) yield return child;
+                yield break;
+            }
+
+            var scroll = element as ScrollViewer;
+            if (scroll != null)
+            {
+                foreach (var child in EnumerateStacks(scroll.Content as UIElement)) yield return child;
+                yield break;
+            }
+
+            var panel = element as Panel;
+            if (panel == null) yield break;
+            foreach (UIElement childElement in panel.Children)
+            {
+                foreach (var child in EnumerateStacks(childElement)) yield return child;
+            }
+        }
+
+        private void SyncOffHoursToLegacyControls()
+        {
+            if (_legacyWorkHoursEnabled != null && _offHoursEnabled != null)
+                _legacyWorkHoursEnabled.IsChecked = _offHoursEnabled.IsChecked == true;
+            if (_legacyWorkStartTime != null && _offHoursStartTime != null)
+                _legacyWorkStartTime.Text = _offHoursStartTime.Text ?? string.Empty;
+            if (_legacyWorkEndTime != null && _offHoursEndTime != null)
+                _legacyWorkEndTime.Text = _offHoursEndTime.Text ?? string.Empty;
+            if (_legacyOffHoursFixedText != null && _offHoursFixedAnswer != null)
+                _legacyOffHoursFixedText.Text = _offHoursFixedAnswer.Text ?? string.Empty;
+            if (_legacyOffHoursMode != null)
+            {
+                const string fixedMode = "固定预设答案";
+                if (!_legacyOffHoursMode.Items.Contains(fixedMode))
+                    _legacyOffHoursMode.Items.Add(fixedMode);
+                _legacyOffHoursMode.SelectedItem = fixedMode;
+            }
         }
 
         private static UIElement DetachLegacyScrollHost(UIElement content)
