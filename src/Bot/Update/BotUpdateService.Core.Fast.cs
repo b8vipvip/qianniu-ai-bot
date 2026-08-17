@@ -59,13 +59,13 @@ namespace Bot.UpdateNs
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
             LoadSettings();
-            RestartTimer();
+            RestartServerPushListener();
             Log.Info(
                 "Bot自动更新服务已启动: version=" + CurrentVersion
-                + ", mode=control-plane-cache-first"
-                + ", autoCheck=" + GetSettings().AutoCheck
+                + ", mode=server-push-sse"
+                + ", receiveServerPush=" + GetSettings().AutoCheck
                 + ", autoInstall=" + GetSettings().AutoInstall
-                + ", intervalHours=" + GetSettings().CheckIntervalHours);
+                + ", clientAutoCheck=False");
         }
 
         public static BotUpdateSettings GetSettings()
@@ -85,9 +85,12 @@ namespace Bot.UpdateNs
                 _settings = CloneSettings(settings);
                 SaveSettingsInternal(_settings);
             }
-            RestartTimer();
+            RestartServerPushListener();
         }
 
+        /// <summary>
+        /// Explicit manual check only. No background timer invokes this method anymore.
+        /// </summary>
         public static async Task<BotUpdateCheckResult> CheckNowAsync(bool interactive)
         {
             if (Interlocked.CompareExchange(ref _checking, 1, 0) != 0)
@@ -107,7 +110,7 @@ namespace Bot.UpdateNs
                 {
                     Success = true,
                     CurrentVersion = current,
-                    Message = "正在通过更新服务检查新版本..."
+                    Message = "正在手动检查新版本..."
                 });
 
                 var release = await FetchLatestReleaseAsync();
@@ -130,8 +133,8 @@ namespace Bot.UpdateNs
                     release.Source,
                     "control-plane-cache",
                     StringComparison.OrdinalIgnoreCase)
-                    ? "服务端缓存"
-                    : "GitHub直连";
+                    ? "服务器"
+                    : "GitHub";
                 var result = new BotUpdateCheckResult
                 {
                     Success = true,
@@ -139,7 +142,7 @@ namespace Bot.UpdateNs
                     UpdateAvailable = available,
                     Release = release,
                     Message = available
-                        ? "发现新版本 " + release.Version + "（" + sourceText + "）"
+                        ? "手动检查发现新版本 " + release.Version + "（" + sourceText + "）"
                         : "当前已是最新版本 " + current + "（" + sourceText + "）"
                 };
 
@@ -158,13 +161,15 @@ namespace Bot.UpdateNs
                         {
                             result.Message += "，已启用自动更新，正在下载安装包...";
                             RaiseStatus(result);
+                            ShowAutomaticProgressWindow(release);
                             var package = await DownloadPackageAsync(
                                 release,
                                 null,
                                 CancellationToken.None);
                             result.InstallStarted = true;
-                            result.Message = "发现新版本 " + release.Version
-                                + "（" + sourceText + "），已自动启动更新，Bot 将自动重启。";
+                            result.DownloadChannel = CurrentDownloadChannel;
+                            result.DownloadPercent = 100;
+                            result.Message = "安装包已下载并校验完成，正在启动更新。";
                             RaiseStatus(result);
                             LaunchInstaller(package, release);
                             return result;
@@ -186,6 +191,8 @@ namespace Bot.UpdateNs
                                 release,
                                 null,
                                 CancellationToken.None);
+                            result.DownloadChannel = CurrentDownloadChannel;
+                            result.DownloadPercent = 100;
                             result.Message += "，安装包已自动下载。";
                         }
                         catch (Exception ex)
@@ -199,7 +206,7 @@ namespace Bot.UpdateNs
                 }
 
                 RaiseStatus(result);
-                if (!interactive && available && !result.InstallStarted) MaybeShowBackgroundPrompt(release);
+                if (interactive && available && !result.InstallStarted) return result;
                 return result;
             }
             catch (Exception ex)
@@ -208,11 +215,10 @@ namespace Bot.UpdateNs
                 {
                     Success = false,
                     CurrentVersion = CurrentVersion,
-                    Message = "检查更新失败：" + Short(ex.Message, 260)
+                    Message = "手动检查更新失败：" + Short(ex.Message, 260)
                 };
                 RaiseStatus(failed);
-                if (interactive) Log.Info(failed.Message);
-                else Log.Info("后台检查更新失败，已静默跳过: " + ex.Message);
+                Log.Info(failed.Message);
                 return failed;
             }
             finally
