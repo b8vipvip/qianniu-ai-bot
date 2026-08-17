@@ -34,7 +34,6 @@
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedPathProvider.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedRuntimeBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedSettingsStore.cs" />
-    <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedUiBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopSettingsScope.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopTokenStore.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopTokenBindingService.cs" />
@@ -64,6 +63,10 @@
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\MultiShopRuntimeSessionCoordinator.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\MultiShopRuntimeSessionCoordinator.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\QNRpa.MultiShopDeskBinding.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\QNRpa.NativeSend.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\QNRpa.NativeSend.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\DuplicateCdpInboundRecoveryBridge.cs')">
