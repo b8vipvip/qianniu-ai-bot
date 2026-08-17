@@ -1037,7 +1037,7 @@ namespace Bot.ChromeNs
 
                 SendDeliveryWatchdog.EnsurePending(SellerNick, buyer, text);
                 var sendStart = DateTime.Now;
-                sendResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
+                sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
                     SetSendFailure("发送确认", "发送主按钮坐标点击后未确认消息送达");
@@ -1047,7 +1047,7 @@ namespace Bot.ChromeNs
                     CompleteAttemptLease(buyer, text);
                 }
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer
-                    + ", method=UIA定位+发送主按钮坐标, failure=" + GetSendFailureReason() + ", text=" + text);
+                    + ", method=CDP页面按钮+HWND安全消息+UIA安全回退, failure=" + GetSendFailureReason() + ", text=" + text);
             }
             catch (Exception ex)
             {

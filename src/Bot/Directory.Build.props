@@ -66,6 +66,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\QNRpa.MultiShopDeskBinding.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\QNRpa.NativeSend.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\QNRpa.NativeSend.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\DuplicateCdpInboundRecoveryBridge.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\DuplicateCdpInboundRecoveryBridge.cs" />
   </ItemGroup>
