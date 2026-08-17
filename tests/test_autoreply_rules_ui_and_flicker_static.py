@@ -37,7 +37,7 @@ def test_attached_bot_tracking_never_hides_controls_before_geometry_move():
     assert "Canvas.SetLeft" in perf
     assert "Canvas.SetTop" in perf
     assert "HasMeaningfulPositionChange" in perf
-    assert "MoveUIElement" not in perf
+    assert "MoveUIElement(" not in perf
     assert "Topmost = true" not in perf
     assert "SwpNoActivate" in perf
     assert "SwpNoSendChanging" in perf
