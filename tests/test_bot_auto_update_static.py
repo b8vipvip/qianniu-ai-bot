@@ -80,18 +80,20 @@ def test_download_prefers_server_then_falls_back_to_github_and_reports_channel_p
     assert github_line in download
     assert download.index(server_line) < download.index(github_line)
     assert "DownloadConnectTimeoutSeconds = 20" in code
-    assert "DownloadReadTimeoutSeconds = 45" in code
+    assert "GitHubDownloadConnectTimeoutSeconds = 60" in code
+    assert "DownloadReadTimeoutSeconds = 60" in code
     assert "HashFile(partial)" in code
     assert "服务器与 GitHub 均下载失败" in code
     assert "CurrentDownloadChannel" in download
     assert "CurrentDownloadPercent" in download
     assert "RaiseDownloadStatus" in download
     assert "正在下载更新｜通道：" in download
+    assert "正在连接下载通道" in download
     assert "DownloadedBytes" in code
     assert "TotalBytes" in code
 
     assert "if (cancellationToken.IsCancellationRequested) throw;" in download
-    assert "已自动切换备用下载源" in download
+    assert "准备尝试下一来源" in download
     assert "非用户取消，自动切换下一来源" in download
     assert "Bot更新下载被用户取消" in download
 

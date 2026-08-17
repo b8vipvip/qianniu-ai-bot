@@ -16,6 +16,13 @@ namespace Bot.UpdateNs
         private static CancellationTokenSource _serverPushCts;
         private static Task _serverPushTask;
 
+        private static readonly object AutoInstallRetrySync = new object();
+        private static string _autoInstallRetryVersion = string.Empty;
+        private static bool _autoInstallInFlight;
+        private static int _autoInstallFailureCount;
+        private static DateTime _autoInstallRetryAfterUtc = DateTime.MinValue;
+        private static int _autoInstallRetryGeneration;
+
         internal static void RestartServerPushListener()
         {
             lock (ServerPushSync)
@@ -178,6 +185,14 @@ namespace Bot.UpdateNs
 
             if (settings.AutoInstall)
             {
+                string blockedReason;
+                if (!TryBeginAutoInstallAttempt(release.Version, out blockedReason))
+                {
+                    result.Message = blockedReason;
+                    RaiseStatus(result);
+                    return;
+                }
+
                 try
                 {
                     result.Message = "服务端主动通知新版本 " + release.Version
@@ -188,6 +203,7 @@ namespace Bot.UpdateNs
                         release,
                         null,
                         CancellationToken.None);
+                    CompleteAutoInstallAttempt(release.Version, true);
                     result.InstallStarted = true;
                     result.DownloadPercent = 100;
                     result.DownloadChannel = CurrentDownloadChannel;
@@ -198,9 +214,18 @@ namespace Bot.UpdateNs
                 }
                 catch (Exception ex)
                 {
-                    result.Message = "自动更新失败：" + Short(ex.Message, 220);
+                    var delay = CompleteAutoInstallAttempt(release.Version, false);
+                    result.Message = "自动更新失败：" + Short(ex.Message, 220)
+                        + "；已暂停反复切换下载通道，将在 "
+                        + FormatRetryDelay(delay) + " 后自动重试。";
+                    result.DownloadChannel = CurrentDownloadChannel;
+                    result.DownloadPercent = CurrentDownloadPercent;
                     RaiseStatus(result);
                     Log.Info(result.Message);
+                    ScheduleAutoInstallRetry(release, delay);
+                    // Auto-install owns this version. Do not open a second manual prompt on top of
+                    // the progress window after each failed source attempt.
+                    return;
                 }
             }
             else if (settings.AutoDownload)
@@ -224,6 +249,111 @@ namespace Bot.UpdateNs
             {
                 MaybeShowBackgroundPrompt(release);
             }
+        }
+
+        private static bool TryBeginAutoInstallAttempt(string version, out string blockedReason)
+        {
+            blockedReason = string.Empty;
+            version = NormalizeVersion(version);
+            lock (AutoInstallRetrySync)
+            {
+                if (!string.Equals(_autoInstallRetryVersion, version, StringComparison.OrdinalIgnoreCase))
+                {
+                    _autoInstallRetryVersion = version;
+                    _autoInstallInFlight = false;
+                    _autoInstallFailureCount = 0;
+                    _autoInstallRetryAfterUtc = DateTime.MinValue;
+                    _autoInstallRetryGeneration++;
+                }
+
+                if (_autoInstallInFlight)
+                {
+                    blockedReason = "版本 " + version
+                        + " 的自动更新任务已经在运行，已忽略重复的服务端版本通知。";
+                    return false;
+                }
+
+                var now = DateTime.UtcNow;
+                if (_autoInstallRetryAfterUtc > now)
+                {
+                    blockedReason = "版本 " + version
+                        + " 上一次自动下载失败，正在退避等待；"
+                        + "不会在服务器/GitHub之间反复切换。剩余约 "
+                        + FormatRetryDelay(_autoInstallRetryAfterUtc - now) + "。";
+                    return false;
+                }
+
+                _autoInstallInFlight = true;
+                return true;
+            }
+        }
+
+        private static TimeSpan CompleteAutoInstallAttempt(string version, bool success)
+        {
+            version = NormalizeVersion(version);
+            lock (AutoInstallRetrySync)
+            {
+                if (!string.Equals(_autoInstallRetryVersion, version, StringComparison.OrdinalIgnoreCase))
+                    return TimeSpan.Zero;
+
+                _autoInstallInFlight = false;
+                _autoInstallRetryGeneration++;
+                if (success)
+                {
+                    _autoInstallFailureCount = 0;
+                    _autoInstallRetryAfterUtc = DateTime.MinValue;
+                    return TimeSpan.Zero;
+                }
+
+                _autoInstallFailureCount++;
+                var seconds = _autoInstallFailureCount <= 1
+                    ? 60
+                    : (_autoInstallFailureCount == 2
+                        ? 180
+                        : (_autoInstallFailureCount == 3 ? 600 : 1800));
+                var delay = TimeSpan.FromSeconds(seconds);
+                _autoInstallRetryAfterUtc = DateTime.UtcNow.Add(delay);
+                return delay;
+            }
+        }
+
+        private static void ScheduleAutoInstallRetry(BotReleaseInfo release, TimeSpan delay)
+        {
+            if (release == null || delay <= TimeSpan.Zero) return;
+            int generation;
+            lock (AutoInstallRetrySync)
+            {
+                generation = _autoInstallRetryGeneration;
+            }
+
+            Task.Run(async () =>
+            {
+                await Task.Delay(delay);
+                lock (AutoInstallRetrySync)
+                {
+                    if (generation != _autoInstallRetryGeneration) return;
+                    if (_autoInstallInFlight) return;
+                    if (!string.Equals(
+                        _autoInstallRetryVersion,
+                        release.Version,
+                        StringComparison.OrdinalIgnoreCase)) return;
+                }
+                if (CompareVersions(release.Version, CurrentVersion) <= 0) return;
+                var settings = GetSettings();
+                if (!settings.AutoInstall) return;
+                await HandleServerPushedReleaseAsync(release);
+            });
+        }
+
+        private static string FormatRetryDelay(TimeSpan delay)
+        {
+            if (delay <= TimeSpan.Zero) return "0 秒";
+            if (delay.TotalMinutes >= 1)
+            {
+                var minutes = (int)Math.Ceiling(delay.TotalMinutes);
+                return minutes + " 分钟";
+            }
+            return Math.Max(1, (int)Math.Ceiling(delay.TotalSeconds)) + " 秒";
         }
 
         private static void ShowAutomaticProgressWindow(BotReleaseInfo release)
