@@ -46,7 +46,11 @@ def test_dom_discovery_requires_exact_send_label_and_rejects_dropdown_identity()
 def test_hwnd_fallback_targets_same_verified_seller_root_and_left_safe_region():
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
 
+    # WindowFromPoint must inspect the seller window, not a Bot/settings window that happens
+    # to cover the same screen coordinate when a diagnostic send is launched.
+    assert "desk.BringTop();" in native
     assert "WindowFromPoint" in native
+    assert native.index("desk.BringTop();") < native.index("WindowFromPoint(screenPoint)")
     assert "GetAncestor(target, GaRoot)" in native
     assert "expectedRoot = new IntPtr(desk.Hwnd.Handle)" in native
     assert "if (root != expectedRoot)" in native
