@@ -1,0 +1,50 @@
+name: One-shot split send safety patch v2
+
+on:
+  push:
+    branches:
+      - fix/split-send-main-action-20260817
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/split-send-main-action-20260817
+          fetch-depth: 0
+
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+
+      - name: Apply patch script from first one-shot workflow
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          workflow = Path('.github/workflows/zz-once-fix-split-send-main-action.yml').read_text(encoding='utf-8')
+          marker = "          from pathlib import Path\n"
+          start = workflow.index(marker)
+          end = workflow.index("\n          PY", start)
+          block = workflow[start:end]
+          code = "\n".join(line[10:] if line.startswith("          ") else line for line in block.splitlines())
+          exec(compile(code, '<split-send-patch>', 'exec'))
+          PY
+
+      - name: Run repository static tests
+        run: python -m pytest -q tests
+
+      - name: Commit patched sources and remove one-shot workflows
+        shell: bash
+        run: |
+          rm -f .github/workflows/zz-once-fix-split-send-main-action.yml
+          rm -f .github/workflows/zz-once-fix-split-send-main-action-v2.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: target Qianniu split send main action safely"
+          git push origin HEAD:fix/split-send-main-action-20260817
