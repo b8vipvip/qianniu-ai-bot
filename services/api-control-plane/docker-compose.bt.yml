@@ -1,6 +1,14 @@
 services:
   control-plane:
-    build: .
+    build:
+      context: .
+      args:
+        APT_MIRROR: ${CONTROL_PLANE_BUILD_APT_MIRROR:-https://mirrors.cloud.tencent.com/debian}
+        APT_SECURITY_MIRROR: ${CONTROL_PLANE_BUILD_APT_SECURITY_MIRROR:-https://mirrors.cloud.tencent.com/debian-security}
+        PIP_INDEX_URL: ${CONTROL_PLANE_BUILD_PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}
+        PIP_TRUSTED_HOST: ${CONTROL_PLANE_BUILD_PIP_TRUSTED_HOST:-}
+        PIP_DEFAULT_TIMEOUT: ${CONTROL_PLANE_BUILD_PIP_TIMEOUT:-120}
+        PIP_RETRIES: ${CONTROL_PLANE_BUILD_PIP_RETRIES:-8}
     container_name: qianniu-api-control-plane
     restart: unless-stopped
     env_file:

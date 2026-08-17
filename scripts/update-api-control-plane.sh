@@ -9,11 +9,37 @@ BACKUP_ROOT="${BACKUP_ROOT:-/opt/qianniu-ai-bot-backups}"
 CONTAINER_NAME="${CONTAINER_NAME:-qianniu-api-control-plane}"
 VERIFY_URL="${VERIFY_URL:-}"
 
+# Build/network tuning. These defaults are intentionally suitable for Tencent Cloud VPCs,
+# while every value remains overridable from the shell for other environments.
+BASE_IMAGE="${CONTROL_PLANE_BASE_IMAGE:-python:3.11-slim}"
+BUILD_RETRIES="${CONTROL_PLANE_BUILD_RETRIES:-3}"
+BUILD_RETRY_DELAY_SECONDS="${CONTROL_PLANE_BUILD_RETRY_DELAY_SECONDS:-12}"
+BUILD_TIMEOUT_SECONDS="${CONTROL_PLANE_BUILD_TIMEOUT_SECONDS:-1800}"
+BASE_IMAGE_PULL_RETRIES="${CONTROL_PLANE_BASE_IMAGE_PULL_RETRIES:-3}"
+BASE_IMAGE_PULL_TIMEOUT_SECONDS="${CONTROL_PLANE_BASE_IMAGE_PULL_TIMEOUT_SECONDS:-180}"
+REFRESH_BASE_IMAGE="${CONTROL_PLANE_REFRESH_BASE_IMAGE:-0}"
+CONTROL_PLANE_BUILD_PIP_INDEX_URL="${CONTROL_PLANE_BUILD_PIP_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}"
+CONTROL_PLANE_BUILD_PIP_TRUSTED_HOST="${CONTROL_PLANE_BUILD_PIP_TRUSTED_HOST:-}"
+CONTROL_PLANE_BUILD_PIP_TIMEOUT="${CONTROL_PLANE_BUILD_PIP_TIMEOUT:-120}"
+CONTROL_PLANE_BUILD_PIP_RETRIES="${CONTROL_PLANE_BUILD_PIP_RETRIES:-8}"
+CONTROL_PLANE_BUILD_APT_MIRROR="${CONTROL_PLANE_BUILD_APT_MIRROR:-https://mirrors.cloud.tencent.com/debian}"
+CONTROL_PLANE_BUILD_APT_SECURITY_MIRROR="${CONTROL_PLANE_BUILD_APT_SECURITY_MIRROR:-https://mirrors.cloud.tencent.com/debian-security}"
+
+export CONTROL_PLANE_BUILD_PIP_INDEX_URL
+export CONTROL_PLANE_BUILD_PIP_TRUSTED_HOST
+export CONTROL_PLANE_BUILD_PIP_TIMEOUT
+export CONTROL_PLANE_BUILD_PIP_RETRIES
+export CONTROL_PLANE_BUILD_APT_MIRROR
+export CONTROL_PLANE_BUILD_APT_SECURITY_MIRROR
+export DOCKER_BUILDKIT="${DOCKER_BUILDKIT:-1}"
+export BUILDKIT_PROGRESS="${BUILDKIT_PROGRESS:-plain}"
+
 SERVICE_REL="services/api-control-plane"
 SERVICE_DIR="$REPO_DIR/$SERVICE_REL"
 COMPOSE_FILE="$SERVICE_DIR/docker-compose.bt.yml"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$BACKUP_ROOT/$TIMESTAMP"
+BUILD_LOG="/tmp/qianniu-control-plane-build-$TIMESTAMP.log"
 OLD_COMMIT=""
 OLD_DEPLOY_KIND="none"
 OLD_SOURCE_DIR=""
@@ -34,6 +60,20 @@ die() {
 
 need() {
   command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"
+}
+
+is_positive_integer() {
+  [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+}
+
+validate_tuning() {
+  local name value
+  for name in BUILD_RETRIES BUILD_RETRY_DELAY_SECONDS BUILD_TIMEOUT_SECONDS BASE_IMAGE_PULL_RETRIES BASE_IMAGE_PULL_TIMEOUT_SECONDS CONTROL_PLANE_BUILD_PIP_TIMEOUT CONTROL_PLANE_BUILD_PIP_RETRIES; do
+    value="${!name}"
+    is_positive_integer "$value" || die "$name 必须是正整数，当前值: $value"
+  done
+  [[ "$REFRESH_BASE_IMAGE" == "0" || "$REFRESH_BASE_IMAGE" == "1" ]] \
+    || die "CONTROL_PLANE_REFRESH_BASE_IMAGE 只能是 0 或 1"
 }
 
 read_env_value() {
@@ -60,6 +100,106 @@ container_exists() {
 
 container_running() {
   docker ps --format '{{.Names}}' | grep -Fxq "$CONTAINER_NAME"
+}
+
+probe_url() {
+  local label="$1"
+  local url="$2"
+  if curl -fsSI --connect-timeout 4 --max-time 10 "$url" >/dev/null 2>&1; then
+    log "网络预检通过: $label -> $url"
+    return 0
+  fi
+  warn "网络预检较慢或不可达: $label -> $url；构建仍会继续，并由内部重试保护。"
+  return 1
+}
+
+prepare_base_image() {
+  local have_local=0
+  if docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+    have_local=1
+  fi
+
+  if [[ "$have_local" -eq 1 && "$REFRESH_BASE_IMAGE" != "1" ]]; then
+    log "基础镜像已存在，直接复用本地缓存: $BASE_IMAGE（如需强制刷新可设置 CONTROL_PLANE_REFRESH_BASE_IMAGE=1）"
+    return 0
+  fi
+
+  log "准备基础镜像: $BASE_IMAGE；最多重试 ${BASE_IMAGE_PULL_RETRIES} 次，每次超时 ${BASE_IMAGE_PULL_TIMEOUT_SECONDS}s"
+  local attempt rc
+  for attempt in $(seq 1 "$BASE_IMAGE_PULL_RETRIES"); do
+    set +e
+    timeout --foreground "${BASE_IMAGE_PULL_TIMEOUT_SECONDS}s" docker pull "$BASE_IMAGE"
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+      log "基础镜像准备完成: $BASE_IMAGE"
+      return 0
+    fi
+    warn "基础镜像拉取第 ${attempt}/${BASE_IMAGE_PULL_RETRIES} 次失败，exit=$rc"
+    if docker image inspect "$BASE_IMAGE" >/dev/null 2>&1; then
+      warn "远端刷新失败，但本机已有完整基础镜像，将继续使用本地缓存。"
+      return 0
+    fi
+    if [[ "$attempt" -lt "$BASE_IMAGE_PULL_RETRIES" ]]; then
+      sleep "$BUILD_RETRY_DELAY_SECONDS"
+    fi
+  done
+  die "基础镜像 $BASE_IMAGE 不存在且连续拉取失败，请检查 Docker 镜像加速或网络。"
+}
+
+print_build_failure_hint() {
+  [[ -f "$BUILD_LOG" ]] || return 0
+  if grep -Eq 'files\.pythonhosted\.org|ReadTimeoutError|Read timed out|pip.*timeout|HTTPSConnectionPool' "$BUILD_LOG"; then
+    warn "检测到 PyPI/pip 下载超时。当前构建已配置腾讯云 PyPI 镜像、120s 读取超时和多次重试；若仍失败，可临时覆盖 CONTROL_PLANE_BUILD_PIP_INDEX_URL。"
+  fi
+  if grep -Eq 'apt-get|deb\.debian\.org|debian-security|Temporary failure resolving|Connection timed out' "$BUILD_LOG"; then
+    warn "检测到 APT/Debian 软件源访问异常。当前 Dockerfile 已支持腾讯云 Debian 镜像和 Acquire::Retries。"
+  fi
+  if grep -Eq 'no space left on device|ENOSPC' "$BUILD_LOG"; then
+    warn "检测到磁盘空间不足。请先运行 docker system df 和 df -h 检查空间。"
+  fi
+}
+
+build_new_image() {
+  log "构建网络配置:"
+  printf '  Base image: %s\n' "$BASE_IMAGE"
+  printf '  PyPI: %s\n' "$CONTROL_PLANE_BUILD_PIP_INDEX_URL"
+  printf '  APT: %s\n' "$CONTROL_PLANE_BUILD_APT_MIRROR"
+  printf '  APT security: %s\n' "$CONTROL_PLANE_BUILD_APT_SECURITY_MIRROR"
+  printf '  Build retries: %s, timeout per attempt: %ss\n' "$BUILD_RETRIES" "$BUILD_TIMEOUT_SECONDS"
+
+  local attempt rc started elapsed
+  for attempt in $(seq 1 "$BUILD_RETRIES"); do
+    log "构建新镜像，第 ${attempt}/${BUILD_RETRIES} 次；旧服务继续运行"
+    started="$(date +%s)"
+    : > "$BUILD_LOG"
+    set +e
+    (
+      cd "$SERVICE_DIR"
+      timeout --foreground "${BUILD_TIMEOUT_SECONDS}s" \
+        docker compose -f docker-compose.bt.yml build
+    ) 2>&1 | tee "$BUILD_LOG"
+    rc=${PIPESTATUS[0]}
+    set -e
+    elapsed=$(( $(date +%s) - started ))
+
+    if [[ "$rc" -eq 0 ]]; then
+      log "新镜像构建成功，耗时 ${elapsed}s"
+      return 0
+    fi
+
+    warn "新镜像构建第 ${attempt}/${BUILD_RETRIES} 次失败，exit=$rc，耗时 ${elapsed}s"
+    print_build_failure_hint
+    if [[ "$rc" -eq 124 ]]; then
+      warn "本轮构建超过 ${BUILD_TIMEOUT_SECONDS}s 已主动终止，避免无限卡住。"
+    fi
+    if [[ "$attempt" -lt "$BUILD_RETRIES" ]]; then
+      warn "保留 BuildKit/apt/pip 缓存，${BUILD_RETRY_DELAY_SECONDS}s 后自动重试。"
+      sleep "$BUILD_RETRY_DELAY_SECONDS"
+    fi
+  done
+
+  die "新镜像连续构建 ${BUILD_RETRIES} 次失败，旧服务未被停止。完整构建日志: $BUILD_LOG"
 }
 
 restore_backup_to() {
@@ -113,6 +253,8 @@ need git
 need docker
 need curl
 need tar
+need timeout
+validate_tuning
 
 docker compose version >/dev/null 2>&1 || die "未检测到 Docker Compose v2（docker compose）"
 
@@ -172,13 +314,13 @@ log "校验宝塔 Compose 配置"
   docker compose -f docker-compose.bt.yml config >/dev/null
 )
 
-log "先构建新镜像；此阶段旧服务继续运行"
-if ! (
-  cd "$SERVICE_DIR"
-  docker compose -f docker-compose.bt.yml build --pull
-); then
-  die "新镜像构建失败，旧服务未被停止。"
-fi
+# These probes are diagnostic only. A transient probe failure must not take production down.
+probe_url "腾讯云 PyPI" "${CONTROL_PLANE_BUILD_PIP_INDEX_URL%/}/pip/" || true
+probe_url "腾讯云 Debian" "${CONTROL_PLANE_BUILD_APT_MIRROR%/}/" || true
+
+docker system df || true
+prepare_base_image
+build_new_image
 
 log "停止旧控制面并创建冷备份"
 if container_running; then
@@ -220,10 +362,10 @@ if container_exists; then
   docker rm -f "$CONTAINER_NAME" >/dev/null
 fi
 
-log "启动最新控制面"
+log "启动已经构建并验证过的新控制面镜像（不重复 build，不再次访问软件源）"
 if ! (
   cd "$SERVICE_DIR"
-  docker compose -f docker-compose.bt.yml up -d --build --force-recreate
+  docker compose -f docker-compose.bt.yml up -d --no-build --force-recreate
 ); then
   rollback
 fi
@@ -279,6 +421,7 @@ log "更新成功"
 printf 'Git commit: %s\n' "$NEW_COMMIT"
 printf 'Service dir: %s\n' "$SERVICE_DIR"
 printf 'Backup: %s\n' "$BACKUP_DIR"
+printf 'Build log: %s\n' "$BUILD_LOG"
 printf 'Local health: %s\n' "$LOCAL_HEALTH"
 printf 'Public health: %s\n' "$VERIFY_URL"
 compose ps

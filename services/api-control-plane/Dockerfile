@@ -1,17 +1,55 @@
+# syntax=docker/dockerfile:1.7
 FROM python:3.11-slim
+
+ARG APT_MIRROR=""
+ARG APT_SECURITY_MIRROR=""
+ARG PIP_INDEX_URL="https://pypi.org/simple"
+ARG PIP_TRUSTED_HOST=""
+ARG PIP_DEFAULT_TIMEOUT="120"
+ARG PIP_RETRIES="8"
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DATA_DIR=/data \
     PORT=8080
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates fonts-dejavu-core curl \
-    && rm -rf /var/lib/apt/lists/*
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    set -eux; \
+    for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+      [ -f "$source_file" ] || continue; \
+      if [ -n "$APT_SECURITY_MIRROR" ]; then \
+        sed -i \
+          -e "s#http://deb.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          -e "s#https://deb.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          -e "s#http://security.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          -e "s#https://security.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          "$source_file"; \
+      fi; \
+      if [ -n "$APT_MIRROR" ]; then \
+        sed -i \
+          -e "s#http://deb.debian.org/debian#$APT_MIRROR#g" \
+          -e "s#https://deb.debian.org/debian#$APT_MIRROR#g" \
+          "$source_file"; \
+      fi; \
+    done; \
+    apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; \
+    apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+      install -y --no-install-recommends ca-certificates fonts-dejavu-core curl
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
+    set -eux; \
+    trusted_args=""; \
+    if [ -n "$PIP_TRUSTED_HOST" ]; then trusted_args="--trusted-host $PIP_TRUSTED_HOST"; fi; \
+    python -m pip install \
+      --disable-pip-version-check \
+      --retries "$PIP_RETRIES" \
+      --timeout "$PIP_DEFAULT_TIMEOUT" \
+      --index-url "$PIP_INDEX_URL" \
+      $trusted_args \
+      -r requirements.txt
 
 COPY app.py bootstrap.py bot_client_shop_binding.py bot_update_cache.py bot_update_prefetch.py bot_update_push.py bot_web_console.py bot_web_bot_enabled.py bot_web_admin.py bot_web_bot_qa.py bot_web_bot_qa_logic.py bot_web_conversation_knowledge.py chat2api_runtime_guard.py client_data_backup.py deep_test_guard.py message_processing_traces.py runtime_shop_ai_proxy.py store_rule_sync.py recharge_status_query.py runtime_routing_guard.py runtime_streaming_guard.py runtime_embedding_guard.py scheduled_deep_test_retry.py wecom_bridge.py wecom_crypto.py wecom_settings.py wecom_policy_migration.py ./
 COPY static ./static
