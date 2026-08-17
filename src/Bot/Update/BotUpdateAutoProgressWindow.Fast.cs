@@ -52,12 +52,13 @@ namespace Bot.UpdateNs
                 Minimum = 0,
                 Maximum = 100,
                 Height = 12,
-                Value = 0
+                Value = 0,
+                IsIndeterminate = true
             };
             panel.Children.Add(_progress);
             panel.Children.Add(new TextBlock
             {
-                Text = "优先使用服务器；服务器不可用时会自动切换 GitHub。下载完成后将自动校验、安装并重启。",
+                Text = "优先使用服务器；服务器镜像未准备好或不可用时只切换一次 GitHub。连接阶段使用动态进度，收到安装包数据后才显示实际百分比。",
                 Margin = new Thickness(0, 10, 0, 0),
                 Foreground = new SolidColorBrush(Color.FromRgb(100, 116, 139)),
                 FontSize = 11,
@@ -94,20 +95,39 @@ namespace Bot.UpdateNs
                 {
                     return;
                 }
-                if (result.DownloadPercent >= 0)
+
+                var connecting = result.DownloadPercent <= 0
+                    && result.DownloadedBytes <= 0
+                    && !result.InstallStarted;
+                if (connecting)
                 {
+                    _progress.IsIndeterminate = true;
+                    _progress.Value = 0;
+                }
+                else if (result.DownloadPercent >= 0)
+                {
+                    _progress.IsIndeterminate = false;
                     _progress.Value = Math.Max(0, Math.Min(100, result.DownloadPercent));
                 }
+
                 if (!string.IsNullOrWhiteSpace(result.DownloadChannel))
                 {
                     _channel.Text = "下载通道：" + result.DownloadChannel;
                 }
-                if (!string.IsNullOrWhiteSpace(result.Message))
+
+                if (connecting && !string.IsNullOrWhiteSpace(result.DownloadChannel))
+                {
+                    _status.Text = "正在连接 " + result.DownloadChannel
+                        + " 下载通道，收到首批安装包数据后显示实际百分比...";
+                }
+                else if (!string.IsNullOrWhiteSpace(result.Message))
                 {
                     _status.Text = result.Message;
                 }
+
                 if (result.InstallStarted)
                 {
+                    _progress.IsIndeterminate = false;
                     _progress.Value = 100;
                 }
             }));
