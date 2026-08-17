@@ -110,6 +110,7 @@ namespace Bot.ChromeNs
             }
         }
 
+
         public async Task<bool> SendTextWithRetryAsync(string buyer, string text, int retryCount = 1)
         {
             await _sendGate.WaitAsync();
@@ -122,7 +123,16 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
+                var sendStartedAt = DateTime.Now;
                 var ok = await SendTextAsync(buyer, text);
+                if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900))
+                {
+                    rpa.ResetSendFailure();
+                    ok = true;
+                    Log.Info("自动发送动作结果未确认，但已收到同买家同文本卖家回显，按真实送达处理并取消重试: buyer="
+                        + buyer + ", text=" + text);
+                }
+
                 var retry = Math.Max(0, retryCount);
                 for (var i = 0; !ok && i < retry; i++)
                 {
@@ -130,12 +140,39 @@ namespace Bot.ChromeNs
                         + ", reason=" + rpa.GetSendFailureReason() + ", text=" + text);
                     rpa.InvalidateChatControls();
                     await Task.Delay(1800);
+
+                    // Seller echo is the source of truth. It can arrive after UIA timed out but
+                    // before this retry window ends; sending again would create a duplicate.
+                    if (HasRecentSellerEcho(buyer, text, sendStartedAt))
+                    {
+                        rpa.ResetSendFailure();
+                        ok = true;
+                        Log.Info("重试前已收到同买家同文本卖家回显，按真实送达处理并取消重复发送: buyer="
+                            + buyer + ", text=" + text);
+                        break;
+                    }
+
                     if (!await EnsureActiveBuyerForSendAsync(buyer))
                     {
                         rpa.SetSendFailure("重试会话确认", "无法确认目标买家会话");
                         return false;
                     }
                     ok = await SendTextAsync(buyer, text);
+                    if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900))
+                    {
+                        rpa.ResetSendFailure();
+                        ok = true;
+                        Log.Info("重试动作结果未确认，但卖家回显已证明真实送达: buyer=" + buyer
+                            + ", text=" + text);
+                    }
+                }
+
+                if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 1400))
+                {
+                    rpa.ResetSendFailure();
+                    ok = true;
+                    Log.Info("最终失败判定前收到延迟卖家回显，改判真实送达: buyer=" + buyer
+                        + ", text=" + text);
                 }
                 if (!ok)
                 {
@@ -147,6 +184,21 @@ namespace Bot.ChromeNs
             {
                 _sendGate.Release();
             }
+        }
+
+        private async Task<bool> WaitForSellerEchoGraceAsync(
+            string buyer,
+            string text,
+            DateTime since,
+            int milliseconds)
+        {
+            var deadline = DateTime.Now.AddMilliseconds(Math.Max(0, milliseconds));
+            while (DateTime.Now <= deadline)
+            {
+                if (HasRecentSellerEcho(buyer, text, since)) return true;
+                await Task.Delay(120);
+            }
+            return HasRecentSellerEcho(buyer, text, since);
         }
 
         private async Task<bool> EnsureActiveBuyerForSendAsync(string buyer)
