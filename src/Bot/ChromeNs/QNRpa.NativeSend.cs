@@ -1,8 +1,9 @@
-using BotLib;
+﻿using BotLib;
 using Newtonsoft.Json;
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
@@ -205,6 +206,11 @@ namespace Bot.ChromeNs
             if (_sendMessageButton == null && _sendMessageButtonRect.IsEmpty) return false;
             var desk = ResolveSellerDesk();
             if (desk == null || !EnsureSellerDeskBinding(false)) return false;
+
+            // WindowFromPoint must observe the verified seller window rather than a settings/dialog
+            // window that happens to cover the same screen coordinate. This is not a send action.
+            desk.BringTop();
+            Thread.Sleep(100);
 
             var rect = _sendMessageButtonRect;
             if ((rect.Width <= 0 || rect.Height <= 0) && _sendMessageButton != null)
