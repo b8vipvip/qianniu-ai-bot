@@ -79,13 +79,30 @@ def test_external_watchdog_restarts_unexpected_process_exit_only():
     assert "Bot外部进程守护已启动" in watchdog
 
 
-def test_handoff_rules_move_to_handoff_strategy_page_and_old_key_remains_compatible():
-    bridge = read("src/Bot/Update/BotUpdateHandoffSettingsUi.Fast.cs")
+def test_handoff_strategy_is_built_directly_not_only_by_loaded_runtime_patch():
+    wnd = read("src/Bot/Options/WndOption.xaml.cs")
+    feature = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
+    legacy_bridge = read("src/Bot/Update/BotUpdateHandoffSettingsUi.Fast.cs")
 
-    assert 'notification.Header = "转人工策略｜消息通知"' in bridge
-    assert '"_rulesEnabled"' in bridge
-    assert '"_manualKeywords"' in bridge
-    assert '"_noAutoKeywords"' in bridge
-    assert '"_handoffText"' in bridge
-    assert "设置界面已将“启用转人工规则”及其关键词/话术移动到“转人工策略”" in bridge
-    assert 'ReplaceExactText(window, "消息通知", "转人工策略")' in bridge
+    # Regression from 1.1.756/1.1.758: WndOption itself still used the old visible title,
+    # so opening settings on another page showed “消息通知” until the feature control Loaded.
+    assert 'AddFeaturePage("回复与通知", "转人工策略"' in wnd
+    assert 'OptionEnum.Notifications, "转人工策略")' in wnd
+    assert 'AddFeaturePage("回复与通知", "消息通知"' not in wnd
+
+    # The real underlying tab and controls must be reorganized during constructor execution.
+    constructor = feature.index("public FeatureSettingsOptionsControl(string seller)")
+    direct_migration = feature.index("OrganizeHandoffStrategyPage();", constructor)
+    hide_tabs = feature.index("HideLegacyTabHeaders();", direct_migration)
+    assert constructor < direct_migration < hide_tabs
+    assert 'notificationTab.Header = "转人工策略"' in feature
+    assert 'pageTitle = "转人工策略"' in feature
+    assert '"_rulesEnabled"' in feature
+    assert '"_manualKeywords"' in feature
+    assert '"_noAutoKeywords"' in feature
+    assert '"_handoffText"' in feature
+    assert "在构造阶段将“启用转人工规则”及关键词/话术移动到“转人工策略”" in feature
+
+    # Keep the older Loaded bridge only as compatibility fallback; correctness can no longer
+    # depend on it executing after the user opens a feature page.
+    assert "HandoffSettingsUiBridge" in legacy_bridge
