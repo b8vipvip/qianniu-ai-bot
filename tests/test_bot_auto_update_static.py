@@ -15,26 +15,39 @@ def updater_code():
         "src/Bot/Update/BotUpdateService.Actions.Fast.cs",
         "src/Bot/Update/BotUpdateService.Network.Fast.cs",
         "src/Bot/Update/BotUpdateService.State.Fast.cs",
+        "src/Bot/Update/BotUpdateService.ServerPush.Fast.cs",
         "src/Bot/Update/BotUpdatePromptWindow.Fast.cs",
     ]
     return "\n".join(read(path) for path in paths)
 
 
-def test_runtime_uses_control_plane_cache_then_single_github_latest_fallback():
+def test_background_updates_are_server_push_and_manual_check_keeps_safe_fallbacks():
     code = updater_code()
+    core = read("src/Bot/Update/BotUpdateService.Core.Fast.cs")
+    state = read("src/Bot/Update/BotUpdateService.State.Fast.cs")
+    push = read("src/Bot/Update/BotUpdateService.ServerPush.Fast.cs")
+    server_push = read("services/api-control-plane/bot_update_push.py")
+    bootstrap = read("services/api-control-plane/bootstrap.py")
     props = read("src/Bot/Directory.Build.props")
 
+    assert "mode=server-push-sse" in core
+    assert "RestartServerPushListener()" in core
+    assert "clientAutoCheck=False" in core
+    assert "CheckNowAsync(false)" not in state
+    assert "new Timer(" not in state
+    assert "ServerPushEventsPath" in push
+    assert "text/event-stream" in push
+    assert "/api/public/v1/bot-update/events" in push
+    assert "notification_mode" in server_push
+    assert "StreamingResponse" in server_push
+    assert "bot_update_push.router" in bootstrap
+
+    # Manual check remains available and still uses server cache first / GitHub fallback.
     assert "/api/public/v1/bot-update/latest" in code
-    assert "control-plane-cache-first" in code
     assert "ServiceMetadataTimeoutSeconds = 6" in code
-    assert (
-        "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest"
-        in code
-    )
-    assert "releases?per_page=20" not in code
+    assert "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest" in code
     assert "FetchLatestFromControlPlaneAsync" in code
     assert "FetchLatestFromGitHubAsync" in code
-    assert "服务端更新缓存不可用" in code
 
     assert 'Name="UseOptimizedBotUpdateService"' in props
     assert 'Compile Remove="$(MSBuildThisFileDirectory)Update\\BotUpdateService.cs"' in props
@@ -55,34 +68,35 @@ def test_update_sha_survives_manifest_network_failure_and_shop_scoped_server_url
     assert "new ShopProfileStore(paths)" in network
     assert "profile.ToContext()" in network
     assert "ShopControlPlaneConnectionStore.GetLegacyGlobalServerUrl()" in network
-    assert "release.Sha256 = string.Empty;\n                Log.Info(\n                    \"读取更新SHA清单失败" not in network
 
 
-def test_download_prefers_tencent_control_plane_then_falls_back_to_github():
+def test_download_prefers_server_then_falls_back_to_github_and_reports_channel_progress():
     code = updater_code()
     download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
 
-    mirror_line = 'AddDownloadSource(sources, "腾讯云控制台服务器", release.MirrorUrl)'
+    server_line = 'AddDownloadSource(sources, "服务器", release.MirrorUrl)'
     github_line = 'AddDownloadSource(sources, "GitHub", release.PackageUrl)'
-    assert mirror_line in download
+    assert server_line in download
     assert github_line in download
-    assert download.index(mirror_line) < download.index(github_line)
+    assert download.index(server_line) < download.index(github_line)
     assert "DownloadConnectTimeoutSeconds = 20" in code
     assert "DownloadReadTimeoutSeconds = 45" in code
     assert "HashFile(partial)" in code
-    assert "腾讯云控制台服务器与 GitHub 均下载失败" in code
-    assert "release.Sha256" in code
-    assert "SHA-256 校验信息" in code
-    assert "release-info.json" in code
+    assert "服务器与 GitHub 均下载失败" in code
+    assert "CurrentDownloadChannel" in download
+    assert "CurrentDownloadPercent" in download
+    assert "RaiseDownloadStatus" in download
+    assert "正在下载更新｜通道：" in download
+    assert "DownloadedBytes" in code
+    assert "TotalBytes" in code
 
-    # The linked 20-second connect timeout must not be mistaken for a user cancel.
     assert "if (cancellationToken.IsCancellationRequested) throw;" in download
     assert "已自动切换备用下载源" in download
     assert "非用户取消，自动切换下一来源" in download
     assert "Bot更新下载被用户取消" in download
 
 
-def test_update_download_is_single_flight_and_auto_install_disables_redundant_prefetch():
+def test_update_download_is_single_flight_and_auto_install_enables_server_push():
     download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
     state = read("src/Bot/Update/BotUpdateService.State.Fast.cs")
 
@@ -95,6 +109,7 @@ def test_update_download_is_single_flight_and_auto_install_disables_redundant_pr
     assert "if (settings.AutoInstall)" in state
     assert "settings.AutoCheck = true" in state
     assert "settings.AutoDownload = false" in state
+    assert "Never reintroduce a client-side periodic version check" in state
 
 
 def test_server_caches_latest_metadata_and_verified_packages():
@@ -133,23 +148,25 @@ def test_update_defaults_keep_auto_install_opt_in_and_remove_second_confirmation
     core = read("src/Bot/Update/BotUpdateService.Core.Fast.cs")
     prompt = read("src/Bot/Update/BotUpdatePromptWindow.Fast.cs")
     ui = read("src/Bot/Options/BotUpdateOptionsControl.cs")
+    ui_bridge = read("src/Bot/Update/BotUpdateSettingsUi.Fast.cs")
 
     assert "AutoCheck = true" in code
     assert "NotifyPopup = true" in code
     assert "AutoDownload = false" in code
     assert "AutoInstall = false" in code
-    assert "CheckIntervalHours = 6" in code
 
     assert 'Content = "自动更新（发现新版本后自动下载安装并重启，无需确认）"' in ui
     assert "settings.AutoInstall = _autoUpdate.IsChecked == true" in ui
     assert "if (settings.AutoInstall) settings.AutoCheck = true" in ui
-    assert "!result.InstallStarted" in ui
+    assert "接收服务端新版本通知（客户端不主动检查版本）" in ui_bridge
+    assert "Visibility.Collapsed" in ui_bridge
 
     assert "if (settings.AutoInstall" in core
     assert "result.InstallStarted = true" in core
     assert "LaunchInstaller(package, release)" in core
     assert "MessageBoxButton.YesNo" not in prompt
     assert '"确认更新"' not in prompt
+    assert "下载通道：" in prompt
     assert "Application.Current.Shutdown()" in code
 
 

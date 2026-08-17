@@ -23,6 +23,12 @@ namespace Bot.UpdateNs
     internal static partial class BotUpdateService
     {
         private static readonly SemaphoreSlim DownloadGate = new SemaphoreSlim(1, 1);
+        private static int _lastReportedDownloadPercent = -100;
+
+        public static string CurrentDownloadChannel { get; private set; } = string.Empty;
+        public static int CurrentDownloadPercent { get; private set; } = -1;
+        public static long CurrentDownloadedBytes { get; private set; }
+        public static long CurrentDownloadTotalBytes { get; private set; }
 
         public static async Task<string> DownloadPackageAsync(
             BotReleaseInfo release,
@@ -45,7 +51,7 @@ namespace Bot.UpdateNs
             try
             {
                 var sources = new List<KeyValuePair<string, string>>();
-                AddDownloadSource(sources, "腾讯云控制台服务器", release.MirrorUrl);
+                AddDownloadSource(sources, "服务器", release.MirrorUrl);
                 AddDownloadSource(sources, "GitHub", release.PackageUrl);
                 if (sources.Count == 0)
                     throw new Exception("发布版本缺少安装包下载地址。");
@@ -60,7 +66,13 @@ namespace Bot.UpdateNs
                         release.Sha256,
                         StringComparison.OrdinalIgnoreCase))
                 {
+                    CurrentDownloadChannel = "本地缓存";
+                    CurrentDownloadPercent = 100;
+                    CurrentDownloadedBytes = new FileInfo(target).Length;
+                    CurrentDownloadTotalBytes = CurrentDownloadedBytes;
                     if (progress != null) progress.Report(100);
+                    RaiseDownloadStatus(release, "本地缓存", 100,
+                        CurrentDownloadedBytes, CurrentDownloadTotalBytes, true);
                     if (waitingForExistingDownload)
                     {
                         Log.Info(
@@ -78,11 +90,23 @@ namespace Bot.UpdateNs
                     try
                     {
                         if (File.Exists(partial)) File.Delete(partial);
+                        CurrentDownloadChannel = source.Key;
+                        CurrentDownloadPercent = 0;
+                        CurrentDownloadedBytes = 0;
+                        CurrentDownloadTotalBytes = Math.Max(0, release.PackageSize);
+                        _lastReportedDownloadPercent = -100;
                         if (progress != null) progress.Report(0);
+                        RaiseDownloadStatus(release, source.Key, 0, 0,
+                            CurrentDownloadTotalBytes, false);
+                        Log.Info("Bot更新开始下载: version=" + release.Version
+                            + ", channel=" + source.Key);
+
                         await DownloadFromUrlAsync(
                             source.Value,
                             partial,
                             release.PackageSize,
+                            source.Key,
+                            release,
                             progress,
                             cancellationToken);
 
@@ -98,7 +122,21 @@ namespace Bot.UpdateNs
 
                         if (File.Exists(target)) File.Delete(target);
                         File.Move(partial, target);
+                        var length = new FileInfo(target).Length;
+                        CurrentDownloadChannel = source.Key;
+                        CurrentDownloadPercent = 100;
+                        CurrentDownloadedBytes = length;
+                        CurrentDownloadTotalBytes = release.PackageSize > 0
+                            ? release.PackageSize
+                            : length;
                         if (progress != null) progress.Report(100);
+                        RaiseDownloadStatus(
+                            release,
+                            source.Key,
+                            100,
+                            CurrentDownloadedBytes,
+                            CurrentDownloadTotalBytes,
+                            true);
                         Log.Info(
                             "Bot更新安装包下载成功: version=" + release.Version
                             + ", source=" + source.Key);
@@ -134,7 +172,7 @@ namespace Bot.UpdateNs
                 }
 
                 throw new Exception(
-                    "腾讯云控制台服务器与 GitHub 均下载失败。"
+                    "服务器与 GitHub 均下载失败。"
                     + string.Join("；", errors.ToArray()));
             }
             finally
@@ -162,6 +200,8 @@ namespace Bot.UpdateNs
             string url,
             string partialPath,
             long expectedSize,
+            string channel,
+            BotReleaseInfo release,
             IProgress<int> progress,
             CancellationToken cancellationToken)
         {
@@ -196,6 +236,7 @@ namespace Bot.UpdateNs
             {
                 response.EnsureSuccessStatusCode();
                 var total = response.Content.Headers.ContentLength ?? expectedSize;
+                CurrentDownloadTotalBytes = Math.Max(0, total);
                 using (var input = await response.Content.ReadAsStreamAsync())
                 using (var output = new FileStream(
                     partialPath,
@@ -221,14 +262,68 @@ namespace Bot.UpdateNs
                             read,
                             cancellationToken);
                         copied += read;
-                        if (progress != null && total > 0)
+                        var percent = total > 0
+                            ? (int)Math.Min(99, copied * 100L / total)
+                            : 0;
+                        CurrentDownloadChannel = channel;
+                        CurrentDownloadPercent = percent;
+                        CurrentDownloadedBytes = copied;
+                        CurrentDownloadTotalBytes = Math.Max(0, total);
+                        if (progress != null && total > 0) progress.Report(percent);
+                        if (percent == 0
+                            || percent >= _lastReportedDownloadPercent + 2
+                            || copied == total)
                         {
-                            progress.Report(
-                                (int)Math.Min(99, copied * 100L / total));
+                            _lastReportedDownloadPercent = percent;
+                            RaiseDownloadStatus(
+                                release,
+                                channel,
+                                percent,
+                                copied,
+                                Math.Max(0, total),
+                                false);
                         }
                     }
                 }
             }
+        }
+
+        private static void RaiseDownloadStatus(
+            BotReleaseInfo release,
+            string channel,
+            int percent,
+            long copied,
+            long total,
+            bool complete)
+        {
+            var result = new BotUpdateCheckResult
+            {
+                Success = true,
+                CurrentVersion = CurrentVersion,
+                UpdateAvailable = release != null && CompareVersions(release.Version, CurrentVersion) > 0,
+                Release = release,
+                DownloadChannel = channel ?? string.Empty,
+                DownloadPercent = Math.Max(0, Math.Min(100, percent)),
+                DownloadedBytes = Math.Max(0, copied),
+                TotalBytes = Math.Max(0, total)
+            };
+            result.Message = complete
+                ? "安装包下载并校验完成｜通道：" + result.DownloadChannel + "｜100%"
+                : "正在下载更新｜通道：" + result.DownloadChannel
+                    + "｜" + result.DownloadPercent + "%"
+                    + FormatBytesProgress(result.DownloadedBytes, result.TotalBytes);
+            RaiseStatus(result);
+        }
+
+        private static string FormatBytesProgress(long copied, long total)
+        {
+            if (copied <= 0 && total <= 0) return string.Empty;
+            Func<long, string> fmt = value => value >= 1024L * 1024L
+                ? (value / 1024d / 1024d).ToString("0.0") + " MB"
+                : (value / 1024d).ToString("0") + " KB";
+            return total > 0
+                ? "｜" + fmt(copied) + "/" + fmt(total)
+                : "｜" + fmt(copied);
         }
 
         private static async Task<int> ReadWithTimeoutAsync(
