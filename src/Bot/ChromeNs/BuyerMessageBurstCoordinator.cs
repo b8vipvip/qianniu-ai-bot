@@ -170,9 +170,7 @@ namespace Bot.ChromeNs
         }
 
         // Only unresolved legacy/global configuration needs serialization. Shop-scoped runtime
-        // work uses AsyncLocal<ShopContext> and is safe to dispatch concurrently; keeping every
-        // buyer behind one semaphore let one slow AI request block fixed replies and all other
-        // buyers for tens of seconds.
+        // work uses AsyncLocal<ShopContext> and is safe to dispatch concurrently.
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
@@ -193,6 +191,29 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            // Fixed business rules are evaluated on the individual incoming message before it is
+            // inserted into any quiet-delay/context-merge state. This guarantees that a first
+            // inquiry greeting or off-hours reply can never be stuck behind “等待合并本轮消息”.
+            Task.Run(async () =>
+            {
+                var continueToMerge = true;
+                try
+                {
+                    continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(item);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount(
+                        "消息合并前固定规则处理失败，继续普通合并链路: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick + ", error=" + Safe(ex.Message, 220),
+                        20);
+                }
+                if (continueToMerge) EnqueueForMerge(item);
+            });
+        }
+
+        private void EnqueueForMerge(BuyerMessageBurstItem item)
+        {
             var key = Key(item.SellerNick, item.BuyerNick);
             var state = _states.GetOrAdd(key, _ => new BurstState());
             var startWorker = false;
@@ -359,10 +380,6 @@ namespace Bot.ChromeNs
 
             if (shop == null)
             {
-                // Even the legacy path gets one deterministic chance before waiting for an AI
-                // configuration lock. It does not read or mutate AI endpoint state.
-                if (await DeterministicAutoReplyService.TryHandleAsync(burst, lease)) return;
-
                 await LegacyAiConfigurationGate.WaitAsync();
                 try
                 {
@@ -375,12 +392,8 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // ShopSettingsScope is AsyncLocal. Fixed replies and normal per-shop AI work can run
-            // concurrently without a process-wide gate. This prevents a 60-90 second upstream
-            // timeout for one buyer from freezing every other buyer of the same running Bot.
             using (ShopSettingsScope.Enter(shop))
             {
-                if (await DeterministicAutoReplyService.TryHandleAsync(burst, lease)) return;
                 await _handler(lease);
             }
         }
