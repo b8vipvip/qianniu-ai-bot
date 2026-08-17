@@ -74,6 +74,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\FirstInquiryStreamingGuard.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\DeterministicAutoReplyService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\DeterministicAutoReplyService.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\BotWebBotEnabledSyncService.cs" />
   </ItemGroup>
