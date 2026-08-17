@@ -20,9 +20,10 @@ using System.Windows.Media;
 
 namespace Bot.UpdateNs
 {
-
     internal sealed class BotUpdateSettings
     {
+        // Compatibility name retained in persisted JSON. It now means “receive server push”,
+        // not “periodically check version from the client”.
         public bool AutoCheck { get; set; }
         public bool NotifyPopup { get; set; }
         public bool AutoDownload { get; set; }
@@ -87,11 +88,17 @@ namespace Bot.UpdateNs
         public string CurrentVersion { get; set; }
         public string Message { get; set; }
         public BotReleaseInfo Release { get; set; }
+        public string DownloadChannel { get; set; }
+        public int DownloadPercent { get; set; }
+        public long DownloadedBytes { get; set; }
+        public long TotalBytes { get; set; }
 
         public BotUpdateCheckResult()
         {
             CurrentVersion = string.Empty;
             Message = string.Empty;
+            DownloadChannel = string.Empty;
+            DownloadPercent = -1;
         }
     }
 }
