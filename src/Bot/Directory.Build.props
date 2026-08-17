@@ -34,6 +34,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedPathProvider.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedRuntimeBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedSettingsStore.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopScopedUiBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopSettingsScope.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopTokenStore.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ShopScope\ShopTokenBindingService.cs" />
