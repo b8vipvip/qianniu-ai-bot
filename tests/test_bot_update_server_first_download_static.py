@@ -21,9 +21,10 @@ def test_update_package_download_is_server_first_then_github_fallback():
     # so the foreach loop can continue to the GitHub fallback source.
     assert "connectTimeout.CancelAfter" in download
     assert "if (cancellationToken.IsCancellationRequested) throw;" in download
-    assert "已自动切换备用下载源" in download
     assert "准备尝试下一来源" in download
     assert "CurrentDownloadChannel = source.Key" in download
+    assert "CurrentDownloadPercent = -1" in download
+    assert "正在连接下载通道" in download
     assert "RaiseDownloadStatus" in download
 
 
