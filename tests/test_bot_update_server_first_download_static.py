@@ -11,7 +11,7 @@ def read(path: str) -> str:
 def test_update_package_download_is_server_first_then_github_fallback():
     download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
 
-    server = 'AddDownloadSource(sources, "腾讯云控制台服务器", release.MirrorUrl)'
+    server = 'AddDownloadSource(sources, "服务器", release.MirrorUrl)'
     github = 'AddDownloadSource(sources, "GitHub", release.PackageUrl)'
     assert server in download
     assert github in download
@@ -23,11 +23,15 @@ def test_update_package_download_is_server_first_then_github_fallback():
     assert "if (cancellationToken.IsCancellationRequested) throw;" in download
     assert "已自动切换备用下载源" in download
     assert "准备尝试下一来源" in download
+    assert "CurrentDownloadChannel = source.Key" in download
+    assert "RaiseDownloadStatus" in download
 
 
-def test_update_prompt_matches_server_first_runtime_strategy():
+def test_update_prompt_matches_server_first_runtime_strategy_and_shows_channel():
     prompt = read("src/Bot/Update/BotUpdatePromptWindow.Fast.cs")
 
-    assert "优先从服务端下载安装包" in prompt
-    assert "服务端超时或下载失败时自动切换 GitHub" in prompt
+    assert "优先从服务器下载" in prompt
+    assert "服务器不可用时自动切换 GitHub" in prompt
+    assert "下载通道：" in prompt
+    assert "CurrentDownloadChannel" in prompt
     assert "优先从 GitHub 下载；失败时自动切换服务端镜像" not in prompt
