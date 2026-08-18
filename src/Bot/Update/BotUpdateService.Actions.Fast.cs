@@ -113,6 +113,16 @@ namespace Bot.UpdateNs
                 throw new FileNotFoundException(
                     "自动更新程序 BotAutoUpdater.ps1 缺失。",
                     sourceScript);
+
+            // The current process is about to intentionally exit and hand control to the updater.
+            // Persist a provisional skip for this exact target first. If the updater later rolls
+            // back to the old build, that build must stay running instead of immediately receiving
+            // the same SSE release and entering an update -> rollback -> update loop. A successful
+            // install is unaffected because CurrentVersion then equals the skipped target; any later
+            // release has a different version and can still auto-install normally.
+            QuarantineVersionForUpdaterHandoff(release.Version);
+            BotProcessWatchdog.MarkExpectedExit("auto-update:" + release.Version);
+
             var tempScript = Path.Combine(
                 Path.GetTempPath(),
                 "QianniuAiBotUpdater-"
@@ -140,7 +150,8 @@ namespace Bot.UpdateNs
                 throw new Exception("无法启动自动更新程序。");
             Log.Info(
                 "已启动Bot自动更新程序: version=" + release.Version
-                + ", package=" + packagePath);
+                + ", package=" + packagePath
+                + "；目标版本已预先隔离，若回滚不会再次自动循环安装。");
             if (Application.Current != null)
             {
                 Application.Current.Dispatcher.BeginInvoke(
@@ -148,6 +159,33 @@ namespace Bot.UpdateNs
                     {
                         Application.Current.Shutdown();
                     }));
+            }
+        }
+
+        private static void QuarantineVersionForUpdaterHandoff(string version)
+        {
+            version = NormalizeVersion(version);
+            if (string.IsNullOrWhiteSpace(version)) return;
+            try
+            {
+                lock (SettingsSync)
+                {
+                    var settings = _settings == null
+                        ? LoadSettingsInternal()
+                        : CloneSettings(_settings);
+                    settings.SkippedVersion = version;
+                    _settings = CloneSettings(settings);
+                    SaveSettingsInternal(_settings);
+                }
+                Log.Info("自动更新交接保护已记录目标版本隔离: version=" + version);
+            }
+            catch (Exception ex)
+            {
+                // Do not block an otherwise valid manual update solely because the anti-loop marker
+                // could not be persisted; the external updater also writes the same quarantine on
+                // failure as a second line of defense.
+                Log.Info("记录自动更新交接保护失败，将依赖更新器失败隔离: version="
+                    + version + ", error=" + Short(ex.Message, 180));
             }
         }
 
