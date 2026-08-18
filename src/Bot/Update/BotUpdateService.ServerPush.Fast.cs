@@ -1,4 +1,4 @@
-using BotLib;
+﻿using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
 using System.IO;
@@ -178,7 +178,13 @@ namespace Bot.UpdateNs
 
             if (skipped)
             {
-                result.Message += " 当前版本已设置为跳过。";
+                var failedInstallBlocked = string.Equals(
+                    settings.FailedInstallVersion,
+                    release.Version,
+                    StringComparison.OrdinalIgnoreCase);
+                result.Message += failedInstallBlocked
+                    ? " 当前版本因上次安装失败处于隔离状态；不会自动循环重装，清除失败隔离后才会重试。"
+                    : " 当前版本已由用户设置为跳过。";
                 RaiseStatus(result);
                 return;
             }

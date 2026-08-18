@@ -1,4 +1,4 @@
-using Bot.ChromeNs;
+﻿using Bot.ChromeNs;
 using Bot.UpdateNs;
 using Newtonsoft.Json.Linq;
 using System;
@@ -31,6 +31,7 @@ namespace Bot.Options
         private readonly TextBlock _latestVersion;
         private readonly TextBlock _status;
         private readonly TextBlock _skipped;
+        private readonly TextBlock _failedInstall;
         private readonly TextBlock _buildCommit;
         private readonly TextBlock _buildTime;
         private readonly TextBlock _buildChannel;
@@ -95,7 +96,7 @@ namespace Bot.Options
             var versionGrid = new Grid { Margin = new Thickness(0, 10, 0, 0) };
             versionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(130) });
             versionGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            for (var i = 0; i < 8; i++) versionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            for (var i = 0; i < 9; i++) versionGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
 
             AddLabel(versionGrid, 0, "当前版本");
             _currentVersion = AddValue(versionGrid, 0, BotUpdateService.CurrentVersion);
@@ -112,8 +113,10 @@ namespace Bot.Options
             _installDirectory.TextWrapping = TextWrapping.Wrap;
             AddLabel(versionGrid, 6, "最新正式版本");
             _latestVersion = AddValue(versionGrid, 6, "尚未检查");
-            AddLabel(versionGrid, 7, "已跳过版本");
+            AddLabel(versionGrid, 7, "用户跳过版本");
             _skipped = AddValue(versionGrid, 7, "无");
+            AddLabel(versionGrid, 8, "安装失败隔离");
+            _failedInstall = AddValue(versionGrid, 8, "无");
             versionPanel.Children.Add(versionGrid);
 
             versionPanel.Children.Add(new TextBlock
@@ -157,12 +160,12 @@ namespace Bot.Options
             var openInstall = CreateButton("打开安装目录", false);
             openInstall.Click += (s, e) => OpenDirectory(ReadInstalledBuildInfo().InstallDirectory);
             buttons.Children.Add(openInstall);
-            var clearSkip = CreateButton("取消跳过版本", false);
+            var clearSkip = CreateButton("清除跳过/失败隔离", false);
             clearSkip.Click += (s, e) =>
             {
                 BotUpdateService.ClearSkippedVersion();
                 LoadSettings();
-                _status.Text = "已取消跳过版本，下次检查时会重新提示。";
+                _status.Text = "已清除用户跳过和安装失败隔离，并重新连接服务端版本通知。";
             };
             buttons.Children.Add(clearSkip);
             actionPanel.Children.Add(buttons);
@@ -358,7 +361,12 @@ namespace Bot.Options
         private void LoadSkippedVersionOnly()
         {
             var settings = BotUpdateService.GetSettings();
-            _skipped.Text = string.IsNullOrWhiteSpace(settings.SkippedVersion) ? "无" : settings.SkippedVersion;
+            _skipped.Text = string.IsNullOrWhiteSpace(settings.UserSkippedVersion)
+                ? "无"
+                : settings.UserSkippedVersion;
+            _failedInstall.Text = string.IsNullOrWhiteSpace(settings.FailedInstallVersion)
+                ? "无"
+                : settings.FailedInstallVersion;
         }
 
         private void RefreshBuildInfo()
