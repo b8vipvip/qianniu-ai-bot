@@ -82,7 +82,6 @@ namespace Bot.UpdateNs
         {
             settings = settings ?? new BotUpdateSettings();
             var requestedSkip = CleanVersionText(settings.SkippedVersion);
-            var skipCleared = false;
 
             lock (SettingsSync)
             {
@@ -100,11 +99,12 @@ namespace Bot.UpdateNs
                     if (string.IsNullOrWhiteSpace(requestedSkip))
                     {
                         // “取消跳过版本” is an explicit user action. Clear both the real user
-                        // skip and an updater failure quarantine, then immediately re-check below.
+                        // skip and the updater failure quarantine. Restarting the SSE listener
+                        // below makes the cleared state effective without reintroducing a client
+                        // background version-polling loop.
                         settings.UserSkippedVersion = string.Empty;
                         settings.FailedInstallVersion = string.Empty;
                         settings.FailedInstallAt = string.Empty;
-                        skipCleared = !string.IsNullOrWhiteSpace(currentSkip);
                     }
                     else
                     {
@@ -122,7 +122,6 @@ namespace Bot.UpdateNs
                 SaveSettingsInternal(_settings);
             }
             RestartServerPushListener();
-            if (skipCleared) ScheduleRecheckAfterSkipClear();
         }
 
         /// <summary>
