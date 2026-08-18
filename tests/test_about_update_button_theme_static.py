@@ -17,7 +17,7 @@ def test_all_about_update_actions_use_shared_button_factory():
         "下载并安装",
         "查看发布页面",
         "打开安装目录",
-        "取消跳过版本",
+        "清除跳过/失败隔离",
     ):
         assert f'CreateButton("{label}"' in source
 
