@@ -9,8 +9,12 @@
       OrderTemplateTradeDetailBridge.cs and OrderTemplateReceiveNewMessageTradeDetailBridge.cs.
       The legacy source files remain in the repository for history/regression reference, but are no
       longer compiled, preventing two enrichment pipelines from racing to send the same order reply.
+      OrderTemplateRuntimeBootstrap.cs adds an explicit App static constructor so the runtime/UI
+      bootstrap cannot be skipped by beforefieldinit semantics in either Bot or WPF *_wpftmp builds.
     -->
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRequiredFieldsV2.cs" />
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRuntimeBootstrap.cs"
+             Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRuntimeBootstrap.cs')" />
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RechargeStatusAutoQueryService.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotWebConsoleSyncService.cs')">
