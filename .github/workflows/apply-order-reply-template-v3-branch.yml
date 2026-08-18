@@ -1,0 +1,37 @@
+name: Apply order reply template v3 on branch
+
+on:
+  push:
+    branches: [ agent/order-reply-template-v3 ]
+    paths: [ '.github/workflows/apply-order-reply-template-v3-branch.yml' ]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/order-reply-template-v3
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Apply patch
+        run: python scripts/apply_order_reply_template_v3.py
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Run targeted regression tests
+        run: python -m pytest -q tests/test_order_reply_template_placeholders_v3_static.py tests/test_late_order_panel_recovery_static.py
+      - name: Commit branch patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/Bot/ChromeNs/OrderEventHub.cs src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs src/Bot/ChromeNs/QN.cs tests/test_order_reply_template_placeholders_v3_static.py
+          git diff --cached --check
+          git commit -m "feat: enhance order auto-reply template variables"
+          git push origin HEAD:agent/order-reply-template-v3
