@@ -113,6 +113,23 @@ namespace Bot.ChromeNs
 
         public async Task<bool> SendTextWithRetryAsync(string buyer, string text, int retryCount = 1)
         {
+            const string segmentToken = "{分段符}";
+            if (!string.IsNullOrEmpty(text) && text.IndexOf(segmentToken, StringComparison.Ordinal) >= 0)
+            {
+                var segments = text.Split(new[] { segmentToken }, StringSplitOptions.None)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .ToList();
+                if (segments.Count == 0) return false;
+                for (var segmentIndex = 0; segmentIndex < segments.Count; segmentIndex++)
+                {
+                    var segment = segments[segmentIndex];
+                    Log.Info("分段自动发送: buyer=" + buyer + ", segment=" + (segmentIndex + 1) + "/" + segments.Count);
+                    if (!await SendTextWithRetryAsync(buyer, segment, retryCount)) return false;
+                    if (segmentIndex + 1 < segments.Count) await Task.Delay(220);
+                }
+                return true;
+            }
+
             await _sendGate.WaitAsync();
             try
             {

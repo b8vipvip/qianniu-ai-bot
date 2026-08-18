@@ -1,4 +1,4 @@
-using Bot.ChatRecord;
+﻿using Bot.ChatRecord;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -30,6 +30,7 @@ namespace Bot.ChromeNs
         public string ItemTitle { get; set; }
         public string SkuId { get; set; }
         public string SkuText { get; set; }
+        public string BuyerRemark { get; set; }
         public int Quantity { get; set; }
         public decimal? TotalAmount { get; set; }
         public decimal? PaidAmount { get; set; }
@@ -61,6 +62,7 @@ namespace Bot.ChromeNs
             sb.Append("订单号：").Append(Safe(OrderId, 80)).Append("\n");
             if (!string.IsNullOrWhiteSpace(ItemTitle)) sb.Append("商品：").Append(Safe(ItemTitle, 180)).Append("\n");
             if (!string.IsNullOrWhiteSpace(SkuText)) sb.Append("规格：").Append(Safe(SkuText, 160)).Append("\n");
+            if (!string.IsNullOrWhiteSpace(BuyerRemark)) sb.Append("买家备注：").Append(Safe(BuyerRemark, 300)).Append("\n");
             if (Quantity > 0) sb.Append("数量：").Append(Quantity).Append("\n");
             if (PaidAmount.HasValue) sb.Append("实付：¥").Append(PaidAmount.Value.ToString("0.00", CultureInfo.InvariantCulture)).Append("\n");
             else if (TotalAmount.HasValue) sb.Append("金额：¥").Append(TotalAmount.Value.ToString("0.00", CultureInfo.InvariantCulture)).Append("\n");
@@ -120,6 +122,11 @@ namespace Bot.ChromeNs
         {
             "skutext", "skuname", "skupropertiesname", "propertiesname", "spec", "specification", "skudesc"
         };
+        private static readonly string[] BuyerRemarkKeys =
+        {
+            "buyerremark", "buyermemo", "buyernote", "buyermessage", "buyermessagecontent",
+            "buyermsg", "remarkfrombuyer", "memofrombuyer"
+        };
         private static readonly string[] QuantityKeys =
         {
             "quantity", "num", "buyamount", "itemcount", "count"
@@ -172,6 +179,8 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(itemTitle)) itemTitle = ExtractLabeledText(combined, "商品", "宝贝", "商品名称");
             var skuText = FindValue(flat, SkuTextKeys);
             if (string.IsNullOrWhiteSpace(skuText)) skuText = ExtractLabeledText(combined, "规格", "SKU", "属性");
+            var buyerRemark = FindValue(flat, BuyerRemarkKeys);
+            if (string.IsNullOrWhiteSpace(buyerRemark)) buyerRemark = ExtractLabeledText(combined, "买家备注", "买家留言");
             var tradeStatus = FindValue(flat, StatusKeys);
             if (string.IsNullOrWhiteSpace(tradeStatus)) tradeStatus = ExtractStatus(combined);
 
@@ -195,6 +204,7 @@ namespace Bot.ChromeNs
                 ItemTitle = Clean(itemTitle, 300),
                 SkuId = Clean(FindValue(flat, SkuIdKeys), 100),
                 SkuText = Clean(skuText, 240),
+                BuyerRemark = Clean(buyerRemark, 500),
                 Quantity = ParseInt(FindValue(flat, QuantityKeys)),
                 TotalAmount = ParseMoney(FindValue(flat, TotalAmountKeys)),
                 PaidAmount = ParseMoney(FindValue(flat, PaidAmountKeys)),
@@ -562,6 +572,7 @@ namespace Bot.ChromeNs
             if (string.IsNullOrWhiteSpace(target.ItemTitle)) target.ItemTitle = incoming.ItemTitle;
             if (string.IsNullOrWhiteSpace(target.SkuId)) target.SkuId = incoming.SkuId;
             if (string.IsNullOrWhiteSpace(target.SkuText)) target.SkuText = incoming.SkuText;
+            if (string.IsNullOrWhiteSpace(target.BuyerRemark)) target.BuyerRemark = incoming.BuyerRemark;
             if (target.Quantity <= 0) target.Quantity = incoming.Quantity;
             if (!target.TotalAmount.HasValue) target.TotalAmount = incoming.TotalAmount;
             if (!target.PaidAmount.HasValue) target.PaidAmount = incoming.PaidAmount;

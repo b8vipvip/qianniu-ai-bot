@@ -193,6 +193,8 @@ namespace Bot.ChromeNs
             if (template.Contains("{时间}") && (plan == null || plan.EventTime == DateTime.MinValue)) missing.Add("event_time");
             if ((template.Contains("{sku}") || template.Contains("{规格}"))
                 && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.SkuText))) missing.Add("sku");
+            if (template.Contains("{买家备注}")
+                && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.BuyerRemark))) missing.Add("buyer_remark");
             if (template.Contains("{数量}") && (snapshot == null || snapshot.Quantity <= 0)) missing.Add("quantity");
             if (template.Contains("{金额}") && (snapshot == null || !snapshot.TotalAmount.HasValue)) missing.Add("total");
             if (template.Contains("{实付}") && (snapshot == null || !snapshot.PaidAmount.HasValue)) missing.Add("paid");
@@ -212,6 +214,8 @@ namespace Bot.ChromeNs
             if (template.Contains("{时间}") && plan != null && plan.EventTime != DateTime.MinValue) present.Add("event_time");
             if ((template.Contains("{sku}") || template.Contains("{规格}"))
                 && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
+            if (template.Contains("{买家备注}")
+                && snapshot != null && !string.IsNullOrWhiteSpace(snapshot.BuyerRemark)) present.Add("buyer_remark");
             if (template.Contains("{数量}") && snapshot != null && snapshot.Quantity > 0) present.Add("quantity");
             if (template.Contains("{金额}") && snapshot != null && snapshot.TotalAmount.HasValue) present.Add("total");
             if (template.Contains("{实付}") && snapshot != null && snapshot.PaidAmount.HasValue) present.Add("paid");
@@ -240,6 +244,7 @@ namespace Bot.ChromeNs
                         case "order_id": reason = "order_id_empty"; break;
                         case "event_time": reason = "event_time_min_value"; break;
                         case "sku": reason = "snapshot_sku_empty"; break;
+                        case "buyer_remark": reason = "snapshot_buyer_remark_empty"; break;
                         case "quantity": reason = "snapshot_quantity_zero"; break;
                         case "total": reason = "snapshot_total_amount_null"; break;
                         case "paid": reason = "snapshot_paid_amount_null"; break;
@@ -420,20 +425,17 @@ namespace Bot.ChromeNs
                 .Replace("{客服}", plan == null ? string.Empty : plan.Seller ?? string.Empty)
                 .Replace("{买家}", plan == null ? string.Empty : plan.Buyer ?? string.Empty)
                 .Replace("{订单号}", plan == null ? string.Empty : plan.OrderId ?? string.Empty)
-                .Replace("{时间}", plan == null ? string.Empty : plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"))
+                .Replace("{时间}", plan == null || plan.EventTime == DateTime.MinValue ? string.Empty : plan.EventTime.ToString("yyyy-MM-dd HH:mm:ss"))
                 .Replace("{商品}", snapshot == null ? string.Empty : snapshot.ItemTitle ?? string.Empty)
                 .Replace("{sku}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)
                 .Replace("{规格}", snapshot == null ? string.Empty : snapshot.SkuText ?? string.Empty)
+                .Replace("{买家备注}", snapshot == null ? string.Empty : snapshot.BuyerRemark ?? string.Empty)
                 .Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())
                 .Replace("{金额}", snapshot == null || !snapshot.TotalAmount.HasValue ? string.Empty : snapshot.TotalAmount.Value.ToString("0.00"))
                 .Replace("{实付}", snapshot == null || !snapshot.PaidAmount.HasValue ? string.Empty : snapshot.PaidAmount.Value.ToString("0.00"))
                 .Replace("{订单状态}", snapshot == null ? string.Empty : snapshot.TradeStatus ?? string.Empty);
 
-            // 保留已有字段，同时清理缺失占位符造成的双空格、冒号后空格和行尾空白。
-            rendered = Regex.Replace(rendered, @"[ \t]{2,}", " ");
-            rendered = Regex.Replace(rendered, @"([：:])\s+", "$1");
-            rendered = Regex.Replace(rendered, @"\s+([，。；、])", "$1");
-            rendered = Regex.Replace(rendered, @"(?m)[ \t]+$", string.Empty).Trim();
+            // 固定预设/兜底答案保留商家编辑的换行、连续空格和缩进；只替换变量，不重排版。
 
             var allRequestedFieldsMissing = missing.Count > 0 && present.Count == 0;
             Log.Info("order_template_render"

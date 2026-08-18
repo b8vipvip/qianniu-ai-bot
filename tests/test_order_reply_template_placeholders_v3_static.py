@@ -1,0 +1,46 @@
+from pathlib import Path
+
+SERVICE = Path("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs").read_text(encoding="utf-8-sig")
+HUB = Path("src/Bot/ChromeNs/OrderEventHub.cs").read_text(encoding="utf-8-sig")
+V2 = Path("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs").read_text(encoding="utf-8-sig")
+QN = Path("src/Bot/ChromeNs/QN.cs").read_text(encoding="utf-8-sig")
+
+
+def test_supported_tokens_include_new_real_order_fields():
+    assert '"{sku}"' in V2
+    assert '"{买家备注}"' in V2
+    assert '"{分段符}"' in V2
+    assert 'public string BuyerRemark { get; set; }' in HUB
+    for key in ("buyerremark", "buyermemo", "buyernote", "buyermessage", "remarkfrombuyer", "memofrombuyer"):
+        assert f'"{key}"' in HUB
+    keys = HUB.split("BuyerRemarkKeys", 1)[1].split("};", 1)[0]
+    assert '"remark"' not in keys
+    assert '"memo"' not in keys
+
+
+def test_template_preserves_authored_layout():
+    assert 'Regex.Replace(rendered, @"[ \\t]{2,}", " ")' not in SERVICE
+    assert 'Regex.Replace(rendered, @"(?m)[ \\t]+$", string.Empty).Trim()' not in SERVICE
+    assert '.Replace("{买家备注}", snapshot == null ? string.Empty : snapshot.BuyerRemark ?? string.Empty)' in SERVICE
+
+
+def test_segment_token_sends_sequentially_without_trim():
+    assert 'text.Split(new[] { segmentToken }, StringSplitOptions.None)' in QN
+    assert 'var segment = segments[segmentIndex];' in QN
+    assert 'await SendTextWithRetryAsync(buyer, segment, retryCount)' in QN
+    block = QN.split('const string segmentToken = "{分段符}";', 1)[1].split('await _sendGate.WaitAsync();', 1)[0]
+    assert '.Trim()' not in block
+
+
+def test_placeholder_hint_is_blue_clickable_and_caret_aware():
+    assert 'Color.FromRgb(37, 99, 235)' in V2
+    assert 'new Hyperlink(new Run(token))' in V2
+    assert 'link.Click += delegate { InsertAtCaret(target, token); };' in V2
+    assert 'box.SelectionStart' in V2
+    assert 'box.SelectionLength' in V2
+
+
+def test_buyer_remark_enrichment_is_strict_and_real_only():
+    assert 'FindValue(tradeFlat, BuyerRemarkKeys)' in V2
+    assert 'FindValue(flat, BuyerRemarkKeys)' in V2
+    assert 'trade_found_but_buyer_remark_empty' in V2

@@ -18,6 +18,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
+using System.Windows.Input;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace Bot
@@ -53,6 +56,7 @@ namespace Bot.ChromeNs
             public bool QuantityFound;
             public bool PaidFound;
             public bool TotalFound;
+            public bool BuyerRemarkFound;
             public bool BuyerSearchAttempted;
             public int TradeQueryAttempts;
             public string Error;
@@ -101,6 +105,12 @@ namespace Bot.ChromeNs
         {
             "paidat", "paytime", "paidtime", "paymenttime", "createdat", "createtime",
             "ordertime", "createdtime", "tradecreatetime", "eventtime", "sendtime", "timestamp"
+        };
+
+        private static readonly string[] BuyerRemarkKeys =
+        {
+            "buyerremark", "buyermemo", "buyernote", "buyermessage", "buyermessagecontent",
+            "buyermsg", "remarkfrombuyer", "memofrombuyer"
         };
 
         public static object InitializeForApp()
@@ -392,6 +402,7 @@ namespace Bot.ChromeNs
             probe.QuantityFound = snapshot.Quantity > 0;
             probe.PaidFound = snapshot.PaidAmount.HasValue;
             probe.TotalFound = snapshot.TotalAmount.HasValue;
+            probe.BuyerRemarkFound = !string.IsNullOrWhiteSpace(snapshot.BuyerRemark);
         }
 
         private static void LogProbe(
@@ -433,6 +444,7 @@ namespace Bot.ChromeNs
             var template = cfg.OrderPlacedReplyText ?? string.Empty;
             if ((template.Contains("{sku}") || template.Contains("{规格}"))
                 && !string.IsNullOrWhiteSpace(snapshot.SkuText)) present.Add("sku");
+            if (template.Contains("{买家备注}") && !string.IsNullOrWhiteSpace(snapshot.BuyerRemark)) present.Add("buyer_remark");
             if (template.Contains("{数量}") && snapshot.Quantity > 0) present.Add("quantity");
             if (template.Contains("{实付}") && snapshot.PaidAmount.HasValue) present.Add("paid");
             if (template.Contains("{金额}") && snapshot.TotalAmount.HasValue) present.Add("total");
@@ -472,6 +484,7 @@ namespace Bot.ChromeNs
                     switch (field)
                     {
                         case "sku": reason = "trade_found_but_sku_empty"; break;
+                        case "buyer_remark": reason = "trade_found_but_buyer_remark_empty"; break;
                         case "quantity": reason = "trade_found_but_quantity_zero"; break;
                         case "paid": reason = "trade_found_but_paid_amount_null"; break;
                         case "total": reason = "trade_found_but_total_amount_null"; break;
@@ -505,7 +518,8 @@ namespace Bot.ChromeNs
                 || template.Contains("{金额}")
                 || template.Contains("{实付}")
                 || template.Contains("{商品}")
-                || template.Contains("{订单状态}");
+                || template.Contains("{订单状态}")
+                || template.Contains("{买家备注}");
         }
 
         private static List<string> MissingRequiredFields(
@@ -520,6 +534,11 @@ namespace Bot.ChromeNs
                 && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.SkuText)))
             {
                 missing.Add("sku");
+            }
+            if (template.Contains("{买家备注}")
+                && (snapshot == null || string.IsNullOrWhiteSpace(snapshot.BuyerRemark)))
+            {
+                missing.Add("buyer_remark");
             }
             if (template.Contains("{数量}") && (snapshot == null || snapshot.Quantity <= 0))
             {
@@ -584,6 +603,17 @@ namespace Bot.ChromeNs
             var quantity = items.Sum(x => x.buyAmount > 0 ? x.buyAmount : Math.Max(0, x.buyerAmount));
             if (quantity <= 0) quantity = Math.Max(0, trade.buyAmount);
             if (snapshot.Quantity <= 0 && quantity > 0) snapshot.Quantity = quantity;
+
+            if (string.IsNullOrWhiteSpace(snapshot.BuyerRemark))
+            {
+                try
+                {
+                    var tradeFlat = Flatten(JObject.FromObject(trade));
+                    var buyerRemark = FindValue(tradeFlat, BuyerRemarkKeys);
+                    if (!string.IsNullOrWhiteSpace(buyerRemark)) snapshot.BuyerRemark = Safe(buyerRemark, 500);
+                }
+                catch { }
+            }
 
             var title = string.Join("；", items
                 .Select(x => Safe(x.auctionTitle, 180))
@@ -692,6 +722,7 @@ namespace Bot.ChromeNs
                 Seller = seller,
                 Buyer = buyer,
                 OrderId = orderId,
+                BuyerRemark = Safe(FindValue(flat, BuyerRemarkKeys), 500),
                 TradeStatus = string.IsNullOrWhiteSpace(status) ? (paid == true ? "已付款" : "新下单") : status,
                 IsPaid = paid,
                 CreatedAt = eventType == OrderEventType.Created ? (DateTime?)eventTime : null,
@@ -947,6 +978,7 @@ namespace Bot.ChromeNs
             sb.Append("订单号：").Append(snapshot.OrderId);
             if (!string.IsNullOrWhiteSpace(snapshot.ItemTitle)) sb.Append(" 商品：").Append(Safe(snapshot.ItemTitle, 220));
             if (!string.IsNullOrWhiteSpace(snapshot.SkuText)) sb.Append(" SKU：").Append(Safe(snapshot.SkuText, 180));
+            if (!string.IsNullOrWhiteSpace(snapshot.BuyerRemark)) sb.Append(" 买家备注：").Append(Safe(snapshot.BuyerRemark, 300));
             if (snapshot.Quantity > 0) sb.Append(" 数量：").Append(snapshot.Quantity);
             if (snapshot.PaidAmount.HasValue) sb.Append(" 实付：").Append(snapshot.PaidAmount.Value.ToString("0.00", CultureInfo.InvariantCulture));
             else if (snapshot.TotalAmount.HasValue) sb.Append(" 金额：").Append(snapshot.TotalAmount.Value.ToString("0.00", CultureInfo.InvariantCulture));
@@ -1031,6 +1063,8 @@ namespace Bot.ChromeNs
     {
         private static readonly ConditionalWeakTable<FeatureSettingsWindow, object> Enhanced =
             new ConditionalWeakTable<FeatureSettingsWindow, object>();
+        private static readonly ConditionalWeakTable<TextBlock, object> EnhancedHints =
+            new ConditionalWeakTable<TextBlock, object>();
         private static int _initialized;
 
         public static void Initialize()
@@ -1040,6 +1074,16 @@ namespace Bot.ChromeNs
                 typeof(FeatureSettingsWindow),
                 FrameworkElement.LoadedEvent,
                 new RoutedEventHandler(OnLoaded),
+                true);
+            EventManager.RegisterClassHandler(
+                typeof(TextBlock),
+                FrameworkElement.LoadedEvent,
+                new RoutedEventHandler(OnTextBlockLoaded),
+                true);
+            EventManager.RegisterClassHandler(
+                typeof(TextBox),
+                FrameworkElement.LoadedEvent,
+                new RoutedEventHandler(OnTextBoxLoaded),
                 true);
         }
 
@@ -1053,6 +1097,113 @@ namespace Bot.ChromeNs
 
             window.Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() => Rewrite(window)));
             window.Dispatcher.BeginInvoke(DispatcherPriority.ContextIdle, new Action(() => Rewrite(window)));
+        }
+
+        private static readonly string[] OrderTemplateTokens =
+        {
+            "{客服}", "{买家}", "{订单号}", "{时间}", "{商品}", "{sku}",
+            "{数量}", "{金额}", "{实付}", "{订单状态}", "{买家备注}", "{分段符}"
+        };
+
+        private static void OnTextBoxLoaded(object sender, RoutedEventArgs e)
+        {
+            var box = sender as TextBox;
+            if (box == null) return;
+            if ((box.Text ?? string.Empty).Contains("{规格}"))
+            {
+                var caret = box.SelectionStart;
+                box.Text = box.Text.Replace("{规格}", "{sku}");
+                box.SelectionStart = Math.Min(caret, box.Text.Length);
+                box.ToolTip = "新模板统一使用 {sku}；旧 {规格} 仍兼容。";
+            }
+        }
+
+        private static void OnTextBlockLoaded(object sender, RoutedEventArgs e)
+        {
+            var hint = sender as TextBlock;
+            if (hint == null) return;
+            var value = hint.Text ?? string.Empty;
+            if (value.IndexOf("支持 {客服}", StringComparison.Ordinal) < 0
+                || value.IndexOf("接口失败", StringComparison.Ordinal) < 0) return;
+            object marker;
+            if (EnhancedHints.TryGetValue(hint, out marker)) return;
+            var target = FindOrderTemplateTextBox(hint);
+            if (target == null) return;
+            EnhancedHints.Add(hint, new object());
+            RewritePlaceholderHint(hint, target);
+        }
+
+        private static void RewritePlaceholderHint(TextBlock hint, TextBox target)
+        {
+            hint.Inlines.Clear();
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.Inlines.Add(new Run("支持 "));
+            var blue = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+            for (var i = 0; i < OrderTemplateTokens.Length; i++)
+            {
+                if (i > 0) hint.Inlines.Add(new Run("、"));
+                var token = OrderTemplateTokens[i];
+                var link = new Hyperlink(new Run(token))
+                {
+                    Foreground = blue,
+                    Cursor = Cursors.Hand,
+                    TextDecorations = null,
+                    ToolTip = "点击插入 " + token
+                };
+                link.Click += delegate { InsertAtCaret(target, token); };
+                hint.Inlines.Add(link);
+            }
+            hint.Inlines.Add(new Run("。点击蓝色变量可插入到当前光标处；分段符会拆成多条千牛消息依次发送；接口失败时也会使用这段话兜底。"));
+        }
+
+        private static void InsertAtCaret(TextBox box, string token)
+        {
+            if (box == null || string.IsNullOrEmpty(token)) return;
+            var value = box.Text ?? string.Empty;
+            var start = Math.Max(0, Math.Min(box.SelectionStart, value.Length));
+            var length = Math.Max(0, Math.Min(box.SelectionLength, value.Length - start));
+            box.Text = value.Remove(start, length).Insert(start, token);
+            box.SelectionStart = start + token.Length;
+            box.SelectionLength = 0;
+            box.Focus();
+        }
+
+        private static TextBox FindOrderTemplateTextBox(DependencyObject start)
+        {
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            var configured = cfg == null ? string.Empty : (cfg.OrderPlacedReplyText ?? string.Empty);
+            DependencyObject current = start;
+            for (var depth = 0; current != null && depth < 10; depth++)
+            {
+                var boxes = Descendants(current).OfType<TextBox>().Where(x => x.AcceptsReturn).ToList();
+                var exact = boxes.FirstOrDefault(x => string.Equals(x.Text ?? string.Empty, configured, StringComparison.Ordinal));
+                if (exact != null) return exact;
+                if (boxes.Count == 1) return boxes[0];
+                current = ParentOf(current);
+            }
+            return null;
+        }
+
+        private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+        {
+            foreach (var child in LogicalChildren(root))
+            {
+                yield return child;
+                foreach (var nested in Descendants(child)) yield return nested;
+            }
+        }
+
+        private static DependencyObject ParentOf(DependencyObject value)
+        {
+            if (value == null) return null;
+            try
+            {
+                var logical = LogicalTreeHelper.GetParent(value);
+                if (logical != null) return logical;
+            }
+            catch { }
+            try { return VisualTreeHelper.GetParent(value); }
+            catch { return null; }
         }
 
         private static void Rewrite(DependencyObject root)
