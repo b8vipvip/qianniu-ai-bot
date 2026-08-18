@@ -12,6 +12,14 @@ using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
+    // KnowledgeCenterWindow.cs is compiled inside the Bot.ChromeNs namespace for the
+    // optimization service, while the legacy database facade lives in Bot.Common.
+    // Keep a namespace-local compatibility alias so normal and WPF temporary builds
+    // resolve the same shared database facade without duplicating database state.
+    internal class DbHelper : Bot.Common.DbHelper
+    {
+    }
+
     // Keeps startup calls beside the handoff service while the actual list
     // management implementation lives with the knowledge UI types.
     internal static class BulkListManagementUi
