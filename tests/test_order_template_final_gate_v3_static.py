@@ -43,13 +43,14 @@ def test_missing_field_causes_and_self_check_are_structured_in_logs():
     assert "trade_query_error_after_" in source
 
 
-def test_final_renderer_keeps_present_fields_and_cleans_spacing():
+def test_final_renderer_keeps_present_fields_and_preserves_authored_layout():
     source = read(SERVICE)
     assert 'RenderTemplate(cfg.OrderPlacedReplyText, plan, "fixed-preset")' in source
     assert "partial=" in source
     assert "all_requested_fields_missing=" in source
-    assert 'Regex.Replace(rendered, @"[ \\t]{2,}", " ")' in source
-    assert 'Regex.Replace(rendered, @"([：:])\\s+", "$1")' in source
+    assert 'Regex.Replace(rendered, @"[ \\t]{2,}", " ")' not in source
+    assert 'Regex.Replace(rendered, @"([：:])\\s+", "$1")' not in source
+    assert "保留商家编辑的换行、连续空格和缩进" in source
 
 
 def test_only_all_missing_dynamic_fields_create_an_empty_shell_block():
