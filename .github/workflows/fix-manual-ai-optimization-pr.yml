@@ -1,5 +1,6 @@
 name: Finalize manual AI optimization PR
 
+# Trigger after this workflow already exists on the default branch.
 on:
   push:
     branches: [ master ]
