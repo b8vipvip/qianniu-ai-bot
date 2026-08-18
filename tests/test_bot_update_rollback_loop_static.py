@@ -49,7 +49,9 @@ def test_server_push_still_respects_effective_failure_quarantine():
 
     assert "settings.SkippedVersion" in push
     assert "if (skipped)" in push
-    assert "当前版本已设置为跳过" in push
+    assert "settings.FailedInstallVersion" in push
+    assert "因上次安装失败处于隔离状态" in push
+    assert "已由用户设置为跳过" in push
     assert push.index("if (skipped)") < push.index("if (settings.AutoInstall)")
     assert "settings.SkippedVersion = GetCanonicalSkippedVersion(settings);" in state
     assert "return CleanVersionText(settings.FailedInstallVersion);" in state
