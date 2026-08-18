@@ -1,5 +1,6 @@
 name: Apply manual AI optimization ingress watchdog
 
+# second push intentionally triggers the branch workflow after the workflow file exists on the branch
 on:
   push:
     branches: [ agent/manual-ai-optimization-ingress-watchdog ]
