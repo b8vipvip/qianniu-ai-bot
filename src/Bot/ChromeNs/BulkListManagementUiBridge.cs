@@ -1,7 +1,6 @@
 using log4net;
 using log4net.Appender;
 using log4net.Filter;
-using Newtonsoft.Json.Linq;
 using System;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -20,28 +19,6 @@ namespace Bot.ChromeNs
             // through SaveRules only when the old server snapshot is available.
             HandoffPolicyLegacyMigrationService.StartOnce();
             Bot.Knowledge.BulkListManagementUi.Initialize();
-        }
-    }
-
-    // KnowledgeCenterWindow.cs also contains Bot.ChromeNs helpers. Keep calls to the
-    // established Bot.Common AI implementation explicit without forcing that large
-    // legacy UI source file to own another namespace import.
-    internal static class MyOpenAI
-    {
-        public static string GetAnswer(string seller, string buyer, string question, bool useKnowledge)
-        {
-            return Bot.Common.MyOpenAI.GetAnswer(seller, buyer, question, useKnowledge);
-        }
-
-        public static dynamic CallStructuredChat(
-            JArray messages,
-            int maxTokens,
-            double temperature,
-            int timeoutSeconds,
-            CancellationToken cancellationToken)
-        {
-            return Bot.Common.MyOpenAI.CallStructuredChat(
-                messages, maxTokens, temperature, timeoutSeconds, cancellationToken);
         }
     }
 
