@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "src" / "Bot" / "App.xaml.cs"
 ORDER_SERVICE = ROOT / "src" / "Bot" / "ChromeNs" / "OrderPlacedAutoReplyService.cs"
+QN = ROOT / "src" / "Bot" / "ChromeNs" / "QN.cs"
 
 
 def source(path: Path) -> str:
@@ -48,24 +49,48 @@ def test_placeholder_buttons_copy_exact_token_with_feedback():
     assert "TimeSpan.FromMilliseconds(900)" in text
 
 
-def test_order_help_exposes_every_runtime_supported_placeholder():
+def test_order_help_exposes_current_ui_placeholders_and_keeps_legacy_spec_runtime_alias():
     app = source(APP)
     service = source(ORDER_SERVICE)
-    placeholders = (
+    qn = source(QN)
+
+    ui_placeholders = (
         "{客服}",
         "{买家}",
         "{订单号}",
         "{时间}",
         "{商品}",
+        "{sku}",
+        "{数量}",
+        "{金额}",
+        "{实付}",
+        "{订单状态}",
+        "{买家备注}",
+        "{分段符}",
+    )
+    for placeholder in ui_placeholders:
+        assert f'"{placeholder}"' in app
+
+    runtime_replacements = (
+        "{客服}",
+        "{买家}",
+        "{订单号}",
+        "{时间}",
+        "{商品}",
+        "{sku}",
         "{规格}",
         "{数量}",
         "{金额}",
         "{实付}",
         "{订单状态}",
+        "{买家备注}",
     )
-    for placeholder in placeholders:
-        assert f'"{placeholder}"' in app
+    for placeholder in runtime_replacements:
         assert f'.Replace("{placeholder}"' in service
+
+    assert 'const string segmentToken = "{分段符}";' in qn
+    order_ui_block = app.split("OrderPlaceholders", 1)[1].split("};", 1)[0]
+    assert '"{规格}"' not in order_ui_block
 
 
 def test_replacement_preserves_common_wpf_layout_metadata():

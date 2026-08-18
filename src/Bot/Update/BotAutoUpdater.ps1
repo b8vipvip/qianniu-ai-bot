@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string]$PackagePath,
@@ -62,7 +62,7 @@ function Assert-DirectoryCopyMatches([string]$Source, [string]$Backup, [string]$
     $sourceState = @(Get-DirectoryFingerprint $Source)
     $backupState = @(Get-DirectoryFingerprint $Backup)
     if ($sourceState.Count -ne $backupState.Count) {
-        throw "Backup validation failed for $Label: entry count differs ($($sourceState.Count) != $($backupState.Count))."
+        throw "Backup validation failed for ${Label}: entry count differs ($($sourceState.Count) != $($backupState.Count))."
     }
 
     for ($i = 0; $i -lt $sourceState.Count; $i++) {

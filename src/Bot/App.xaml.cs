@@ -1,4 +1,4 @@
-using Bot.ChromeNs;
+﻿using Bot.ChromeNs;
 using Bot.Options;
 using Bot.UpdateNs;
 using BotLib;
@@ -34,6 +34,9 @@ namespace Bot
             ReplyQualityCenterUi.Initialize();
             OrderPlacedReplyDelaySettings.Initialize();
             OrderAttentionSettings.Initialize();
+            // Explicitly initialize order-template runtime/UI hooks. A never-read static field on a
+            // partial App type is not guaranteed to run because of beforefieldinit semantics.
+            OrderTemplateRequiredFieldsV2.InitializeForApp();
             SelectableSettingsText.Initialize();
             DirectOrderEventBridge.Initialize();
             OrderPaymentNotificationFallback.Initialize();
@@ -107,11 +110,13 @@ namespace Bot
             "{订单号}",
             "{时间}",
             "{商品}",
-            "{规格}",
+            "{sku}",
             "{数量}",
             "{金额}",
             "{实付}",
-            "{订单状态}"
+            "{订单状态}",
+            "{买家备注}",
+            "{分段符}"
         };
 
         private static int _initialized;
@@ -182,6 +187,9 @@ namespace Bot
         private static bool ShouldEnhance(TextBlock source)
         {
             if (source == null || string.IsNullOrWhiteSpace(source.Text)) return false;
+            // The order-template hint is owned by OrderTemplateSkuUiMigration so its blue clickable
+            // placeholders can insert at the answer TextBox caret. Do not replace it with copy-only UI.
+            if (IsOrderTemplateHint(source.Text)) return false;
             if (PlaceholderRegex.IsMatch(source.Text)) return true;
 
             // 粗体栏目标题和字段标签不转换，只处理明确采用灰色说明样式的内容。
@@ -192,6 +200,13 @@ namespace Bot
             return source.TextWrapping == TextWrapping.Wrap
                 || source.FontSize <= 11.5
                 || source.Text.Trim().Length >= 12;
+        }
+
+        private static bool IsOrderTemplateHint(string text)
+        {
+            text = text ?? string.Empty;
+            return text.IndexOf("支持 {客服}", StringComparison.Ordinal) >= 0
+                && text.IndexOf("接口失败", StringComparison.Ordinal) >= 0;
         }
 
         private static bool IsMutedColor(Color color)

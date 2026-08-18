@@ -56,6 +56,22 @@ jobs:
         shell: pwsh
         run: python -m pytest -q tests
 
+      - name: Validate updater with Windows PowerShell 5.1 parser
+        shell: powershell
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'src\Bot\Update\BotAutoUpdater.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | Format-List *
+            throw "BotAutoUpdater.ps1 has Windows PowerShell 5.1 parser errors."
+          }
+          Write-Host 'BotAutoUpdater.ps1 Windows PowerShell 5.1 syntax check passed.'
+
       - name: Set up MSBuild
         uses: microsoft/setup-msbuild@v2
 
