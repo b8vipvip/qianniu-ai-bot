@@ -80,13 +80,49 @@ namespace Bot.UpdateNs
 
         public static void SaveSettings(BotUpdateSettings settings)
         {
-            settings = NormalizeSettings(settings ?? new BotUpdateSettings());
+            settings = settings ?? new BotUpdateSettings();
+            var requestedSkip = CleanVersionText(settings.SkippedVersion);
+            var skipCleared = false;
+
             lock (SettingsSync)
             {
+                var current = _settings == null
+                    ? LoadSettingsInternal()
+                    : CloneSettings(_settings);
+                var currentSkip = GetCanonicalSkippedVersion(current);
+                var skipChanged = !string.Equals(
+                    requestedSkip,
+                    currentSkip,
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (skipChanged)
+                {
+                    if (string.IsNullOrWhiteSpace(requestedSkip))
+                    {
+                        // “取消跳过版本” is an explicit user action. Clear both the real user
+                        // skip and an updater failure quarantine, then immediately re-check below.
+                        settings.UserSkippedVersion = string.Empty;
+                        settings.FailedInstallVersion = string.Empty;
+                        settings.FailedInstallAt = string.Empty;
+                        skipCleared = !string.IsNullOrWhiteSpace(currentSkip);
+                    }
+                    else
+                    {
+                        // Existing SkipVersion() reaches this method through SaveSettings, while
+                        // updater handoff quarantine deliberately bypasses it and writes through
+                        // SaveSettingsInternal. That distinction keeps the two meanings separate.
+                        settings.UserSkippedVersion = requestedSkip;
+                        settings.FailedInstallVersion = string.Empty;
+                        settings.FailedInstallAt = string.Empty;
+                    }
+                }
+
+                settings = NormalizeSettings(settings);
                 _settings = CloneSettings(settings);
                 SaveSettingsInternal(_settings);
             }
             RestartServerPushListener();
+            if (skipCleared) ScheduleRecheckAfterSkipClear();
         }
 
         /// <summary>
