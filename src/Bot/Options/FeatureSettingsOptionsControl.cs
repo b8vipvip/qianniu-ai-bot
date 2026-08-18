@@ -1,6 +1,5 @@
 using Bot.ChromeNs;
 using Bot.Knowledge;
-using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Generic;
@@ -39,18 +38,7 @@ namespace Bot.Options
         public FeatureSettingsOptionsControl(string seller)
         {
             Seller = seller ?? string.Empty;
-            var initialShop = ResolveShopContext(Seller);
-            if (initialShop != null)
-            {
-                using (ShopSettingsScope.Enter(initialShop))
-                {
-                    _legacyWindow = new FeatureSettingsWindow("知识库");
-                }
-            }
-            else
-            {
-                _legacyWindow = new FeatureSettingsWindow("知识库");
-            }
+            _legacyWindow = new FeatureSettingsWindow("知识库");
             _tabs = GetPrivateField<TabControl>(_legacyWindow, "_tabs");
             _saveAllMethod = typeof(FeatureSettingsWindow).GetMethod(
                 "SaveAll",
@@ -122,32 +110,15 @@ namespace Bot.Options
         {
             try
             {
-                var effectiveSeller = string.IsNullOrWhiteSpace(seller) ? Seller : seller.Trim();
-                var shop = ResolveShopContext(effectiveSeller);
-                if (shop != null)
-                {
-                    using (ShopSettingsScope.Enter(shop))
-                    {
-                        SyncOffHoursToLegacyControls();
-                        _saveAllMethod.Invoke(_legacyWindow, null);
-                    }
-                }
-                else
-                {
-                    SyncOffHoursToLegacyControls();
-                    _saveAllMethod.Invoke(_legacyWindow, null);
-                }
-
+                SyncOffHoursToLegacyControls();
+                _saveAllMethod.Invoke(_legacyWindow, null);
                 if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)
                 {
                     FirstInquiryFixedReplyService.Save(
-                        effectiveSeller,
+                        seller ?? Seller,
                         _firstInquiryFixedReplyEnabled.IsChecked == true,
                         _firstInquiryFixedReplyAnswer.Text ?? string.Empty);
                 }
-
-                Log.Info("自动回复规则已按当前店铺作用域保存: seller=" + effectiveSeller
-                    + ", offHoursEnabled=" + (_offHoursEnabled != null && _offHoursEnabled.IsChecked == true));
             }
             catch (TargetInvocationException ex)
             {
@@ -263,14 +234,6 @@ namespace Bot.Options
             var firstSettings = FirstInquiryFixedReplyService.Load(Seller)
                 ?? new FirstInquiryFixedReplySettings();
             var cfg = BotFeatureStore.GetAutoReplyRules();
-            var shop = ResolveShopContext(Seller);
-            if (shop != null)
-            {
-                using (ShopSettingsScope.Enter(shop))
-                {
-                    cfg = BotFeatureStore.GetAutoReplyRules();
-                }
-            }
 
             _firstInquiryFixedReplyEnabled = new CheckBox
             {
@@ -759,26 +722,6 @@ namespace Bot.Options
                         buttonPanel.Visibility = Visibility.Collapsed;
                     }
                 }
-            }
-        }
-
-        private static ShopContext ResolveShopContext(string seller)
-        {
-            seller = (seller ?? string.Empty).Trim();
-            if (seller.Length == 0) return null;
-            try
-            {
-                var runtime = ShopContextLocator.ResolveRuntimeBySellerNick(seller);
-                if (runtime != null) return runtime;
-            }
-            catch { }
-            try
-            {
-                return ShopContextLocator.ResolveBySellerNick(seller);
-            }
-            catch
-            {
-                return null;
             }
         }
 
