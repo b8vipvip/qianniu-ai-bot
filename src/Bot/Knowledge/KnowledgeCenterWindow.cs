@@ -1,7 +1,6 @@
 using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.ChromeNs;
-using Bot.Common;
 using BotLib;
 using BotLib.Db.Sqlite;
 using DbEntity.Response;
@@ -25,10 +24,10 @@ namespace Bot.Knowledge
 {
     public class KnowledgeCenterWindow : Window
     {
-        private TabControl _tabs;
-        private KnowledgeImportControl _import;
-        private KnowledgeManagerControl _manager;
-        private AiOptimizationHistoryControl _optimizationHistory;
+        private readonly TabControl _tabs;
+        private readonly KnowledgeImportControl _import;
+        private readonly KnowledgeManagerControl _manager;
+        private readonly AiOptimizationHistoryControl _optimizationHistory;
 
         public KnowledgeCenterWindow()
         {
@@ -54,29 +53,20 @@ namespace Bot.Knowledge
 
         public void ShowOptimizationHistory()
         {
-            if (_optimizationHistory != null) _optimizationHistory.RefreshData();
+            _optimizationHistory.RefreshData();
             _tabs.SelectedIndex = 2;
         }
 
-        public void NavigateToManager(
-            string seller,
-            string buyer,
-            string question,
-            string answer)
+        public void NavigateToManager(string seller, string buyer, string question, string answer)
         {
             ShowManager();
-            if (!_manager.LocateEntry(seller, buyer, question, answer))
-            {
-                MessageBox.Show(
-                    this,
-                    "没有找到完全对应的知识条目，已按当前问题或答案显示搜索结果。",
-                    "知识库定位",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
-            }
+            if (_manager.LocateEntry(seller, buyer, question, answer)) return;
+            MessageBox.Show(this,
+                "没有找到完全对应的知识条目，已按当前问题或答案显示搜索结果。",
+                "知识库定位", MessageBoxButton.OK, MessageBoxImage.Information);
         }
 
-        protected override void OnClosed(System.EventArgs e)
+        protected override void OnClosed(EventArgs e)
         {
             if (_import != null) _import.CancelForWindowClose();
             base.OnClosed(e);
@@ -89,12 +79,7 @@ namespace Bot.Knowledge
             wnd.Show();
         }
 
-        public static void ShowManagerAndLocate(
-            Window owner,
-            string seller,
-            string buyer,
-            string question,
-            string answer)
+        public static void ShowManagerAndLocate(Window owner, string seller, string buyer, string question, string answer)
         {
             var wnd = new KnowledgeCenterWindow();
             if (owner != null) wnd.Owner = owner;
@@ -105,7 +90,7 @@ namespace Bot.Knowledge
 
     internal sealed class AiOptimizationHistoryControl : UserControl
     {
-        private sealed class HistoryRow
+        private sealed class Row
         {
             public DateTime SortTime { get; set; }
             public string Time { get; set; }
@@ -118,9 +103,10 @@ namespace Bot.Knowledge
             public object Source { get; set; }
         }
 
-        private readonly DataGrid _grid;
-        private readonly TextBox _detail;
-        private readonly TextBlock _summary;
+        private readonly DataGrid _grid = new DataGrid();
+        private readonly TextBox _detail = new TextBox();
+        private readonly TextBlock _summary = new TextBlock();
+        private bool _subscribed;
 
         public AiOptimizationHistoryControl()
         {
@@ -130,70 +116,60 @@ namespace Bot.Knowledge
             root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(2, GridUnitType.Star) });
 
             var header = new DockPanel { Margin = new Thickness(0, 0, 0, 10) };
-            var refresh = new Button
-            {
-                Content = "刷新记录",
-                Width = 90,
-                Height = 30,
-                HorizontalAlignment = HorizontalAlignment.Right
-            };
+            var refresh = new Button { Content = "刷新记录", Width = 90, Height = 30 };
             refresh.Click += delegate { RefreshData(); };
             DockPanel.SetDock(refresh, Dock.Right);
             header.Children.Add(refresh);
-
-            _summary = new TextBlock
-            {
-                Text = "显示人工介入后的即时AI对比，以及接待结束后的整轮知识复盘记录。",
-                VerticalAlignment = VerticalAlignment.Center,
-                TextWrapping = TextWrapping.Wrap
-            };
+            _summary.Text = "人工接管即时对比 + 接待结束整轮复盘";
+            _summary.VerticalAlignment = VerticalAlignment.Center;
+            _summary.TextWrapping = TextWrapping.Wrap;
             header.Children.Add(_summary);
             Grid.SetRow(header, 0);
             root.Children.Add(header);
 
-            _grid = new DataGrid
-            {
-                IsReadOnly = true,
-                AutoGenerateColumns = false,
-                SelectionMode = DataGridSelectionMode.Single,
-                HeadersVisibility = DataGridHeadersVisibility.Column,
-                CanUserAddRows = false,
-                CanUserDeleteRows = false
-            };
+            _grid.IsReadOnly = true;
+            _grid.AutoGenerateColumns = false;
+            _grid.SelectionMode = DataGridSelectionMode.Single;
+            _grid.HeadersVisibility = DataGridHeadersVisibility.Column;
+            _grid.CanUserAddRows = false;
+            _grid.CanUserDeleteRows = false;
             _grid.Columns.Add(new DataGridTextColumn { Header = "时间", Binding = new System.Windows.Data.Binding("Time"), Width = 120 });
             _grid.Columns.Add(new DataGridTextColumn { Header = "类型", Binding = new System.Windows.Data.Binding("Type"), Width = 135 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "买家", Binding = new System.Windows.Data.Binding("Buyer"), Width = 150 });
-            _grid.Columns.Add(new DataGridTextColumn { Header = "状态", Binding = new System.Windows.Data.Binding("Status"), Width = 100 });
+            _grid.Columns.Add(new DataGridTextColumn { Header = "买家", Binding = new System.Windows.Data.Binding("Buyer"), Width = 145 });
+            _grid.Columns.Add(new DataGridTextColumn { Header = "状态", Binding = new System.Windows.Data.Binding("Status"), Width = 95 });
             _grid.Columns.Add(new DataGridTextColumn { Header = "AI准确度", Binding = new System.Windows.Data.Binding("Accuracy"), Width = 85 });
             _grid.Columns.Add(new DataGridTextColumn { Header = "知识应用", Binding = new System.Windows.Data.Binding("Applied"), Width = 85 });
             _grid.Columns.Add(new DataGridTextColumn { Header = "摘要/问题", Binding = new System.Windows.Data.Binding("Summary"), Width = new DataGridLength(1, DataGridLengthUnitType.Star) });
-            _grid.SelectionChanged += Grid_SelectionChanged;
+            _grid.SelectionChanged += OnSelectionChanged;
             Grid.SetRow(_grid, 1);
             root.Children.Add(_grid);
 
-            _detail = new TextBox
-            {
-                IsReadOnly = true,
-                AcceptsReturn = true,
-                TextWrapping = TextWrapping.Wrap,
-                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
-                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
-                Margin = new Thickness(0, 10, 0, 0)
-            };
+            _detail.IsReadOnly = true;
+            _detail.AcceptsReturn = true;
+            _detail.TextWrapping = TextWrapping.Wrap;
+            _detail.VerticalScrollBarVisibility = ScrollBarVisibility.Auto;
+            _detail.HorizontalScrollBarVisibility = ScrollBarVisibility.Auto;
+            _detail.Margin = new Thickness(0, 10, 0, 0);
             Grid.SetRow(_detail, 2);
             root.Children.Add(_detail);
-
             Content = root;
+
             Loaded += delegate
             {
-                AiManualReplyOptimizationService.RecordsChanged += RecordsChanged;
-                ConversationSessionLearningService.ReportsChanged += RecordsChanged;
+                if (!_subscribed)
+                {
+                    AiManualReplyOptimizationService.RecordsChanged += OnRecordsChanged;
+                    ConversationSessionLearningService.ReportsChanged += OnRecordsChanged;
+                    _subscribed = true;
+                }
                 RefreshData();
             };
             Unloaded += delegate
             {
-                AiManualReplyOptimizationService.RecordsChanged -= RecordsChanged;
-                ConversationSessionLearningService.ReportsChanged -= RecordsChanged;
+                if (!_subscribed) return;
+                AiManualReplyOptimizationService.RecordsChanged -= OnRecordsChanged;
+                ConversationSessionLearningService.ReportsChanged -= OnRecordsChanged;
+                _subscribed = false;
             };
         }
 
@@ -201,8 +177,8 @@ namespace Bot.Knowledge
         {
             try
             {
-                var rows = new List<HistoryRow>();
-                rows.AddRange(AiManualReplyOptimizationService.GetRecords(500).Select(x => new HistoryRow
+                var rows = new List<Row>();
+                rows.AddRange(AiManualReplyOptimizationService.GetRecords(500).Select(x => new Row
                 {
                     SortTime = x.CreatedAt,
                     Time = x.CreatedAtText,
@@ -214,7 +190,7 @@ namespace Bot.Knowledge
                     Summary = Short(x.Question, 120),
                     Source = x
                 }));
-                rows.AddRange(ConversationSessionLearningService.GetReports(500).Select(x => new HistoryRow
+                rows.AddRange(ConversationSessionLearningService.GetReports(500).Select(x => new Row
                 {
                     SortTime = x.CompletedAt == DateTime.MinValue ? x.LastBuyerAt : x.CompletedAt,
                     Time = x.CompletedAtText,
@@ -228,30 +204,23 @@ namespace Bot.Knowledge
                 }));
                 rows = rows.OrderByDescending(x => x.SortTime).Take(1000).ToList();
                 _grid.ItemsSource = rows;
-                _summary.Text = "AI优化记录：共 " + rows.Count + " 条。即时记录包含AI对照答案、人工实际回复、准确度、人工回复原因和知识策略；整轮复盘保留原有自动学习记录。";
+                _summary.Text = "AI优化记录：共 " + rows.Count + " 条；即时记录可查看AI对照答案、人工实际回复、准确度、人工回复原因和知识策略。";
                 if (rows.Count > 0) _grid.SelectedIndex = 0;
                 else _detail.Text = "暂无AI优化记录。";
             }
-            catch (Exception ex)
-            {
-                _detail.Text = "读取AI优化记录失败：" + ex.Message;
-            }
+            catch (Exception ex) { _detail.Text = "读取AI优化记录失败：" + ex.Message; }
         }
 
-        private void RecordsChanged()
+        private void OnRecordsChanged()
         {
             try { Dispatcher.BeginInvoke(new Action(RefreshData)); }
             catch { }
         }
 
-        private void Grid_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        private void OnSelectionChanged(object sender, SelectionChangedEventArgs e)
         {
-            var row = _grid.SelectedItem as HistoryRow;
-            if (row == null)
-            {
-                _detail.Text = string.Empty;
-                return;
-            }
+            var row = _grid.SelectedItem as Row;
+            if (row == null) { _detail.Text = string.Empty; return; }
             var immediate = row.Source as AiOptimizationRecordView;
             if (immediate != null)
             {
@@ -274,14 +243,9 @@ namespace Bot
 {
     public partial class App
     {
-        // These bridges are deliberately bootstrapped from an already compiled source file so they
-        // also exist in WPF temporary projects without changing legacy project-item enumeration.
-        private readonly object _manualReplyAiComparisonBootstrap =
-            ChromeNs.ManualReplyAiComparisonBridge.InitializeForApp();
-        private readonly object _runtimeIngressReconciliationBootstrap =
-            ChromeNs.RuntimeIngressReconciliationBridge.InitializeForApp();
-        private readonly object _runtimeLogNoiseFilterBootstrap =
-            ChromeNs.RuntimeLogNoiseFilterBootstrap.InitializeForApp();
+        private readonly object _manualReplyAiComparisonBootstrap = ChromeNs.ManualReplyAiComparisonBridge.InitializeForApp();
+        private readonly object _runtimeIngressReconciliationBootstrap = ChromeNs.RuntimeIngressReconciliationBridge.InitializeForApp();
+        private readonly object _runtimeLogNoiseFilterBootstrap = ChromeNs.RuntimeLogNoiseFilterBootstrap.InitializeForApp();
     }
 }
 
@@ -334,10 +298,8 @@ namespace Bot.ChromeNs
     internal static class AiManualReplyOptimizationService
     {
         private static readonly object DbSync = new object();
-        private static readonly ConcurrentDictionary<string, DateTime> Inflight =
-            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> Inflight = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static int _schemaReady;
-
         public const int RetentionDays = 180;
         public const int MaxRecords = 3000;
         public static event Action RecordsChanged;
@@ -355,15 +317,8 @@ namespace Bot.ChromeNs
             Task.Run(async () =>
             {
                 try { await RunAsync(seller, buyer, humanAnswer, manualAt).ConfigureAwait(false); }
-                catch (Exception ex)
-                {
-                    Log.ErrorWithMaxCount("人工接管AI即时优化失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20);
-                }
-                finally
-                {
-                    DateTime ignored;
-                    Inflight.TryRemove(key, out ignored);
-                }
+                catch (Exception ex) { Log.ErrorWithMaxCount("人工接管AI即时优化失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20); }
+                finally { DateTime ignored; Inflight.TryRemove(key, out ignored); }
             });
         }
 
@@ -375,12 +330,8 @@ namespace Bot.ChromeNs
             {
                 lock (DbSync)
                 {
-                    return (DbHelper.Db.Select(typeof(AiOptimizationRecordEntity),
-                        "order by UpdatedAtTicks desc limit " + take) ?? new List<object>())
-                        .OfType<AiOptimizationRecordEntity>()
-                        .Where(x => x != null)
-                        .Select(ToView)
-                        .ToList();
+                    return (DbHelper.Db.Select(typeof(AiOptimizationRecordEntity), "order by UpdatedAtTicks desc limit " + take) ?? new List<object>())
+                        .OfType<AiOptimizationRecordEntity>().Where(x => x != null).Select(ToView).ToList();
                 }
             }
             catch (Exception ex)
@@ -400,30 +351,16 @@ namespace Bot.ChromeNs
             sb.AppendLine("买家：" + x.Buyer);
             sb.AppendLine("状态：" + x.Status);
             sb.AppendLine("AI准确度：" + x.AccuracyText);
-            sb.AppendLine();
-            sb.AppendLine("买家问题：");
-            sb.AppendLine(x.Question ?? string.Empty);
-            sb.AppendLine();
-            sb.AppendLine("后台AI对照答案（未发送）：");
-            sb.AppendLine(x.AiAnswer ?? string.Empty);
-            sb.AppendLine();
-            sb.AppendLine("人工客服实际回复：");
-            sb.AppendLine(x.HumanAnswer ?? string.Empty);
-            sb.AppendLine();
-            sb.AppendLine("AI回复准确性分析：");
-            sb.AppendLine(x.AccuracyAnalysis ?? string.Empty);
-            sb.AppendLine();
-            sb.AppendLine("人工为什么这样回复：");
-            sb.AppendLine(x.HumanReplyReason ?? string.Empty);
-            sb.AppendLine();
-            sb.AppendLine("知识库/策略建议：");
-            sb.AppendLine(x.KnowledgeStrategy ?? string.Empty);
-            sb.AppendLine();
-            sb.AppendLine("自动应用：" + x.AppliedCount + " 条；跳过：" + x.SkippedCount + " 条");
+            sb.AppendLine(); sb.AppendLine("买家问题："); sb.AppendLine(x.Question ?? string.Empty);
+            sb.AppendLine(); sb.AppendLine("后台AI对照答案（未发送）："); sb.AppendLine(x.AiAnswer ?? string.Empty);
+            sb.AppendLine(); sb.AppendLine("人工客服实际回复："); sb.AppendLine(x.HumanAnswer ?? string.Empty);
+            sb.AppendLine(); sb.AppendLine("AI回复准确性分析："); sb.AppendLine(x.AccuracyAnalysis ?? string.Empty);
+            sb.AppendLine(); sb.AppendLine("人工为什么这样回复："); sb.AppendLine(x.HumanReplyReason ?? string.Empty);
+            sb.AppendLine(); sb.AppendLine("知识库/策略建议："); sb.AppendLine(x.KnowledgeStrategy ?? string.Empty);
+            sb.AppendLine(); sb.AppendLine("自动应用：" + x.AppliedCount + " 条；跳过：" + x.SkippedCount + " 条");
             if (!string.IsNullOrWhiteSpace(x.SuggestionsJson))
             {
-                sb.AppendLine();
-                sb.AppendLine("结构化优化建议：");
+                sb.AppendLine(); sb.AppendLine("结构化优化建议：");
                 try { sb.AppendLine(JToken.Parse(x.SuggestionsJson).ToString(Formatting.Indented)); }
                 catch { sb.AppendLine(x.SuggestionsJson); }
             }
@@ -440,33 +377,22 @@ namespace Bot.ChromeNs
             var cards = BotConversationHistoryStore.LoadRange(seller, buyer, from, manualAt.AddSeconds(1), 100);
             var question = BuildRecentBuyerQuestion(turns, cards, manualAt);
             if (string.IsNullOrWhiteSpace(question)) return;
-            var transcriptBeforeHuman = BuildTranscriptBeforeHuman(turns, cards, humanAnswer, manualAt);
+            var transcript = BuildTranscriptBeforeHuman(turns, cards, humanAnswer, manualAt);
 
-            // The ordinary send pipeline is intentionally cancelled by the existing manual-intervention
-            // safety guard. Generate a shadow answer with the same configured AI/knowledge routing, but
-            // explicitly tell it to ignore the just-sent human reply. This answer is never sent to Qianniu.
             var shadowQuestion = question
                 + "\n\n【后台AI对比任务：客服已经人工接管。请忽略聊天记录中刚刚出现的客服人工回复，只根据它之前的买家消息、店铺知识和规则独立回答原问题。不要提到本说明。】";
             var aiAnswer = await Task.Run(() => MyOpenAI.GetAnswer(seller, buyer, shadowQuestion, true)).ConfigureAwait(false);
             aiAnswer = StripAi(Clean(aiAnswer, 2400));
             if (string.IsNullOrWhiteSpace(aiAnswer) || aiAnswer.StartsWith("错误：", StringComparison.Ordinal)) return;
-
             ShowCompareOnlyAnswer(seller, buyer, question, aiAnswer);
 
             var entity = new AiOptimizationRecordEntity
             {
-                EntityId = Guid.NewGuid().ToString("N"),
-                Seller = seller,
-                Buyer = buyer,
-                Question = Redact(question),
-                AiAnswer = Redact(aiAnswer),
-                HumanAnswer = Redact(humanAnswer),
-                Status = "正在分析",
-                CreatedAtTicks = DateTime.Now.Ticks,
-                UpdatedAtTicks = DateTime.Now.Ticks
+                EntityId = Guid.NewGuid().ToString("N"), Seller = seller, Buyer = buyer,
+                Question = Redact(question), AiAnswer = Redact(aiAnswer), HumanAnswer = Redact(humanAnswer),
+                Status = "正在分析", CreatedAtTicks = DateTime.Now.Ticks, UpdatedAtTicks = DateTime.Now.Ticks
             };
-            Save(entity);
-            NotifyChanged();
+            Save(entity); NotifyChanged();
 
             try
             {
@@ -476,37 +402,33 @@ namespace Bot.ChromeNs
                     {
                         ["role"] = "system",
                         ["content"] =
-                            "你是电商客服AI回复质量审计与知识库优化器。请比较后台AI对照答案与人工客服实际回复，并结合人工回复之前的聊天记录，只输出JSON："
-                            + "{\"accuracy_score\":0-100,\"accuracy_analysis\":\"AI哪里正确、错误、遗漏\","
-                            + "\"human_reply_reason\":\"人工为什么这样回复\",\"knowledge_strategy\":\"是否应新增或修改知识库/策略以及原因\","
-                            + "\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"可复用完整答案\","
-                            + "\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,"
-                            + "\"evidence_type\":\"manual_reply|manual_correction|insufficient\",\"evidence\":\"证据\",\"reason\":\"原因\"}]}。"
-                            + "人工最终有效回复优先作为纠错证据；Bot答案不能作为新增事实的唯一证据。"
-                            + "退款、赔偿、投诉、订单隐私、账号安全、验证码等一次性或高风险结论不得自动固化。没有可靠人工事实证据必须skip。"
+                            "你是电商客服AI回复质量审计与知识库优化器。比较后台AI对照答案与人工客服实际回复，并结合人工回复之前的聊天记录。只输出JSON："
+                            + "{\"accuracy_score\":0-100,\"accuracy_analysis\":\"AI哪里正确、错误、遗漏\",\"human_reply_reason\":\"人工为什么这样回复\","
+                            + "\"knowledge_strategy\":\"是否应新增或修改知识库/策略以及原因\",\"suggestions\":[{\"action\":\"add|update|skip\","
+                            + "\"question\":\"通用问题\",\"answer\":\"可复用完整答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\","
+                            + "\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|insufficient\",\"evidence\":\"证据\",\"reason\":\"原因\"}]}。"
+                            + "人工最终有效回复优先作为纠错证据；Bot答案不能作为新增事实的唯一证据；高风险或一次性结论不得自动固化；没有可靠人工事实证据必须skip。"
                     },
                     new JObject
                     {
                         ["role"] = "user",
-                        ["content"] = "买家问题：" + Redact(question)
-                            + "\n后台AI对照答案：" + Redact(aiAnswer)
-                            + "\n人工客服实际回复：" + Redact(humanAnswer)
-                            + "\n\n人工回复之前的聊天时间线：\n" + transcriptBeforeHuman
+                        ["content"] = "买家问题：" + Redact(question) + "\n后台AI对照答案：" + Redact(aiAnswer)
+                            + "\n人工客服实际回复：" + Redact(humanAnswer) + "\n\n人工回复之前的聊天时间线：\n" + transcript
                     }
                 };
                 var result = await Task.Run(() => MyOpenAI.CallStructuredChat(messages, 2400, 0.05, 50, CancellationToken.None)).ConfigureAwait(false);
                 if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
                     throw new Exception(result == null ? "AI对比结果为空" : result.Error);
-
                 var analysis = ParseObject(result.Answer);
                 entity.AccuracyScore = ParseScore(analysis["accuracy_score"]);
                 entity.AccuracyAnalysis = Redact(Clean(Convert.ToString(analysis["accuracy_analysis"]), 1800));
                 entity.HumanReplyReason = Redact(Clean(Convert.ToString(analysis["human_reply_reason"]), 1800));
                 entity.KnowledgeStrategy = Redact(Clean(Convert.ToString(analysis["knowledge_strategy"]), 1800));
-                var suggestions = analysis["suggestions"] as JArray ?? new JArray();
+
                 var persisted = new JArray();
                 var applied = 0;
                 var skipped = 0;
+                var suggestions = analysis["suggestions"] as JArray ?? new JArray();
                 foreach (var token in suggestions.OfType<JObject>().Take(8))
                 {
                     var item = (JObject)token.DeepClone();
@@ -519,87 +441,57 @@ namespace Bot.ChromeNs
                     var keywords = item["keywords"] is JArray
                         ? string.Join(",", ((JArray)item["keywords"]).Select(v => Clean(Convert.ToString(v), 80)).Where(v => v.Length > 0))
                         : Clean(Convert.ToString(item["keywords"]), 500);
-                    var safe = (action == "add" || action == "update")
-                        && confidence >= 0.88
+                    var safe = (action == "add" || action == "update") && confidence >= 0.88
                         && (evidenceType == "manual_reply" || evidenceType == "manual_correction")
                         && q.Length > 0 && a.Length > 0 && !ContainsHighRisk(q + " " + a);
                     var wasApplied = false;
                     string applyMessage;
                     if (safe)
                     {
-                        var write = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(
-                            q, a, category, keywords, "人工即时对比", confidence, evidenceType);
+                        var write = ReviewedKnowledgeLearningService.ApplyReviewedKnowledge(q, a, category, keywords, "人工即时对比", confidence, evidenceType);
                         wasApplied = write != null && write.Success && (write.Added || write.Updated);
                         applyMessage = write == null ? "知识写入结果为空" : write.Message;
                     }
-                    else
-                    {
-                        applyMessage = action == "skip" ? "AI建议跳过" : "未达到人工证据/置信度/安全边界";
-                    }
+                    else applyMessage = action == "skip" ? "AI建议跳过" : "未达到人工证据/置信度/安全边界";
                     if (wasApplied) applied++; else skipped++;
-                    item["question"] = q;
-                    item["answer"] = a;
-                    item["confidence"] = confidence;
-                    item["applied"] = wasApplied;
-                    item["apply_message"] = applyMessage;
+                    item["question"] = q; item["answer"] = a; item["confidence"] = confidence;
+                    item["applied"] = wasApplied; item["apply_message"] = applyMessage;
                     persisted.Add(item);
                 }
                 entity.SuggestionsJson = persisted.ToString(Formatting.None);
-                entity.AppliedCount = applied;
-                entity.SkippedCount = skipped;
-                entity.Status = "分析完成";
-                entity.Error = string.Empty;
-                entity.UpdatedAtTicks = DateTime.Now.Ticks;
-                Save(entity);
-                Cleanup();
-                NotifyChanged();
+                entity.AppliedCount = applied; entity.SkippedCount = skipped; entity.Status = "分析完成";
+                entity.Error = string.Empty; entity.UpdatedAtTicks = DateTime.Now.Ticks;
+                Save(entity); Cleanup(); NotifyChanged();
                 Log.Info("人工接管AI即时优化完成: seller=" + seller + ", buyer=" + buyer
                     + ", accuracy=" + entity.AccuracyScore.ToString("0") + ", applied=" + applied + ", skipped=" + skipped);
             }
             catch (Exception ex)
             {
-                entity.Status = "分析失败";
-                entity.Error = Clean(ex.Message, 1600);
-                entity.UpdatedAtTicks = DateTime.Now.Ticks;
-                Save(entity);
-                NotifyChanged();
-                throw;
+                entity.Status = "分析失败"; entity.Error = Clean(ex.Message, 1600); entity.UpdatedAtTicks = DateTime.Now.Ticks;
+                Save(entity); NotifyChanged(); throw;
             }
         }
 
-        private static string BuildRecentBuyerQuestion(
-            List<ConversationContextTurn> turns,
-            List<BotConversationHistoryEntity> cards,
-            DateTime manualAt)
+        private static string BuildRecentBuyerQuestion(List<ConversationContextTurn> turns, List<BotConversationHistoryEntity> cards, DateTime manualAt)
         {
             var buyerTurns = (turns ?? new List<ConversationContextTurn>())
                 .Where(x => x != null && x.Role == "user" && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text))
                 .Where(x => x.Timestamp == DateTime.MinValue || x.Timestamp <= manualAt.AddSeconds(1))
-                .Where(x => !IsPlatformNoise(x.Text))
-                .OrderBy(x => x.Timestamp)
-                .ToList();
+                .Where(x => !IsPlatformNoise(x.Text)).OrderBy(x => x.Timestamp).ToList();
             if (buyerTurns.Count > 0)
             {
-                var last = buyerTurns.Last();
+                var last = buyerTurns[buyerTurns.Count - 1];
                 var floor = last.Timestamp == DateTime.MinValue ? DateTime.MinValue : last.Timestamp.AddSeconds(-18);
-                var selected = buyerTurns
-                    .Where(x => floor == DateTime.MinValue || x.Timestamp == DateTime.MinValue || x.Timestamp >= floor)
-                    .TakeLast(5)
-                    .Select(x => Clean(x.Text, 600))
-                    .Where(x => x.Length > 0)
-                    .Distinct()
-                    .ToList();
+                var recent = buyerTurns.Where(x => floor == DateTime.MinValue || x.Timestamp == DateTime.MinValue || x.Timestamp >= floor).ToList();
+                if (recent.Count > 5) recent = recent.Skip(recent.Count - 5).ToList();
+                var selected = recent.Select(x => Clean(x.Text, 600)).Where(x => x.Length > 0).Distinct().ToList();
                 if (selected.Count > 0) return Clean(string.Join("\n", selected), 1800);
             }
             var card = (cards ?? new List<BotConversationHistoryEntity>()).OrderByDescending(x => x.CreatedAtTicks).FirstOrDefault();
             return card == null ? string.Empty : Clean(card.Question, 1800);
         }
 
-        private static string BuildTranscriptBeforeHuman(
-            List<ConversationContextTurn> turns,
-            List<BotConversationHistoryEntity> cards,
-            string humanAnswer,
-            DateTime manualAt)
+        private static string BuildTranscriptBeforeHuman(List<ConversationContextTurn> turns, List<BotConversationHistoryEntity> cards, string humanAnswer, DateTime manualAt)
         {
             var sb = new StringBuilder();
             foreach (var turn in (turns ?? new List<ConversationContextTurn>()).OrderBy(x => x.Timestamp))
@@ -618,8 +510,8 @@ namespace Bot.ChromeNs
         {
             var text = turn == null ? string.Empty : (turn.Text ?? string.Empty).Trim();
             if (HasAiMarker(text)) return true;
-            var n = Normalize(StripAi(text));
-            return n.Length > 0 && cards != null && cards.Any(x => Normalize(StripAi(x.Answer)) == n);
+            var normalized = Normalize(StripAi(text));
+            return normalized.Length > 0 && cards != null && cards.Any(x => Normalize(StripAi(x.Answer)) == normalized);
         }
 
         private static bool IsPlatformNoise(string value)
@@ -630,39 +522,23 @@ namespace Bot.ChromeNs
 
         private static void ShowCompareOnlyAnswer(string seller, string buyer, string question, string answer)
         {
+            if (Application.Current == null) return;
             try
             {
-                if (Application.Current == null) return;
                 Application.Current.Dispatcher.BeginInvoke(new Action(() =>
                 {
                     try
                     {
                         var desk = Desk.FindExistingBySellerNick(seller);
                         if (desk == null) return;
-                        var display = BotOutboundMessageFormatter.EnsureAiMarker(answer);
-                        var ctl = desk.AddConversation(
-                            seller,
-                            buyer,
-                            question,
-                            display,
-                            false,
-                            "人工接管后的AI优化对比");
-                        if (ctl != null)
-                            ctl.SetStatus("客服已人工回复；这是后台最终AI对照答案，仅用于准确性与知识库优化，绝不会发送给买家", true);
+                        var ctl = desk.AddConversation(seller, buyer, question,
+                            BotOutboundMessageFormatter.EnsureAiMarker(answer), false, "人工接管后的AI优化对比");
+                        if (ctl != null) ctl.SetStatus("客服已人工回复；这是后台AI对照答案，仅用于准确性与知识库优化，绝不会发送给买家", true);
                     }
-                    catch (Exception ex)
-                    {
-                        Log.ErrorWithMaxCount("显示人工接管后的AI对照答案失败：" + ex.Message, 10);
-                    }
+                    catch (Exception ex) { Log.ErrorWithMaxCount("显示人工接管AI对照答案失败：" + ex.Message, 10); }
                 }));
             }
             catch { }
-        }
-
-        private static void Save(AiOptimizationRecordEntity entity)
-        {
-            EnsureSchema();
-            lock (DbSync) DbHelper.Db.SaveRecordsInTransaction(new List<object> { entity });
         }
 
         private static void EnsureSchema()
@@ -671,8 +547,7 @@ namespace Bot.ChromeNs
             lock (DbSync)
             {
                 if (_schemaReady != 0) return;
-                DbHelper.Db.Execute(
-                    "create table if not exists AiOptimizationRecordEntity ("
+                DbHelper.Db.Execute("create table if not exists AiOptimizationRecordEntity ("
                     + "EntityId text primary key not null,Seller text,Buyer text,Question text,AiAnswer text,HumanAnswer text,"
                     + "AccuracyScore real not null default 0,AccuracyAnalysis text,HumanReplyReason text,KnowledgeStrategy text,"
                     + "SuggestionsJson text,Status text,Error text,AppliedCount integer not null default 0,SkippedCount integer not null default 0,"
@@ -680,6 +555,12 @@ namespace Bot.ChromeNs
                 DbHelper.Db.Execute("create index if not exists IX_AiOptimizationRecord_Updated on AiOptimizationRecordEntity(UpdatedAtTicks)");
                 Volatile.Write(ref _schemaReady, 1);
             }
+        }
+
+        private static void Save(AiOptimizationRecordEntity entity)
+        {
+            EnsureSchema();
+            lock (DbSync) DbHelper.Db.SaveRecordsInTransaction(new List<object> { entity });
         }
 
         private static void Cleanup()
@@ -714,8 +595,7 @@ namespace Bot.ChromeNs
             value = (value ?? string.Empty).Trim();
             var fenced = Regex.Match(value, @"```(?:json)?\s*(\{[\s\S]*\})\s*```", RegexOptions.IgnoreCase);
             if (fenced.Success) value = fenced.Groups[1].Value;
-            var start = value.IndexOf('{');
-            var end = value.LastIndexOf('}');
+            var start = value.IndexOf('{'); var end = value.LastIndexOf('}');
             if (start >= 0 && end > start) value = value.Substring(start, end - start + 1);
             return JObject.Parse(value);
         }
@@ -728,16 +608,14 @@ namespace Bot.ChromeNs
 
         private static double ParseScore(JToken token)
         {
-            double value;
-            if (!double.TryParse(Convert.ToString(token), out value)) return 0;
+            double value; if (!double.TryParse(Convert.ToString(token), out value)) return 0;
             if (value <= 1) value *= 100;
             return Math.Max(0, Math.Min(100, value));
         }
 
         private static double ParseConfidence(JToken token)
         {
-            double value;
-            if (!double.TryParse(Convert.ToString(token), out value)) return 0;
+            double value; if (!double.TryParse(Convert.ToString(token), out value)) return 0;
             if (value > 1) value /= 100.0;
             return Math.Max(0, Math.Min(1, value));
         }
@@ -766,8 +644,7 @@ namespace Bot.ChromeNs
             value = value ?? string.Empty;
             value = Regex.Replace(value, @"(?<!\d)1[3-9]\d{9}(?!\d)", "[手机号已隐藏]");
             value = Regex.Replace(value, @"(?<!\d)\d{14,20}(?!\d)", "[长数字已隐藏]");
-            value = Regex.Replace(value, @"(?i)(验证码|code)\s*[:：]?\s*\d{4,8}", "$1：[已隐藏]");
-            return value;
+            return Regex.Replace(value, @"(?i)(验证码|code)\s*[:：]?\s*\d{4,8}", "$1：[已隐藏]");
         }
 
         private static string Clean(string value, int max)
@@ -799,7 +676,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _started, 1) == 0)
             {
                 _timer = new Timer(_ => Attach(), null, 1200, 1500);
-                Log.Info("人工接管AI即时对比已启动：人工回复后后台AI继续生成对照答案，但绝不发送给买家。");
+                Log.Info("人工接管AI即时对比已启动：人工回复后生成后台AI对照答案，只用于学习，不发送给买家。");
             }
             return new object();
         }
@@ -828,14 +705,12 @@ namespace Bot.ChromeNs
                 var seller = (qn.Seller.Nick ?? string.Empty).Trim();
                 foreach (var message in response.result.Where(x => x != null && x.fromid != null && x.toid != null))
                 {
-                    var from = (message.fromid.nick ?? string.Empty).Trim();
+                    if (!string.Equals((message.fromid.nick ?? string.Empty).Trim(), seller, StringComparison.Ordinal)) continue;
                     var buyer = (message.toid.nick ?? string.Empty).Trim();
-                    if (!string.Equals(from, seller, StringComparison.Ordinal) || buyer.Length == 0) continue;
+                    if (buyer.Length == 0) continue;
                     var variants = ExtractTexts(message);
-                    if (variants.Count == 0 || variants.Any(HasAiMarker)) continue;
-                    var human = variants[0];
-                    if (MatchesRecentBotAnswer(seller, buyer, variants)) continue;
-                    AiManualReplyOptimizationService.StartForManualReply(seller, buyer, human, DateTime.Now);
+                    if (variants.Count == 0 || variants.Any(HasAiMarker) || MatchesRecentBotAnswer(seller, buyer, variants)) continue;
+                    AiManualReplyOptimizationService.StartForManualReply(seller, buyer, variants[0], DateTime.Now);
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("人工回复即时对比识别失败：" + ex.Message, 10); }
@@ -844,10 +719,7 @@ namespace Bot.ChromeNs
         private static List<string> ExtractTexts(QNChatMessage message)
         {
             var values = new List<string>();
-            try
-            {
-                if (message.originalData != null && !string.IsNullOrWhiteSpace(message.originalData.text)) values.Add(message.originalData.text.Trim());
-            }
+            try { if (message.originalData != null && !string.IsNullOrWhiteSpace(message.originalData.text)) values.Add(message.originalData.text.Trim()); }
             catch { }
             if (!string.IsNullOrWhiteSpace(message.summary)) values.Add(message.summary.Trim());
             return values.Distinct(StringComparer.Ordinal).ToList();
@@ -855,13 +727,8 @@ namespace Bot.ChromeNs
 
         private static bool MatchesRecentBotAnswer(string seller, string buyer, IEnumerable<string> variants)
         {
-            var normalized = new HashSet<string>(variants.Select(Normalize).Where(x => x.Length > 0), StringComparer.Ordinal);
-            if (normalized.Count == 0) return false;
-            try
-            {
-                return BotConversationHistoryStore.LoadRecent(seller, buyer, 30)
-                    .Any(x => x != null && normalized.Contains(Normalize(StripAi(x.Answer))));
-            }
+            var values = new HashSet<string>(variants.Select(Normalize).Where(x => x.Length > 0), StringComparer.Ordinal);
+            try { return BotConversationHistoryStore.LoadRecent(seller, buyer, 30).Any(x => x != null && values.Contains(Normalize(StripAi(x.Answer)))); }
             catch { return false; }
         }
 
@@ -929,21 +796,16 @@ namespace Bot.ChromeNs
             try
             {
                 var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-                var current = await qn.GetCurrentConversationID().ConfigureAwait(false);
-                var conversation = current == null ? null : current.Result;
-                if (seller.Length == 0 || conversation == null || string.IsNullOrWhiteSpace(conversation.Nick)) return;
-                var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, conversation.Nick);
-                if (string.IsNullOrWhiteSpace(buyer)) buyer = conversation.Nick.Trim();
-
+                var response = await qn.GetCurrentConversationID().ConfigureAwait(false);
+                var current = response == null ? null : response.Result;
+                if (seller.Length == 0 || current == null || string.IsNullOrWhiteSpace(current.Nick)) return;
+                var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, current.Nick);
+                if (string.IsNullOrWhiteSpace(buyer)) buyer = current.Nick.Trim();
                 var recovered = await qn.ReconcileActiveConversationIngressAsync(seller, buyer, 90).ConfigureAwait(false);
                 if (recovered > 0)
                 {
-                    BotConnectionDiagnostics.RecordCdpStatus(true,
-                        "业务推送曾漏事件，已通过当前会话主动核对恢复" + recovered + "条",
-                        seller,
-                        buyer);
-                    Log.Error("检测到连接存活但业务入站漏事件，已主动补回: seller=" + seller
-                        + ", buyer=" + buyer + ", count=" + recovered);
+                    BotConnectionDiagnostics.RecordCdpStatus(true, "业务推送曾漏事件，已由主动核对恢复" + recovered + "条", seller, buyer);
+                    Log.Error("检测到连接存活但业务入站漏事件，已主动补回: seller=" + seller + ", buyer=" + buyer + ", count=" + recovered);
                 }
 
                 DateTime panelNext;
@@ -952,11 +814,7 @@ namespace Bot.ChromeNs
                 {
                     NextPanelProbeAt[qn] = now.AddSeconds(60);
                     await qn.TryRecoverVisibleOrderPanelForBackgroundProbeAsync(
-                        seller,
-                        buyer,
-                        "runtimePassiveIngressWatchdog",
-                        DateTime.Now.AddMinutes(-3),
-                        false).ConfigureAwait(false);
+                        seller, buyer, "runtimePassiveIngressWatchdog", DateTime.Now.AddSeconds(-60), false).ConfigureAwait(false);
                 }
             }
             catch (Exception ex) { Log.ErrorWithMaxCount("业务入站主动核对失败：" + ex.Message, 10); }
@@ -974,11 +832,7 @@ namespace Bot.ChromeNs
             if (HasBuyerMessageAfter(seller, buyer, DateTime.Now.AddSeconds(-lookback))) return 0;
 
             DbEntity.Conversation current;
-            try
-            {
-                var response = await GetCurrentConversationID().ConfigureAwait(false);
-                current = response == null ? null : response.Result;
-            }
+            try { var response = await GetCurrentConversationID().ConfigureAwait(false); current = response == null ? null : response.Result; }
             catch { return 0; }
             if (current == null || string.IsNullOrWhiteSpace(current.Nick)
                 || !BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer)
@@ -989,11 +843,7 @@ namespace Bot.ChromeNs
             {
                 history = await cdp.Invoke<JObject>("im.singlemsg.GetRemoteHisMsg", new
                 {
-                    cid = new { ccode = current.Ccode, type = 1 },
-                    count = 30,
-                    gohistory = 1,
-                    msgid = "-1",
-                    msgtime = "-1"
+                    cid = new { ccode = current.Ccode, type = 1 }, count = 30, gohistory = 1, msgid = "-1", msgtime = "-1"
                 }).ConfigureAwait(false);
             }
             catch { return 0; }
@@ -1001,28 +851,17 @@ namespace Bot.ChromeNs
 
             var threshold = DateTime.Now.AddSeconds(-lookback).Ticks;
             var messages = history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>() ?? new List<QNChatMessage>();
-            var candidates = messages
-                .Where(m => m != null)
-                .Where(m =>
-                    (IsBuyerMessage(m) && m.fromid != null && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer))
-                    || IsPotentialRecoveredOrderCard(m))
-                .Where(m =>
-                {
-                    var sort = IncomingMessageSafety.GetSortValue(m);
-                    return sort <= 0 || sort >= threshold;
-                })
-                .OrderBy(IncomingMessageSafety.GetSortValue)
-                .ToList();
+            var candidates = messages.Where(m => m != null)
+                .Where(m => (IsBuyerMessage(m) && m.fromid != null && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer)) || IsPotentialRecoveredOrderCard(m))
+                .Where(m => { var sort = IncomingMessageSafety.GetSortValue(m); return sort > 0 && sort >= threshold; })
+                .OrderBy(IncomingMessageSafety.GetSortValue).ToList();
             if (candidates.Count == 0) return 0;
-
-            var processed = 0;
             foreach (var message in candidates)
             {
                 await ProcessRecoveredMessageWithKnownBuyerAsync(message, seller, buyer, false).ConfigureAwait(false);
-                processed++;
                 await Task.Delay(20).ConfigureAwait(false);
             }
-            return processed;
+            return candidates.Count;
         }
     }
 
@@ -1032,14 +871,11 @@ namespace Bot.ChromeNs
         private static readonly HashSet<AppenderSkeleton> Filtered = new HashSet<AppenderSkeleton>();
         private static Timer _timer;
         private static int _started;
-        private static int _logged;
+        private static int _reported;
 
         public static object InitializeForApp()
         {
-            if (Interlocked.Exchange(ref _started, 1) == 0)
-            {
-                _timer = new Timer(_ => Apply(), null, 2500, 10000);
-            }
+            if (Interlocked.Exchange(ref _started, 1) == 0) _timer = new Timer(_ => Apply(), null, 2500, 10000);
             return new object();
         }
 
@@ -1049,34 +885,35 @@ namespace Bot.ChromeNs
             {
                 lock (Sync)
                 {
+                    var phrases = new[]
+                    {
+                        "设置界面已将“人工客服工作时间与下班回复”迁移",
+                        "设置界面已在构造阶段将“启用转人工规则”",
+                        "设置界面已直接构造“转人工策略”页面并迁移转人工规则",
+                        "UIA控件刷新成功:",
+                        "收到千牛WebSocket事件: type=qnbotStatus",
+                        "千牛注入状态:",
+                        "检测到卖家重复千牛WebSocket页面，保留已稳定的权威CDP会话",
+                        "RPA已绑定卖家专属千牛窗口:",
+                        "IMSDK璋冪敤璺熻釜:",
+                        "SendForGetText",
+                        "后台订单面板延迟兜底订单已由其他通道处理/去重"
+                    };
+                    var pattern = string.Join("|", phrases.Select(Regex.Escape));
                     foreach (var appender in LogManager.GetRepository().GetAppenders().OfType<AppenderSkeleton>())
                     {
                         if (!Filtered.Add(appender)) continue;
-                        var filter = new RegexFilter
-                        {
-                            RegexToMatch =
-                                "设置界面已将“人工客服工作时间与下班回复”迁移|"
-                                + "设置界面已在构造阶段将“启用转人工规则”|"
-                                + "设置界面已直接构造“转人工策略”页面并迁移转人工规则|"
-                                + "UIA控件刷新成功:|"
-                                + "IMSDK璋冪敤璺熻釜:|"
-                                + "SendForGetText|"
-                                + "收到千牛WebSocket事件: type=qnbotStatus|"
-                                + "千牛注入状态: .*\\\"extra\\\":\\\"loop\\\"|"
-                                + "后台订单面板延迟兜底订单已由其他通道处理/去重",
-                            AcceptOnMatch = false
-                        };
+                        var filter = new RegexFilter { RegexToMatch = pattern, AcceptOnMatch = false };
                         filter.ActivateOptions();
                         appender.AddFilter(filter);
                     }
                 }
-                if (Interlocked.Exchange(ref _logged, 1) == 0)
-                    Log.Info("运行日志降噪已启用：保留故障/恢复/真实发送关键日志，过滤高频成功探测和已完成设置迁移提示。");
+                if (Interlocked.Exchange(ref _reported, 1) == 0)
+                    Log.Info("运行日志降噪已启用：保留故障、恢复、真实消息和发送结果，过滤高频成功探测与已完成设置迁移提示。");
             }
             catch (Exception ex)
             {
-                if (Interlocked.Exchange(ref _logged, 1) == 0)
-                    Log.ErrorWithMaxCount("运行日志降噪初始化失败：" + ex.Message, 3);
+                if (Interlocked.Exchange(ref _reported, 1) == 0) Log.ErrorWithMaxCount("运行日志降噪初始化失败：" + ex.Message, 3);
             }
         }
     }
