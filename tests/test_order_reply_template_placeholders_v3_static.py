@@ -44,3 +44,11 @@ def test_buyer_remark_enrichment_is_strict_and_real_only():
     assert 'FindValue(tradeFlat, BuyerRemarkKeys)' in V2
     assert 'FindValue(flat, BuyerRemarkKeys)' in V2
     assert 'trade_found_but_buyer_remark_empty' in V2
+
+
+def test_fixed_template_bypasses_output_policy_to_preserve_layout():
+    assert 'var preserveTemplateLayout' in SERVICE
+    assert 'resolution.Source.IndexOf("固定预设", StringComparison.Ordinal)' in SERVICE
+    assert 'resolution.Source.IndexOf("接口失败兜底", StringComparison.Ordinal)' in SERVICE
+    preserve = SERVICE.split('var preserveTemplateLayout', 1)[1].split('string duplicateReason;', 1)[0]
+    assert 'rawReply + " [AI]"' in preserve

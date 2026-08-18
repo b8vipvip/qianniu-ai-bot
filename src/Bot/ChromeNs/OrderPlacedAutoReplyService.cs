@@ -487,8 +487,16 @@ namespace Bot.ChromeNs
                     return;
                 }
 
-                var answer = BotOutboundMessageFormatter.EnsureAiMarker(
-                    BotFeatureStore.ApplyOutputPolicy(resolution.Reply));
+                var preserveTemplateLayout = !string.IsNullOrWhiteSpace(resolution.Source)
+                    && (resolution.Source.IndexOf("固定预设", StringComparison.Ordinal) >= 0
+                        || resolution.Source.IndexOf("接口失败兜底", StringComparison.Ordinal) >= 0);
+                var rawReply = resolution.Reply ?? string.Empty;
+                var answer = preserveTemplateLayout
+                    ? (Regex.IsMatch(rawReply, @"(?:\[AI\]|【AI】|［AI］)\s*$", RegexOptions.IgnoreCase)
+                        ? rawReply
+                        : rawReply + " [AI]")
+                    : BotOutboundMessageFormatter.EnsureAiMarker(
+                        BotFeatureStore.ApplyOutputPolicy(rawReply));
 
                 string duplicateReason;
                 if (OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
