@@ -18,14 +18,16 @@ namespace Bot.UpdateNs
 {
     /// <summary>
     /// An external PowerShell watcher survives native crashes / process kills that cannot be
-    /// recovered by in-process exception handlers. Normal exits and updater-driven exits create
-    /// an expected-exit marker so the watcher does not fight intentional shutdowns.
+    /// recovered by in-process exception handlers. Normal exits remain suppressed, while an
+    /// updater-driven exit enters a bounded handoff watch and can recover Bot.exe if the updater
+    /// disappears before a replacement process comes back.
     /// </summary>
     internal static class BotProcessWatchdog
     {
         private static readonly object Sync = new object();
         private static bool _initialized;
         private static string _expectedExitMarker = string.Empty;
+        private static string _expectedExitReason = string.Empty;
 
         public static object InitializeForApp()
         {
@@ -77,7 +79,7 @@ namespace Bot.UpdateNs
                     Application.Current.Exit += delegate { MarkExpectedExit("normal-app-exit"); };
                     Application.Current.SessionEnding += delegate { MarkExpectedExit("windows-session-ending"); };
                 }
-                Log.Info("Bot外部进程守护已启动：异常退出将自动重启；正常退出和自动更新不会误拉起。watchdogPid="
+                Log.Info("Bot外部进程守护已启动：异常退出将自动重启；正常退出不会误拉起；自动更新退出进入安全交接恢复监控。watchdogPid="
                     + watcher.Id);
             }
             catch (Exception ex)
@@ -89,13 +91,34 @@ namespace Bot.UpdateNs
 
         public static void MarkExpectedExit(string reason)
         {
+            reason = (reason ?? string.Empty).Trim();
             try
             {
-                if (string.IsNullOrWhiteSpace(_expectedExitMarker)) return;
-                File.WriteAllText(
-                    _expectedExitMarker,
-                    DateTime.Now.ToString("o") + " " + (reason ?? string.Empty),
-                    new UTF8Encoding(false));
+                lock (Sync)
+                {
+                    // Application.Current.Exit fires after LaunchInstaller has already marked an
+                    // auto-update handoff. Do not let that generic normal-exit callback erase the
+                    // update reason; the external watcher needs it to know that recovery is allowed.
+                    if (_expectedExitReason.StartsWith(
+                            "auto-update:",
+                            StringComparison.OrdinalIgnoreCase)
+                        && !reason.StartsWith(
+                            "auto-update:",
+                            StringComparison.OrdinalIgnoreCase))
+                    {
+                        reason = _expectedExitReason;
+                    }
+                    else
+                    {
+                        _expectedExitReason = reason;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(_expectedExitMarker)) return;
+                    File.WriteAllText(
+                        _expectedExitMarker,
+                        DateTime.Now.ToString("o") + " " + reason,
+                        new UTF8Encoding(false));
+                }
             }
             catch { }
         }
@@ -122,25 +145,102 @@ function Write-WatchdogLog([string]$Message) {
         Add-Content -LiteralPath $WatchdogLog -Value $line -Encoding UTF8
     } catch {}
 }
+function Test-SameBotRunning {
+    try {
+        $same = Get-CimInstance Win32_Process -Filter 'Name=''Bot.exe''' | Where-Object {
+            $_.ExecutablePath -and ([string]::Equals($_.ExecutablePath, $ExePath, [System.StringComparison]::OrdinalIgnoreCase))
+        }
+        return [bool]$same
+    } catch {
+        return $false
+    }
+}
+function Get-RelatedUpdaterProcesses {
+    $installRoot = Split-Path -Parent $WorkingDirectory
+    try {
+        return @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+            if ($null -eq $_ -or [int]$_.ProcessId -eq $PID) { return $false }
+            $cmd = [string]$_.CommandLine
+            if ([string]::IsNullOrWhiteSpace($cmd)) { return $false }
+            $mentionsInstall = $cmd.IndexOf($installRoot, [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            $looksLikeUpdater =
+                $cmd.IndexOf('QianniuAiBotUpdaterBootstrap-', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $cmd.IndexOf('QianniuAiBotUpdater-', [System.StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+                $cmd.IndexOf('BotAutoUpdater.ps1', [System.StringComparison]::OrdinalIgnoreCase) -ge 0
+            return $mentionsInstall -and $looksLikeUpdater
+        })
+    } catch {
+        return @()
+    }
+}
+function Restart-Bot([string]$Reason) {
+    if (Test-SameBotRunning) {
+        Write-WatchdogLog ($Reason + '; Bot already running')
+        return $true
+    }
+    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
+        Write-WatchdogLog ($Reason + '; restart failed because executable is missing: ' + $ExePath)
+        return $false
+    }
+    try {
+        $newProcess = Start-Process -FilePath $ExePath -WorkingDirectory $WorkingDirectory -PassThru
+        Write-WatchdogLog ($Reason + '; restarted pid=' + $newProcess.Id)
+        return $true
+    } catch {
+        Write-WatchdogLog ($Reason + '; restart failed: ' + $_.Exception.Message)
+        return $false
+    }
+}
 try {
     $p = Get-Process -Id $CurrentPid -ErrorAction SilentlyContinue
     if ($null -ne $p) { Wait-Process -Id $CurrentPid -ErrorAction SilentlyContinue }
 } catch {}
 Start-Sleep -Seconds 2
 if (Test-Path -LiteralPath $ExpectedExitMarker) {
-    Write-WatchdogLog ('expected exit pid=' + $CurrentPid + '; no restart')
+    $expected = ''
+    try { $expected = Get-Content -LiteralPath $ExpectedExitMarker -Raw -ErrorAction SilentlyContinue } catch {}
     Remove-Item -LiteralPath $ExpectedExitMarker -Force -ErrorAction SilentlyContinue
+
+    if ($expected.IndexOf('auto-update:', [System.StringComparison]::OrdinalIgnoreCase) -ge 0) {
+        Write-WatchdogLog ('auto-update expected exit pid=' + $CurrentPid + '; entering handoff recovery watch')
+        $softDeadline = (Get-Date).AddSeconds(90)
+        $hardDeadline = (Get-Date).AddMinutes(5)
+        while ((Get-Date) -lt $hardDeadline) {
+            if (Test-SameBotRunning) {
+                Write-WatchdogLog 'auto-update handoff completed; replacement Bot is running'
+                exit 0
+            }
+
+            if ((Get-Date) -ge $softDeadline) {
+                $updaters = @(Get-RelatedUpdaterProcesses)
+                if ($updaters.Count -eq 0) {
+                    Write-WatchdogLog 'auto-update handoff updater disappeared before Bot returned; starting recovery now'
+                    if (Restart-Bot 'auto-update early recovery') { exit 0 }
+                    exit 4
+                }
+            }
+            Start-Sleep -Seconds 2
+        }
+
+        $stuck = @(Get-RelatedUpdaterProcesses)
+        if ($stuck.Count -gt 0) {
+            Write-WatchdogLog ('auto-update handoff exceeded 5 minutes; terminating stuck updater count=' + $stuck.Count)
+            foreach ($u in $stuck) {
+                Stop-Process -Id $u.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+            Start-Sleep -Seconds 2
+        }
+        if (Restart-Bot 'auto-update timeout recovery') { exit 0 }
+        exit 4
+    }
+
+    Write-WatchdogLog ('expected exit pid=' + $CurrentPid + '; reason=' + $expected + '; no restart')
     exit 0
 }
-try {
-    $same = Get-CimInstance Win32_Process -Filter 'Name=''Bot.exe''' | Where-Object {
-        $_.ExecutablePath -and ([string]::Equals($_.ExecutablePath, $ExePath, [System.StringComparison]::OrdinalIgnoreCase))
-    }
-    if ($same) {
-        Write-WatchdogLog 'another Bot.exe instance already owns this install; no restart'
-        exit 0
-    }
-} catch {}
+if (Test-SameBotRunning) {
+    Write-WatchdogLog 'another Bot.exe instance already owns this install; no restart'
+    exit 0
+}
 $now = Get-Date
 $recent = @()
 try {
@@ -156,14 +256,8 @@ if ($recent.Count -ge 5) {
 }
 $recent += $now
 try { $recent | ForEach-Object { $_.ToString('o') } | Set-Content -LiteralPath $RestartState -Encoding UTF8 } catch {}
-try {
-    $newProcess = Start-Process -FilePath $ExePath -WorkingDirectory $WorkingDirectory -PassThru
-    Write-WatchdogLog ('unexpected exit pid=' + $CurrentPid + '; restarted pid=' + $newProcess.Id)
-    exit 0
-} catch {
-    Write-WatchdogLog ('restart failed: ' + $_.Exception.Message)
-    exit 3
-}
+if (Restart-Bot ('unexpected exit pid=' + $CurrentPid)) { exit 0 }
+exit 3
 ";
         }
     }
