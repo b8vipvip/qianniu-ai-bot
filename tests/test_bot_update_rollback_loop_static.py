@@ -32,15 +32,15 @@ def test_installer_quarantine_is_kept_separate_from_user_skip_state():
     assert "Bot 已保持运行，不会退出" in actions
 
 
-def test_cancel_skip_clears_failure_quarantine_and_rechecks_immediately():
+def test_cancel_skip_clears_failure_quarantine_and_reconnects_server_push():
     core = read("src/Bot/Update/BotUpdateService.Core.Fast.cs")
     state = read("src/Bot/Update/BotUpdateService.State.Fast.cs")
 
     assert "settings.UserSkippedVersion = string.Empty;" in core
     assert "settings.FailedInstallVersion = string.Empty;" in core
-    assert "if (skipCleared) ScheduleRecheckAfterSkipClear();" in core
-    assert "CheckNowAsync(false)" in state
-    assert "ShowUpdatePrompt(result.Release, owner);" in state
+    assert "settings.FailedInstallAt = string.Empty;" in core
+    assert "RestartServerPushListener();" in core
+    assert "CheckNowAsync(false)" not in state
 
 
 def test_server_push_still_respects_effective_failure_quarantine():
