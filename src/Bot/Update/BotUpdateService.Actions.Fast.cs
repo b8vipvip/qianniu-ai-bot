@@ -114,10 +114,6 @@ namespace Bot.UpdateNs
                     "自动更新程序 BotAutoUpdater.ps1 缺失。",
                     sourceScript);
 
-            // Persist a provisional skip before handoff. If anything after this point fails,
-            // the same bad target will not be auto-installed in a tight restart loop.
-            QuarantineVersionForUpdaterHandoff(release.Version);
-
             var handoffRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "QianniuAiBotUpdater",
@@ -128,6 +124,7 @@ namespace Bot.UpdateNs
             var handoffPath = Path.Combine(
                 handoffRoot,
                 "updater-handoff-" + handoffId + ".ready");
+            var handoffGoPath = handoffPath + ".go";
             var bootstrapLogPath = handoffPath + ".bootstrap.log";
 
             var tempUpdaterScript = Path.Combine(
@@ -176,23 +173,39 @@ namespace Bot.UpdateNs
                     TimeSpan.FromSeconds(12),
                     out handoffDetail))
             {
-                try
-                {
-                    if (!process.HasExited) process.Kill();
-                }
-                catch { }
+                TryKillUpdaterBootstrap(process);
                 throw new Exception(
                     "自动更新器未完成安全交接，Bot 已保持运行，不会退出。"
                     + " detail=" + handoffDetail
                     + "；bootstrapLog=" + bootstrapLogPath);
             }
 
-            // Only mark the current process as an expected updater exit after the bootstrap has
-            // positively acknowledged that it is alive, has validated the package, and can recover
-            // the old Bot if the inner updater fails.
-            BotProcessWatchdog.MarkExpectedExit("auto-update:" + release.Version);
+            try
+            {
+                // The bootstrap is alive and has already validated the package, but it is waiting
+                // for the .go commit file and therefore cannot stop this Bot yet. Persist the loop
+                // quarantine and watchdog intent before allowing the external updater to proceed.
+                QuarantineVersionForUpdaterHandoff(release.Version);
+                if (!BotProcessWatchdog.TryMarkExpectedExit(
+                        "auto-update:" + release.Version))
+                {
+                    throw new Exception("无法写入自动更新退出保护标记，已取消本次更新。");
+                }
+
+                File.WriteAllText(
+                    handoffGoPath,
+                    DateTime.Now.ToString("o") + " go " + release.Version,
+                    new UTF8Encoding(false));
+            }
+            catch
+            {
+                BotProcessWatchdog.CancelExpectedExit();
+                TryKillUpdaterBootstrap(process);
+                throw;
+            }
+
             Log.Info(
-                "Bot自动更新安全交接已确认: version=" + release.Version
+                "Bot自动更新安全交接已确认并提交: version=" + release.Version
                 + ", handoff=" + handoffPath
                 + ", detail=" + handoffDetail
                 + "；现在才允许当前Bot退出。若更新器异常，bootstrap/watchdog会恢复Bot。");
@@ -205,6 +218,16 @@ namespace Bot.UpdateNs
                         Application.Current.Shutdown();
                     }));
             }
+        }
+
+        private static void TryKillUpdaterBootstrap(Process process)
+        {
+            if (process == null) return;
+            try
+            {
+                if (!process.HasExited) process.Kill();
+            }
+            catch { }
         }
 
         private static bool WaitForUpdaterHandoff(
@@ -265,8 +288,9 @@ namespace Bot.UpdateNs
 )
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-$handoffSignaled = $false
+$handoffCommitted = $false
 $bootstrapLog = $HandoffPath + '.bootstrap.log'
+$goPath = $HandoffPath + '.go'
 
 function Write-BootstrapLog([string]$Message) {
     try {
@@ -280,13 +304,16 @@ function Write-BootstrapLog([string]$Message) {
 }
 
 function Quote-Arg([string]$Value) {
-    return '"' + (($Value ?? '').Replace('"', '\"')) + '"'
+    $text = [string]$Value
+    $q = [char]34
+    $escaped = $text.Replace([string]$q, ('\' + [string]$q))
+    return ([string]$q) + $escaped + ([string]$q)
 }
 
 function Test-BotRunning {
     $exe = Join-Path $InstallDir 'Bin\Bot.exe'
     try {
-        foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='Bot.exe'" -ErrorAction SilentlyContinue)) {
+        foreach ($p in @(Get-CimInstance Win32_Process -Filter 'Name=''Bot.exe''' -ErrorAction SilentlyContinue)) {
             if ($p.ExecutablePath -and [string]::Equals([string]$p.ExecutablePath, $exe, [System.StringComparison]::OrdinalIgnoreCase)) {
                 return $true
             }
@@ -352,8 +379,17 @@ try {
         ('target=' + $ExpectedVersion),
         ('bootstrap_log=' + $bootstrapLog)
     ) | Set-Content -LiteralPath $HandoffPath -Encoding UTF8
-    $handoffSignaled = $true
-    Write-BootstrapLog ('handoff acknowledged; waiting for inner updater completion')
+    Write-BootstrapLog 'handoff ready; waiting for Bot commit signal before updater may proceed.'
+
+    $goDeadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $goDeadline -and -not (Test-Path -LiteralPath $goPath -PathType Leaf)) {
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not (Test-Path -LiteralPath $goPath -PathType Leaf)) {
+        throw 'Handoff commit signal was not received within 20 seconds.'
+    }
+    $handoffCommitted = $true
+    Write-BootstrapLog 'handoff commit received; starting inner updater.'
 
     $childArgs = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Arg $UpdaterScriptPath)
     $childArgs += ' -PackagePath ' + (Quote-Arg $PackagePath)
@@ -398,7 +434,7 @@ try {
 }
 catch {
     Write-BootstrapLog ('bootstrap failure: ' + $_.Exception.Message)
-    if ($handoffSignaled) {
+    if ($handoffCommitted) {
         $exitDeadline = (Get-Date).AddSeconds(20)
         while ((Get-Date) -lt $exitDeadline -and $null -ne (Get-Process -Id $CurrentPid -ErrorAction SilentlyContinue)) {
             Start-Sleep -Milliseconds 500
@@ -409,7 +445,7 @@ catch {
             Write-BootstrapLog 'bootstrap recovery ensured Bot is running.'
         }
     } else {
-        Write-BootstrapLog 'handoff was never acknowledged; current Bot should remain running.'
+        Write-BootstrapLog 'handoff was not committed; current Bot should remain running.'
     }
     exit 1
 }
@@ -419,25 +455,19 @@ catch {
         private static void QuarantineVersionForUpdaterHandoff(string version)
         {
             version = NormalizeVersion(version);
-            if (string.IsNullOrWhiteSpace(version)) return;
-            try
+            if (string.IsNullOrWhiteSpace(version))
+                throw new Exception("自动更新目标版本为空，拒绝进入交接。");
+
+            lock (SettingsSync)
             {
-                lock (SettingsSync)
-                {
-                    var settings = _settings == null
-                        ? LoadSettingsInternal()
-                        : CloneSettings(_settings);
-                    settings.SkippedVersion = version;
-                    _settings = CloneSettings(settings);
-                    SaveSettingsInternal(_settings);
-                }
-                Log.Info("自动更新交接保护已记录目标版本隔离: version=" + version);
+                var settings = _settings == null
+                    ? LoadSettingsInternal()
+                    : CloneSettings(_settings);
+                settings.SkippedVersion = version;
+                _settings = CloneSettings(settings);
+                SaveSettingsInternal(_settings);
             }
-            catch (Exception ex)
-            {
-                Log.Info("记录自动更新交接保护失败，将依赖更新器失败隔离: version="
-                    + version + ", error=" + Short(ex.Message, 180));
-            }
+            Log.Info("自动更新交接保护已记录目标版本隔离: version=" + version);
         }
 
         private static void MaybeShowBackgroundPrompt(BotReleaseInfo release)
