@@ -23,17 +23,6 @@ namespace Bot.ChromeNs
         }
     }
 
-    // KnowledgeCenterWindow is also compiled by WPF temporary projects. DbHelper lives
-    // under Bot.Common and is otherwise not in that source file's namespace imports.
-    // A dynamic bridge keeps the normal SQLite API intact without duplicating storage.
-    internal static class DbHelper
-    {
-        public static dynamic Db
-        {
-            get { return Bot.Common.DbHelper.Db; }
-        }
-    }
-
     // log4net 2.0.3 used by this legacy client does not ship a RegexFilter. The runtime
     // noise filter needs deterministic regex matching, so provide the tiny FilterSkeleton
     // implementation locally. It is used by both normal and WPF temporary builds.
