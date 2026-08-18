@@ -91,6 +91,11 @@ namespace Bot.UpdateNs
 
         public static void MarkExpectedExit(string reason)
         {
+            TryMarkExpectedExit(reason);
+        }
+
+        public static bool TryMarkExpectedExit(string reason)
+        {
             reason = (reason ?? string.Empty).Trim();
             try
             {
@@ -113,11 +118,32 @@ namespace Bot.UpdateNs
                         _expectedExitReason = reason;
                     }
 
-                    if (string.IsNullOrWhiteSpace(_expectedExitMarker)) return;
+                    if (string.IsNullOrWhiteSpace(_expectedExitMarker)) return false;
                     File.WriteAllText(
                         _expectedExitMarker,
                         DateTime.Now.ToString("o") + " " + reason,
                         new UTF8Encoding(false));
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public static void CancelExpectedExit()
+        {
+            try
+            {
+                lock (Sync)
+                {
+                    _expectedExitReason = string.Empty;
+                    if (!string.IsNullOrWhiteSpace(_expectedExitMarker)
+                        && File.Exists(_expectedExitMarker))
+                    {
+                        File.Delete(_expectedExitMarker);
+                    }
                 }
             }
             catch { }
