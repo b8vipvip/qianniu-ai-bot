@@ -127,7 +127,11 @@ function Restore-PersistentData([string]$CompleteBackupDir, [string]$PersistentR
 
 function Get-InstallProcessIds([string]$TargetInstallDir) {
     $ids = @()
-    $ids += @(Get-Process -Name 'Bot' -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+    # Never terminate unrelated Bot.exe instances from other installations. The handoff PID is
+    # explicit, and additional cleanup is scoped strictly to the target install directory.
+    if ($CurrentPid -gt 0 -and $CurrentPid -ne $PID) {
+        $ids += [int]$CurrentPid
+    }
 
     if (-not [string]::IsNullOrWhiteSpace($TargetInstallDir)) {
         $root = [IO.Path]::GetFullPath($TargetInstallDir).TrimEnd('\') + '\'
@@ -219,16 +223,34 @@ function Clear-DirectoryContentsWithRetry([string]$Path, [int]$MaxAttempts = 24)
     throw "Unable to clear install directory contents after $MaxAttempts attempts: $Path. $detail"
 }
 
-function Test-BotStarted([string]$ExpectedExe) {
-    $deadline = (Get-Date).AddSeconds(15)
+function Test-BotStarted([string]$ExpectedExe, [int]$ExpectedPid) {
+    $deadline = (Get-Date).AddSeconds(20)
+    $survivalStartedAt = $null
     while ((Get-Date) -lt $deadline) {
-        foreach ($process in (Get-Process -Name 'Bot' -ErrorAction SilentlyContinue)) {
-            try {
-                if ($process.Path -and ([IO.Path]::GetFullPath($process.Path) -ieq [IO.Path]::GetFullPath($ExpectedExe))) {
-                    return $true
-                }
-            }
-            catch { }
+        $process = Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue
+        if ($null -eq $process) {
+            $survivalStartedAt = $null
+            Start-Sleep -Milliseconds 500
+            continue
+        }
+
+        $pathMatches = $false
+        try {
+            $pathMatches = $process.Path -and
+                ([IO.Path]::GetFullPath($process.Path) -ieq [IO.Path]::GetFullPath($ExpectedExe))
+        }
+        catch {
+            $pathMatches = $false
+        }
+        if (-not $pathMatches) {
+            return $false
+        }
+
+        if ($null -eq $survivalStartedAt) {
+            $survivalStartedAt = Get-Date
+        }
+        elseif (((Get-Date) - $survivalStartedAt).TotalSeconds -ge 8) {
+            return $true
         }
         Start-Sleep -Milliseconds 500
     }
@@ -388,11 +410,20 @@ try {
     if (-not (Test-Path -LiteralPath $installedReleaseInfo)) {
         throw 'Installed package validation failed: release-info.json was not found.'
     }
+    $installedInfo = Get-Content -LiteralPath $installedReleaseInfo -Raw | ConvertFrom-Json
+    if ([string]::IsNullOrWhiteSpace([string]$installedInfo.version) -or
+        ([string]$installedInfo.version -ne $ExpectedVersion)) {
+        throw "Installed package version mismatch. Expected $ExpectedVersion, actual $($installedInfo.version)"
+    }
 
     Write-Step 'Starting and validating new Bot.exe'
-    Start-Process -FilePath $installedExe -WorkingDirectory (Split-Path -Parent $installedExe)
-    if (-not (Test-BotStarted $installedExe)) {
-        throw 'New Bot.exe did not remain running. Automatic rollback will start.'
+    $newBot = Start-Process -FilePath $installedExe -WorkingDirectory (Split-Path -Parent $installedExe) -PassThru
+    if ($null -eq $newBot) {
+        throw 'New Bot.exe process could not be created. Automatic rollback will start.'
+    }
+    Write-Host "Started target Bot PID=$($newBot.Id); requiring an 8 second survival window."
+    if (-not (Test-BotStarted $installedExe $newBot.Id)) {
+        throw 'New Bot.exe did not survive the required validation window. Automatic rollback will start.'
     }
 
     Write-Step "Update to $ExpectedVersion completed successfully"

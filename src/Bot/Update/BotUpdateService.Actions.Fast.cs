@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -106,13 +107,9 @@ namespace Bot.UpdateNs
                     "安装前 SHA-256 校验失败，已拒绝执行更新。");
             }
 
-            var sourceScript = Path.Combine(
-                AppDomain.CurrentDomain.BaseDirectory,
-                "BotAutoUpdater.ps1");
-            if (!File.Exists(sourceScript))
-                throw new FileNotFoundException(
-                    "自动更新程序 BotAutoUpdater.ps1 缺失。",
-                    sourceScript);
+            // Never bootstrap a new release with the updater bundled in the currently
+            // installed Bot. A defect in that old updater would otherwise make the fixed target
+            // release impossible to install. The verified target package owns its updater.
 
             var handoffRoot = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -137,7 +134,7 @@ namespace Bot.UpdateNs
                 "QianniuAiBotUpdaterBootstrap-"
                 + Guid.NewGuid().ToString("N")
                 + ".ps1");
-            File.Copy(sourceScript, tempUpdaterScript, true);
+            ExtractTargetUpdaterFromPackage(packagePath, tempUpdaterScript, release);
             File.WriteAllText(
                 tempBootstrapScript,
                 BuildUpdaterBootstrapScript(),
@@ -217,6 +214,105 @@ namespace Bot.UpdateNs
                     {
                         Application.Current.Shutdown();
                     }));
+            }
+        }
+
+        private static void ExtractTargetUpdaterFromPackage(
+            string packagePath,
+            string destinationPath,
+            BotReleaseInfo release)
+        {
+            if (release == null) throw new ArgumentNullException("release");
+            using (var stream = File.Open(
+                packagePath,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read))
+            using (var archive = new ZipArchive(
+                stream,
+                ZipArchiveMode.Read,
+                false))
+            {
+                Func<ZipArchiveEntry, string> normalizedName = entry =>
+                    (entry == null ? string.Empty : entry.FullName ?? string.Empty)
+                        .Replace('\\', '/')
+                        .TrimStart('/');
+
+                var updaterEntries = archive.Entries
+                    .Where(entry => string.Equals(
+                        normalizedName(entry),
+                        "Bin/BotAutoUpdater.ps1",
+                        StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (updaterEntries.Count != 1)
+                {
+                    throw new Exception(
+                        "目标安装包必须且只能包含一个 Bin/BotAutoUpdater.ps1。actual="
+                        + updaterEntries.Count);
+                }
+
+                var releaseEntries = archive.Entries
+                    .Where(entry => string.Equals(
+                        normalizedName(entry),
+                        "release-info.json",
+                        StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                if (releaseEntries.Count != 1)
+                {
+                    throw new Exception(
+                        "目标安装包必须且只能包含一个 release-info.json。actual="
+                        + releaseEntries.Count);
+                }
+
+                JObject packageInfo;
+                using (var reader = new StreamReader(
+                    releaseEntries[0].Open(),
+                    Encoding.UTF8,
+                    true))
+                {
+                    packageInfo = JObject.Parse(reader.ReadToEnd());
+                }
+                var packageVersion = NormalizeVersion(
+                    packageInfo.Value<string>("version") ?? string.Empty);
+                if (!string.Equals(
+                        packageVersion,
+                        NormalizeVersion(release.Version),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new Exception(
+                        "目标安装包版本与发布清单不一致。expected="
+                        + release.Version + ", actual=" + packageVersion);
+                }
+
+                var packageCommit =
+                    (packageInfo.Value<string>("commit") ?? string.Empty).Trim();
+                if (!string.IsNullOrWhiteSpace(release.Commit)
+                    && !string.IsNullOrWhiteSpace(packageCommit)
+                    && !string.Equals(
+                        packageCommit,
+                        release.Commit.Trim(),
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new Exception(
+                        "目标安装包提交与发布清单不一致。expected="
+                        + release.Commit + ", actual=" + packageCommit);
+                }
+
+                var destinationDir = Path.GetDirectoryName(destinationPath);
+                if (!string.IsNullOrWhiteSpace(destinationDir))
+                    Directory.CreateDirectory(destinationDir);
+                using (var input = updaterEntries[0].Open())
+                using (var output = File.Create(destinationPath))
+                {
+                    input.CopyTo(output);
+                }
+            }
+
+            if (!File.Exists(destinationPath)
+                || new FileInfo(destinationPath).Length < 256)
+            {
+                throw new Exception(
+                    "目标安装包中的 BotAutoUpdater.ps1 提取失败或内容异常。");
             }
         }
 
@@ -367,6 +463,19 @@ try {
     if ($actualHash -ne $ExpectedSha256) {
         throw ('Bootstrap SHA256 verification failed. Expected ' + $ExpectedSha256 + ', actual ' + $actualHash)
     }
+
+    $tokens = $null
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile(
+        $UpdaterScriptPath,
+        [ref]$tokens,
+        [ref]$parseErrors
+    ) | Out-Null
+    if ($parseErrors.Count -gt 0) {
+        $parseSummary = @($parseErrors | ForEach-Object { $_.Message }) -join ' | '
+        throw ('Target updater PowerShell syntax validation failed: ' + $parseSummary)
+    }
+    Write-BootstrapLog 'target updater PowerShell syntax validated.'
     Write-BootstrapLog ('preflight validated; package=' + $PackagePath + '; install=' + $InstallDir)
 
     $handoffDir = Split-Path -Parent $HandoffPath
