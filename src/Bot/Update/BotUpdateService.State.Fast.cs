@@ -241,38 +241,6 @@ namespace Bot.UpdateNs
             return (value ?? string.Empty).Trim();
         }
 
-        private static void ScheduleRecheckAfterSkipClear()
-        {
-            Task.Run(async delegate
-            {
-                try
-                {
-                    await Task.Delay(250).ConfigureAwait(false);
-                    var result = await CheckNowAsync(false).ConfigureAwait(false);
-                    if (result == null
-                        || !result.Success
-                        || !result.UpdateAvailable
-                        || result.Release == null
-                        || result.InstallStarted)
-                    {
-                        return;
-                    }
-
-                    if (Application.Current == null) return;
-                    Application.Current.Dispatcher.BeginInvoke(new Action(delegate
-                    {
-                        Window owner = null;
-                        try { owner = Application.Current.MainWindow; } catch { }
-                        ShowUpdatePrompt(result.Release, owner);
-                    }));
-                }
-                catch (Exception ex)
-                {
-                    Log.Info("取消跳过版本后的立即重新检查失败: " + Short(ex.Message, 220));
-                }
-            });
-        }
-
         private static string ResolveCurrentVersion()
         {
             try
