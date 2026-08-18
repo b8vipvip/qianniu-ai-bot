@@ -1,0 +1,48 @@
+name: Capture order reply template v3 Windows result
+
+on:
+  push:
+    branches: [ agent/order-reply-template-v3 ]
+    paths: [ '.github/workflows/validate-order-reply-template-v3-debug.yml' ]
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/order-reply-template-v3
+          fetch-depth: 0
+      - uses: microsoft/setup-msbuild@v2
+      - name: Restore
+        shell: pwsh
+        run: nuget restore src/Bot.sln -PackagesDirectory src/packages -NonInteractive
+      - name: Build and capture
+        id: build
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          msbuild src/Bot.sln /t:Build /m /nologo /verbosity:minimal /p:Configuration=Release /p:Platform=x64 '/flp:logfile=order-template-v3-msbuild.log;verbosity=diagnostic'
+          $code = $LASTEXITCODE
+          "exit_code=$code" | Set-Content order-template-v3-result.txt -Encoding UTF8
+          if (Test-Path order-template-v3-msbuild.log) {
+            Select-String -Path order-template-v3-msbuild.log -Pattern ': error ',' error CS',' error MSB' |
+              Select-Object -Last 80 |
+              ForEach-Object { $_.Line } |
+              Add-Content order-template-v3-result.txt -Encoding UTF8
+          }
+          exit $code
+      - name: Commit result
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path order-template-v3-result.txt)) { "exit_code=unknown" | Set-Content order-template-v3-result.txt -Encoding UTF8 }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add order-template-v3-result.txt
+          git commit -m "ci: capture order reply template v3 Windows result"
+          git push origin HEAD:agent/order-reply-template-v3
