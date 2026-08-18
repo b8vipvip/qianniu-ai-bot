@@ -75,7 +75,7 @@ namespace Bot.UpdateNs
             try
             {
                 var path = GetSettingsPath();
-                if (!File.Exists(path)) return new BotUpdateSettings();
+                if (!File.Exists(path)) return NormalizeSettings(new BotUpdateSettings());
                 return NormalizeSettings(
                     JsonConvert.DeserializeObject<BotUpdateSettings>(
                         File.ReadAllText(path, Encoding.UTF8)));
@@ -85,13 +85,39 @@ namespace Bot.UpdateNs
                 Log.Info(
                     "读取Bot更新设置失败，使用默认值: "
                     + ex.Message);
-                return new BotUpdateSettings();
+                return NormalizeSettings(new BotUpdateSettings());
             }
         }
 
         private static void SaveSettingsInternal(
             BotUpdateSettings settings)
         {
+            settings = settings ?? new BotUpdateSettings();
+
+            // Older updater code intentionally writes SkippedVersion directly during the
+            // two-phase handoff so a rollback cannot immediately reinstall the same failed build.
+            // Preserve that safety behavior, but canonicalize it as FailedInstallVersion instead
+            // of confusing it with an explicit user “跳过此版本” choice.
+            var compatibilitySkip = CleanVersionText(settings.SkippedVersion);
+            var canonicalSkip = GetCanonicalSkippedVersion(settings);
+            if (!string.Equals(
+                    compatibilitySkip,
+                    canonicalSkip,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                if (!string.IsNullOrWhiteSpace(compatibilitySkip))
+                {
+                    settings.FailedInstallVersion = compatibilitySkip;
+                    settings.FailedInstallAt = DateTime.Now.ToString("o");
+                }
+                else if (string.IsNullOrWhiteSpace(settings.UserSkippedVersion))
+                {
+                    settings.FailedInstallVersion = string.Empty;
+                    settings.FailedInstallAt = string.Empty;
+                }
+            }
+
+            settings = NormalizeSettings(settings);
             var path = GetSettingsPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             var temp = path + ".tmp";
@@ -123,8 +149,46 @@ namespace Bot.UpdateNs
                     settings.CheckIntervalHours <= 0
                         ? 6
                         : settings.CheckIntervalHours));
-            settings.SkippedVersion =
-                (settings.SkippedVersion ?? string.Empty).Trim();
+
+            settings.SkippedVersion = CleanVersionText(settings.SkippedVersion);
+            settings.UserSkippedVersion = CleanVersionText(settings.UserSkippedVersion);
+            settings.FailedInstallVersion = CleanVersionText(settings.FailedInstallVersion);
+            settings.FailedInstallAt = (settings.FailedInstallAt ?? string.Empty).Trim();
+
+            // Migration for 1.1.787 and earlier: those builds stored updater handoff quarantine in
+            // exactly the same field as a user skip. Treat a legacy-only value as failure
+            // quarantine. It remains effective for loop prevention, but the UI can now clear it
+            // deterministically instead of the updater immediately recreating a fake user skip.
+            if (string.IsNullOrWhiteSpace(settings.UserSkippedVersion)
+                && string.IsNullOrWhiteSpace(settings.FailedInstallVersion)
+                && !string.IsNullOrWhiteSpace(settings.SkippedVersion))
+            {
+                settings.FailedInstallVersion = settings.SkippedVersion;
+            }
+
+            var current = NormalizeVersion(CurrentVersion);
+            if (!string.IsNullOrWhiteSpace(settings.FailedInstallVersion)
+                && string.Equals(
+                    NormalizeVersion(settings.FailedInstallVersion),
+                    current,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                // A successful install can inherit the provisional quarantine written by the old
+                // process immediately before shutdown. Once that exact version is running, the
+                // quarantine has served its purpose and must not appear as “已跳过”.
+                settings.FailedInstallVersion = string.Empty;
+                settings.FailedInstallAt = string.Empty;
+            }
+            if (!string.IsNullOrWhiteSpace(settings.UserSkippedVersion)
+                && string.Equals(
+                    NormalizeVersion(settings.UserSkippedVersion),
+                    current,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                settings.UserSkippedVersion = string.Empty;
+            }
+
+            settings.SkippedVersion = GetCanonicalSkippedVersion(settings);
             settings.LastNotifiedVersion =
                 (settings.LastNotifiedVersion ?? string.Empty).Trim();
             settings.LastNotifiedAt =
@@ -138,6 +202,8 @@ namespace Bot.UpdateNs
             BotUpdateSettings settings)
         {
             settings = settings ?? new BotUpdateSettings();
+            var canonicalSkip = GetCanonicalSkippedVersion(settings);
+            var compatibilitySkip = CleanVersionText(settings.SkippedVersion);
             return new BotUpdateSettings
             {
                 AutoCheck = settings.AutoCheck,
@@ -145,11 +211,34 @@ namespace Bot.UpdateNs
                 AutoDownload = settings.AutoDownload,
                 AutoInstall = settings.AutoInstall,
                 CheckIntervalHours = settings.CheckIntervalHours,
-                SkippedVersion = settings.SkippedVersion,
+                // Preserve a direct compatibility override long enough for SaveSettingsInternal
+                // to recognize the old updater's quarantine write.
+                SkippedVersion = string.Equals(
+                    compatibilitySkip,
+                    canonicalSkip,
+                    StringComparison.OrdinalIgnoreCase)
+                    ? canonicalSkip
+                    : compatibilitySkip,
+                UserSkippedVersion = CleanVersionText(settings.UserSkippedVersion),
+                FailedInstallVersion = CleanVersionText(settings.FailedInstallVersion),
+                FailedInstallAt = (settings.FailedInstallAt ?? string.Empty).Trim(),
                 LastNotifiedVersion = settings.LastNotifiedVersion,
                 LastNotifiedAt = settings.LastNotifiedAt,
                 LastCheckAt = settings.LastCheckAt
             };
+        }
+
+        private static string GetCanonicalSkippedVersion(BotUpdateSettings settings)
+        {
+            if (settings == null) return string.Empty;
+            var userSkip = CleanVersionText(settings.UserSkippedVersion);
+            if (!string.IsNullOrWhiteSpace(userSkip)) return userSkip;
+            return CleanVersionText(settings.FailedInstallVersion);
+        }
+
+        private static string CleanVersionText(string value)
+        {
+            return (value ?? string.Empty).Trim();
         }
 
         private static string ResolveCurrentVersion()

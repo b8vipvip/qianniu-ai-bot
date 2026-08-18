@@ -80,9 +80,44 @@ namespace Bot.UpdateNs
 
         public static void SaveSettings(BotUpdateSettings settings)
         {
-            settings = NormalizeSettings(settings ?? new BotUpdateSettings());
+            settings = settings ?? new BotUpdateSettings();
+            var requestedSkip = CleanVersionText(settings.SkippedVersion);
+
             lock (SettingsSync)
             {
+                var current = _settings == null
+                    ? LoadSettingsInternal()
+                    : CloneSettings(_settings);
+                var currentSkip = GetCanonicalSkippedVersion(current);
+                var skipChanged = !string.Equals(
+                    requestedSkip,
+                    currentSkip,
+                    StringComparison.OrdinalIgnoreCase);
+
+                if (skipChanged)
+                {
+                    if (string.IsNullOrWhiteSpace(requestedSkip))
+                    {
+                        // “取消跳过版本” is an explicit user action. Clear both the real user
+                        // skip and the updater failure quarantine. Restarting the SSE listener
+                        // below makes the cleared state effective without reintroducing a client
+                        // background version-polling loop.
+                        settings.UserSkippedVersion = string.Empty;
+                        settings.FailedInstallVersion = string.Empty;
+                        settings.FailedInstallAt = string.Empty;
+                    }
+                    else
+                    {
+                        // Existing SkipVersion() reaches this method through SaveSettings, while
+                        // updater handoff quarantine deliberately bypasses it and writes through
+                        // SaveSettingsInternal. That distinction keeps the two meanings separate.
+                        settings.UserSkippedVersion = requestedSkip;
+                        settings.FailedInstallVersion = string.Empty;
+                        settings.FailedInstallAt = string.Empty;
+                    }
+                }
+
+                settings = NormalizeSettings(settings);
                 _settings = CloneSettings(settings);
                 SaveSettingsInternal(_settings);
             }
