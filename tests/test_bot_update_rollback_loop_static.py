@@ -24,7 +24,7 @@ def test_installer_quarantine_is_kept_separate_from_user_skip_state():
     assert "settings.SkippedVersion = version;" in actions
     assert "UserSkippedVersion" in models
     assert "FailedInstallVersion" in models
-    assert "updater handoff quarantine" in state
+    assert "two-phase handoff" in state
     assert "settings.FailedInstallVersion = compatibilitySkip;" in state
     assert "settings.UserSkippedVersion = requestedSkip;" in core
     assert "settings.FailedInstallVersion = string.Empty;" in core
