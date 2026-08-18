@@ -29,7 +29,16 @@ namespace Bot.UpdateNs
         public bool AutoDownload { get; set; }
         public bool AutoInstall { get; set; }
         public int CheckIntervalHours { get; set; }
+
+        // SkippedVersion is retained as the compatibility surface used by the existing UI and
+        // older call sites. New persistence keeps an explicit user skip separate from the
+        // updater's rollback-loop quarantine so “取消跳过版本” cannot be immediately overwritten
+        // by a failed-install marker that happens to share the same field.
         public string SkippedVersion { get; set; }
+        public string UserSkippedVersion { get; set; }
+        public string FailedInstallVersion { get; set; }
+        public string FailedInstallAt { get; set; }
+
         public string LastNotifiedVersion { get; set; }
         public string LastNotifiedAt { get; set; }
         public string LastCheckAt { get; set; }
@@ -42,6 +51,9 @@ namespace Bot.UpdateNs
             AutoInstall = false;
             CheckIntervalHours = 6;
             SkippedVersion = string.Empty;
+            UserSkippedVersion = string.Empty;
+            FailedInstallVersion = string.Empty;
+            FailedInstallAt = string.Empty;
             LastNotifiedVersion = string.Empty;
             LastNotifiedAt = string.Empty;
             LastCheckAt = string.Empty;
