@@ -1,10 +1,14 @@
+using BotLib;
 using log4net;
 using log4net.Appender;
+using log4net.Core;
 using log4net.Filter;
 using System;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -14,18 +18,79 @@ namespace Bot.ChromeNs
     {
         public static void Initialize()
         {
-            // The local policy has already been initialized at this point. Run
-            // the authenticated legacy import in the background and replace it
-            // through SaveRules only when the old server snapshot is available.
             HandoffPolicyLegacyMigrationService.StartOnce();
             Bot.Knowledge.BulkListManagementUi.Initialize();
         }
     }
 
-    // The first implementation of RuntimeLogNoiseFilterBootstrap was intentionally
-    // conservative but filtered two signals too broadly. Repair that exact filter in
-    // place after startup: SendForGetText must remain visible and only stable
-    // qnbotStatus/extra=loop injection status should be hidden.
+    // KnowledgeCenterWindow is also compiled by WPF temporary projects. DbHelper lives
+    // under Bot.Common and is otherwise not in that source file's namespace imports.
+    // A dynamic bridge keeps the normal SQLite API intact without duplicating storage.
+    internal static class DbHelper
+    {
+        public static dynamic Db
+        {
+            get { return Bot.Common.DbHelper.Db; }
+        }
+    }
+
+    // log4net 2.0.3 used by this legacy client does not ship a RegexFilter. The runtime
+    // noise filter needs deterministic regex matching, so provide the tiny FilterSkeleton
+    // implementation locally. It is used by both normal and WPF temporary builds.
+    internal sealed class RegexFilter : FilterSkeleton
+    {
+        private Regex _regex;
+        public string RegexToMatch { get; set; }
+        public bool AcceptOnMatch { get; set; }
+
+        public override void ActivateOptions()
+        {
+            _regex = string.IsNullOrWhiteSpace(RegexToMatch)
+                ? null
+                : new Regex(RegexToMatch, RegexOptions.Compiled | RegexOptions.CultureInvariant);
+            base.ActivateOptions();
+        }
+
+        public override FilterDecision Decide(LoggingEvent loggingEvent)
+        {
+            if (loggingEvent == null) return FilterDecision.Neutral;
+            if (_regex == null) ActivateOptions();
+            if (_regex == null) return FilterDecision.Neutral;
+            var matched = _regex.IsMatch(loggingEvent.RenderedMessage ?? string.Empty);
+            if (!matched) return FilterDecision.Neutral;
+            return AcceptOnMatch ? FilterDecision.Accept : FilterDecision.Deny;
+        }
+    }
+
+    // In WPF temporary projects FirstInquiryDeliveryBridge.cs is not part of the generated
+    // compile set, while it is present in the real Bot project. This extension satisfies the
+    // temporary compile and, if ever invoked without the real instance method, reflects into it.
+    internal static class QnVisibleOrderPanelProbeCompatibility
+    {
+        public static async Task<bool> TryRecoverVisibleOrderPanelForBackgroundProbeAsync(
+            this QN qn,
+            string seller,
+            string buyer,
+            string source,
+            DateTime notBefore,
+            bool requireFresh)
+        {
+            if (qn == null) return false;
+            var method = typeof(QN).GetMethod(
+                "TryRecoverVisibleOrderPanelForBackgroundProbeAsync",
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+                null,
+                new[] { typeof(string), typeof(string), typeof(string), typeof(DateTime), typeof(bool) },
+                null);
+            if (method == null || method.DeclaringType == typeof(QnVisibleOrderPanelProbeCompatibility)) return false;
+            var task = method.Invoke(qn, new object[] { seller, buyer, source, notBefore, requireFresh }) as Task<bool>;
+            return task != null && await task.ConfigureAwait(false);
+        }
+    }
+
+    // The first implementation of RuntimeLogNoiseFilterBootstrap filtered two signals too
+    // broadly. Repair that exact filter in place after startup: SendForGetText remains visible,
+    // and only stable qnbotStatus/extra=loop injection status is hidden.
     internal static class RuntimeLogNoiseSafetyOverride
     {
         private static Timer _timer;
