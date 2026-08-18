@@ -8,6 +8,7 @@ namespace Bot.Knowledge
         private TabControl _tabs;
         private KnowledgeImportControl _import;
         private KnowledgeManagerControl _manager;
+        private AiOptimizationHistoryControl _optimizationHistory;
 
         public KnowledgeCenterWindow()
         {
@@ -19,14 +20,22 @@ namespace Bot.Knowledge
             Content = _tabs;
             _manager = new KnowledgeManagerControl();
             _import = new KnowledgeImportControl(delegate { ShowManager(); });
+            _optimizationHistory = new AiOptimizationHistoryControl();
             _tabs.Items.Add(new TabItem { Header = "智能导入", Content = _import });
             _tabs.Items.Add(new TabItem { Header = "问答管理", Content = _manager });
+            _tabs.Items.Add(new TabItem { Header = "AI优化记录", Content = _optimizationHistory });
         }
 
         public void ShowManager()
         {
             _manager.RefreshData();
             _tabs.SelectedIndex = 1;
+        }
+
+        public void ShowOptimizationHistory()
+        {
+            if (_optimizationHistory != null) _optimizationHistory.RefreshData();
+            _tabs.SelectedIndex = 2;
         }
 
         public void NavigateToManager(
