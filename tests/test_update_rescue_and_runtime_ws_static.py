@@ -1,3 +1,5 @@
+import os
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -50,6 +52,28 @@ def test_rescue_updater_retries_with_curl_and_verifies_each_download_source():
     assert "所有安装包下载通道均失败" in rescue
     assert "SHA-256 不一致" in rescue
     assert "$ProgressPreference = 'SilentlyContinue'" in rescue
+
+
+def test_rescue_updater_parses_under_windows_powershell_51():
+    if os.name != "nt":
+        return
+
+    script = str((ROOT / "scripts/qianniu-bot-rescue-update.ps1").resolve())
+    escaped = script.replace("'", "''")
+    command = (
+        "$tokens=$null;$errors=$null;"
+        "[System.Management.Automation.Language.Parser]::ParseFile('"
+        + escaped
+        + "',[ref]$tokens,[ref]$errors)|Out-Null;"
+        "if($errors.Count -gt 0){$errors|ForEach-Object{$_.Message}|Write-Error;exit 1}"
+    )
+    completed = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-Command", command],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert completed.returncode == 0, completed.stdout + completed.stderr
 
 
 def test_bootstrap_awaits_injection_and_starts_bounded_listener_self_heal():
