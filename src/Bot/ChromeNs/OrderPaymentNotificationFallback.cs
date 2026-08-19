@@ -16,8 +16,7 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// 千牛部分版本把 messageCenterNotify.response 直接作为 JSON 对象发送，
-    /// 而旧 WSocketMessage.Response 是 string。该兼容转换器只在“目标属性是 string，
-    /// 实际 token 却是 object/array”时把 token 保留为紧凑 JSON 文本，避免整条付款事件反序列化失败。
+    /// 而旧 WSocketMessage.Response 是 string。仅在目标属性为 string 时保留紧凑 JSON 文本。
     /// </summary>
     internal static class QianniuWebSocketJsonCompatibility
     {
@@ -78,13 +77,305 @@ namespace Bot.ChromeNs
     }
 
     /// <summary>
-    /// 对 messageCenterNotify 再做一层兼容解析：
-    /// - 展开被包在字符串里的嵌套 JSON；
-    /// - 兼容更多 buyer/contact/customer/sender/opposite 字段；
-    /// - 能直接确认订单号/买家时继续走结构化订单链路；
-    /// - 不能直接确认时，不从通知内容猜订单，而把通知作为“订单面板可能已刷新”的唤醒信号，
-    ///   对当时已验证的当前买家做最长 180 秒被动右侧订单面板补扫；
-    /// - 面板补扫仍要求真实 16-24 位订单号、受支持状态和新鲜订单时间，且读取前后买家必须一致。
+    /// 订单入站统一协调器。
+    ///
+    /// 设计原则：
+    /// 1. receiveNewMsg/messageCenterNotify 只负责提供订单证据，不各自维护长期补扫循环；
+    /// 2. 无法从 messageCenterNotify 确认 buyer 时只登记“付款可能发生”的 seller 级唤醒，绝不猜当前会话；
+    /// 3. 后续 shopRobot/buyerSwitched 提供经过千牛确认的 buyer 后，再把两类信号按时间窗口关联；
+    /// 4. 同一 seller+buyer 全局只允许一个 180 秒补扫任务；
+    /// 5. 面板读取前后都验证 buyer，订单号/状态/时间仍沿用严格订单面板解析，最终只发布到 OrderEventHub；
+    /// 6. 本类不发送消息，实际发送仍只有 OrderEventHub -> V2 -> ProcessOrderPlacedReplyAsync 一条业务链。
+    /// </summary>
+    internal static class OrderAutomationCoordinator
+    {
+        private sealed class GenericWake
+        {
+            public DateTime StartedAt;
+            public DateTime LastSeenAt;
+            public string Trigger;
+        }
+
+        private sealed class BuyerSignal
+        {
+            public QN Qn;
+            public string Seller;
+            public string Buyer;
+            public DateTime SeenAt;
+            public string Source;
+        }
+
+        private sealed class ProbeState
+        {
+            public DateTime StartedAt;
+            public int Running;
+        }
+
+        private static readonly ConcurrentDictionary<QN, byte> Attached =
+            new ConcurrentDictionary<QN, byte>();
+        private static readonly ConcurrentDictionary<string, GenericWake> GenericWakes =
+            new ConcurrentDictionary<string, GenericWake>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, BuyerSignal> RecentBuyerSignals =
+            new ConcurrentDictionary<string, BuyerSignal>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, ProbeState> Probes =
+            new ConcurrentDictionary<string, ProbeState>(StringComparer.Ordinal);
+
+        private static readonly int[] CorrelatedProbeDelaysMs =
+            { 500, 1500, 3200, 6000, 10000, 16000, 24000, 36000, 60000, 90000, 120000, 150000, 180000 };
+        private static readonly TimeSpan GenericWakeLifetime = TimeSpan.FromSeconds(90);
+        private static readonly TimeSpan BackwardBuyerCorrelation = TimeSpan.FromSeconds(20);
+        private const int LastSafeAutoFocusProbeMs = 36000;
+
+        internal static void Attach(QN qn)
+        {
+            if (qn == null || !Attached.TryAdd(qn, 0)) return;
+            qn.EvShopRobotReceriveNewMessage += OnShopRobotNewMessage;
+            qn.EvBuyerSwitched += OnBuyerSwitched;
+            Log.Info("订单入站统一协调器已绑定: seller="
+                + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
+        }
+
+        internal static void ObserveGenericPaymentSignal(QN qn, string trigger)
+        {
+            if (qn == null || qn.Seller == null) return;
+            var seller = (qn.Seller.Nick ?? string.Empty).Trim();
+            if (seller.Length == 0) return;
+
+            Cleanup();
+            var now = DateTime.Now;
+            var key = Normalize(seller);
+            var wake = GenericWakes.AddOrUpdate(
+                key,
+                _ => new GenericWake { StartedAt = now, LastSeenAt = now, Trigger = trigger ?? string.Empty },
+                (_, old) => old == null || old.LastSeenAt < now.Subtract(GenericWakeLifetime)
+                    ? new GenericWake { StartedAt = now, LastSeenAt = now, Trigger = trigger ?? string.Empty }
+                    : new GenericWake
+                    {
+                        StartedAt = old.StartedAt,
+                        LastSeenAt = now,
+                        Trigger = string.IsNullOrWhiteSpace(trigger) ? old.Trigger : trigger
+                    });
+
+            Log.Info("订单入站统一协调器记录无买家付款唤醒: seller=" + seller
+                + ", trigger=" + Short(trigger, 160));
+
+            // 千牛有时先发 buyer 级后台通知，几秒后才发 generic messageCenterNotify。
+            // 反向关联最近 20 秒 buyer 信号；即使碰到无关买家，后续严格面板时间/订单证据也会 fail closed。
+            foreach (var pair in RecentBuyerSignals.ToArray())
+            {
+                var signal = pair.Value;
+                if (signal == null || signal.Qn == null) continue;
+                if (!DirectOrderIdentityResolver.IdentityEquals(signal.Seller, seller)) continue;
+                if (signal.SeenAt < now.Subtract(BackwardBuyerCorrelation)) continue;
+                ScheduleCorrelatedProbe(signal.Qn, seller, signal.Buyer, wake.StartedAt,
+                    "generic-after-" + (signal.Source ?? "buyer-signal"));
+            }
+        }
+
+        private static void OnShopRobotNewMessage(object sender, ShopRobotReceriveNewMessageEventArgs e)
+        {
+            var qn = sender as QN;
+            if (qn == null || e == null || e.Seller == null || e.Buyer == null) return;
+            ObserveBuyerSignal(qn, e.Seller.Nick, e.Buyer.Nick, "shopRobotNotify");
+        }
+
+        private static void OnBuyerSwitched(object sender, BuyerSwitchedEventArgs e)
+        {
+            var qn = sender as QN;
+            if (qn == null || e == null || e.Seller == null || e.Buyer == null) return;
+            ObserveBuyerSignal(qn, e.Seller.Nick, e.Buyer.Nick, "buyerSwitched");
+        }
+
+        private static void ObserveBuyerSignal(QN qn, string seller, string buyer, string source)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            if (qn == null || seller.Length == 0 || buyer.Length == 0) return;
+
+            var normalizedBuyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            if (!string.IsNullOrWhiteSpace(normalizedBuyer)) buyer = normalizedBuyer;
+            var now = DateTime.Now;
+            Cleanup();
+
+            var buyerKey = Normalize(seller) + "#" + Normalize(buyer);
+            RecentBuyerSignals[buyerKey] = new BuyerSignal
+            {
+                Qn = qn,
+                Seller = seller,
+                Buyer = buyer,
+                SeenAt = now,
+                Source = source ?? string.Empty
+            };
+
+            GenericWake wake;
+            if (!GenericWakes.TryGetValue(Normalize(seller), out wake)
+                || wake == null
+                || wake.LastSeenAt < now.Subtract(GenericWakeLifetime))
+            {
+                return;
+            }
+
+            Log.Info("订单入站统一协调器关联付款唤醒与买家: seller=" + seller
+                + ", buyer=" + buyer + ", source=" + (source ?? string.Empty));
+            ScheduleCorrelatedProbe(qn, seller, buyer, wake.StartedAt, source);
+        }
+
+        private static void ScheduleCorrelatedProbe(
+            QN qn,
+            string seller,
+            string buyer,
+            DateTime startedAt,
+            string source)
+        {
+            if (qn == null || string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
+            var key = Normalize(seller) + "#" + Normalize(buyer);
+            var state = Probes.GetOrAdd(key, _ => new ProbeState { StartedAt = startedAt });
+            if (startedAt < state.StartedAt) state.StartedAt = startedAt;
+            if (Interlocked.Exchange(ref state.Running, 1) != 0) return;
+
+            Task.Run(async () =>
+            {
+                try
+                {
+                    Log.Info("订单入站统一协调器启动目标买家面板补扫: seller=" + seller
+                        + ", buyer=" + buyer + ", source=" + (source ?? string.Empty));
+                    foreach (var targetDelay in CorrelatedProbeDelaysMs)
+                    {
+                        var elapsed = (int)Math.Max(0, Math.Min(int.MaxValue,
+                            (DateTime.Now - state.StartedAt).TotalMilliseconds));
+                        var wait = Math.Max(0, targetDelay - elapsed);
+                        if (wait > 0) await Task.Delay(wait).ConfigureAwait(false);
+
+                        ProbeState current;
+                        if (!Probes.TryGetValue(key, out current) || !ReferenceEquals(current, state)) return;
+
+                        var mayFocus = targetDelay >= 3200 && targetDelay <= LastSafeAutoFocusProbeMs;
+                        if (await TryActivateTargetIfSafeAsync(qn, seller, buyer, mayFocus).ConfigureAwait(false))
+                        {
+                            if (await qn.TryRecoverVisibleOrderPanelForCoordinatorAsync(
+                                seller,
+                                buyer,
+                                "统一订单补扫@" + targetDelay + "ms/" + (source ?? string.Empty),
+                                state.StartedAt).ConfigureAwait(false))
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    Log.Info("订单入站统一协调器补扫结束：180秒内未发现可确认的新订单。seller="
+                        + seller + ", buyer=" + buyer);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("订单入站统一协调器补扫异常: seller=" + seller
+                        + ", buyer=" + buyer + ", error=" + Short(ex.Message, 240), 20);
+                }
+                finally
+                {
+                    ProbeState current;
+                    if (Probes.TryGetValue(key, out current) && ReferenceEquals(current, state))
+                    {
+                        ProbeState ignored;
+                        Probes.TryRemove(key, out ignored);
+                    }
+                }
+            });
+        }
+
+        private static async Task<bool> TryActivateTargetIfSafeAsync(
+            QN qn,
+            string seller,
+            string buyer,
+            bool mayFocus)
+        {
+            DbEntity.Conversation current = null;
+            try
+            {
+                var response = await qn.GetCurrentConversationID().ConfigureAwait(false);
+                current = response == null ? null : response.Result;
+            }
+            catch { }
+
+            if (current != null && !string.IsNullOrWhiteSpace(current.Nick)
+                && BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
+            {
+                return true;
+            }
+            if (!mayFocus) return false;
+
+            string blockedReason;
+            if (!BotActivityCoordinator.IsSafeToAutoFocus(seller, out blockedReason))
+            {
+                Log.Info("订单入站统一协调器暂不切换买家：" + blockedReason + ", target=" + buyer);
+                return false;
+            }
+
+            var openNick = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            if (string.IsNullOrWhiteSpace(openNick)) openNick = buyer;
+            qn.OpenChat(openNick);
+            if (!string.Equals(openNick, buyer, StringComparison.Ordinal))
+            {
+                await Task.Delay(180).ConfigureAwait(false);
+                qn.OpenChat(buyer);
+            }
+
+            for (var i = 0; i < 10; i++)
+            {
+                await Task.Delay(220).ConfigureAwait(false);
+                try
+                {
+                    var response = await qn.GetCurrentConversationID().ConfigureAwait(false);
+                    current = response == null ? null : response.Result;
+                }
+                catch
+                {
+                    current = null;
+                }
+                if (current != null && !string.IsNullOrWhiteSpace(current.Nick)
+                    && BuyerIdentityAliasService.AreEquivalent(seller, current.Nick, buyer))
+                {
+                    Log.Info("订单入站统一协调器已在Bot空闲时切换到目标买家: seller="
+                        + seller + ", buyer=" + buyer);
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static void Cleanup()
+        {
+            var now = DateTime.Now;
+            foreach (var pair in GenericWakes)
+            {
+                if (pair.Value != null && pair.Value.LastSeenAt >= now.Subtract(GenericWakeLifetime)) continue;
+                GenericWake ignored;
+                GenericWakes.TryRemove(pair.Key, out ignored);
+            }
+            foreach (var pair in RecentBuyerSignals)
+            {
+                if (pair.Value != null && pair.Value.SeenAt >= now.AddMinutes(-3)) continue;
+                BuyerSignal ignored;
+                RecentBuyerSignals.TryRemove(pair.Key, out ignored);
+            }
+        }
+
+        private static string Normalize(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty);
+        }
+
+        private static string Short(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
+        }
+    }
+
+    /// <summary>
+    /// messageCenterNotify 兼容解析只做两件事：
+    /// - 有 seller+buyer+orderId+状态的强证据时，交给统一结构化订单链；
+    /// - 证据不足时只通知 OrderAutomationCoordinator，等待 buyer 级信号后再核对面板。
+    /// 不再在这里维护第二套“当前会话 180 秒补扫”与第二套去重状态。
     /// </summary>
     internal static class OrderPaymentNotificationFallback
     {
@@ -95,20 +386,10 @@ namespace Bot.ChromeNs
             public string Value;
         }
 
-        private sealed class PanelProbeState
-        {
-            public DateTime StartedAt;
-            public int Running;
-        }
-
         private static readonly object Sync = new object();
         private static readonly HashSet<QN> Attached = new HashSet<QN>();
         private static readonly ConcurrentDictionary<string, DateTime> Reservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, PanelProbeState> PanelProbes =
-            new ConcurrentDictionary<string, PanelProbeState>(StringComparer.Ordinal);
-        private static readonly int[] PanelProbeDelaysMs =
-            { 250, 900, 1800, 3200, 5200, 8000, 12000, 20000, 30000, 45000, 60000, 90000, 120000, 150000, 180000 };
         private static Timer _timer;
         private static int _initialized;
 
@@ -156,7 +437,8 @@ namespace Bot.ChromeNs
                     Attached.Add(qn);
                 }
                 qn.EvMessageNotity += OnMessageNotify;
-                Log.Info("付款通知兼容兜底已绑定: seller="
+                OrderAutomationCoordinator.Attach(qn);
+                Log.Info("付款通知兼容解析已绑定: seller="
                     + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
             }
         }
@@ -167,166 +449,80 @@ namespace Bot.ChromeNs
             var raw = e == null ? string.Empty : (e.NotifyContent ?? string.Empty).Trim();
             if (qn == null || raw.Length == 0) return;
 
-            if (!LooksLikeOrderEvent(raw))
-            {
-                ScheduleVerifiedCurrentBuyerPanelRecovery(
-                    qn,
-                    "messageCenterNotify未携带可直接判定的订单号/状态");
-                return;
-            }
-
             var hash = Hash(raw);
             CleanupReservations();
-            DateTime until;
-            if (Reservations.TryGetValue(hash, out until) && until >= DateTime.Now) return;
-            Reservations[hash] = DateTime.Now.AddMinutes(2);
 
             try
             {
                 var root = ParseExpanded(raw);
                 var flat = Flatten(root);
-                var combined = raw + " " + string.Join(" ", flat.Select(x => x.Value).Where(x => !string.IsNullOrWhiteSpace(x)).Take(250));
+                var combined = raw + " " + string.Join(" ", flat
+                    .Select(x => x == null ? string.Empty : x.Value)
+                    .Where(x => !string.IsNullOrWhiteSpace(x))
+                    .Take(250));
+
                 if (!EventCueRegex.IsMatch(combined))
                 {
-                    ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify缺少明确订单状态");
+                    OrderAutomationCoordinator.ObserveGenericPaymentSignal(
+                        qn,
+                        "messageCenterNotify缺少明确订单状态");
                     return;
                 }
 
                 var orderId = ResolveOrderId(flat, combined);
                 if (string.IsNullOrWhiteSpace(orderId))
                 {
-                    ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify缺少可验证订单号");
+                    OrderAutomationCoordinator.ObserveGenericPaymentSignal(
+                        qn,
+                        "messageCenterNotify缺少可验证订单号");
                     return;
                 }
+
                 var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
                 var buyer = ResolveBuyer(flat, seller, orderId);
                 if (string.IsNullOrWhiteSpace(buyer))
                 {
-                    var diagnosticKeys = string.Join(",", flat
-                        .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Key))
-                        .Select(x => Normalize(x.Key))
-                        .Where(x => x.Contains("buyer") || x.Contains("customer") || x.Contains("contact")
-                            || x.Contains("sender") || x.Contains("from") || x.Contains("opposite")
-                            || x.Contains("conversation") || x.Contains("user"))
-                        .Distinct()
-                        .Take(24));
-                    Log.Info("付款通知已解析订单号但仍缺少买家身份，未猜测当前会话: orderId="
-                        + orderId + ", payloadHash=" + hash + ", identityKeys=" + diagnosticKeys);
-                    ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify有订单号但缺少买家身份");
+                    Log.Info("付款通知已解析订单号但仍缺少买家身份，交给统一协调器等待buyer信号: orderId="
+                        + orderId + ", payloadHash=" + hash);
+                    OrderAutomationCoordinator.ObserveGenericPaymentSignal(
+                        qn,
+                        "messageCenterNotify有订单号但缺少买家身份");
                     return;
                 }
 
-                var paid = Regex.IsMatch(combined, "已付款|付款成功|支付成功|待卖家发货|WAIT_SELLER_SEND_GOODS", RegexOptions.IgnoreCase);
+                DateTime until;
+                if (Reservations.TryGetValue(hash, out until) && until >= DateTime.Now) return;
+                Reservations[hash] = DateTime.Now.AddMinutes(2);
+
+                var paid = Regex.IsMatch(combined,
+                    "已付款|付款成功|支付成功|待卖家发货|WAIT_SELLER_SEND_GOODS",
+                    RegexOptions.IgnoreCase);
                 var summary = (paid ? "买家已付款 " : "买家已下单 ")
                     + "订单号：" + orderId
                     + " 订单状态：" + (paid ? "已付款" : "新下单");
                 var synthetic = new QNChatMessage { summary = summary };
-                Log.Info("付款通知兼容兜底解析成功: seller=" + seller
+                Log.Info("付款通知兼容解析成功: seller=" + seller
                     + ", buyer=" + buyer + ", orderId=" + orderId + ", paid=" + paid);
                 await qn.ProcessDirectOrderMessageAsync(
                     synthetic,
                     seller,
                     buyer,
-                    "messageCenterNotify嵌套JSON兼容兜底");
+                    "messageCenterNotify统一兼容解析");
             }
             catch (Exception ex)
             {
-                Log.Info("付款通知兼容兜底解析失败: payloadHash=" + hash + ", error=" + ex.Message);
-                ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify解析异常");
+                Log.Info("付款通知兼容解析失败，交给统一协调器: payloadHash=" + hash
+                    + ", error=" + Short(ex.Message, 240));
+                OrderAutomationCoordinator.ObserveGenericPaymentSignal(qn, "messageCenterNotify解析异常");
             }
-        }
-
-        private static void ScheduleVerifiedCurrentBuyerPanelRecovery(QN qn, string trigger)
-        {
-            if (qn == null) return;
-            Task.Run(async () =>
-            {
-                var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
-                if (seller.Length == 0) return;
-
-                DbEntity.Conversation current = null;
-                try
-                {
-                    var response = await qn.GetCurrentConversationID().ConfigureAwait(false);
-                    current = response == null ? null : response.Result;
-                }
-                catch (Exception ex)
-                {
-                    Log.Info("messageCenterNotify订单面板验证无法读取当前会话: seller=" + seller
-                        + ", error=" + ex.Message);
-                    return;
-                }
-                if (current == null || string.IsNullOrWhiteSpace(current.Nick))
-                {
-                    Log.Info("messageCenterNotify订单面板验证已跳过：当前没有可验证买家会话。seller=" + seller);
-                    return;
-                }
-
-                BuyerIdentityAliasService.Observe(seller, current.Nick, current.Display, current.TargetId);
-                var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, current.Nick);
-                if (string.IsNullOrWhiteSpace(buyer)) buyer = current.Nick.Trim();
-                if (buyer.Length == 0) return;
-
-                var key = seller.Trim().ToLowerInvariant() + "#" + buyer.Trim().ToLowerInvariant();
-                var state = PanelProbes.GetOrAdd(key, _ => new PanelProbeState { StartedAt = DateTime.Now });
-                if (Interlocked.Exchange(ref state.Running, 1) != 0) return;
-
-                Log.Info("messageCenterNotify未形成可直接处理的订单事件，启动当前会话右侧订单面板验证: seller="
-                    + seller + ", buyer=" + buyer + ", trigger=" + (trigger ?? string.Empty));
-                var elapsed = 0;
-                try
-                {
-                    foreach (var targetDelay in PanelProbeDelaysMs)
-                    {
-                        var wait = Math.Max(0, targetDelay - elapsed);
-                        if (wait > 0) await Task.Delay(wait).ConfigureAwait(false);
-                        elapsed = targetDelay;
-
-                        if (await qn.TryRecoverVisibleOrderPanelForBackgroundProbeAsync(
-                            seller,
-                            buyer,
-                            "messageCenterNotify被动验证补扫@" + targetDelay + "ms",
-                            state.StartedAt,
-                            false).ConfigureAwait(false))
-                        {
-                            return;
-                        }
-                    }
-                    Log.Info("messageCenterNotify订单面板验证结束：180秒内未发现可确认的新订单。seller="
-                        + seller + ", buyer=" + buyer);
-                }
-                catch (Exception ex)
-                {
-                    Log.ErrorWithMaxCount("messageCenterNotify订单面板验证异常: seller=" + seller
-                        + ", buyer=" + buyer + ", error=" + ex.Message, 20);
-                }
-                finally
-                {
-                    PanelProbeState currentState;
-                    if (PanelProbes.TryGetValue(key, out currentState) && ReferenceEquals(currentState, state))
-                    {
-                        PanelProbeState ignored;
-                        PanelProbes.TryRemove(key, out ignored);
-                    }
-                }
-            });
-        }
-
-        private static bool LooksLikeOrderEvent(string raw)
-        {
-            if (!EventCueRegex.IsMatch(raw)) return false;
-            return LabeledOrderRegex.IsMatch(raw)
-                || Regex.IsMatch(raw,
-                    "[\\\"'](?:orderid|bizorderid|mainorderid|suborderid|biztradeid|tradeid|tid)[\\\"']\\s*:\\s*[\\\"']?\\d{8,}",
-                    RegexOptions.IgnoreCase);
         }
 
         private static JToken ParseExpanded(string raw)
         {
             JToken token;
             try { token = JToken.Parse(raw); }
-            catch { return new JValue(raw); }
-            for (var i = 0; i < 4 && token.Type == JTokenType.String; i++)
+            catch { return new JValue(raw ?? string.Empty); }
+            for (var i = 0; i < 5 && token.Type == JTokenType.String; i++)
             {
                 var nested = token.ToString().Trim();
                 if (!(nested.StartsWith("{") || nested.StartsWith("["))) break;
@@ -377,15 +573,14 @@ namespace Bot.ChromeNs
             if (dot >= 0) key = key.Substring(dot + 1);
             var bracket = key.IndexOf('[');
             if (bracket >= 0) key = key.Substring(0, bracket);
-            output.Add(new FlatValue { Path = path, Key = key, Value = value.Length > 3000 ? value.Substring(0, 3000) : value });
+            output.Add(new FlatValue { Path = path, Key = key, Value = value.Length > 4000 ? value.Substring(0, 4000) : value });
 
             if (token.Type == JTokenType.String && depth < 14)
             {
-                var trimmed = value.Trim();
-                if ((trimmed.StartsWith("{") && trimmed.EndsWith("}"))
-                    || (trimmed.StartsWith("[") && trimmed.EndsWith("]")))
+                var nested = value.Trim();
+                if (nested.StartsWith("{") || nested.StartsWith("["))
                 {
-                    try { Walk(JToken.Parse(trimmed), path + ".json", output, depth + 1); }
+                    try { Walk(JToken.Parse(nested), path + ".json", output, depth + 1); }
                     catch { }
                 }
             }
@@ -395,9 +590,10 @@ namespace Bot.ChromeNs
         {
             foreach (var item in flat ?? new List<FlatValue>())
             {
-                if (item == null || !StrongOrderKeys.Contains(Normalize(item.Key))) continue;
-                var digits = Digits(item.Value);
-                if (digits.Length >= 8 && digits.Length <= 40) return digits;
+                if (item == null || string.IsNullOrWhiteSpace(item.Value)) continue;
+                if (!StrongOrderKeys.Contains(Normalize(item.Key))) continue;
+                var digits = DigitsOnly(item.Value, 8, 40);
+                if (digits.Length > 0) return digits;
             }
             var match = LabeledOrderRegex.Match(combined ?? string.Empty);
             return match.Success ? match.Groups[1].Value : string.Empty;
@@ -411,7 +607,7 @@ namespace Bot.ChromeNs
             {
                 if (item == null) continue;
                 var value = (item.Value ?? string.Empty).Trim();
-                if (!UsableIdentity(value, seller, orderId)) continue;
+                if (!UsableBuyer(value, seller, orderId)) continue;
                 var key = Normalize(item.Key);
                 var path = Normalize(item.Path);
                 var score = 0;
@@ -422,9 +618,7 @@ namespace Bot.ChromeNs
                 if (path.Contains("opposite") || path.Contains("peer")) score += 70;
                 if (path.Contains("conversation")) score += 65;
                 if (path.Contains("sender") || path.Contains("from")) score += 45;
-                if (path.Contains("target") || path.Contains("member") || path.Contains("user")) score += 35;
                 if (key.EndsWith("nick") || key.EndsWith("name")) score += 25;
-                if (key.EndsWith("uid") || key.EndsWith("id")) score += 10;
                 if (score <= bestScore) continue;
                 bestScore = score;
                 best = value;
@@ -432,25 +626,25 @@ namespace Bot.ChromeNs
             return bestScore >= 55 ? best : string.Empty;
         }
 
-        private static bool UsableIdentity(string value, string seller, string orderId)
+        private static bool UsableBuyer(string value, string seller, string orderId)
         {
             if (value.Length < 2 || value.Length > 180) return false;
             if (DirectOrderIdentityResolver.IdentityEquals(value, seller)) return false;
-            if (string.Equals(Digits(value), orderId, StringComparison.Ordinal)) return false;
+            if (string.Equals(DigitsOnly(value, 8, 40), orderId, StringComparison.Ordinal)) return false;
             if (value.Contains("订单") || value.Contains("付款") || value.Contains("商品") || value.Contains("金额")) return false;
             if (value.StartsWith("{") || value.StartsWith("[")) return false;
-            if (Regex.IsMatch(value, "^\\d{16,}$")) return false;
-            return true;
+            return !Regex.IsMatch(value, @"^\d{16,}$");
+        }
+
+        private static string DigitsOnly(string value, int min, int max)
+        {
+            var digits = Regex.Replace(value ?? string.Empty, @"\D", string.Empty);
+            return digits.Length >= min && digits.Length <= max ? digits : string.Empty;
         }
 
         private static string Normalize(string value)
         {
-            return Regex.Replace((value ?? string.Empty).ToLowerInvariant(), "[^a-z0-9]", string.Empty);
-        }
-
-        private static string Digits(string value)
-        {
-            return Regex.Replace(value ?? string.Empty, "\\D", string.Empty);
+            return Regex.Replace((value ?? string.Empty).ToLowerInvariant(), @"[^a-z0-9]", string.Empty);
         }
 
         private static string Hash(string value)
@@ -462,6 +656,12 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static string Short(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
+        }
+
         private static void CleanupReservations()
         {
             var now = DateTime.Now;
@@ -471,6 +671,149 @@ namespace Bot.ChromeNs
                 DateTime ignored;
                 Reservations.TryRemove(pair.Key, out ignored);
             }
+        }
+    }
+
+    public partial class QN
+    {
+        /// <summary>
+        /// 统一订单协调器专用的严格面板核对：只接受 probeStartedAt 前 20 秒之后的订单。
+        /// 与旧 TryRecoverVisibleOrderPanelAsync 的“Bot 启动后”窗口不同，避免切换买家时把历史订单当新订单。
+        /// </summary>
+        internal async Task<bool> TryRecoverVisibleOrderPanelForCoordinatorAsync(
+            string sellerHint,
+            string buyerHint,
+            string source,
+            DateTime probeStartedAt)
+        {
+            var runtimeSeller = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+            sellerHint = (sellerHint ?? string.Empty).Trim();
+            buyerHint = (buyerHint ?? string.Empty).Trim();
+            if (runtimeSeller.Length == 0 || buyerHint.Length == 0 || cdp == null) return false;
+            if (sellerHint.Length > 0 && !DirectOrderIdentityResolver.IdentityEquals(runtimeSeller, sellerHint)) return true;
+
+            DbEntity.Conversation before;
+            try
+            {
+                var current = await GetCurrentConversationID().ConfigureAwait(false);
+                before = current == null ? null : current.Result;
+            }
+            catch
+            {
+                return false;
+            }
+            if (before == null || string.IsNullOrWhiteSpace(before.Nick)
+                || !BuyerIdentityAliasService.AreEquivalent(runtimeSeller, before.Nick, buyerHint))
+            {
+                return false;
+            }
+
+            BuyerIdentityAliasService.Observe(runtimeSeller, before.Nick, before.Display, before.TargetId);
+            var verifiedBuyer = BuyerIdentityAliasService.ResolveInternalNick(runtimeSeller, before.Nick);
+            if (string.IsNullOrWhiteSpace(verifiedBuyer)) verifiedBuyer = buyerHint;
+
+            string raw;
+            try
+            {
+                raw = await cdp.EvaluateExpressionAsync(
+                    VisibleOrderPanelExpression,
+                    "统一订单协调器读取当前买家右侧近3个月订单面板").ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("统一订单协调器DOM读取失败: seller=" + runtimeSeller
+                    + ", buyer=" + verifiedBuyer + ", error=" + ex.Message);
+                return false;
+            }
+
+            var panelText = ExtractVisibleOrderPanelText(raw);
+            if (string.IsNullOrWhiteSpace(panelText)) return false;
+
+            DbEntity.Conversation after;
+            try
+            {
+                var current = await GetCurrentConversationID().ConfigureAwait(false);
+                after = current == null ? null : current.Result;
+            }
+            catch
+            {
+                return false;
+            }
+            if (after == null || string.IsNullOrWhiteSpace(after.Nick)
+                || !BuyerIdentityAliasService.AreEquivalent(runtimeSeller, after.Nick, verifiedBuyer))
+            {
+                Log.Info("统一订单协调器已取消：读取期间当前买家变化。seller=" + runtimeSeller
+                    + ", expectedBuyer=" + verifiedBuyer
+                    + ", currentBuyer=" + (after == null ? string.Empty : after.Nick));
+                return false;
+            }
+
+            var candidates = ParseVisibleOrderPanelCandidates(panelText)
+                .OrderByDescending(x => x.PaidAt ?? x.CreatedAt ?? DateTime.MinValue)
+                .Take(3)
+                .ToList();
+            if (candidates.Count == 0) return false;
+
+            var now = DateTime.Now;
+            var freshFloor = (probeStartedAt == DateTime.MinValue ? now : probeStartedAt).AddSeconds(-20);
+            var sawFreshSupportedOrder = false;
+            var sawFreshUnsupportedOrder = false;
+            foreach (var candidate in candidates)
+            {
+                if (candidate == null || string.IsNullOrWhiteSpace(candidate.OrderId)) continue;
+                var eventTime = candidate.PaidAt ?? candidate.CreatedAt;
+                if (!eventTime.HasValue) continue;
+                if (eventTime.Value > now.AddMinutes(2) || eventTime.Value < freshFloor) continue;
+
+                if (VisiblePanelUnsupportedStatuses.Any(x => string.Equals(x, candidate.TradeStatus, StringComparison.Ordinal)))
+                {
+                    sawFreshUnsupportedOrder = true;
+                    continue;
+                }
+
+                var paid = candidate.PaidAt.HasValue
+                    || VisiblePanelPaidStatuses.Any(x => string.Equals(x, candidate.TradeStatus, StringComparison.Ordinal));
+                var eventType = paid ? OrderEventType.Paid : OrderEventType.Created;
+                var text = new StringBuilder();
+                text.Append(paid ? "买家已付款 " : "买家已下单 ")
+                    .Append("订单号：").Append(candidate.OrderId);
+                if (!string.IsNullOrWhiteSpace(candidate.TradeStatus))
+                    text.Append(" 订单状态：").Append(candidate.TradeStatus);
+                if (candidate.CreatedAt.HasValue)
+                    text.Append(" 下单时间：").Append(candidate.CreatedAt.Value.ToString("yyyy-MM-dd HH:mm:ss"));
+                if (candidate.PaidAt.HasValue)
+                    text.Append(" 付款时间：").Append(candidate.PaidAt.Value.ToString("yyyy-MM-dd HH:mm:ss"));
+
+                var snapshot = new OrderSnapshot
+                {
+                    Seller = runtimeSeller,
+                    Buyer = verifiedBuyer,
+                    OrderId = candidate.OrderId,
+                    TradeStatus = candidate.TradeStatus,
+                    IsPaid = paid,
+                    CreatedAt = candidate.CreatedAt,
+                    PaidAt = candidate.PaidAt,
+                    Source = "千牛右侧订单面板统一协调补偿",
+                    DetectedAt = now,
+                    EventTime = eventTime.Value,
+                    EventType = eventType,
+                    EventText = text.ToString()
+                };
+
+                var publish = OrderEventHub.Publish(snapshot);
+                if (publish != null && publish.Detected)
+                {
+                    sawFreshSupportedOrder = true;
+                    Log.Info((publish.Accepted
+                        ? "统一订单协调器识别并发布"
+                        : "统一订单协调器订单已由其他通道处理/去重")
+                        + ": seller=" + runtimeSeller + ", buyer=" + verifiedBuyer
+                        + ", orderId=" + candidate.OrderId + ", event=" + eventType
+                        + ", trigger=" + (source ?? string.Empty));
+                }
+            }
+
+            return sawFreshSupportedOrder || sawFreshUnsupportedOrder;
         }
     }
 }
