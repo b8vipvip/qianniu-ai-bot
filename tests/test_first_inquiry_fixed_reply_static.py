@@ -175,15 +175,17 @@ def test_qnrpa_no_longer_requires_global_desk_and_send_path_is_nonblocking_main_
     assert "method=CDP页面按钮+HWND安全消息+UIA安全回退" in open_send
 
 
-def test_order_first_event_has_first_inquiry_delivery_bridge():
-    source = read("src/Bot/ChromeNs/FirstInquiryDeliveryBridge.cs")
-    assert "EvRecieveNewMessage += Qn_EvRecieveNewMessage" in source
-    assert "FirstInquiryFixedReplyService.HasPending" in source
-    assert "FirstInquiryFixedReplyService.MarkDelivered" in source
-    assert "OrderEventType.Created" in source
-    assert "OrderEventType.Paid" in source
-    assert "SendOrderFirstGreetingAsync" in source
-    assert "qn.SendTextWithRetryAsync" in source
+def test_order_system_event_uses_order_pipeline_not_a_separate_first_inquiry_bridge():
+    direct = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    v2 = read("src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs")
+    targets = read("src/Directory.Build.targets")
+    assert "ProcessDirectOrderMessageAsync" in direct
+    assert "OrderPlacedAutoReplyService.TryCreatePlan" in direct
+    assert "OrderTemplateRequiredFieldsV2.TryOwnExistingPlan" in direct
+    assert "ProcessOrderPlacedReplyAsync(plan)" in direct
+    assert "OrderEventHub.Publish" in v2
+    assert "ProcessOrderTemplateRequiredFieldsPlanAsync" in v2
+    assert "FirstInquiryDeliveryBridge.cs" not in targets
 
 
 def test_delayed_exact_seller_echo_cancels_retry_and_false_failure():
