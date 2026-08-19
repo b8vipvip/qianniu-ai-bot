@@ -1,6 +1,7 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$InstallDir = "",
+    [string]$ControlPlaneUrl = "http://botserver.mv3.cn",
     [string]$ReleaseApi = "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest",
     [string]$PackagePath = "",
     [string]$ExpectedVersion = "",
@@ -8,7 +9,9 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
 function Write-Step([string]$Message) {
     Write-Host "`n[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" -ForegroundColor Cyan
@@ -22,6 +25,71 @@ function Test-IsAdministrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $principal = New-Object Security.Principal.WindowsPrincipal($identity)
     return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-Sha256([string]$Value) {
+    return -not [string]::IsNullOrWhiteSpace($Value) -and $Value.Trim() -match '^[A-Fa-f0-9]{64}$'
+}
+
+function Normalize-Version([string]$Value) {
+    $value = ([string]$Value).Trim()
+    if ($value.StartsWith('bot-v', [StringComparison]::OrdinalIgnoreCase)) { return $value.Substring(5) }
+    if ($value.StartsWith('v', [StringComparison]::OrdinalIgnoreCase)) { return $value.Substring(1) }
+    return $value
+}
+
+function Add-UniqueUrl([System.Collections.ArrayList]$List, [string]$Value) {
+    $value = ([string]$Value).Trim()
+    if ([string]::IsNullOrWhiteSpace($value)) { return }
+    $uri = $null
+    if (-not [Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$uri)) { return }
+    foreach ($existing in @($List)) {
+        if ([string]::Equals([string]$existing, $value, [StringComparison]::OrdinalIgnoreCase)) { return }
+    }
+    [void]$List.Add($value)
+}
+
+function Invoke-JsonRequest([string]$Uri, [hashtable]$Headers, [int]$TimeoutSec = 30) {
+    $lastError = ''
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            return Invoke-RestMethod -UseBasicParsing -Uri $Uri -Headers $Headers -TimeoutSec $TimeoutSec
+        }
+        catch {
+            $lastError = $_.Exception.Message
+            Write-Host "PowerShell 网络请求失败，切换 curl.exe：attempt=$attempt error=$lastError" -ForegroundColor Yellow
+        }
+
+        $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+        if ($null -ne $curl) {
+            $temp = Join-Path $env:TEMP ("qianniu-rescue-json-" + [Guid]::NewGuid().ToString('N') + '.json')
+            try {
+                $curlArgs = @(
+                    '--fail', '--location', '--silent', '--show-error',
+                    '--connect-timeout', '15', '--max-time', [string]$TimeoutSec,
+                    '--output', $temp
+                )
+                foreach ($key in @($Headers.Keys)) {
+                    $curlArgs += @('--header', ("${key}: " + [string]$Headers[$key]))
+                }
+                $curlArgs += $Uri
+                & $curl.Source @curlArgs
+                if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $temp -PathType Leaf)) {
+                    return (Get-Content -LiteralPath $temp -Raw -Encoding UTF8 | ConvertFrom-Json)
+                }
+                $lastError = "curl.exe exitCode=$LASTEXITCODE"
+            }
+            catch {
+                $lastError = $_.Exception.Message
+            }
+            finally {
+                Remove-Item -LiteralPath $temp -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+    }
+    throw "网络请求失败：$Uri；$lastError"
 }
 
 function Resolve-InstallDir([string]$Requested) {
@@ -77,27 +145,176 @@ function Get-TargetBotPid([string]$Root) {
     return [int]($ids | Sort-Object | Select-Object -First 1)
 }
 
-function Resolve-LatestRelease {
-    Write-Step '读取最新正式版本元数据'
-    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-    $headers = @{ 'User-Agent' = 'QianniuAiBotRescueUpdater' }
-    $release = Invoke-RestMethod -UseBasicParsing -Uri $ReleaseApi -Headers $headers
-    $manifestAsset = @($release.assets | Where-Object { $_.name -eq 'update.json' } | Select-Object -First 1)
+function Resolve-LatestFromControlPlane {
+    if ([string]::IsNullOrWhiteSpace($ControlPlaneUrl)) { return $null }
+    $base = $ControlPlaneUrl.Trim().TrimEnd('/')
+    $url = $base + '/api/public/v1/bot-update/latest'
+    Write-Step "优先读取服务器更新缓存：$url"
+    $json = Invoke-JsonRequest $url @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/2.0'; 'Accept' = 'application/json' } 20
+
+    $version = Normalize-Version ([string]$json.version)
+    $sha = ([string]$json.sha256).Trim().ToUpperInvariant()
+    if ([string]::IsNullOrWhiteSpace($version)) { throw '服务器更新缓存缺少 version。' }
+    if (-not (Test-Sha256 $sha)) { throw '服务器更新缓存缺少有效 SHA-256。' }
+
+    $urls = New-Object System.Collections.ArrayList
+    Add-UniqueUrl $urls ([string]$json.mirror_url)
+    Add-UniqueUrl $urls ([string]$json.download_url)
+    if ($urls.Count -lt 1) { throw '服务器更新缓存没有可用安装包地址。' }
+
+    return [pscustomobject]@{
+        Version = $version
+        Sha256 = $sha
+        Urls = @($urls)
+        Source = '服务器更新缓存'
+    }
+}
+
+function Get-ShaFromReleaseNotes([string]$Notes) {
+    $notes = [string]$Notes
+    $match = [Regex]::Match(
+        $notes,
+        '(?is)(?:安装包\s*SHA-256|SHA-256)[^0-9A-Fa-f]{0,120}([0-9A-Fa-f]{64})')
+    if ($match.Success) { return $match.Groups[1].Value.ToUpperInvariant() }
+    return ''
+}
+
+function Normalize-GitHubDigest([string]$Digest) {
+    $digest = ([string]$Digest).Trim()
+    if ($digest.StartsWith('sha256:', [StringComparison]::OrdinalIgnoreCase)) {
+        $digest = $digest.Substring(7).Trim()
+    }
+    if (Test-Sha256 $digest) { return $digest.ToUpperInvariant() }
+    return ''
+}
+
+function Resolve-LatestFromGitHub {
+    Write-Step '服务器更新缓存不可用，回退 GitHub Release API'
+    $headers = @{
+        'User-Agent' = 'QianniuAiBotRescueUpdater/2.0'
+        'Accept' = 'application/vnd.github+json'
+        'X-GitHub-Api-Version' = '2022-11-28'
+    }
+    $release = Invoke-JsonRequest $ReleaseApi $headers 45
+    if ([bool]$release.draft -or [bool]$release.prerelease) { throw 'GitHub latest Release 不是稳定版本。' }
+
+    $tag = ([string]$release.tag_name).Trim()
+    if (-not $tag.StartsWith('bot-v', [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'GitHub latest Release 不是 bot-v* 正式版本。'
+    }
+    $version = Normalize-Version $tag
     $packageAsset = @($release.assets | Where-Object { $_.name -eq 'qianniu-bot-x64.zip' } | Select-Object -First 1)
-    if ($manifestAsset.Count -ne 1 -or $packageAsset.Count -ne 1) {
-        throw '最新正式版本缺少 update.json 或 qianniu-bot-x64.zip。'
+    if ($packageAsset.Count -ne 1) { throw '最新正式版本缺少 qianniu-bot-x64.zip。' }
+
+    $sha = Normalize-GitHubDigest ([string]$packageAsset[0].digest)
+    if (-not (Test-Sha256 $sha)) { $sha = Get-ShaFromReleaseNotes ([string]$release.body) }
+
+    $urls = New-Object System.Collections.ArrayList
+    Add-UniqueUrl $urls ([string]$packageAsset[0].browser_download_url)
+
+    $manifestAsset = @($release.assets | Where-Object { $_.name -eq 'update.json' } | Select-Object -First 1)
+    if ($manifestAsset.Count -eq 1) {
+        try {
+            $manifest = Invoke-JsonRequest ([string]$manifestAsset[0].browser_download_url) @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/2.0'; 'Accept' = 'application/json' } 30
+            $manifestVersion = Normalize-Version ([string]$manifest.version)
+            if (-not [string]::IsNullOrWhiteSpace($manifestVersion) -and $manifestVersion -ne $version) {
+                throw "update.json 版本不一致。release=$version manifest=$manifestVersion"
+            }
+            $manifestSha = ([string]$manifest.sha256).Trim().ToUpperInvariant()
+            if (Test-Sha256 $manifestSha) {
+                if ((Test-Sha256 $sha) -and $sha -ne $manifestSha) { throw 'GitHub asset digest 与 update.json SHA-256 不一致。' }
+                $sha = $manifestSha
+            }
+            Add-UniqueUrl $urls ([string]$manifest.download_url)
+        }
+        catch {
+            if (Test-Sha256 $sha) {
+                Write-Host "update.json 下载失败，但已有可信 SHA-256，继续救援更新：$($_.Exception.Message)" -ForegroundColor Yellow
+            }
+            else {
+                throw
+            }
+        }
     }
 
-    $manifest = Invoke-RestMethod -UseBasicParsing -Uri ([string]$manifestAsset[0].browser_download_url) -Headers $headers
-    $version = ([string]$manifest.version).Trim()
-    $sha = ([string]$manifest.sha256).Trim().ToUpperInvariant()
-    $url = ([string]$manifest.download_url).Trim()
-    if ([string]::IsNullOrWhiteSpace($url)) { $url = [string]$packageAsset[0].browser_download_url }
-    if ([string]::IsNullOrWhiteSpace($version)) { throw 'update.json 缺少 version。' }
-    if ($sha -notmatch '^[A-F0-9]{64}$') { throw 'update.json 中的 SHA-256 无效。' }
-    if ([string]::IsNullOrWhiteSpace($url)) { throw 'update.json 缺少安装包下载地址。' }
+    if (-not (Test-Sha256 $sha)) {
+        throw '无法从 GitHub asset digest、Release 说明或 update.json 获得可信 SHA-256。'
+    }
+    if ($urls.Count -lt 1) { throw 'GitHub Release 没有可用安装包地址。' }
 
-    return [pscustomobject]@{ Version = $version; Sha256 = $sha; Url = $url }
+    return [pscustomobject]@{
+        Version = $version
+        Sha256 = $sha
+        Urls = @($urls)
+        Source = 'GitHub Release'
+    }
+}
+
+function Resolve-LatestRelease {
+    try {
+        $server = Resolve-LatestFromControlPlane
+        if ($null -ne $server) { return $server }
+    }
+    catch {
+        Write-Host "服务器更新缓存暂不可用：$($_.Exception.Message)" -ForegroundColor Yellow
+    }
+    return Resolve-LatestFromGitHub
+}
+
+function Download-One([string]$Uri, [string]$Destination) {
+    $lastError = ''
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($null -ne $curl) {
+        try {
+            Write-Host "尝试 curl.exe 下载：$Uri"
+            & $curl.Source '--fail' '--location' '--silent' '--show-error' '--retry' '3' '--retry-delay' '2' '--connect-timeout' '20' '--max-time' '900' '--output' $Destination $Uri
+            if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $Destination -PathType Leaf)) { return }
+            $lastError = "curl.exe exitCode=$LASTEXITCODE"
+        }
+        catch {
+            $lastError = $_.Exception.Message
+        }
+        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+    }
+
+    try {
+        Write-Host "curl.exe 未成功，尝试 Invoke-WebRequest：$Uri" -ForegroundColor Yellow
+        Invoke-WebRequest -UseBasicParsing -Uri $Uri -OutFile $Destination -TimeoutSec 900
+        if (Test-Path -LiteralPath $Destination -PathType Leaf) { return }
+        $lastError = 'Invoke-WebRequest 未生成目标文件。'
+    }
+    catch {
+        $lastError = $_.Exception.Message
+    }
+    throw "下载失败：$Uri；$lastError"
+}
+
+function Download-VerifiedPackage([string[]]$Urls, [string]$Destination, [string]$ExpectedHash) {
+    $partial = $Destination + '.partial'
+    $errors = @()
+    foreach ($url in @($Urls)) {
+        if ([string]::IsNullOrWhiteSpace([string]$url)) { continue }
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+            try {
+                Write-Step "下载安装包｜来源=$url｜attempt=$attempt"
+                Download-One ([string]$url) $partial
+                $actual = (Get-FileHash -LiteralPath $partial -Algorithm SHA256).Hash.ToUpperInvariant()
+                if ($actual -ne $ExpectedHash) {
+                    throw "SHA-256 不一致。expected=$ExpectedHash actual=$actual"
+                }
+                Move-Item -LiteralPath $partial -Destination $Destination -Force
+                Write-Host "安装包下载并校验成功：$url" -ForegroundColor Green
+                return
+            }
+            catch {
+                $errors += ([string]$url + ' attempt=' + $attempt + ' => ' + $_.Exception.Message)
+                Remove-Item -LiteralPath $partial -Force -ErrorAction SilentlyContinue
+                if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+            }
+        }
+    }
+    throw ('所有安装包下载通道均失败：' + ($errors -join ' | '))
 }
 
 if (-not (Test-IsAdministrator)) {
@@ -106,6 +323,7 @@ if (-not (Test-IsAdministrator)) {
     if ([string]::IsNullOrWhiteSpace($self)) { throw '无法确定当前脚本路径，请以管理员 PowerShell 重新运行。' }
     $args = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Arg $self)
     if (-not [string]::IsNullOrWhiteSpace($InstallDir)) { $args += ' -InstallDir ' + (Quote-Arg $InstallDir) }
+    if (-not [string]::IsNullOrWhiteSpace($ControlPlaneUrl)) { $args += ' -ControlPlaneUrl ' + (Quote-Arg $ControlPlaneUrl) }
     if (-not [string]::IsNullOrWhiteSpace($ReleaseApi)) { $args += ' -ReleaseApi ' + (Quote-Arg $ReleaseApi) }
     if (-not [string]::IsNullOrWhiteSpace($PackagePath)) { $args += ' -PackagePath ' + (Quote-Arg $PackagePath) }
     if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) { $args += ' -ExpectedVersion ' + (Quote-Arg $ExpectedVersion) }
@@ -118,11 +336,13 @@ $InstallDir = Resolve-InstallDir $InstallDir
 if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) { throw "拒绝覆盖 Git 源码目录：$InstallDir" }
 
 $downloadRequired = [string]::IsNullOrWhiteSpace($PackagePath)
+$packageUrls = @()
 if ($downloadRequired) {
     $releaseInfo = Resolve-LatestRelease
     $ExpectedVersion = $releaseInfo.Version
     $ExpectedSha256 = $releaseInfo.Sha256
-    $PackageUrl = $releaseInfo.Url
+    $packageUrls = @($releaseInfo.Urls)
+    Write-Host "已解析正式版本：$ExpectedVersion｜来源=$($releaseInfo.Source)" -ForegroundColor Green
 } else {
     $PackagePath = [IO.Path]::GetFullPath($PackagePath)
     if ([string]::IsNullOrWhiteSpace($ExpectedVersion) -or [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
@@ -130,8 +350,9 @@ if ($downloadRequired) {
     }
 }
 
+$ExpectedVersion = Normalize-Version $ExpectedVersion
 $ExpectedSha256 = $ExpectedSha256.Trim().ToUpperInvariant()
-if ($ExpectedSha256 -notmatch '^[A-F0-9]{64}$') { throw 'ExpectedSha256 必须是 64 位十六进制 SHA-256。' }
+if (-not (Test-Sha256 $ExpectedSha256)) { throw 'ExpectedSha256 必须是 64 位十六进制 SHA-256。' }
 
 $root = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater\rescue'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
@@ -141,10 +362,7 @@ if ($downloadRequired) { $PackagePath = Join-Path $root ("qianniu-bot-x64-$Expec
 
 try {
     if ($downloadRequired) {
-        Write-Step "下载正式安装包 $ExpectedVersion"
-        Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
-        Invoke-WebRequest -UseBasicParsing -Uri $PackageUrl -OutFile $partialPath
-        Move-Item -LiteralPath $partialPath -Destination $PackagePath -Force
+        Download-VerifiedPackage $packageUrls $PackagePath $ExpectedSha256
     }
 
     if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw "安装包不存在：$PackagePath" }
@@ -165,7 +383,7 @@ try {
 
         $reader = New-Object IO.StreamReader($releaseEntries[0].Open(), [Text.Encoding]::UTF8, $true)
         try { $packageInfo = ($reader.ReadToEnd() | ConvertFrom-Json) } finally { $reader.Dispose() }
-        if ([string]$packageInfo.version -ne $ExpectedVersion) {
+        if ((Normalize-Version ([string]$packageInfo.version)) -ne $ExpectedVersion) {
             throw "目标包版本不匹配。expected=$ExpectedVersion actual=$($packageInfo.version)"
         }
         [IO.Compression.ZipFileExtensions]::ExtractToFile($updaterEntries[0], $updaterPath, $true)
@@ -192,7 +410,7 @@ try {
     $installedInfoPath = Join-Path $InstallDir 'release-info.json'
     if (-not (Test-Path -LiteralPath $installedInfoPath -PathType Leaf)) { throw '救援更新结束但 release-info.json 不存在。' }
     $installedInfo = Get-Content -LiteralPath $installedInfoPath -Raw | ConvertFrom-Json
-    if ([string]$installedInfo.version -ne $ExpectedVersion) {
+    if ((Normalize-Version ([string]$installedInfo.version)) -ne $ExpectedVersion) {
         throw "救援更新版本校验失败。expected=$ExpectedVersion actual=$($installedInfo.version)"
     }
 
