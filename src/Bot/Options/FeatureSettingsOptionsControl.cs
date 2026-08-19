@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
+using System.Windows.Documents;
 using System.Windows.Media;
 
 namespace Bot.Options
@@ -19,6 +20,12 @@ namespace Bot.Options
     /// </summary>
     internal sealed class FeatureSettingsOptionsControl : UserControl, IOptions
     {
+        private static readonly string[] OrderTemplatePlaceholders =
+        {
+            "{客服}", "{买家}", "{订单号}", "{时间}", "{商品}", "{sku}",
+            "{数量}", "{金额}", "{实付}", "{订单状态}", "{买家备注}", "{分段符}"
+        };
+
         private readonly FeatureSettingsWindow _legacyWindow;
         private readonly TabControl _tabs;
         private readonly MethodInfo _saveAllMethod;
@@ -65,6 +72,12 @@ namespace Bot.Options
             _legacyWindow.Content = null;
             PrepareHostedLayout(hosted);
             Content = hosted;
+
+            // The unified settings window detaches FeatureSettingsWindow.Content and never shows
+            // the legacy Window itself. Therefore Loaded hooks registered on FeatureSettingsWindow
+            // are not a reliable way to enhance this page. Rewrite the real embedded auto-reply
+            // content here, after its final structure has been constructed.
+            EnhanceEmbeddedOrderTemplateHint();
             NavigateTo("知识库");
         }
 
@@ -99,6 +112,11 @@ namespace Bot.Options
                 {
                     _tabs.SelectedItem = tab;
                     _currentPage = header;
+                    if (string.Equals(header, "自动回复规则", StringComparison.Ordinal))
+                    {
+                        // Idempotent: protects against future layout code recreating the legacy hint.
+                        EnhanceEmbeddedOrderTemplateHint();
+                    }
                     return;
                 }
             }
@@ -410,6 +428,180 @@ namespace Bot.Options
                 });
             }
             return wrapper;
+        }
+
+        private void EnhanceEmbeddedOrderTemplateHint()
+        {
+            try
+            {
+                var autoReplyTab = _tabs.Items
+                    .OfType<TabItem>()
+                    .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "自动回复规则", StringComparison.Ordinal));
+                var root = autoReplyTab == null ? null : autoReplyTab.Content as UIElement;
+                if (root == null) return;
+
+                var hints = EnumerateElements(root)
+                    .OfType<TextBlock>()
+                    .Where(x => IsOrderTemplateHint(x.Text))
+                    .ToList();
+
+                // Some historical layouts used Label/ContentControl rather than a direct TextBlock.
+                // Normalize those to a TextBlock so the clickable placeholder UI is deterministic.
+                foreach (var contentControl in EnumerateElements(root).OfType<ContentControl>().ToList())
+                {
+                    var raw = contentControl.Content as string;
+                    if (!IsOrderTemplateHint(raw)) continue;
+                    var normalized = new TextBlock
+                    {
+                        Text = raw,
+                        TextWrapping = TextWrapping.Wrap,
+                        Foreground = Brushes.Gray
+                    };
+                    contentControl.Content = normalized;
+                    hints.Add(normalized);
+                }
+
+                foreach (var hint in hints.Distinct())
+                {
+                    RewriteOrderTemplateHint(hint);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("嵌入式下单模板占位符提示修复失败：" + ex.Message, 10);
+            }
+        }
+
+        private static bool IsOrderTemplateHint(string text)
+        {
+            text = text ?? string.Empty;
+            return text.IndexOf("支持 {客服}", StringComparison.Ordinal) >= 0
+                && text.IndexOf("接口失败", StringComparison.Ordinal) >= 0;
+        }
+
+        private void RewriteOrderTemplateHint(TextBlock hint)
+        {
+            if (hint == null || !IsOrderTemplateHint(hint.Text)) return;
+
+            hint.Inlines.Clear();
+            hint.TextWrapping = TextWrapping.Wrap;
+            hint.ToolTip = "点击蓝色变量插入到“预设/兜底答案”的当前光标位置";
+            hint.Inlines.Add(new Run("支持 "));
+            var blue = new SolidColorBrush(Color.FromRgb(37, 99, 235));
+            for (var i = 0; i < OrderTemplatePlaceholders.Length; i++)
+            {
+                if (i > 0) hint.Inlines.Add(new Run("、"));
+                var token = OrderTemplatePlaceholders[i];
+                var link = new Hyperlink(new Run(token))
+                {
+                    Foreground = blue,
+                    Cursor = System.Windows.Input.Cursors.Hand,
+                    TextDecorations = null,
+                    ToolTip = "点击插入 " + token
+                };
+                link.Click += delegate { InsertOrderTemplateToken(token); };
+                hint.Inlines.Add(link);
+            }
+            hint.Inlines.Add(new Run("。点击蓝色变量可插入到当前光标处；{分段符} 会拆成多条千牛消息依次发送；接口失败时也会使用这段话兜底。"));
+        }
+
+        private void InsertOrderTemplateToken(string token)
+        {
+            if (string.IsNullOrWhiteSpace(token)) return;
+            var box = FindOrderTemplateReplyTextBox();
+            if (box == null)
+            {
+                Log.ErrorWithMaxCount("无法定位“买家下单后自动发送”的预设/兜底答案输入框，未插入占位符。", 10);
+                return;
+            }
+
+            var value = box.Text ?? string.Empty;
+            var start = Math.Max(0, Math.Min(box.SelectionStart, value.Length));
+            var length = Math.Max(0, Math.Min(box.SelectionLength, value.Length - start));
+            box.Text = value.Remove(start, length).Insert(start, token);
+            box.SelectionStart = start + token.Length;
+            box.SelectionLength = 0;
+            box.Focus();
+        }
+
+        private TextBox FindOrderTemplateReplyTextBox()
+        {
+            var cfg = BotFeatureStore.GetAutoReplyRules();
+            var configured = cfg == null ? string.Empty : (cfg.OrderPlacedReplyText ?? string.Empty);
+
+            // Prefer the legacy window's actual private TextBox field. This remains stable even after
+            // its Content is detached and hosted in WndOption.
+            var fields = _legacyWindow.GetType().GetFields(BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
+            var fieldBoxes = new List<KeyValuePair<string, TextBox>>();
+            foreach (var field in fields)
+            {
+                if (!typeof(TextBox).IsAssignableFrom(field.FieldType)) continue;
+                var box = field.GetValue(_legacyWindow) as TextBox;
+                if (box != null) fieldBoxes.Add(new KeyValuePair<string, TextBox>(field.Name ?? string.Empty, box));
+            }
+
+            if (configured.Length > 0)
+            {
+                var exact = fieldBoxes.Select(x => x.Value)
+                    .FirstOrDefault(x => x.AcceptsReturn && string.Equals(x.Text ?? string.Empty, configured, StringComparison.Ordinal));
+                if (exact != null) return exact;
+            }
+
+            var named = fieldBoxes.FirstOrDefault(x =>
+                x.Value != null
+                && x.Value.AcceptsReturn
+                && x.Key.IndexOf("order", StringComparison.OrdinalIgnoreCase) >= 0
+                && (x.Key.IndexOf("reply", StringComparison.OrdinalIgnoreCase) >= 0
+                    || x.Key.IndexOf("placed", StringComparison.OrdinalIgnoreCase) >= 0
+                    || x.Key.IndexOf("answer", StringComparison.OrdinalIgnoreCase) >= 0));
+            if (named.Value != null) return named.Value;
+
+            var autoReplyTab = _tabs.Items
+                .OfType<TabItem>()
+                .FirstOrDefault(x => string.Equals(Convert.ToString(x.Header), "自动回复规则", StringComparison.Ordinal));
+            var root = autoReplyTab == null ? null : autoReplyTab.Content as UIElement;
+            if (root == null) return null;
+            var candidates = EnumerateElements(root).OfType<TextBox>().Where(x => x.AcceptsReturn).ToList();
+            if (configured.Length > 0)
+            {
+                var exact = candidates.FirstOrDefault(x => string.Equals(x.Text ?? string.Empty, configured, StringComparison.Ordinal));
+                if (exact != null) return exact;
+            }
+            return candidates.Count == 1 ? candidates[0] : null;
+        }
+
+        private static IEnumerable<DependencyObject> EnumerateElements(DependencyObject root)
+        {
+            if (root == null) yield break;
+            yield return root;
+
+            var panel = root as Panel;
+            if (panel != null)
+            {
+                foreach (UIElement child in panel.Children)
+                    foreach (var nested in EnumerateElements(child)) yield return nested;
+                yield break;
+            }
+
+            var border = root as Border;
+            if (border != null)
+            {
+                foreach (var nested in EnumerateElements(border.Child)) yield return nested;
+                yield break;
+            }
+
+            var scroll = root as ScrollViewer;
+            if (scroll != null)
+            {
+                foreach (var nested in EnumerateElements(scroll.Content as DependencyObject)) yield return nested;
+                yield break;
+            }
+
+            var content = root as ContentControl;
+            if (content != null && content.Content is DependencyObject)
+            {
+                foreach (var nested in EnumerateElements((DependencyObject)content.Content)) yield return nested;
+            }
         }
 
         private static StackPanel FindPrimaryRuleStack(UIElement element)
