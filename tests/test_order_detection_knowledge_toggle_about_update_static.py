@@ -22,15 +22,18 @@ def test_object_message_center_payload_is_preserved_as_json_text():
 
 def test_paid_order_fallback_expands_nested_json_and_never_guesses_buyer():
     code = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
-    assert "messageCenterNotify嵌套JSON兼容兜底" in code
-    assert "JToken.Parse(trimmed)" in code
+    assert "messageCenterNotify统一兼容解析" in code
+    assert "JToken.Parse(nested)" in code
     assert "customernick" in code
     assert "oppositenick" in code
     assert "sendernick" in code
     assert "conversationnick" in code
     assert "EventCueRegex" in code
     assert "LabeledOrderRegex" in code
-    assert "未猜测当前会话" in code
+    assert "OrderAutomationCoordinator.ObserveGenericPaymentSignal" in code
+    generic = code[code.index("internal static void ObserveGenericPaymentSignal"):code.index("private static void OnShopRobotNewMessage")]
+    assert "GetCurrentConversationID" not in generic
+    assert "OpenChat" not in generic
     assert "ProcessDirectOrderMessageAsync" in code
 
 
