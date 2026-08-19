@@ -81,8 +81,10 @@ namespace Bot.ChromeNs
     /// 对 messageCenterNotify 再做一层兼容解析：
     /// - 展开被包在字符串里的嵌套 JSON；
     /// - 兼容更多 buyer/contact/customer/sender/opposite 字段；
-    /// - 只接受同时含真实订单号与明确下单/付款/退款状态的通知；
-    /// - 解析到真实买家后仍交给原 OrderMessageClassifier、OrderEventHub 和安全发送链路。
+    /// - 能直接确认订单号/买家时继续走结构化订单链路；
+    /// - 不能直接确认时，不从通知内容猜订单，而把通知作为“订单面板可能已刷新”的唤醒信号，
+    ///   对当时已验证的当前买家做最长 180 秒被动右侧订单面板补扫；
+    /// - 面板补扫仍要求真实 16-24 位订单号、受支持状态和新鲜订单时间，且读取前后买家必须一致。
     /// </summary>
     internal static class OrderPaymentNotificationFallback
     {
@@ -93,10 +95,20 @@ namespace Bot.ChromeNs
             public string Value;
         }
 
+        private sealed class PanelProbeState
+        {
+            public DateTime StartedAt;
+            public int Running;
+        }
+
         private static readonly object Sync = new object();
         private static readonly HashSet<QN> Attached = new HashSet<QN>();
         private static readonly ConcurrentDictionary<string, DateTime> Reservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, PanelProbeState> PanelProbes =
+            new ConcurrentDictionary<string, PanelProbeState>(StringComparer.Ordinal);
+        private static readonly int[] PanelProbeDelaysMs =
+            { 250, 900, 1800, 3200, 5200, 8000, 12000, 20000, 30000, 45000, 60000, 90000, 120000, 150000, 180000 };
         private static Timer _timer;
         private static int _initialized;
 
@@ -153,7 +165,15 @@ namespace Bot.ChromeNs
         {
             var qn = sender as QN;
             var raw = e == null ? string.Empty : (e.NotifyContent ?? string.Empty).Trim();
-            if (qn == null || raw.Length < 8 || !LooksLikeOrderEvent(raw)) return;
+            if (qn == null || raw.Length == 0) return;
+
+            if (!LooksLikeOrderEvent(raw))
+            {
+                ScheduleVerifiedCurrentBuyerPanelRecovery(
+                    qn,
+                    "messageCenterNotify未携带可直接判定的订单号/状态");
+                return;
+            }
 
             var hash = Hash(raw);
             CleanupReservations();
@@ -166,10 +186,18 @@ namespace Bot.ChromeNs
                 var root = ParseExpanded(raw);
                 var flat = Flatten(root);
                 var combined = raw + " " + string.Join(" ", flat.Select(x => x.Value).Where(x => !string.IsNullOrWhiteSpace(x)).Take(250));
-                if (!EventCueRegex.IsMatch(combined)) return;
+                if (!EventCueRegex.IsMatch(combined))
+                {
+                    ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify缺少明确订单状态");
+                    return;
+                }
 
                 var orderId = ResolveOrderId(flat, combined);
-                if (string.IsNullOrWhiteSpace(orderId)) return;
+                if (string.IsNullOrWhiteSpace(orderId))
+                {
+                    ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify缺少可验证订单号");
+                    return;
+                }
                 var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
                 var buyer = ResolveBuyer(flat, seller, orderId);
                 if (string.IsNullOrWhiteSpace(buyer))
@@ -184,6 +212,7 @@ namespace Bot.ChromeNs
                         .Take(24));
                     Log.Info("付款通知已解析订单号但仍缺少买家身份，未猜测当前会话: orderId="
                         + orderId + ", payloadHash=" + hash + ", identityKeys=" + diagnosticKeys);
+                    ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify有订单号但缺少买家身份");
                     return;
                 }
 
@@ -203,7 +232,84 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 Log.Info("付款通知兼容兜底解析失败: payloadHash=" + hash + ", error=" + ex.Message);
+                ScheduleVerifiedCurrentBuyerPanelRecovery(qn, "messageCenterNotify解析异常");
             }
+        }
+
+        private static void ScheduleVerifiedCurrentBuyerPanelRecovery(QN qn, string trigger)
+        {
+            if (qn == null) return;
+            Task.Run(async () =>
+            {
+                var seller = qn.Seller == null ? string.Empty : (qn.Seller.Nick ?? string.Empty).Trim();
+                if (seller.Length == 0) return;
+
+                DbEntity.Conversation current = null;
+                try
+                {
+                    var response = await qn.GetCurrentConversationID().ConfigureAwait(false);
+                    current = response == null ? null : response.Result;
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("messageCenterNotify订单面板验证无法读取当前会话: seller=" + seller
+                        + ", error=" + ex.Message);
+                    return;
+                }
+                if (current == null || string.IsNullOrWhiteSpace(current.Nick))
+                {
+                    Log.Info("messageCenterNotify订单面板验证已跳过：当前没有可验证买家会话。seller=" + seller);
+                    return;
+                }
+
+                BuyerIdentityAliasService.Observe(seller, current.Nick, current.Display, current.TargetId);
+                var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, current.Nick);
+                if (string.IsNullOrWhiteSpace(buyer)) buyer = current.Nick.Trim();
+                if (buyer.Length == 0) return;
+
+                var key = seller.Trim().ToLowerInvariant() + "#" + buyer.Trim().ToLowerInvariant();
+                var state = PanelProbes.GetOrAdd(key, _ => new PanelProbeState { StartedAt = DateTime.Now });
+                if (Interlocked.Exchange(ref state.Running, 1) != 0) return;
+
+                Log.Info("messageCenterNotify未形成可直接处理的订单事件，启动当前会话右侧订单面板验证: seller="
+                    + seller + ", buyer=" + buyer + ", trigger=" + (trigger ?? string.Empty));
+                var elapsed = 0;
+                try
+                {
+                    foreach (var targetDelay in PanelProbeDelaysMs)
+                    {
+                        var wait = Math.Max(0, targetDelay - elapsed);
+                        if (wait > 0) await Task.Delay(wait).ConfigureAwait(false);
+                        elapsed = targetDelay;
+
+                        if (await qn.TryRecoverVisibleOrderPanelForBackgroundProbeAsync(
+                            seller,
+                            buyer,
+                            "messageCenterNotify被动验证补扫@" + targetDelay + "ms",
+                            state.StartedAt,
+                            false).ConfigureAwait(false))
+                        {
+                            return;
+                        }
+                    }
+                    Log.Info("messageCenterNotify订单面板验证结束：180秒内未发现可确认的新订单。seller="
+                        + seller + ", buyer=" + buyer);
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("messageCenterNotify订单面板验证异常: seller=" + seller
+                        + ", buyer=" + buyer + ", error=" + ex.Message, 20);
+                }
+                finally
+                {
+                    PanelProbeState currentState;
+                    if (PanelProbes.TryGetValue(key, out currentState) && ReferenceEquals(currentState, state))
+                    {
+                        PanelProbeState ignored;
+                        PanelProbes.TryRemove(key, out ignored);
+                    }
+                }
+            });
         }
 
         private static bool LooksLikeOrderEvent(string raw)
