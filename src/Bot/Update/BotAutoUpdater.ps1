@@ -51,6 +51,32 @@ function Get-DirectoryFingerprint([string]$Root) {
     return @($entries | Sort-Object)
 }
 
+function Get-DirectorySizeBytes([string]$Root) {
+    if (-not (Test-Path -LiteralPath $Root -PathType Container)) { return [int64]0 }
+    [int64]$total = 0
+    foreach ($item in @(Get-ChildItem -LiteralPath $Root -File -Recurse -Force -ErrorAction SilentlyContinue)) {
+        $total += [int64]$item.Length
+    }
+    return $total
+}
+
+function Get-AvailableBytes([string]$Path) {
+    $root = [IO.Path]::GetPathRoot([IO.Path]::GetFullPath($Path))
+    if ([string]::IsNullOrWhiteSpace($root)) { return [int64]0 }
+    try {
+        return [int64](New-Object IO.DriveInfo($root)).AvailableFreeSpace
+    }
+    catch {
+        return [int64]0
+    }
+}
+
+function Format-Bytes([int64]$Bytes) {
+    if ($Bytes -ge 1GB) { return ('{0:N2} GB' -f ($Bytes / 1GB)) }
+    if ($Bytes -ge 1MB) { return ('{0:N2} MB' -f ($Bytes / 1MB)) }
+    return ('{0:N0} bytes' -f $Bytes)
+}
+
 function Assert-DirectoryCopyMatches([string]$Source, [string]$Backup, [string]$Label) {
     if (-not (Test-Path -LiteralPath $Source -PathType Container)) {
         throw "Backup validation source is missing: $Label ($Source)"
@@ -88,6 +114,24 @@ function Test-BackupComplete([string]$Path) {
     }
     catch {
         return $false
+    }
+}
+
+function Clear-PreviousUpdaterBackups([string]$BackupRoot) {
+    if (-not (Test-Path -LiteralPath $BackupRoot -PathType Container)) { return }
+
+    # The live install is not mutated until the new backup has been completely copied, hashed and
+    # finalized. Therefore old updater snapshots are not needed while creating the next snapshot.
+    # Keeping eight full copies (plus seven days of .partial copies) caused multi-gigabyte user data
+    # to accumulate on every update and eventually fill the system drive.
+    foreach ($item in @(Get-ChildItem -LiteralPath $BackupRoot -Directory -Force -ErrorAction SilentlyContinue)) {
+        try {
+            Remove-Item -LiteralPath $item.FullName -Recurse -Force -ErrorAction Stop
+            Write-Host "Removed previous updater backup: $($item.Name)"
+        }
+        catch {
+            throw "Unable to remove previous updater backup before creating a new snapshot: $($item.FullName). $($_.Exception.Message)"
+        }
     }
 }
 
@@ -280,6 +324,7 @@ $partialBackupDir = "$backupDir.partial"
 $programBackup = Join-Path $backupDir 'program'
 $persistentRoot = Join-Path $env:LOCALAPPDATA 'QianniuAiBot'
 $persistentNames = @('data', 'global', 'shops')
+$migrationMarker = Join-Path $persistentRoot 'data-migration-v2.done'
 $tempDir = Join-Path $env:TEMP "qianniu-bot-auto-update-$timestamp"
 $logDir = Join-Path $updaterRoot 'logs'
 $logPath = Join-Path $logDir "auto-update-$timestamp.log"
@@ -312,8 +357,28 @@ try {
     Write-Host "Persistent root: $persistentRoot (data/global/shops)"
     Write-Host "Log: $logPath"
 
-    Write-Step 'Backing up current program and persistent data'
+    Write-Step 'Preparing bounded rollback backup'
     New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+
+    # Only one updater snapshot is useful: the snapshot for the update that is about to mutate the
+    # install. Old complete copies and failed .partial copies are pure disk growth at this point.
+    # The live install is still intact here, so deleting old snapshots cannot make this update unsafe.
+    Clear-PreviousUpdaterBackups $backupRoot
+
+    [int64]$estimatedBackupBytes = 0
+    if ($oldProgramExisted) {
+        $estimatedBackupBytes += Get-DirectorySizeBytes $InstallDir
+    }
+    foreach ($name in $persistentNames) {
+        $estimatedBackupBytes += Get-DirectorySizeBytes (Join-Path $persistentRoot $name)
+    }
+    [int64]$backupHeadroomBytes = 512MB
+    [int64]$availableBytes = Get-AvailableBytes $backupRoot
+    Write-Host "Rollback snapshot estimate: $(Format-Bytes $estimatedBackupBytes); free space after stale-backup cleanup: $(Format-Bytes $availableBytes)"
+    if ($availableBytes -gt 0 -and $availableBytes -lt ($estimatedBackupBytes + $backupHeadroomBytes)) {
+        throw "Insufficient disk space for validated rollback snapshot. Need approximately $(Format-Bytes ($estimatedBackupBytes + $backupHeadroomBytes)), available $(Format-Bytes $availableBytes). Install directory has not been modified."
+    }
+
     if (Test-Path -LiteralPath $partialBackupDir) {
         Remove-Item -LiteralPath $partialBackupDir -Recurse -Force
     }
@@ -354,7 +419,7 @@ try {
         throw "Backup finalization failed: $backupDir"
     }
     $backupFinalized = $true
-    Write-Host "Validated backup directory: $backupDir" -ForegroundColor Green
+    Write-Host "Validated rollback snapshot: $backupDir" -ForegroundColor Green
 
     Write-Step 'Extracting and validating package'
     if (Test-Path -LiteralPath $tempDir) { Remove-Item -LiteralPath $tempDir -Recurse -Force }
@@ -387,8 +452,13 @@ try {
 
     $legacyData = Join-Path $InstallDir 'data'
     if (Test-Path -LiteralPath $legacyData) {
-        Write-Host 'Legacy runtime data detected; preserving it for first-run migration.'
-        Copy-DirectoryContents $legacyData (Join-Path $packageRoot 'data')
+        if (Test-Path -LiteralPath $migrationMarker -PathType Leaf) {
+            Write-Host 'Persistent-data migration is already complete; legacy install\data will not be copied into the new program directory.' -ForegroundColor Yellow
+        }
+        else {
+            Write-Host 'Legacy runtime data detected before migration; preserving it for first-run migration.'
+            Copy-DirectoryContents $legacyData (Join-Path $packageRoot 'data')
+        }
     }
 
     Write-Step 'Replacing program files'
@@ -428,21 +498,9 @@ try {
 
     Write-Step "Update to $ExpectedVersion completed successfully"
     Write-Host "Current program: $installedExe" -ForegroundColor Green
-    Write-Host "Backup: $backupDir"
+    Write-Host "Rollback snapshot retained: $backupDir"
     Write-Host 'Persistent user data remains under %LocalAppData%\QianniuAiBot (data/global/shops).'
-
-    if (Test-Path -LiteralPath $backupRoot) {
-        @(Get-ChildItem -LiteralPath $backupRoot -Directory | Where-Object {
-            Test-BackupComplete $_.FullName
-        } | Sort-Object Name -Descending | Select-Object -Skip 8) | ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        }
-        @(Get-ChildItem -LiteralPath $backupRoot -Directory -Filter '*.partial' -ErrorAction SilentlyContinue | Where-Object {
-            $_.LastWriteTime -lt (Get-Date).AddDays(-7)
-        }) | ForEach-Object {
-            Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
+    Write-Host 'Updater storage policy: one validated rollback snapshot only; failed .partial snapshots are removed immediately.'
 }
 catch {
     $failure = $_
@@ -495,6 +553,9 @@ catch {
     throw $failure
 }
 finally {
+    if (Test-Path -LiteralPath $partialBackupDir) {
+        Remove-Item -LiteralPath $partialBackupDir -Recurse -Force -ErrorAction SilentlyContinue
+    }
     if (Test-Path -LiteralPath $tempDir) {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
