@@ -1,7 +1,7 @@
 ﻿[CmdletBinding()]
 param(
     [string]$InstallDir = "",
-    [string]$ControlPlaneUrl = "http://botserver.mv3.cn",
+    [string]$ControlPlaneUrl = "",
     [string]$ReleaseApi = "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest",
     [string]$PackagePath = "",
     [string]$ExpectedVersion = "",
@@ -12,6 +12,11 @@ $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 Set-StrictMode -Version Latest
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+$BuiltInControlPlaneUrl = 'http://aboter.mv3.cn'
+$ServerUrlEnvironmentKey = 'QIANNIU_BOT_SERVER_URL'
+$ObsoleteControlPlaneHost = 'botserver.mv3.cn'
+$CurrentControlPlaneHost = 'aboter.mv3.cn'
 
 function Write-Step([string]$Message) {
     Write-Host "`n[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" -ForegroundColor Cyan
@@ -36,6 +41,113 @@ function Normalize-Version([string]$Value) {
     if ($value.StartsWith('bot-v', [StringComparison]::OrdinalIgnoreCase)) { return $value.Substring(5) }
     if ($value.StartsWith('v', [StringComparison]::OrdinalIgnoreCase)) { return $value.Substring(1) }
     return $value
+}
+
+function Normalize-ControlPlaneUrl([string]$Value) {
+    $value = ([string]$Value).Trim().TrimEnd('/')
+    if ([string]::IsNullOrWhiteSpace($value)) { return '' }
+    if ($value.EndsWith('/v1', [StringComparison]::OrdinalIgnoreCase)) {
+        $value = $value.Substring(0, $value.Length - 3).TrimEnd('/')
+    }
+
+    $parsed = $null
+    if ([Uri]::TryCreate($value, [UriKind]::Absolute, [ref]$parsed)) {
+        if ([string]::Equals($parsed.Host, $ObsoleteControlPlaneHost, [StringComparison]::OrdinalIgnoreCase)) {
+            $builder = New-Object System.UriBuilder -ArgumentList $parsed.AbsoluteUri
+            $builder.Host = $CurrentControlPlaneHost
+            $value = $builder.Uri.AbsoluteUri.TrimEnd('/')
+        }
+    }
+    return $value
+}
+
+function Resolve-InstallDir([string]$Requested) {
+    if (-not [string]::IsNullOrWhiteSpace($Requested)) {
+        return [IO.Path]::GetFullPath($Requested.Trim().Trim('"'))
+    }
+
+    $roots = @()
+    try {
+        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='Bot.exe'" -ErrorAction SilentlyContinue)) {
+            $exe = [string]$process.ExecutablePath
+            if ([string]::IsNullOrWhiteSpace($exe)) { continue }
+            try {
+                $full = [IO.Path]::GetFullPath($exe)
+                if ([IO.Path]::GetFileName($full) -ieq 'Bot.exe' -and
+                    [IO.Path]::GetFileName((Split-Path -Parent $full)) -ieq 'Bin') {
+                    $root = Split-Path -Parent (Split-Path -Parent $full)
+                    if ($roots -notcontains $root) { $roots += $root }
+                }
+            } catch {}
+        }
+    } catch {}
+
+    if ($roots.Count -eq 1) { return $roots[0] }
+    if ($roots.Count -gt 1) {
+        throw '检测到多个 Bot 安装目录，请使用 -InstallDir 明确指定要修复的安装目录。'
+    }
+
+    $cwd = [IO.Path]::GetFullPath((Get-Location).Path)
+    if (Test-Path -LiteralPath (Join-Path $cwd 'Bin\Bot.exe') -PathType Leaf) { return $cwd }
+
+    $default = 'C:\qianniu-bot-x64'
+    if (Test-Path -LiteralPath (Join-Path $default 'Bin\Bot.exe') -PathType Leaf) { return $default }
+
+    throw '未自动找到 Bot 安装目录，请使用 -InstallDir 指定，例如 C:\qianniu-bot-x64。'
+}
+
+function Resolve-ControlPlaneUrl([string]$Root) {
+    $explicit = Normalize-ControlPlaneUrl $ControlPlaneUrl
+    if (-not [string]::IsNullOrWhiteSpace($explicit)) {
+        Write-Host "救援更新服务地址：$explicit｜来源=命令参数" -ForegroundColor Green
+        return $explicit
+    }
+
+    $environment = Normalize-ControlPlaneUrl ([Environment]::GetEnvironmentVariable($ServerUrlEnvironmentKey))
+    if (-not [string]::IsNullOrWhiteSpace($environment)) {
+        Write-Host "救援更新服务地址：$environment｜来源=环境变量 $ServerUrlEnvironmentKey" -ForegroundColor Green
+        return $environment
+    }
+
+    $configPath = Join-Path $Root 'Bin\Bot.exe.config'
+    if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+        try {
+            [xml]$config = Get-Content -LiteralPath $configPath -Raw -Encoding UTF8
+            $node = @($config.configuration.appSettings.add | Where-Object { [string]$_.key -eq 'BotControlPlaneDefaultUrl' } | Select-Object -First 1)
+            if ($node.Count -eq 1) {
+                $configured = Normalize-ControlPlaneUrl ([string]$node[0].value)
+                if (-not [string]::IsNullOrWhiteSpace($configured)) {
+                    Write-Host "救援更新服务地址：$configured｜来源=已安装 Bot.exe.config" -ForegroundColor Green
+                    return $configured
+                }
+            }
+        }
+        catch {
+            Write-Host "读取 Bot.exe.config 的更新服务地址失败，将使用内置地址：$($_.Exception.Message)" -ForegroundColor Yellow
+        }
+    }
+
+    $fallback = Normalize-ControlPlaneUrl $BuiltInControlPlaneUrl
+    Write-Host "救援更新服务地址：$fallback｜来源=内置默认" -ForegroundColor Green
+    return $fallback
+}
+
+function Get-TargetBotPid([string]$Root) {
+    $expectedExe = [IO.Path]::GetFullPath((Join-Path $Root 'Bin\Bot.exe'))
+    $ids = @()
+    try {
+        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='Bot.exe'" -ErrorAction SilentlyContinue)) {
+            $exe = [string]$process.ExecutablePath
+            if ([string]::IsNullOrWhiteSpace($exe)) { continue }
+            try {
+                if ([string]::Equals([IO.Path]::GetFullPath($exe), $expectedExe, [StringComparison]::OrdinalIgnoreCase)) {
+                    $ids += [int]$process.ProcessId
+                }
+            } catch {}
+        }
+    } catch {}
+    if ($ids.Count -eq 0) { return 0 }
+    return [int]($ids | Sort-Object | Select-Object -First 1)
 }
 
 function Add-UniqueUrl([System.Collections.ArrayList]$List, [string]$Value) {
@@ -92,65 +204,12 @@ function Invoke-JsonRequest([string]$Uri, [hashtable]$Headers, [int]$TimeoutSec 
     throw "网络请求失败：$Uri；$lastError"
 }
 
-function Resolve-InstallDir([string]$Requested) {
-    if (-not [string]::IsNullOrWhiteSpace($Requested)) {
-        return [IO.Path]::GetFullPath($Requested.Trim().Trim('"'))
-    }
-
-    $roots = @()
-    try {
-        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='Bot.exe'" -ErrorAction SilentlyContinue)) {
-            $exe = [string]$process.ExecutablePath
-            if ([string]::IsNullOrWhiteSpace($exe)) { continue }
-            try {
-                $full = [IO.Path]::GetFullPath($exe)
-                if ([IO.Path]::GetFileName($full) -ieq 'Bot.exe' -and
-                    [IO.Path]::GetFileName((Split-Path -Parent $full)) -ieq 'Bin') {
-                    $root = Split-Path -Parent (Split-Path -Parent $full)
-                    if ($roots -notcontains $root) { $roots += $root }
-                }
-            } catch {}
-        }
-    } catch {}
-
-    if ($roots.Count -eq 1) { return $roots[0] }
-    if ($roots.Count -gt 1) {
-        throw '检测到多个 Bot 安装目录，请使用 -InstallDir 明确指定要修复的安装目录。'
-    }
-
-    $cwd = [IO.Path]::GetFullPath((Get-Location).Path)
-    if (Test-Path -LiteralPath (Join-Path $cwd 'Bin\Bot.exe') -PathType Leaf) { return $cwd }
-
-    $default = 'C:\qianniu-bot-x64'
-    if (Test-Path -LiteralPath (Join-Path $default 'Bin\Bot.exe') -PathType Leaf) { return $default }
-
-    throw '未自动找到 Bot 安装目录，请使用 -InstallDir 指定，例如 C:\qianniu-bot-x64。'
-}
-
-function Get-TargetBotPid([string]$Root) {
-    $expectedExe = [IO.Path]::GetFullPath((Join-Path $Root 'Bin\Bot.exe'))
-    $ids = @()
-    try {
-        foreach ($process in @(Get-CimInstance Win32_Process -Filter "Name='Bot.exe'" -ErrorAction SilentlyContinue)) {
-            $exe = [string]$process.ExecutablePath
-            if ([string]::IsNullOrWhiteSpace($exe)) { continue }
-            try {
-                if ([string]::Equals([IO.Path]::GetFullPath($exe), $expectedExe, [StringComparison]::OrdinalIgnoreCase)) {
-                    $ids += [int]$process.ProcessId
-                }
-            } catch {}
-        }
-    } catch {}
-    if ($ids.Count -eq 0) { return 0 }
-    return [int]($ids | Sort-Object | Select-Object -First 1)
-}
-
-function Resolve-LatestFromControlPlane {
-    if ([string]::IsNullOrWhiteSpace($ControlPlaneUrl)) { return $null }
-    $base = $ControlPlaneUrl.Trim().TrimEnd('/')
+function Resolve-LatestFromControlPlane([string]$BaseUrl) {
+    if ([string]::IsNullOrWhiteSpace($BaseUrl)) { return $null }
+    $base = (Normalize-ControlPlaneUrl $BaseUrl).TrimEnd('/')
     $url = $base + '/api/public/v1/bot-update/latest'
     Write-Step "优先读取服务器更新缓存：$url"
-    $json = Invoke-JsonRequest $url @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/2.0'; 'Accept' = 'application/json' } 20
+    $json = Invoke-JsonRequest $url @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/3.0'; 'Accept' = 'application/json' } 20
 
     $version = Normalize-Version ([string]$json.version)
     $sha = ([string]$json.sha256).Trim().ToUpperInvariant()
@@ -172,9 +231,7 @@ function Resolve-LatestFromControlPlane {
 
 function Get-ShaFromReleaseNotes([string]$Notes) {
     $notes = [string]$Notes
-    $match = [Regex]::Match(
-        $notes,
-        '(?is)(?:安装包\s*SHA-256|SHA-256)[^0-9A-Fa-f]{0,120}([0-9A-Fa-f]{64})')
+    $match = [Regex]::Match($notes, '(?is)SHA-256[^0-9A-Fa-f]{0,120}([0-9A-Fa-f]{64})')
     if ($match.Success) { return $match.Groups[1].Value.ToUpperInvariant() }
     return ''
 }
@@ -191,7 +248,7 @@ function Normalize-GitHubDigest([string]$Digest) {
 function Resolve-LatestFromGitHub {
     Write-Step '服务器更新缓存不可用，回退 GitHub Release API'
     $headers = @{
-        'User-Agent' = 'QianniuAiBotRescueUpdater/2.0'
+        'User-Agent' = 'QianniuAiBotRescueUpdater/3.0'
         'Accept' = 'application/vnd.github+json'
         'X-GitHub-Api-Version' = '2022-11-28'
     }
@@ -215,7 +272,7 @@ function Resolve-LatestFromGitHub {
     $manifestAsset = @($release.assets | Where-Object { $_.name -eq 'update.json' } | Select-Object -First 1)
     if ($manifestAsset.Count -eq 1) {
         try {
-            $manifest = Invoke-JsonRequest ([string]$manifestAsset[0].browser_download_url) @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/2.0'; 'Accept' = 'application/json' } 30
+            $manifest = Invoke-JsonRequest ([string]$manifestAsset[0].browser_download_url) @{ 'User-Agent' = 'QianniuAiBotRescueUpdater/3.0'; 'Accept' = 'application/json' } 30
             $manifestVersion = Normalize-Version ([string]$manifest.version)
             if (-not [string]::IsNullOrWhiteSpace($manifestVersion) -and $manifestVersion -ne $version) {
                 throw "update.json 版本不一致。release=$version manifest=$manifestVersion"
@@ -250,9 +307,9 @@ function Resolve-LatestFromGitHub {
     }
 }
 
-function Resolve-LatestRelease {
+function Resolve-LatestRelease([string]$ServerUrl) {
     try {
-        $server = Resolve-LatestFromControlPlane
+        $server = Resolve-LatestFromControlPlane $ServerUrl
         if ($null -ne $server) { return $server }
     }
     catch {
@@ -334,11 +391,12 @@ if (-not (Test-IsAdministrator)) {
 
 $InstallDir = Resolve-InstallDir $InstallDir
 if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) { throw "拒绝覆盖 Git 源码目录：$InstallDir" }
+$ControlPlaneUrl = Resolve-ControlPlaneUrl $InstallDir
 
 $downloadRequired = [string]::IsNullOrWhiteSpace($PackagePath)
 $packageUrls = @()
 if ($downloadRequired) {
-    $releaseInfo = Resolve-LatestRelease
+    $releaseInfo = Resolve-LatestRelease $ControlPlaneUrl
     $ExpectedVersion = $releaseInfo.Version
     $ExpectedSha256 = $releaseInfo.Sha256
     $packageUrls = @($releaseInfo.Urls)

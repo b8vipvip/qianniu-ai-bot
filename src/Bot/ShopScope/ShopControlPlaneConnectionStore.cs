@@ -11,7 +11,9 @@ namespace Bot.ShopScope
         private const string LegacyTokenKey = "ControlPlaneClientToken";
         private const string DefaultUrlSettingKey = "BotControlPlaneDefaultUrl";
         private const string ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL";
-        private const string BuiltInDefaultServerUrl = "http://botserver.mv3.cn";
+        private const string BuiltInDefaultServerUrl = "http://aboter.mv3.cn";
+        private const string ObsoleteBuiltInHost = "botserver.mv3.cn";
+        private const string CurrentBuiltInHost = "aboter.mv3.cn";
 
         private readonly ShopContext _shop;
         private readonly ShopTokenStore _tokens;
@@ -135,6 +137,19 @@ namespace Bot.ShopScope
             serverUrl = (serverUrl ?? string.Empty).Trim().TrimEnd('/');
             if (serverUrl.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
                 serverUrl = serverUrl.Substring(0, serverUrl.Length - 3).TrimEnd('/');
+
+            Uri parsed;
+            if (Uri.TryCreate(serverUrl, UriKind.Absolute, out parsed)
+                && string.Equals(parsed.Host, ObsoleteBuiltInHost, StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    var builder = new UriBuilder(parsed) { Host = CurrentBuiltInHost };
+                    serverUrl = builder.Uri.AbsoluteUri.TrimEnd('/');
+                }
+                catch { }
+            }
+
             return serverUrl;
         }
     }

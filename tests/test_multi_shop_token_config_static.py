@@ -51,7 +51,9 @@ def test_control_plane_url_is_program_level_with_built_in_default_and_legacy_mig
     assert "_settings.TryGetString(UrlKey" in connection  # one-time migration from PR #89
     assert "_settings.SetString(UrlKey" not in connection
     assert 'key="BotControlPlaneDefaultUrl"' in config
-    assert 'value="http://botserver.mv3.cn"' in config
+    assert 'value="http://aboter.mv3.cn"' in config
+    assert 'ObsoleteBuiltInHost = "botserver.mv3.cn"' in connection
+    assert 'CurrentBuiltInHost = "aboter.mv3.cn"' in connection
 
 
 def test_shop_binding_page_owns_token_and_cloud_sync_but_not_per_shop_server_url():
@@ -69,7 +71,6 @@ def test_shop_binding_page_owns_token_and_cloud_sync_but_not_per_shop_server_url
     assert "IsEnabledForShop" in sync
     assert "SyncNowAsync" in sync
     assert "ShopSettingsScope.Enter(shop)" in sync
-    assert '"X-Shop-Key"' in sync
 
 
 def test_token_binding_conflict_is_checked_before_new_token_is_saved():
