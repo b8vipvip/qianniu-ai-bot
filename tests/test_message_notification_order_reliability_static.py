@@ -44,6 +44,37 @@ def test_background_notification_only_recovers_when_detailed_event_is_missing():
     assert "MarkBuyerMessageObserved(sellerNick, buyerNick)" in qn
 
 
+def test_generic_message_center_notification_wakes_verified_panel_without_guessing_order():
+    source = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
+
+    handler = between(source, "private static async void OnMessageNotify", "private static void ScheduleVerifiedCurrentBuyerPanelRecovery")
+    generic_branch = between(handler, "if (!LooksLikeOrderEvent(raw))", "var hash = Hash(raw)")
+    assert "ScheduleVerifiedCurrentBuyerPanelRecovery" in generic_branch
+    assert "ProcessDirectOrderMessageAsync" not in generic_branch
+
+    recovery = between(source, "private static void ScheduleVerifiedCurrentBuyerPanelRecovery", "private static bool LooksLikeOrderEvent")
+    assert "GetCurrentConversationID()" in recovery
+    assert "current == null || string.IsNullOrWhiteSpace(current.Nick)" in recovery
+    assert "BuyerIdentityAliasService.ResolveInternalNick" in recovery
+    assert "TryRecoverVisibleOrderPanelForBackgroundProbeAsync" in recovery
+    assert '"messageCenterNotify被动验证补扫@"' in recovery
+    assert "state.StartedAt" in recovery
+    assert "false).ConfigureAwait(false)" in recovery  # generic notification must never steal chat focus
+    assert "180000" in source
+    assert "真实 16-24 位订单号" in source
+
+
+def test_parseable_message_center_order_still_uses_structured_order_pipeline():
+    source = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
+    handler = between(source, "private static async void OnMessageNotify", "private static void ScheduleVerifiedCurrentBuyerPanelRecovery")
+
+    assert "ResolveOrderId(flat, combined)" in handler
+    assert "ResolveBuyer(flat, seller, orderId)" in handler
+    assert "ProcessDirectOrderMessageAsync" in handler
+    assert "messageCenterNotify嵌套JSON兼容兜底" in handler
+    assert "有订单号但缺少买家身份" in handler
+
+
 def test_settings_have_separate_notification_tab_and_order_section():
     source = read("src/Bot/Options/CtlRobotOptions.xaml.cs")
     assert 'Header = "消息通知"' in source
