@@ -70,10 +70,11 @@ def test_rescue_updater_parses_under_windows_powershell_51():
     completed = subprocess.run(
         ["powershell.exe", "-NoProfile", "-Command", command],
         capture_output=True,
-        text=True,
         timeout=30,
     )
-    assert completed.returncode == 0, completed.stdout + completed.stderr
+    stdout = (completed.stdout or b"").decode("utf-8", errors="replace")
+    stderr = (completed.stderr or b"").decode("utf-8", errors="replace")
+    assert completed.returncode == 0, stdout + stderr
 
 
 def test_bootstrap_awaits_injection_and_starts_bounded_listener_self_heal():
