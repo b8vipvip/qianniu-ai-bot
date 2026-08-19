@@ -23,7 +23,8 @@ namespace Bot
             BotConnectionDiagnostics.RecordLanguageStatus(languageResult.IsOk, languageResult.StatusText, languageResult.Detail);
             DeskScanner.LoopScan();
             MyWebSocketServer.WSocketSvrInst.Start();
-            QNInject.StartInject();
+            await QNInject.StartInject();
+            QnStartupConnectionSelfHeal.Start();
             WeComAppBridgeClient.Start();
 
             //var script = File.ReadAllText(Path.Combine(AppContext.BaseDirectory,"inject.js"));
