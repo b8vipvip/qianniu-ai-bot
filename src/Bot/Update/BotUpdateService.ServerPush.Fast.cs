@@ -120,7 +120,9 @@ namespace Bot.UpdateNs
                             BotReleaseInfo release;
                             try
                             {
-                                release = ParseServerPushRelease(JObject.Parse(jsonText));
+                                release = ParseServerPushRelease(
+                                    JObject.Parse(jsonText),
+                                    baseUrl);
                             }
                             catch (Exception ex)
                             {
@@ -134,8 +136,31 @@ namespace Bot.UpdateNs
             }
         }
 
-        private static BotReleaseInfo ParseServerPushRelease(JObject json)
+        private static BotReleaseInfo ParseServerPushRelease(
+            JObject json,
+            string serverBaseUrl)
         {
+            if (json == null) throw new ArgumentNullException("json");
+            if (json.Value<bool?>("mirror_ready") != true
+                || json.Value<bool?>("package_verified_on_server") != true)
+            {
+                throw new InvalidDataException(
+                    "服务端安装包尚未完整下载并校验，拒绝版本通知和自动更新。");
+            }
+
+            var mirrorUrl = (json.Value<string>("mirror_url") ?? string.Empty).Trim();
+            if (!Uri.IsWellFormedUriString(mirrorUrl, UriKind.Absolute))
+            {
+                throw new InvalidDataException(
+                    "服务端版本通知缺少有效的服务器安装包地址。");
+            }
+            if (!IsSameServerOrigin(serverBaseUrl, mirrorUrl))
+            {
+                throw new InvalidDataException(
+                    "服务端版本通知的安装包地址不属于当前服务器，已拒绝自动更新。"
+                );
+            }
+
             var release = new BotReleaseInfo
             {
                 Version = NormalizeVersion(json.Value<string>("version") ?? string.Empty),
@@ -143,8 +168,11 @@ namespace Bot.UpdateNs
                 Name = json.Value<string>("name") ?? string.Empty,
                 Notes = json.Value<string>("notes") ?? string.Empty,
                 HtmlUrl = json.Value<string>("html_url") ?? ReleasesPage,
-                PackageUrl = (json.Value<string>("download_url") ?? string.Empty).Trim(),
-                MirrorUrl = (json.Value<string>("mirror_url") ?? string.Empty).Trim(),
+                // A server-pushed release is server-owned end to end. Keep PackageUrl equal to
+                // MirrorUrl so DownloadPackageAsync deduplicates the two entries and cannot fall
+                // through to the GitHub asset URL after the server has announced the version.
+                PackageUrl = mirrorUrl,
+                MirrorUrl = mirrorUrl,
                 Sha256 = (json.Value<string>("sha256") ?? string.Empty).Trim().ToLowerInvariant(),
                 PackageSize = json.Value<long?>("size") ?? 0,
                 PublishedAt = ParseDateTime(json.Value<string>("published_at")),
@@ -153,6 +181,21 @@ namespace Bot.UpdateNs
             };
             ValidateRelease(release, true);
             return release;
+        }
+
+        private static bool IsSameServerOrigin(string serverBaseUrl, string packageUrl)
+        {
+            Uri server;
+            Uri package;
+            if (!Uri.TryCreate(serverBaseUrl, UriKind.Absolute, out server)
+                || !Uri.TryCreate(packageUrl, UriKind.Absolute, out package))
+            {
+                return false;
+            }
+
+            return string.Equals(server.Scheme, package.Scheme, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(server.Host, package.Host, StringComparison.OrdinalIgnoreCase)
+                && server.Port == package.Port;
         }
 
         private static async Task HandleServerPushedReleaseAsync(BotReleaseInfo release)
@@ -171,7 +214,7 @@ namespace Bot.UpdateNs
                 UpdateAvailable = true,
                 Release = release,
                 DownloadPercent = -1,
-                Message = "服务端主动通知新版本 " + release.Version
+                Message = "服务端已完整缓存并校验新版本 " + release.Version
                     + "；客户端未执行版本轮询。"
             };
             RaiseStatus(result);
@@ -201,8 +244,8 @@ namespace Bot.UpdateNs
 
                 try
                 {
-                    result.Message = "服务端主动通知新版本 " + release.Version
-                        + "，已启用自动更新，准备下载安装包...";
+                    result.Message = "服务端已准备好新版本 " + release.Version
+                        + "，已启用自动更新，正在从服务器下载安装包...";
                     RaiseStatus(result);
                     ShowAutomaticProgressWindow(release);
                     var package = await DownloadPackageAsync(
@@ -213,7 +256,7 @@ namespace Bot.UpdateNs
                     result.InstallStarted = true;
                     result.DownloadPercent = 100;
                     result.DownloadChannel = CurrentDownloadChannel;
-                    result.Message = "安装包已下载并校验完成，正在启动自动安装。";
+                    result.Message = "服务器安装包已下载并校验完成，正在启动自动安装。";
                     RaiseStatus(result);
                     LaunchInstaller(package, release);
                     return;
@@ -222,8 +265,8 @@ namespace Bot.UpdateNs
                 {
                     var delay = CompleteAutoInstallAttempt(release.Version, false);
                     result.Message = "自动更新失败：" + Short(ex.Message, 220)
-                        + "；已暂停反复切换下载通道，将在 "
-                        + FormatRetryDelay(delay) + " 后自动重试。";
+                        + "；不会绕过服务器切换到GitHub，将在 "
+                        + FormatRetryDelay(delay) + " 后自动重试服务器通道。";
                     result.DownloadChannel = CurrentDownloadChannel;
                     result.DownloadPercent = CurrentDownloadPercent;
                     RaiseStatus(result);
@@ -241,12 +284,12 @@ namespace Bot.UpdateNs
                     await DownloadPackageAsync(release, null, CancellationToken.None);
                     result.DownloadPercent = 100;
                     result.DownloadChannel = CurrentDownloadChannel;
-                    result.Message = "新版本安装包已自动下载并通过校验。";
+                    result.Message = "新版本安装包已从服务器自动下载并通过校验。";
                     RaiseStatus(result);
                 }
                 catch (Exception ex)
                 {
-                    result.Message = "自动下载失败：" + Short(ex.Message, 220);
+                    result.Message = "服务器自动下载失败：" + Short(ex.Message, 220);
                     RaiseStatus(result);
                 }
             }
@@ -283,8 +326,8 @@ namespace Bot.UpdateNs
                 if (_autoInstallRetryAfterUtc > now)
                 {
                     blockedReason = "版本 " + version
-                        + " 上一次自动下载失败，正在退避等待；"
-                        + "不会在服务器/GitHub之间反复切换。剩余约 "
+                        + " 上一次服务器自动下载失败，正在退避等待；"
+                        + "不会绕过服务器切换到GitHub。剩余约 "
                         + FormatRetryDelay(_autoInstallRetryAfterUtc - now) + "。";
                     return false;
                 }
