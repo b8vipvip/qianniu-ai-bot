@@ -28,7 +28,8 @@ def test_repeated_same_version_push_does_not_restart_download_loop_immediately()
     assert "_autoInstallRetryAfterUtc" in code
     assert "_autoInstallFailureCount" in code
     assert "ScheduleAutoInstallRetry" in code
-    assert '"不会在服务器/GitHub之间反复切换。剩余约 "' in code
+    assert '"不会绕过服务器切换到GitHub。剩余约 "' in code
+    assert "自动重试服务器通道" in code
     assert "60" in code and "180" in code and "600" in code and "1800" in code
     assert "Do not open a second manual prompt" in code
 
