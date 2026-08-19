@@ -41,9 +41,10 @@ def test_manual_intervention_still_requires_bot_delivery_checks_to_fail_first():
 
 
 def test_first_inquiry_and_segmented_order_replies_share_the_reliable_send_path():
-    bridge = text("src/Bot/ChromeNs/FirstInquiryDeliveryBridge.cs")
+    deterministic = text("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     qn = text("src/Bot/ChromeNs/QN.cs")
 
-    assert "await qn.SendTextWithRetryAsync(buyer, greeting, 1)" in bridge
+    assert "FirstInquiryFixedReplyService.TryResolve" in deterministic
+    assert "await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3)" in deterministic
     assert 'const string segmentToken = "{分段符}"' in qn
     assert "await SendTextWithRetryAsync(buyer, segment, retryCount)" in qn
