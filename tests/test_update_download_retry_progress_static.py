@@ -8,15 +8,16 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_server_push_waits_for_mirror_before_advertising_server_download():
+def test_server_push_waits_for_verified_mirror_before_advertising_update():
     push = read("services/api-control-plane/bot_update_push.py")
 
-    assert "BOT_UPDATE_PUSH_MIRROR_GRACE_SECONDS" in push
+    assert "BOT_UPDATE_PUSH_MIRROR_GRACE_SECONDS" not in push
     assert "_mirror_ready(metadata)" in push
-    assert 'public["mirror_ready"] = bool(ready)' in push
-    assert 'public["mirror_url"] = ""' in push
-    assert "waited < MIRROR_READY_GRACE_SECONDS" in push
-    assert "do not advertise a server download URL" in push
+    assert 'public["mirror_ready"] = True' in push
+    assert 'public["package_verified_on_server"] = True' in push
+    assert 'public["mirror_url"] = ""' not in push
+    assert "MIRROR_READY_GRACE_SECONDS" not in push
+    assert "bot_update_cache._hash_file(target).lower() == expected_sha" in push
 
 
 def test_repeated_same_version_push_does_not_restart_download_loop_immediately():
