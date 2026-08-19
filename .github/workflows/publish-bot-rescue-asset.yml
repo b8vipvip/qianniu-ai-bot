@@ -1,0 +1,65 @@
+name: Publish Bot rescue updater asset
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "scripts/qianniu-bot-rescue-update.ps1"
+      - ".github/workflows/publish-bot-rescue-asset.yml"
+  workflow_run:
+    workflows: ["Publish Bot auto-update release"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: publish-bot-rescue-updater
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 1
+
+      - name: Validate rescue updater
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path 'scripts/qianniu-bot-rescue-update.ps1'),
+            [ref]$tokens,
+            [ref]$errors
+          ) | Out-Null
+          if ($errors.Count -gt 0) {
+            throw (($errors | ForEach-Object Message) -join ' | ')
+          }
+
+      - name: Attach rescue updater to latest stable release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq '.tagName')"
+          if [[ -z "$tag" ]]; then
+            echo "No stable Bot release exists yet; nothing to attach." >&2
+            exit 1
+          fi
+          cp scripts/qianniu-bot-rescue-update.ps1 qianniu-bot-rescue-update.ps1
+          gh release upload "$tag" qianniu-bot-rescue-update.ps1 \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets \
+            --jq '.assets[].name' | grep -Fx 'qianniu-bot-rescue-update.ps1'
