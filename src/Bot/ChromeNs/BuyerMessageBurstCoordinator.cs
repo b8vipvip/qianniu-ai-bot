@@ -180,6 +180,9 @@ namespace Bot.ChromeNs
         {
             if (handler == null) throw new ArgumentNullException("handler");
             _handler = handler;
+            // Register the knowledge-center management page from a guaranteed runtime constructor.
+            // The call only installs an idempotent WPF class handler; it does not send anything.
+            try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
         }
 
         public void Enqueue(BuyerMessageBurstItem item)
@@ -191,15 +194,25 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            // A buyer message must invalidate an answer that has already been dispatched to the
+            // Smart Reply/AI handler before we spend time evaluating deterministic rules. This is
+            // what lets “好的” cancel the previous in-flight AI and immediately use a local reply.
+            InvalidateDispatchedAnswerOnArrival(item.SellerNick, item.BuyerNick);
+            var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
+
             // Fixed business rules are evaluated on the individual incoming message before it is
             // inserted into any quiet-delay/context-merge state. This guarantees that a first
-            // inquiry greeting or off-hours reply can never be stuck behind “等待合并本轮消息”.
+            // inquiry greeting, off-hours reply or standalone local short reply can never be stuck
+            // behind “等待合并本轮消息”. A short acknowledgement is not consumed locally while an
+            // earlier buyer message is still waiting to be merged.
             Task.Run(async () =>
             {
                 var continueToMerge = true;
                 try
                 {
-                    continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(item);
+                    continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(
+                        item,
+                        allowLocalShortReply);
                 }
                 catch (Exception ex)
                 {
@@ -210,6 +223,43 @@ namespace Bot.ChromeNs
                 }
                 if (continueToMerge) EnqueueForMerge(item);
             });
+        }
+
+        private bool HasPendingBuyerMessages(string seller, string buyer)
+        {
+            BurstState state;
+            if (!_states.TryGetValue(Key(seller, buyer), out state) || state == null) return false;
+            lock (state.Sync)
+            {
+                return state.Items.Count > 0;
+            }
+        }
+
+        private void InvalidateDispatchedAnswerOnArrival(string seller, string buyer)
+        {
+            var key = Key(seller, buyer);
+            BurstState state;
+            if (!_states.TryGetValue(key, out state) || state == null) return;
+
+            var removeEmptyState = false;
+            lock (state.Sync)
+            {
+                // RunAsync clears Items and sets WorkerRunning=false immediately before invoking the
+                // handler. That exact state means an answer is already dispatched/in-flight. A new
+                // buyer message increments Version now so BuyerMessageBurstLease.IsCurrent becomes
+                // false and the streaming monitor cancels the stale AI without waiting for merge.
+                if (state.Items.Count == 0 && !state.WorkerRunning)
+                {
+                    state.Version++;
+                    removeEmptyState = true;
+                }
+            }
+
+            if (!removeEmptyState) return;
+            BurstState ignored;
+            _states.TryRemove(key, out ignored);
+            Log.Info("收到买家新消息，已立即使上一轮已派发答案失效: seller=" + seller
+                + ", buyer=" + buyer);
         }
 
         private void EnqueueForMerge(BuyerMessageBurstItem item)

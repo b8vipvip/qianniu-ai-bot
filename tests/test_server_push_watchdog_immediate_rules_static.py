@@ -13,7 +13,7 @@ def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
     deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
 
     enqueue = coordinator.index("public void Enqueue(BuyerMessageBurstItem item)")
-    before_merge = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(item)", enqueue)
+    before_merge = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(", enqueue)
     enqueue_merge = coordinator.index("EnqueueForMerge(item)", before_merge)
     quiet_delay = coordinator.index("QuietDelayMilliseconds", enqueue_merge)
     assert enqueue < before_merge < enqueue_merge < quiet_delay
@@ -24,7 +24,8 @@ def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
 
     first = deterministic.index("FirstInquiryFixedReplyService.TryResolve(")
     off_hours = deterministic.index("TryResolveOffHours(out offHoursReply)")
-    assert first < off_hours
+    local_short = deterministic.index("LocalShortReplyService.TryResolve(")
+    assert first < off_hours < local_short
     assert "SendTextWithRetryAsync(item.BuyerNick, answer, 3)" in deterministic
     assert "Do not let an AI/context reply overtake a failed mandatory greeting" in deterministic
 

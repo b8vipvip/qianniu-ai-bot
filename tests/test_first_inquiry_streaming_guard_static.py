@@ -14,7 +14,7 @@ def test_deterministic_reply_service_is_compiled_before_merge_and_ai_dispatch():
     service = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
 
     assert "ChromeNs\\DeterministicAutoReplyService.cs" in props
-    deterministic = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(item)")
+    deterministic = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(")
     merge = coordinator.index("EnqueueForMerge(item)", deterministic)
     legacy_gate = coordinator.index("LegacyAiConfigurationGate.WaitAsync", merge)
     assert deterministic < merge < legacy_gate
@@ -28,7 +28,7 @@ def test_shop_scoped_replies_are_not_serialized_behind_one_slow_ai_request():
 
     # Deterministic rules execute before EnqueueForMerge, therefore before either the scoped
     # AI path or the legacy global gate. The scoped post-merge path itself remains lock-free.
-    deterministic = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(item)")
+    deterministic = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(")
     merge = coordinator.index("EnqueueForMerge(item)", deterministic)
     shop_branch = coordinator.index("using (ShopSettingsScope.Enter(shop))", merge)
     shop_body = coordinator[shop_branch:]
@@ -62,8 +62,11 @@ def test_off_hours_reply_is_a_fixed_local_rule_not_manual_keyword_or_ai_dependen
     assert "cfg.OffHoursFixedText" in service
     assert "IsInsideWorkHours" in service
     assert '"下班自动回复"' in service
-    assert "EvaluateAutoReplyRule" not in service
-    assert "OffHoursReplyMode" not in service
+    off_hours_start = service.index("private static bool TryResolveOffHours")
+    off_hours_end = service.index("private static bool TryParseClock", off_hours_start)
+    off_hours_block = service[off_hours_start:off_hours_end]
+    assert "EvaluateAutoReplyRule" not in off_hours_block
+    assert "OffHoursReplyMode" not in off_hours_block
     assert "MyOpenAI" not in service
 
 
