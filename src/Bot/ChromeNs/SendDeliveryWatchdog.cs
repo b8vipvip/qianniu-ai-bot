@@ -363,7 +363,12 @@ namespace Bot.ChromeNs
 
         private static string Normalize(string value)
         {
-            return Regex.Replace((value ?? string.Empty).Trim(), @"\s+", string.Empty);
+            // The in-process answer carries the internal [AI] authorship marker, while Qianniu's
+            // seller echo may expose the same text without that suffix (for example segmented order
+            // replies). Compare the buyer-visible body, not the internal marker, so a Bot echo cannot
+            // fall through to the manual-intervention guard and cancel its own first/order reply.
+            value = BotOutboundMessageFormatter.StripAiMarker(value ?? string.Empty);
+            return Regex.Replace(value.Trim(), @"\s+", string.Empty);
         }
     }
 }
