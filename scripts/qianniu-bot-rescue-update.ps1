@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$InstallDir = "",
     [string]$ControlPlaneUrl = "http://botserver.mv3.cn",
