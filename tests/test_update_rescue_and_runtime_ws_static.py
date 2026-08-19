@@ -28,7 +28,8 @@ def test_rescue_updater_bypasses_broken_legacy_client_bootstrap():
 def test_rescue_updater_prefers_control_plane_and_does_not_require_manifest_download():
     rescue = read("scripts/qianniu-bot-rescue-update.ps1")
 
-    assert 'ControlPlaneUrl = "http://botserver.mv3.cn"' in rescue
+    assert 'ControlPlaneUrl = ""' in rescue
+    assert "$BuiltInControlPlaneUrl = 'http://aboter.mv3.cn'" in rescue
     assert "/api/public/v1/bot-update/latest" in rescue
     assert "Resolve-LatestFromControlPlane" in rescue
     assert "return Resolve-LatestFromGitHub" in rescue
@@ -38,6 +39,35 @@ def test_rescue_updater_prefers_control_plane_and_does_not_require_manifest_down
     assert "Get-ShaFromReleaseNotes" in rescue
     assert "update.json 下载失败，但已有可信 SHA-256，继续救援更新" in rescue
     assert "最新正式版本缺少 update.json 或 qianniu-bot-x64.zip" not in rescue
+
+
+def test_rescue_updater_autodetects_installed_control_plane_and_migrates_old_hostname():
+    rescue = read("scripts/qianniu-bot-rescue-update.ps1")
+
+    assert "$ServerUrlEnvironmentKey = 'QIANNIU_BOT_SERVER_URL'" in rescue
+    assert "Resolve-ControlPlaneUrl" in rescue
+    assert "Bin\\Bot.exe.config" in rescue
+    assert "BotControlPlaneDefaultUrl" in rescue
+    assert "$ObsoleteControlPlaneHost = 'botserver.mv3.cn'" in rescue
+    assert "$CurrentControlPlaneHost = 'aboter.mv3.cn'" in rescue
+    assert "$ControlPlaneUrl = Resolve-ControlPlaneUrl $InstallDir" in rescue
+
+
+def test_client_update_endpoint_uses_correct_default_and_preserves_dynamic_overrides():
+    app_config = read("src/Bot/App.config")
+    store = read("src/Bot/ShopScope/ShopControlPlaneConnectionStore.cs")
+    network = read("src/Bot/Update/BotUpdateService.Network.Fast.cs")
+
+    assert 'BotControlPlaneDefaultUrl" value="http://aboter.mv3.cn"' in app_config
+    assert 'BuiltInDefaultServerUrl = "http://aboter.mv3.cn"' in store
+    assert 'ServerUrlEnvironmentKey = "QIANNIU_BOT_SERVER_URL"' in store
+    assert "GetProgramServerUrl()" in store
+    assert "PersistentParams.GetParam2Key(UrlKey, LegacyScope" in store
+    assert 'ObsoleteBuiltInHost = "botserver.mv3.cn"' in store
+    assert 'CurrentBuiltInHost = "aboter.mv3.cn"' in store
+    assert "Uri.TryCreate" in store
+    assert "GetConfiguredControlPlaneUrls" in network
+    assert "ShopControlPlaneConnectionStore.GetLegacyGlobalServerUrl()" in network
 
 
 def test_rescue_updater_retries_with_curl_and_verifies_each_download_source():
