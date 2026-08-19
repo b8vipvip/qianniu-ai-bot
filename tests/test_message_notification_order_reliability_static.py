@@ -44,35 +44,64 @@ def test_background_notification_only_recovers_when_detailed_event_is_missing():
     assert "MarkBuyerMessageObserved(sellerNick, buyerNick)" in qn
 
 
-def test_generic_message_center_notification_wakes_verified_panel_without_guessing_order():
+def test_generic_message_center_notification_uses_buyer_correlation_not_current_chat_guess():
     source = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
+    handler = between(source, "private static async void OnMessageNotify", "private static JToken ParseExpanded")
 
-    handler = between(source, "private static async void OnMessageNotify", "private static void ScheduleVerifiedCurrentBuyerPanelRecovery")
-    generic_branch = between(handler, "if (!LooksLikeOrderEvent(raw))", "var hash = Hash(raw)")
-    assert "ScheduleVerifiedCurrentBuyerPanelRecovery" in generic_branch
-    assert "ProcessDirectOrderMessageAsync" not in generic_branch
+    assert "OrderAutomationCoordinator.ObserveGenericPaymentSignal" in handler
+    assert "ProcessDirectOrderMessageAsync" in handler
+    assert "ScheduleVerifiedCurrentBuyerPanelRecovery" not in source
+    assert "PanelProbes" not in source
 
-    recovery = between(source, "private static void ScheduleVerifiedCurrentBuyerPanelRecovery", "private static bool LooksLikeOrderEvent")
-    assert "GetCurrentConversationID()" in recovery
-    assert "current == null || string.IsNullOrWhiteSpace(current.Nick)" in recovery
-    assert "BuyerIdentityAliasService.ResolveInternalNick" in recovery
-    assert "TryRecoverVisibleOrderPanelForBackgroundProbeAsync" in recovery
-    assert '"messageCenterNotify被动验证补扫@"' in recovery
-    assert "state.StartedAt" in recovery
-    assert "false).ConfigureAwait(false)" in recovery  # generic notification must never steal chat focus
-    assert "180000" in source
-    assert "真实 16-24 位订单号" in source
+    coordinator = between(source, "internal static class OrderAutomationCoordinator", "internal static class OrderPaymentNotificationFallback")
+    assert "GenericWakes" in coordinator
+    assert "RecentBuyerSignals" in coordinator
+    assert "BackwardBuyerCorrelation" in coordinator
+    assert "EvShopRobotReceriveNewMessage" in coordinator
+    assert "EvBuyerSwitched" in coordinator
+    assert "ScheduleCorrelatedProbe" in coordinator
+    assert "BotActivityCoordinator.IsSafeToAutoFocus" in coordinator
+    assert "TryRecoverVisibleOrderPanelForCoordinatorAsync" in coordinator
+    assert "CorrelatedProbeDelaysMs" in coordinator
+    assert "180000" in coordinator
+
+
+def test_generic_payment_wake_never_binds_directly_to_current_conversation():
+    source = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
+    observe = between(source, "internal static void ObserveGenericPaymentSignal", "private static void OnShopRobotNewMessage")
+    assert "GetCurrentConversationID" not in observe
+    assert "OpenChat" not in observe
+    assert "GenericWakes.AddOrUpdate" in observe
+    assert "RecentBuyerSignals" in observe
+
+
+def test_correlated_panel_probe_has_strict_event_time_floor_and_single_order_hub_sink():
+    source = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
+    probe = between(source, "internal async Task<bool> TryRecoverVisibleOrderPanelForCoordinatorAsync", "    }\n}")
+    assert "probeStartedAt" in probe
+    assert "AddSeconds(-20)" in probe
+    assert "eventTime.Value < freshFloor" in probe
+    assert "VisiblePanelUnsupportedStatuses" in probe
+    assert "OrderEventHub.Publish(snapshot)" in probe
+    assert "ProcessOrderPlacedReplyAsync" not in probe
+    assert "SendTextWithRetryAsync" not in probe
 
 
 def test_parseable_message_center_order_still_uses_structured_order_pipeline():
     source = read("src/Bot/ChromeNs/OrderPaymentNotificationFallback.cs")
-    handler = between(source, "private static async void OnMessageNotify", "private static void ScheduleVerifiedCurrentBuyerPanelRecovery")
+    handler = between(source, "private static async void OnMessageNotify", "private static JToken ParseExpanded")
 
     assert "ResolveOrderId(flat, combined)" in handler
     assert "ResolveBuyer(flat, seller, orderId)" in handler
     assert "ProcessDirectOrderMessageAsync" in handler
-    assert "messageCenterNotify嵌套JSON兼容兜底" in handler
+    assert "messageCenterNotify统一兼容解析" in handler
     assert "有订单号但缺少买家身份" in handler
+
+
+def test_dead_uncompiled_order_recovery_file_is_removed():
+    assert not (ROOT / "src/Bot/ChromeNs/FirstInquiryDeliveryBridge.cs").exists()
+    targets = read("src/Directory.Build.targets")
+    assert "FirstInquiryDeliveryBridge.cs" not in targets
 
 
 def test_settings_have_separate_notification_tab_and_order_section():
@@ -112,3 +141,4 @@ def test_new_partial_files_are_in_windows_build():
     assert "QNRpa.ReliableSend.cs" in targets
     assert "QN.MessageRecovery.cs" in targets
     assert "OrderPlacedAutoReplyService.cs" in targets
+    assert "OrderPaymentNotificationFallback.cs" in targets
