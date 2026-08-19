@@ -177,11 +177,12 @@ def test_updater_backs_up_validates_restarts_and_rolls_back():
     assert "Get-FileHash" in script
     assert "ExpectedSha256" in script
     assert "release-info.json" in script
-    assert "Backing up current program and persistent data" in script
+    assert "Preparing bounded rollback backup" in script
     assert "Starting automatic rollback" in script
     assert "Test-BotStarted" in script
     assert "Persistent user data remains" in script
-    assert "Select-Object -Skip 8" in script
+    assert "Clear-PreviousUpdaterBackups $backupRoot" in script
+    assert "Select-Object -Skip 8" not in script
 
 
 def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_copy():
