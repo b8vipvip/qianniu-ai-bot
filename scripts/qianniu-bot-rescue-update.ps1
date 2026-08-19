@@ -1,23 +1,21 @@
 [CmdletBinding()]
 param(
-    [string]$InstallDir = ""
+    [string]$InstallDir = "",
+    [string]$ReleaseApi = "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest",
+    [string]$PackagePath = "",
+    [string]$ExpectedVersion = "",
+    [string]$ExpectedSha256 = ""
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
-
-# These three placeholders are replaced by the stable-release workflow before publication.
-$TargetVersion = '__QIANNIU_TARGET_VERSION__'
-$PackageUrl = '__QIANNIU_PACKAGE_URL__'
-$ExpectedSha256 = '__QIANNIU_SHA256__'
 
 function Write-Step([string]$Message) {
     Write-Host "`n[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')] $Message" -ForegroundColor Cyan
 }
 
 function Quote-Arg([string]$Value) {
-    $text = [string]$Value
-    return '"' + $text.Replace('"', '\"') + '"'
+    return '"' + ([string]$Value).Replace('"', '\"') + '"'
 }
 
 function Test-IsAdministrator {
@@ -53,14 +51,10 @@ function Resolve-InstallDir([string]$Requested) {
     }
 
     $cwd = [IO.Path]::GetFullPath((Get-Location).Path)
-    if (Test-Path -LiteralPath (Join-Path $cwd 'Bin\Bot.exe') -PathType Leaf) {
-        return $cwd
-    }
+    if (Test-Path -LiteralPath (Join-Path $cwd 'Bin\Bot.exe') -PathType Leaf) { return $cwd }
 
     $default = 'C:\qianniu-bot-x64'
-    if (Test-Path -LiteralPath (Join-Path $default 'Bin\Bot.exe') -PathType Leaf) {
-        return $default
-    }
+    if (Test-Path -LiteralPath (Join-Path $default 'Bin\Bot.exe') -PathType Leaf) { return $default }
 
     throw '未自动找到 Bot 安装目录，请使用 -InstallDir 指定，例如 C:\qianniu-bot-x64。'
 }
@@ -83,113 +77,126 @@ function Get-TargetBotPid([string]$Root) {
     return [int]($ids | Sort-Object | Select-Object -First 1)
 }
 
-if ($TargetVersion.Contains('__QIANNIU_') -or
-    $PackageUrl.Contains('__QIANNIU_') -or
-    $ExpectedSha256.Contains('__QIANNIU_')) {
-    throw '这是仓库模板，不是可执行的正式救援更新器。请从 GitHub Release 下载 qianniu-bot-rescue-update.ps1。'
+function Resolve-LatestRelease {
+    Write-Step '读取最新正式版本元数据'
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    $headers = @{ 'User-Agent' = 'QianniuAiBotRescueUpdater' }
+    $release = Invoke-RestMethod -UseBasicParsing -Uri $ReleaseApi -Headers $headers
+    $manifestAsset = @($release.assets | Where-Object { $_.name -eq 'update.json' } | Select-Object -First 1)
+    $packageAsset = @($release.assets | Where-Object { $_.name -eq 'qianniu-bot-x64.zip' } | Select-Object -First 1)
+    if ($manifestAsset.Count -ne 1 -or $packageAsset.Count -ne 1) {
+        throw '最新正式版本缺少 update.json 或 qianniu-bot-x64.zip。'
+    }
+
+    $manifest = Invoke-RestMethod -UseBasicParsing -Uri ([string]$manifestAsset[0].browser_download_url) -Headers $headers
+    $version = ([string]$manifest.version).Trim()
+    $sha = ([string]$manifest.sha256).Trim().ToUpperInvariant()
+    $url = ([string]$manifest.download_url).Trim()
+    if ([string]::IsNullOrWhiteSpace($url)) { $url = [string]$packageAsset[0].browser_download_url }
+    if ([string]::IsNullOrWhiteSpace($version)) { throw 'update.json 缺少 version。' }
+    if ($sha -notmatch '^[A-F0-9]{64}$') { throw 'update.json 中的 SHA-256 无效。' }
+    if ([string]::IsNullOrWhiteSpace($url)) { throw 'update.json 缺少安装包下载地址。' }
+
+    return [pscustomobject]@{ Version = $version; Sha256 = $sha; Url = $url }
 }
 
 if (-not (Test-IsAdministrator)) {
     Write-Step '请求管理员权限'
     $self = $MyInvocation.MyCommand.Path
-    if ([string]::IsNullOrWhiteSpace($self)) {
-        throw '无法确定当前脚本路径，请以管理员 PowerShell 重新运行。'
-    }
-    $argLine = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Arg $self)
-    if (-not [string]::IsNullOrWhiteSpace($InstallDir)) {
-        $argLine += ' -InstallDir ' + (Quote-Arg $InstallDir)
-    }
-    $elevated = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argLine -PassThru -Wait
+    if ([string]::IsNullOrWhiteSpace($self)) { throw '无法确定当前脚本路径，请以管理员 PowerShell 重新运行。' }
+    $args = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Arg $self)
+    if (-not [string]::IsNullOrWhiteSpace($InstallDir)) { $args += ' -InstallDir ' + (Quote-Arg $InstallDir) }
+    if (-not [string]::IsNullOrWhiteSpace($ReleaseApi)) { $args += ' -ReleaseApi ' + (Quote-Arg $ReleaseApi) }
+    if (-not [string]::IsNullOrWhiteSpace($PackagePath)) { $args += ' -PackagePath ' + (Quote-Arg $PackagePath) }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedVersion)) { $args += ' -ExpectedVersion ' + (Quote-Arg $ExpectedVersion) }
+    if (-not [string]::IsNullOrWhiteSpace($ExpectedSha256)) { $args += ' -ExpectedSha256 ' + (Quote-Arg $ExpectedSha256) }
+    $elevated = Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $args -PassThru -Wait
     exit $elevated.ExitCode
 }
 
 $InstallDir = Resolve-InstallDir $InstallDir
-if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) {
-    throw "拒绝覆盖 Git 源码目录：$InstallDir"
+if (Test-Path -LiteralPath (Join-Path $InstallDir '.git')) { throw "拒绝覆盖 Git 源码目录：$InstallDir" }
+
+$downloadRequired = [string]::IsNullOrWhiteSpace($PackagePath)
+if ($downloadRequired) {
+    $releaseInfo = Resolve-LatestRelease
+    $ExpectedVersion = $releaseInfo.Version
+    $ExpectedSha256 = $releaseInfo.Sha256
+    $PackageUrl = $releaseInfo.Url
+} else {
+    $PackagePath = [IO.Path]::GetFullPath($PackagePath)
+    if ([string]::IsNullOrWhiteSpace($ExpectedVersion) -or [string]::IsNullOrWhiteSpace($ExpectedSha256)) {
+        throw '使用本地 -PackagePath 时必须同时提供 -ExpectedVersion 和 -ExpectedSha256。'
+    }
 }
 
-[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $ExpectedSha256 = $ExpectedSha256.Trim().ToUpperInvariant()
+if ($ExpectedSha256 -notmatch '^[A-F0-9]{64}$') { throw 'ExpectedSha256 必须是 64 位十六进制 SHA-256。' }
+
 $root = Join-Path $env:LOCALAPPDATA 'QianniuAiBotUpdater\rescue'
 New-Item -ItemType Directory -Path $root -Force | Out-Null
-$packagePath = Join-Path $root ("qianniu-bot-x64-$TargetVersion.zip")
-$partialPath = $packagePath + '.partial'
-$updaterPath = Join-Path $root ("BotAutoUpdater-$TargetVersion-" + [Guid]::NewGuid().ToString('N') + '.ps1')
+$partialPath = Join-Path $root ("qianniu-bot-x64-$ExpectedVersion.zip.partial")
+$updaterPath = Join-Path $root ("BotAutoUpdater-$ExpectedVersion-" + [Guid]::NewGuid().ToString('N') + '.ps1')
+if ($downloadRequired) { $PackagePath = Join-Path $root ("qianniu-bot-x64-$ExpectedVersion.zip") }
 
 try {
-    Write-Step "下载正式安装包 $TargetVersion"
-    Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
-    Invoke-WebRequest -UseBasicParsing -Uri $PackageUrl -OutFile $partialPath
-    if (-not (Test-Path -LiteralPath $partialPath -PathType Leaf)) {
-        throw '下载安装包失败：临时文件不存在。'
+    if ($downloadRequired) {
+        Write-Step "下载正式安装包 $ExpectedVersion"
+        Remove-Item -LiteralPath $partialPath -Force -ErrorAction SilentlyContinue
+        Invoke-WebRequest -UseBasicParsing -Uri $PackageUrl -OutFile $partialPath
+        Move-Item -LiteralPath $partialPath -Destination $PackagePath -Force
     }
-    $actualHash = (Get-FileHash -LiteralPath $partialPath -Algorithm SHA256).Hash.ToUpperInvariant()
+
+    if (-not (Test-Path -LiteralPath $PackagePath -PathType Leaf)) { throw "安装包不存在：$PackagePath" }
+    $actualHash = (Get-FileHash -LiteralPath $PackagePath -Algorithm SHA256).Hash.ToUpperInvariant()
     if ($actualHash -ne $ExpectedSha256) {
         throw "安装包 SHA-256 校验失败。expected=$ExpectedSha256 actual=$actualHash"
     }
-    Move-Item -LiteralPath $partialPath -Destination $packagePath -Force
     Write-Host "SHA-256 校验通过：$actualHash" -ForegroundColor Green
 
     Write-Step '提取并预检目标版本自己的更新器'
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
+    $archive = [IO.Compression.ZipFile]::OpenRead($PackagePath)
     try {
-        $updaterEntries = @($archive.Entries | Where-Object {
-            ([string]$_.FullName).Replace('\', '/').TrimStart('/') -ieq 'Bin/BotAutoUpdater.ps1'
-        })
-        $releaseEntries = @($archive.Entries | Where-Object {
-            ([string]$_.FullName).Replace('\', '/').TrimStart('/') -ieq 'release-info.json'
-        })
-        if ($updaterEntries.Count -ne 1) {
-            throw "目标包必须且只能包含一个 Bin/BotAutoUpdater.ps1，actual=$($updaterEntries.Count)"
-        }
-        if ($releaseEntries.Count -ne 1) {
-            throw "目标包必须且只能包含一个 release-info.json，actual=$($releaseEntries.Count)"
-        }
+        $updaterEntries = @($archive.Entries | Where-Object { ([string]$_.FullName).Replace('\', '/').TrimStart('/') -ieq 'Bin/BotAutoUpdater.ps1' })
+        $releaseEntries = @($archive.Entries | Where-Object { ([string]$_.FullName).Replace('\', '/').TrimStart('/') -ieq 'release-info.json' })
+        if ($updaterEntries.Count -ne 1) { throw "目标包必须且只能包含一个 Bin/BotAutoUpdater.ps1，actual=$($updaterEntries.Count)" }
+        if ($releaseEntries.Count -ne 1) { throw "目标包必须且只能包含一个 release-info.json，actual=$($releaseEntries.Count)" }
 
         $reader = New-Object IO.StreamReader($releaseEntries[0].Open(), [Text.Encoding]::UTF8, $true)
-        try { $releaseInfo = ($reader.ReadToEnd() | ConvertFrom-Json) } finally { $reader.Dispose() }
-        if ([string]$releaseInfo.version -ne $TargetVersion) {
-            throw "目标包版本不匹配。expected=$TargetVersion actual=$($releaseInfo.version)"
+        try { $packageInfo = ($reader.ReadToEnd() | ConvertFrom-Json) } finally { $reader.Dispose() }
+        if ([string]$packageInfo.version -ne $ExpectedVersion) {
+            throw "目标包版本不匹配。expected=$ExpectedVersion actual=$($packageInfo.version)"
         }
-
         [IO.Compression.ZipFileExtensions]::ExtractToFile($updaterEntries[0], $updaterPath, $true)
-    }
-    finally {
-        $archive.Dispose()
-    }
+    } finally { $archive.Dispose() }
 
     $tokens = $null
     $parseErrors = $null
     [Management.Automation.Language.Parser]::ParseFile($updaterPath, [ref]$tokens, [ref]$parseErrors) | Out-Null
     if ($parseErrors.Count -gt 0) {
-        throw ('目标更新器 PowerShell 5.1 语法预检失败：' + (@($parseErrors | ForEach-Object { $_.Message }) -join ' | '))
+        throw ('目标更新器 Windows PowerShell 5.1 语法预检失败：' + (@($parseErrors | ForEach-Object { $_.Message }) -join ' | '))
     }
 
     $currentPid = Get-TargetBotPid $InstallDir
-    Write-Step "执行独立救援更新；install=$InstallDir currentPid=$currentPid"
+    Write-Step "绕过旧 Bot 更新器执行救援安装；install=$InstallDir currentPid=$currentPid"
     $args = '-NoProfile -ExecutionPolicy Bypass -File ' + (Quote-Arg $updaterPath)
-    $args += ' -PackagePath ' + (Quote-Arg $packagePath)
+    $args += ' -PackagePath ' + (Quote-Arg $PackagePath)
     $args += ' -InstallDir ' + (Quote-Arg $InstallDir)
     $args += ' -ExpectedSha256 ' + (Quote-Arg $ExpectedSha256)
-    $args += ' -ExpectedVersion ' + (Quote-Arg $TargetVersion)
+    $args += ' -ExpectedVersion ' + (Quote-Arg $ExpectedVersion)
     $args += ' -CurrentPid ' + $currentPid
-
     $installer = Start-Process -FilePath 'powershell.exe' -ArgumentList $args -PassThru -Wait
-    if ($installer.ExitCode -ne 0) {
-        throw "目标更新器执行失败，exitCode=$($installer.ExitCode)。安装器会按自身事务备份自动回滚。"
-    }
+    if ($installer.ExitCode -ne 0) { throw "目标更新器执行失败，exitCode=$($installer.ExitCode)。目标更新器会按事务备份自动回滚。" }
 
     $installedInfoPath = Join-Path $InstallDir 'release-info.json'
-    if (-not (Test-Path -LiteralPath $installedInfoPath -PathType Leaf)) {
-        throw '救援更新结束但 release-info.json 不存在。'
-    }
+    if (-not (Test-Path -LiteralPath $installedInfoPath -PathType Leaf)) { throw '救援更新结束但 release-info.json 不存在。' }
     $installedInfo = Get-Content -LiteralPath $installedInfoPath -Raw | ConvertFrom-Json
-    if ([string]$installedInfo.version -ne $TargetVersion) {
-        throw "救援更新版本校验失败。expected=$TargetVersion actual=$($installedInfo.version)"
+    if ([string]$installedInfo.version -ne $ExpectedVersion) {
+        throw "救援更新版本校验失败。expected=$ExpectedVersion actual=$($installedInfo.version)"
     }
 
-    Write-Step "救援更新成功：$TargetVersion"
+    Write-Step "救援更新成功：$ExpectedVersion"
     Write-Host '新 Bot 已由目标更新器启动；永久用户数据仍保存在 %LOCALAPPDATA%\QianniuAiBot。' -ForegroundColor Green
 }
 finally {
