@@ -45,8 +45,8 @@ namespace Bot.ChromeNs
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 Log.Info(
-                    "首条咨询固定回复保持协调器前置直发：不等待消息合并、不等待AI接口；"
-                    + "已启用后台通知ccode首消息快路径。" );
+                    "首条咨询固定回复保持协调器前置直发：不再动态重包消息handler，"
+                    + "不等待消息合并、不等待AI接口；已启用后台通知ccode首消息快路径。" );
             }
             return new object();
         }
