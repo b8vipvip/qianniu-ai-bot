@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.IO;
 using BotLib.Db.Sqlite;
 using BotLib.Extensions;
 using Bot;
@@ -28,8 +29,14 @@ namespace Bot.Common
             tableTypes.Add(typeof(OptionEntity));
             tableTypes.Add(typeof(AutoTaskEntity));
             DbEntityTypeList = tableTypes;
-            Db = new SQLiteHelper(dbPath, tableTypes);
+            Db = DatabaseRecoveryService.OpenOrRecover(dbPath, tableTypes);
             DbTable.InitTableType(tableTypes);
+        }
+
+        public static void EnsureInitialized()
+        {
+            // Accessing this method forces the type initializer to complete. Startup calls it
+            // explicitly so database recovery is part of the observable health contract.
         }
 
         public static long GetMaxModifyTick()

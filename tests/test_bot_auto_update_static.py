@@ -179,7 +179,8 @@ def test_updater_backs_up_validates_restarts_and_rolls_back():
     assert "release-info.json" in script
     assert "Preparing bounded rollback backup" in script
     assert "Starting automatic rollback" in script
-    assert "Test-BotStarted" in script
+    assert "Test-BotHealthy" in script
+    assert "database_initialized" in script
     assert "Persistent user data remains" in script
     assert "Clear-PreviousUpdaterBackups $backupRoot" in script
     assert "Select-Object -Skip 8" not in script

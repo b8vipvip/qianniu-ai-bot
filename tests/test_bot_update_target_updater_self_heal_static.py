@@ -23,12 +23,12 @@ def test_target_updater_syntax_is_validated_before_handoff_ack():
     assert parser < ready
     assert "target updater PowerShell syntax validated." in actions
 
-def test_auto_updater_only_stops_target_install_and_requires_survival_window():
+def test_auto_updater_only_stops_target_install_and_requires_explicit_health():
     script = read("src/Bot/Update/BotAutoUpdater.ps1")
     assert "$ids += @(Get-Process -Name 'Bot'" not in script
     assert "if ($CurrentPid -gt 0 -and $CurrentPid -ne $PID)" in script
-    assert "Test-BotStarted([string]$ExpectedExe, [int]$ExpectedPid)" in script
-    assert "TotalSeconds -ge 8" in script
+    assert "Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$HealthFile)" in script
+    assert "[string]$health.status -eq 'OK'" in script
     assert "-PassThru" in script
     assert "Installed package version mismatch" in script
 
