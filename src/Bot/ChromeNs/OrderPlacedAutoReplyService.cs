@@ -472,6 +472,254 @@ namespace Bot.ChromeNs
 
     public partial class QN
     {
+        private const string OrderPresetSegmentToken = "{分段符}";
+
+        private enum OrderPresetSegmentOutcome
+        {
+            Failed = 0,
+            Sent = 1,
+            SatisfiedByManual = 2
+        }
+
+        private sealed class OrderPresetSendResult
+        {
+            public bool Success { get; set; }
+            public int SentSegments { get; set; }
+            public int ManualSatisfiedSegments { get; set; }
+        }
+
+        private static List<string> SplitOrderPresetSegments(string answer)
+        {
+            var result = new List<string>();
+            foreach (var part in (answer ?? string.Empty).Split(
+                new[] { OrderPresetSegmentToken }, StringSplitOptions.None))
+            {
+                if (!string.IsNullOrWhiteSpace(part)) result.Add(part);
+            }
+            return result;
+        }
+
+        private static bool TryFindRecentEquivalentSellerReply(
+            OrderPlacedReplyPlan plan,
+            string expectedSegment,
+            out string matched)
+        {
+            matched = string.Empty;
+            if (plan == null || string.IsNullOrWhiteSpace(expectedSegment)) return false;
+
+            var since = plan.IsBuyerFollowUp
+                ? plan.TriggerTime.AddSeconds(-5)
+                : plan.EventTime.AddSeconds(-20);
+            var turns = ConversationContextStore.GetRecentTurns(
+                plan.Seller,
+                plan.Buyer,
+                string.Empty,
+                24);
+            foreach (var turn in turns)
+            {
+                if (turn == null || turn.Withdrawn
+                    || !string.Equals(turn.Role, "assistant", StringComparison.Ordinal)) continue;
+                if (turn.Timestamp != DateTime.MinValue && turn.Timestamp < since) continue;
+                if (!OrderGuidanceDeliveryGuard.EquivalentGuidance(turn.Text, expectedSegment)) continue;
+                matched = turn.Text ?? string.Empty;
+                return true;
+            }
+            return false;
+        }
+
+        private bool ShouldSuppressOrderPresetBeforeSend(
+            OrderPlacedReplyPlan plan,
+            string answer,
+            out string reason)
+        {
+            var segments = SplitOrderPresetSegments(answer);
+            if (segments.Count <= 1)
+            {
+                return OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out reason);
+            }
+
+            // Multi-segment presets must not be treated as fully delivered merely because the
+            // human agent already sent one matching segment. Probe the persisted order state with
+            // neutral text first, then evaluate visual evidence and each preset segment separately.
+            var stateProbe = "[order-preset-state-probe:" + (plan == null ? string.Empty : plan.OrderId) + "]";
+            if (OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, stateProbe, out reason))
+            {
+                return true;
+            }
+
+            if (plan != null && !plan.IsBuyerFollowUp)
+            {
+                string visualEvidence;
+                if (RecentVisualContextService.TrySatisfyOrderPhotoRequirement(
+                    plan.Seller,
+                    plan.Buyer,
+                    answer,
+                    plan.EventTime,
+                    out visualEvidence))
+                {
+                    OrderGuidanceDeliveryGuard.MarkDelivered(plan, "下单前图片已满足确认要求");
+                    reason = "买家下单前已发送可确认的酷狗官方APP界面图片，Bot不再重复索要照片";
+                    Log.Info("下单充值流程发送已取消：近期图片已经满足酷狗官方APP界面确认要求。seller="
+                        + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", evidence=" + ShortOrderPresetLog(visualEvidence, 160));
+                    return true;
+                }
+            }
+
+            var matchedSegments = 0;
+            foreach (var segment in segments)
+            {
+                string matched;
+                if (TryFindRecentEquivalentSellerReply(plan, segment, out matched)) matchedSegments++;
+            }
+            if (matchedSegments == segments.Count)
+            {
+                OrderGuidanceDeliveryGuard.MarkDelivered(plan, "人工客服已完成全部固定预设分段");
+                reason = "检测到客服已经发送全部固定预设分段，Bot不再重复发送";
+                Log.Info("下单固定预设全部分段已由人工客服完成: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", segments=" + segments.Count);
+                return true;
+            }
+            if (matchedSegments > 0)
+            {
+                Log.Info("下单固定预设部分分段已由人工客服完成，剩余分段继续发送: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", matched=" + matchedSegments + "/" + segments.Count);
+            }
+
+            reason = string.Empty;
+            return false;
+        }
+
+        private async Task<OrderPresetSegmentOutcome> SendOrderPresetSegmentAsync(
+            OrderPlacedReplyPlan plan,
+            string segment,
+            int segmentIndex,
+            int segmentCount)
+        {
+            // Let the most recent seller echo enter ConversationContextStore before deciding.
+            await Task.Delay(120);
+
+            string matched;
+            if (TryFindRecentEquivalentSellerReply(plan, segment, out matched))
+            {
+                Log.Info("人工客服已发送相同固定预设分段，跳过本段并继续剩余分段: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", segment=" + segmentIndex + "/" + segmentCount
+                    + ", matched=" + ShortOrderPresetLog(matched, 140));
+                return OrderPresetSegmentOutcome.SatisfiedByManual;
+            }
+
+            Log.Info("下单固定预设分段自动发送: buyer=" + plan.Buyer
+                + ", segment=" + segmentIndex + "/" + segmentCount);
+
+            // First attempt intentionally keeps the normal manual-reply guard enabled. If a human
+            // message arrived in the final pre-send window, distinguish matching vs unrelated text.
+            var sent = await SendTextWithRetryAsync(plan.Buyer, segment, 0);
+            if (sent) return OrderPresetSegmentOutcome.Sent;
+
+            string blockReason;
+            string manualAnswer;
+            if (KnowledgeLearningService.TryTakeSendBlock(
+                plan.Seller,
+                plan.Buyer,
+                segment,
+                out blockReason,
+                out manualAnswer))
+            {
+                if (OrderGuidanceDeliveryGuard.EquivalentGuidance(manualAnswer, segment))
+                {
+                    Log.Info("人工客服已发送相同固定预设分段，跳过本段并继续剩余分段: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", segment=" + segmentIndex + "/" + segmentCount
+                        + ", matched=" + ShortOrderPresetLog(manualAnswer, 140));
+                    return OrderPresetSegmentOutcome.SatisfiedByManual;
+                }
+
+                Log.Info("人工回复与当前固定预设分段不同，继续发送本段: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", segment=" + segmentIndex + "/" + segmentCount
+                    + ", manual=" + ShortOrderPresetLog(manualAnswer, 120));
+                await Task.Delay(120);
+                if (TryFindRecentEquivalentSellerReply(plan, segment, out matched))
+                {
+                    Log.Info("固定预设强制继续前检测到人工已补发相同分段，跳过本段: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", segment=" + segmentIndex + "/" + segmentCount);
+                    return OrderPresetSegmentOutcome.SatisfiedByManual;
+                }
+
+                KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, segment);
+                Log.Info("下单固定预设分段已登记精确发送豁免: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", segment=" + segmentIndex + "/" + segmentCount);
+                sent = await SendTextWithRetryAsync(plan.Buyer, segment, 1);
+                return sent ? OrderPresetSegmentOutcome.Sent : OrderPresetSegmentOutcome.Failed;
+            }
+
+            // No manual block was recorded, so this was a real delivery/UI failure. Preserve the
+            // historical one-retry behavior for the order preset without weakening other safeguards.
+            sent = await SendTextWithRetryAsync(plan.Buyer, segment, 1);
+            if (sent) return OrderPresetSegmentOutcome.Sent;
+
+            if (KnowledgeLearningService.TryTakeSendBlock(
+                plan.Seller,
+                plan.Buyer,
+                segment,
+                out blockReason,
+                out manualAnswer))
+            {
+                if (OrderGuidanceDeliveryGuard.EquivalentGuidance(manualAnswer, segment))
+                {
+                    Log.Info("固定预设重试期间人工已发送相同分段，视为本段完成并继续: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", segment=" + segmentIndex + "/" + segmentCount);
+                    return OrderPresetSegmentOutcome.SatisfiedByManual;
+                }
+
+                Log.Info("固定预设重试期间检测到不同人工回复，按原计划继续本段: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", segment=" + segmentIndex + "/" + segmentCount);
+                KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, segment);
+                sent = await SendTextWithRetryAsync(plan.Buyer, segment, 0);
+                return sent ? OrderPresetSegmentOutcome.Sent : OrderPresetSegmentOutcome.Failed;
+            }
+
+            return OrderPresetSegmentOutcome.Failed;
+        }
+
+        private async Task<OrderPresetSendResult> SendOrderPresetAnswerAsync(
+            OrderPlacedReplyPlan plan,
+            string answer)
+        {
+            var result = new OrderPresetSendResult();
+            var segments = SplitOrderPresetSegments(answer);
+            if (segments.Count == 0) return result;
+
+            for (var i = 0; i < segments.Count; i++)
+            {
+                if (i > 0) await Task.Delay(220);
+                var outcome = await SendOrderPresetSegmentAsync(plan, segments[i], i + 1, segments.Count);
+                if (outcome == OrderPresetSegmentOutcome.Failed)
+                {
+                    result.Success = false;
+                    return result;
+                }
+                if (outcome == OrderPresetSegmentOutcome.Sent) result.SentSegments++;
+                if (outcome == OrderPresetSegmentOutcome.SatisfiedByManual) result.ManualSatisfiedSegments++;
+            }
+
+            result.Success = true;
+            return result;
+        }
+
+        private static string ShortOrderPresetLog(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
+        }
+
         private async Task ProcessOrderPlacedReplyAsync(OrderPlacedReplyPlan plan)
         {
             using (BotActivityCoordinator.Begin("下单自动回复", plan == null ? string.Empty : plan.Seller, plan == null ? string.Empty : plan.Buyer))
@@ -499,7 +747,9 @@ namespace Bot.ChromeNs
                         BotFeatureStore.ApplyOutputPolicy(rawReply));
 
                 string duplicateReason;
-                if (OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
+                if (preserveTemplateLayout
+                    ? ShouldSuppressOrderPresetBeforeSend(plan, answer, out duplicateReason)
+                    : OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
                 {
                     OrderPlacedAutoReplyService.Complete(plan, true);
                     OrderAttentionUiService.SetReplyResult(plan.Snapshot, true);
@@ -552,41 +802,65 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                // 延时期间人工客服可能已经发送了同一条充值流程，因此发送前必须再次检查。
-                if (OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
+                // 延时期间人工客服可能已经发送了固定预设的某一段；只跳过命中段，不能中止剩余预设。
+                if (preserveTemplateLayout
+                    ? ShouldSuppressOrderPresetBeforeSend(plan, answer, out duplicateReason)
+                    : OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
                 {
                     OrderPlacedAutoReplyService.Complete(plan, true);
                     OrderAttentionUiService.SetReplyResult(plan.Snapshot, true);
                     if (ctl != null) ctl.SetSendResult(false, "未发送：" + duplicateReason);
-                    Log.Info("下单固定预设在发送前被人工回复抑制: seller=" + plan.Seller
+                    Log.Info("下单固定预设在发送前被重复发送保护抑制: seller=" + plan.Seller
                         + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                         + ", reason=" + duplicateReason);
                     return;
                 }
 
-                KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);
-                Log.Info("下单自动回复已登记精确发送豁免: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                OrderPresetSendResult presetSendResult = null;
+                bool sendOk;
+                if (preserveTemplateLayout)
+                {
+                    presetSendResult = await SendOrderPresetAnswerAsync(plan, answer);
+                    sendOk = presetSendResult.Success;
+                }
+                else
+                {
+                    KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);
+                    Log.Info("下单自动回复已登记精确发送豁免: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);
+                }
 
-                var sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);
                 OrderPlacedAutoReplyService.Complete(plan, sendOk);
                 OrderAttentionUiService.SetReplyResult(plan.Snapshot, sendOk);
                 if (sendOk)
                 {
-                    OrderGuidanceDeliveryGuard.MarkDelivered(
-                        plan,
-                        plan.IsBuyerFollowUp ? "Bot补发" : "Bot首次发送");
+                    var deliveredBy = presetSendResult != null && presetSendResult.ManualSatisfiedSegments > 0
+                        ? (presetSendResult.SentSegments > 0
+                            ? "人工客服+Bot分段完成"
+                            : "人工客服已完成固定预设")
+                        : (plan.IsBuyerFollowUp ? "Bot补发" : "Bot首次发送");
+                    OrderGuidanceDeliveryGuard.MarkDelivered(plan, deliveredBy);
                     ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
                 }
                 if (ctl != null)
                 {
+                    string successDetail;
+                    if (presetSendResult != null && presetSendResult.ManualSatisfiedSegments > 0)
+                    {
+                        successDetail = presetSendResult.SentSegments > 0
+                            ? "已完成（人工已回复相同分段，Bot仅发送剩余固定预设）"
+                            : "已完成（固定预设已由人工客服回复，Bot未重复发送）";
+                    }
+                    else
+                    {
+                        successDetail = plan.IsBuyerFollowUp
+                            ? "已发送（买家明确续问，充值流程仅补发一次）"
+                            : "已发送（买家下单自动消息，订单号 " + plan.OrderId + "）";
+                    }
                     ctl.SetSendResult(
                         sendOk,
-                        sendOk
-                            ? (plan.IsBuyerFollowUp
-                                ? "已发送（买家明确续问，充值流程仅补发一次）"
-                                : "已发送（买家下单自动消息，订单号 " + plan.OrderId + "）")
-                            : "发送失败：" + rpa.GetSendFailureReason());
+                        sendOk ? successDetail : "发送失败：" + rpa.GetSendFailureReason());
                 }
             }
         }
