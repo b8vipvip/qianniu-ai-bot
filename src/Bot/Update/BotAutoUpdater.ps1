@@ -267,15 +267,12 @@ function Clear-DirectoryContentsWithRetry([string]$Path, [int]$MaxAttempts = 24)
     throw "Unable to clear install directory contents after $MaxAttempts attempts: $Path. $detail"
 }
 
-function Test-BotStarted([string]$ExpectedExe, [int]$ExpectedPid) {
-    $deadline = (Get-Date).AddSeconds(20)
-    $survivalStartedAt = $null
+function Test-BotHealthy([string]$ExpectedExe, [int]$ExpectedPid, [string]$HealthFile) {
+    $deadline = (Get-Date).AddSeconds(60)
     while ((Get-Date) -lt $deadline) {
         $process = Get-Process -Id $ExpectedPid -ErrorAction SilentlyContinue
         if ($null -eq $process) {
-            $survivalStartedAt = $null
-            Start-Sleep -Milliseconds 500
-            continue
+            return $false
         }
 
         $pathMatches = $false
@@ -290,11 +287,18 @@ function Test-BotStarted([string]$ExpectedExe, [int]$ExpectedPid) {
             return $false
         }
 
-        if ($null -eq $survivalStartedAt) {
-            $survivalStartedAt = Get-Date
-        }
-        elseif (((Get-Date) - $survivalStartedAt).TotalSeconds -ge 8) {
-            return $true
+        if (Test-Path -LiteralPath $HealthFile -PathType Leaf) {
+            try {
+                $health = Get-Content -LiteralPath $HealthFile -Raw | ConvertFrom-Json
+                if ([string]$health.status -eq 'OK' -and
+                    [int]$health.pid -eq $ExpectedPid -and
+                    [bool]$health.database_initialized -and
+                    [bool]$health.configuration_loaded -and
+                    [bool]$health.services_started) {
+                    return $true
+                }
+            }
+            catch { }
         }
         Start-Sleep -Milliseconds 500
     }
@@ -332,11 +336,18 @@ $oldProgramExisted = Test-Path -LiteralPath $InstallDir -PathType Container
 $oldExe = Join-Path $InstallDir 'Bin\Bot.exe'
 $backupFinalized = $false
 $installMutationStarted = $false
+$healthFile = Join-Path $tempDir 'startup-health.json'
+$updaterMutex = $null
+$ownsUpdaterMutex = $false
 
 New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 try { Start-Transcript -Path $logPath -Force | Out-Null } catch { }
 
 try {
+    $createdNew = $false
+    $updaterMutex = New-Object System.Threading.Mutex($true, 'Global\QianniuAiBotUpdater', [ref]$createdNew)
+    if (-not $createdNew) { throw 'Another Qianniu AI Bot updater is already running.' }
+    $ownsUpdaterMutex = $true
     Write-Step "Waiting for Bot.exe PID=$CurrentPid to exit"
     $deadline = (Get-Date).AddSeconds(30)
     while ((Get-Date) -lt $deadline) {
@@ -487,13 +498,15 @@ try {
     }
 
     Write-Step 'Starting and validating new Bot.exe'
+    $env:QIANNIU_BOT_UPDATE_HEALTH_FILE = $healthFile
     $newBot = Start-Process -FilePath $installedExe -WorkingDirectory (Split-Path -Parent $installedExe) -PassThru
+    Remove-Item Env:\QIANNIU_BOT_UPDATE_HEALTH_FILE -ErrorAction SilentlyContinue
     if ($null -eq $newBot) {
         throw 'New Bot.exe process could not be created. Automatic rollback will start.'
     }
-    Write-Host "Started target Bot PID=$($newBot.Id); requiring an 8 second survival window."
-    if (-not (Test-BotStarted $installedExe $newBot.Id)) {
-        throw 'New Bot.exe did not survive the required validation window. Automatic rollback will start.'
+    Write-Host "Started target Bot PID=$($newBot.Id); waiting for the explicit startup health contract."
+    if (-not (Test-BotHealthy $installedExe $newBot.Id $healthFile)) {
+        throw 'New Bot.exe did not report database/configuration/service health. Automatic rollback will start.'
     }
 
     Write-Step "Update to $ExpectedVersion completed successfully"
@@ -553,6 +566,7 @@ catch {
     throw $failure
 }
 finally {
+    Remove-Item Env:\QIANNIU_BOT_UPDATE_HEALTH_FILE -ErrorAction SilentlyContinue
     if (Test-Path -LiteralPath $partialBackupDir) {
         Remove-Item -LiteralPath $partialBackupDir -Recurse -Force -ErrorAction SilentlyContinue
     }
@@ -560,5 +574,7 @@ finally {
         Remove-Item -LiteralPath $tempDir -Recurse -Force -ErrorAction SilentlyContinue
     }
     try { Stop-Transcript | Out-Null } catch { }
+    if ($ownsUpdaterMutex -and $null -ne $updaterMutex) { try { $updaterMutex.ReleaseMutex() } catch { } }
+    if ($null -ne $updaterMutex) { $updaterMutex.Dispose() }
     try { Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue } catch { }
 }

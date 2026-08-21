@@ -174,6 +174,19 @@ namespace BotLib.Db.Sqlite
             return rt;
         }
 
+        /// <summary>
+        /// Executes a scalar query while preserving the helper's serialized connection access.
+        /// This is primarily used by startup recovery to run SQLite integrity checks before the
+        /// application starts reading cached entities.
+        /// </summary>
+        public T ExecuteScalar<T>(string sql, params object[] args)
+        {
+            using (var conn = GetConnection())
+            {
+                return conn.ExecuteScalar<T>(sql, args);
+            }
+        }
+
         public void ClearTable(List<Type> tables)
         {
             using (var conn = GetConnection())

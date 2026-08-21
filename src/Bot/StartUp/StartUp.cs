@@ -50,6 +50,7 @@ namespace Bot.SingleStartUp
                         }
 
 						AppLife.Init();
+                        DbHelper.EnsureInitialized();
 						App app = new App();
 						app.InitializeComponent();
 						app.Run(WndNotifyIcon.Inst);

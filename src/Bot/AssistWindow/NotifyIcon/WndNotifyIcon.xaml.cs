@@ -18,6 +18,7 @@ using BotLib.Extensions;
 using BotLib.Misc;
 using BotLib.Wpf.Extensions;
 using Bot.Common.Windows;
+using Bot.UpdateNs;
 
 namespace Bot.AssistWindow.NotifyIcon
 {
@@ -62,6 +63,7 @@ namespace Bot.AssistWindow.NotifyIcon
             notifyIcon.StartBlink(base.FindResource("iconGray") as ImageSource);
 
             await BootStrap.Init();
+            UpdateStartupHealthService.ReportReady();
             notifyIcon.StopBlink();
             if (!_exitRequested && IsLoaded)
             {
