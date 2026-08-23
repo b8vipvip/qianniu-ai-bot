@@ -55,7 +55,7 @@ def test_manual_visual_learning_waits_for_inflight_vision_instead_of_cancelling_
     assert "人工视觉回复等待两分钟仍未取得图片语义" in source
 
 
-def test_non_visual_manual_text_learning_remains_session_based_and_human_evidence_only():
+def test_non_visual_session_learning_keeps_human_evidence_primary_and_mode_gates_synthesis():
     service = read("src/Bot/ChromeNs/ConversationSessionLearningService.cs")
     bridge = read("src/Bot/ChromeNs/ConversationSessionLearningRuntimeBridge.cs")
 
@@ -71,7 +71,14 @@ def test_non_visual_manual_text_learning_remains_session_based_and_human_evidenc
     ]:
         assert evidence in service
     assert "人工最终有效回复优先于Bot旧答案" in service
-    assert "缺少可靠人工证据，禁止Bot自我学习" in service
+
+    # AI-first retains the historical human-evidence-only boundary. Local-first adds a
+    # separate, stricter conversation_synthesis path rather than reclassifying bot_only.
+    assert "当前店铺启用了AI优先模式。保持保守学习" in service
+    assert 'suggestion.EvidenceType == "bot_only"' in service
+    assert 'suggestion.EvidenceType == "insufficient"' in service
+    assert 'localFirst && suggestion.EvidenceType == "conversation_synthesis"' in service
+    assert "本地优先会话综合知识置信度低于0.92" in service
 
 
 def test_startup_and_legacy_build_include_new_services():
