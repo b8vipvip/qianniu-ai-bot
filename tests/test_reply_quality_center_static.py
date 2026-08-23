@@ -50,7 +50,7 @@ def test_response_progress_records_route_answer_latency_and_cancellation():
     assert "ResolveQualityRoute" in code
     assert 'return "DIRECT_KNOWLEDGE"' in code
     assert 'return "CONTEXTUAL_KNOWLEDGE"' in code
-    assert 'return "VISION"'' in code
+    assert 'return "VISION"' in code
 
 
 def test_real_send_metrics_use_seller_echo_or_watchdog_timeout():
