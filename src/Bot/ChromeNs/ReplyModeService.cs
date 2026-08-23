@@ -1,0 +1,84 @@
+using Bot.ShopScope;
+using BotLib;
+using System;
+
+namespace Bot.ChromeNs
+{
+    internal enum BotReplyMode
+    {
+        AiFirst = 0,
+        LocalFirst = 1
+    }
+
+    /// <summary>
+    /// Shop-scoped reply routing preference.
+    /// AiFirst keeps the knowledge base as AI context and lets AI produce the final answer.
+    /// LocalFirst permits only SmartReplyRouter's existing high-confidence DirectKnowledge route
+    /// to return without an AI call; all other questions continue through the normal AI pipeline.
+    /// </summary>
+    internal static class ReplyModeService
+    {
+        internal const string SettingsKey = "message.reply_mode";
+        internal const string AiFirstValue = "ai_first";
+        internal const string LocalFirstValue = "local_first";
+
+        private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
+
+        public static BotReplyMode GetMode(string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return BotReplyMode.AiFirst;
+
+            try
+            {
+                var shop = ShopContextLocator.ResolveBySellerNick(seller);
+                var store = new ShopScopedSettingsStore(shop, Paths);
+                string value;
+                if (!store.TryGetString(SettingsKey, out value)) return BotReplyMode.AiFirst;
+                return Parse(value);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取回复模式失败，已按AI优先运行: seller=" + seller + ", error=" + ex.Message, 10);
+                return BotReplyMode.AiFirst;
+            }
+        }
+
+        public static bool IsLocalFirst(string seller)
+        {
+            return GetMode(seller) == BotReplyMode.LocalFirst;
+        }
+
+        public static void Save(string seller, BotReplyMode mode)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) throw new ArgumentException("保存回复模式需要卖家身份。", nameof(seller));
+
+            var shop = ShopContextLocator.ResolveBySellerNick(seller);
+            var store = new ShopScopedSettingsStore(shop, Paths);
+            store.SetString(SettingsKey, Serialize(mode));
+            Log.Info("回复模式已保存: seller=" + seller + ", mode=" + GetDisplayName(mode));
+        }
+
+        public static BotReplyMode Parse(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Equals(LocalFirstValue, StringComparison.OrdinalIgnoreCase)
+                || value.Equals("本地优先", StringComparison.Ordinal))
+            {
+                return BotReplyMode.LocalFirst;
+            }
+            return BotReplyMode.AiFirst;
+        }
+
+        public static string Serialize(BotReplyMode mode)
+        {
+            return mode == BotReplyMode.LocalFirst ? LocalFirstValue : AiFirstValue;
+        }
+
+        public static string GetDisplayName(BotReplyMode mode)
+        {
+            return mode == BotReplyMode.LocalFirst ? "本地优先" : "AI优先";
+        }
+    }
+}

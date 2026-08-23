@@ -45,6 +45,10 @@
     <Compile Include="$(MSBuildThisFileDirectory)Options\FeatureSettingsOptionsControl.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\ReplyModeService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\ReplyModeService.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs" />
   </ItemGroup>

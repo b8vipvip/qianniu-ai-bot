@@ -145,7 +145,7 @@ namespace Bot.ChromeNs
                 ResumePending();
                 CleanupReports();
             });
-            Log.Info("接待结束自动学习已启用：买家5分钟无新消息后自动复盘；客服最后活动不足30秒时会短暂延后，避免漏掉最终人工回复。");
+            Log.Info("接待结束自动学习已启用：买家5分钟无新消息后自动复盘；本地优先模式会从完整买家/Bot/人工客服时间线提炼安全可复用问答并去重入库。" );
         }
 
         public static void ObserveLiveMessage(QNChatMessage message, string messageText, string seller, string buyer)
@@ -349,8 +349,9 @@ namespace Bot.ChromeNs
                     return;
                 }
 
+                var localFirst = ReplyModeService.IsLocalFirst(session.Seller);
                 var styleBefore = GetStyleProfile(session.Seller);
-                var analysis = await AnalyzeAsync(session, turns, cards, styleBefore);
+                var analysis = await AnalyzeAsync(session, turns, cards, styleBefore, localFirst);
                 var summary = Clean(Convert.ToString(analysis["summary"]), 1200);
                 var styleAfter = Clean(Convert.ToString(analysis["reply_style_profile"]), 800);
                 if (CountHumanSellerTurns(turns, cards) >= 2 && !string.IsNullOrWhiteSpace(styleAfter))
@@ -362,14 +363,14 @@ namespace Bot.ChromeNs
                     styleAfter = styleBefore;
                 }
 
-                var suggestions = ParseSuggestions(analysis["suggestions"] as JArray)
+                var suggestions = DeduplicateSuggestions(ParseSuggestions(analysis["suggestions"] as JArray))
                     .Take(MaxSuggestionsPerSession)
                     .ToList();
                 var applied = 0;
                 var skipped = 0;
                 foreach (var suggestion in suggestions)
                 {
-                    if (!CanApply(suggestion))
+                    if (!CanApply(suggestion, localFirst))
                     {
                         skipped++;
                         continue;
@@ -379,7 +380,7 @@ namespace Bot.ChromeNs
                         suggestion.Answer,
                         suggestion.Category,
                         suggestion.Keywords,
-                        "人工接待复盘",
+                        localFirst ? "本地优先-会话AI复盘" : "人工接待复盘",
                         suggestion.Confidence,
                         suggestion.EvidenceType);
                     suggestion.Applied = result != null && result.Success && (result.Added || result.Updated);
@@ -401,6 +402,7 @@ namespace Bot.ChromeNs
                 SaveReport(report);
                 NotifyChanged();
                 Log.Info("接待自动学习完成: seller=" + session.Seller + ", buyer=" + session.Buyer
+                    + ", replyMode=" + ReplyModeService.GetDisplayName(localFirst ? BotReplyMode.LocalFirst : BotReplyMode.AiFirst)
                     + ", applied=" + applied + ", skipped=" + skipped);
             }
             catch (Exception ex)
@@ -421,8 +423,13 @@ namespace Bot.ChromeNs
             ActiveSession session,
             List<ConversationContextTurn> turns,
             List<BotConversationHistoryEntity> cards,
-            string styleBefore)
+            string styleBefore,
+            bool localFirst)
         {
+            var learningPolicy = localFirst
+                ? "当前店铺启用了本地优先模式。你必须阅读这一轮全部买家、Bot和人工客服消息，把可复用的真实问答整理成知识。人工客服最终有效回复优先级最高；若没有人工回复，只有当Bot答案与整轮对话不冲突、不包含无法从对话确认的新业务事实、且问题答案具有跨买家复用价值时，才可使用evidence_type=conversation_synthesis，confidence必须>=0.92。不要把寒暄、一次性订单状态、临时价格/库存或个性化承诺写成知识。"
+                : "当前店铺启用了AI优先模式。保持保守学习：没有可靠人工证据宁可skip；Bot自身回复不能作为新增事实的唯一证据。";
+
             var messages = new JArray
             {
                 new JObject
@@ -430,18 +437,20 @@ namespace Bot.ChromeNs
                     ["role"] = "system",
                     ["content"] =
                         "你是电商客服接待复盘与知识迭代系统。分析完整一轮聊天，对比Bot原答案与客服最终实际回复。只输出JSON："
-                        + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}]}。"
-                        + "Bot自身回复不能作为新增事实的唯一证据；客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
+                        + "{\"summary\":\"摘要\",\"reply_style_profile\":\"稳定的真人客服表达风格\",\"suggestions\":[{\"action\":\"add|update|skip\",\"question\":\"通用问题\",\"answer\":\"完整可复用答案\",\"old_answer\":\"旧答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"evidence_type\":\"manual_reply|manual_correction|withdrawn_bot_then_manual|repeated_human_pattern|conversation_synthesis|bot_only|insufficient\",\"evidence\":\"依据\",\"reason\":\"优化原因\"}]}。"
+                        + learningPolicy
+                        + "客服撤回消息无效；Bot被撤回后人工重发属于强修正证据；人工最终有效回复优先于Bot旧答案。"
                         + "不得保留真实手机号、验证码、订单号、身份证、银行卡、买家账号等个人信息。退款、投诉、赔偿、差评、订单隐私、账号安全等一次性或高风险结论默认skip。"
-                        + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；没有可靠人工证据宁可skip；答案不得带[AI]且不能是半截话。"
+                        + "reply_style_profile只总结称呼、句长、语气、连接方式和追问习惯，不得包含价格、库存、商品或售后事实。最多8条建议；答案不得带[AI]且不能是半截话。"
                 },
                 new JObject
                 {
                     ["role"] = "user",
                     ["content"] = "客服：" + Safe(session.Seller)
                         + "\n买家：" + Safe(session.Buyer)
+                        + "\n回复模式：" + (localFirst ? "本地优先" : "AI优先")
                         + "\n现有表达风格：" + (string.IsNullOrWhiteSpace(styleBefore) ? "（暂无）" : styleBefore)
-                        + "\n\n聊天时间线：\n" + BuildTranscript(turns, cards)
+                        + "\n\n聊天时间线（买家/Bot/人工客服全部消息）：\n" + BuildTranscript(turns, cards)
                         + "\n\nBot问答记录：\n" + BuildCards(cards)
                 }
             };
@@ -525,7 +534,30 @@ namespace Bot.ChromeNs
             return result;
         }
 
-        private static bool CanApply(Suggestion suggestion)
+        private static IEnumerable<Suggestion> DeduplicateSuggestions(IEnumerable<Suggestion> suggestions)
+        {
+            return (suggestions ?? Enumerable.Empty<Suggestion>())
+                .Where(x => x != null)
+                .GroupBy(x => Knowledge.KnowledgeAiService.NormalizeQuestion(x.Question), StringComparer.Ordinal)
+                .Where(group => !string.IsNullOrWhiteSpace(group.Key))
+                .Select(group => group
+                    .OrderByDescending(x => IsHumanEvidence(x.EvidenceType) ? 1 : 0)
+                    .ThenByDescending(x => x.Confidence)
+                    .First())
+                .OrderByDescending(x => IsHumanEvidence(x.EvidenceType) ? 1 : 0)
+                .ThenByDescending(x => x.Confidence);
+        }
+
+        private static bool IsHumanEvidence(string evidenceType)
+        {
+            evidenceType = (evidenceType ?? string.Empty).Trim().ToLowerInvariant();
+            return evidenceType == "manual_reply"
+                || evidenceType == "manual_correction"
+                || evidenceType == "withdrawn_bot_then_manual"
+                || evidenceType == "repeated_human_pattern";
+        }
+
+        private static bool CanApply(Suggestion suggestion, bool localFirst)
         {
             if (suggestion == null) return false;
             if (suggestion.Action != "add" && suggestion.Action != "update")
@@ -545,16 +577,23 @@ namespace Bot.ChromeNs
             }
             if (suggestion.EvidenceType == "bot_only" || suggestion.EvidenceType == "insufficient")
             {
-                suggestion.ApplyMessage = "缺少可靠人工证据，禁止Bot自我学习";
+                suggestion.ApplyMessage = "缺少可靠证据，禁止Bot自我学习";
                 return false;
             }
-            var trusted = suggestion.EvidenceType == "manual_reply"
-                || suggestion.EvidenceType == "manual_correction"
-                || suggestion.EvidenceType == "withdrawn_bot_then_manual"
-                || suggestion.EvidenceType == "repeated_human_pattern";
+
+            var trusted = IsHumanEvidence(suggestion.EvidenceType);
+            if (!trusted && localFirst && suggestion.EvidenceType == "conversation_synthesis")
+            {
+                if (suggestion.Confidence < 0.92)
+                {
+                    suggestion.ApplyMessage = "本地优先会话综合知识置信度低于0.92";
+                    return false;
+                }
+                trusted = true;
+            }
             if (!trusted)
             {
-                suggestion.ApplyMessage = "证据类型不属于自动学习范围";
+                suggestion.ApplyMessage = "证据类型不属于当前回复模式的自动学习范围";
                 return false;
             }
             if (ContainsHighRisk(suggestion.Question + " " + suggestion.Answer))
