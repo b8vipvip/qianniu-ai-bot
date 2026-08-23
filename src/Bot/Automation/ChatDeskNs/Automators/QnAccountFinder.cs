@@ -6,6 +6,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Bot.Automation.ChatDeskNs.Automators
 {
@@ -17,6 +19,12 @@ namespace Bot.Automation.ChatDeskNs.Automators
         }
 
         private static QnChatWnd currenrQNChatWnd;
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetWindowTextW(IntPtr hWnd, StringBuilder lpString, int nMaxCount);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetWindowTextLengthW(IntPtr hWnd);
 
         static QnAccountFinder()
         {
@@ -32,6 +40,30 @@ namespace Bot.Automation.ChatDeskNs.Automators
                 pids.Add(p.Id);
             }
             return pids;
+        }
+
+        /// <summary>
+        /// Read only a top-level native window caption without sending WM_GETTEXT into Qianniu.
+        /// Recent Qt reception windows can reject or stall cross-process SendMessage(WM_GETTEXT),
+        /// which previously produced a continuous SendForGetText failure once per desk scan and
+        /// caused the verified Desk/current-buyer monitor to disappear. GetWindowTextW is the
+        /// bounded Win32 caption API for top-level windows and does not enter the target UI thread.
+        /// </summary>
+        public static string ReadNativeWindowTitle(int hwnd)
+        {
+            if (hwnd == 0) return string.Empty;
+            try
+            {
+                var length = GetWindowTextLengthW(new IntPtr(hwnd));
+                var capacity = Math.Max(256, Math.Min(4096, length + 1));
+                var sb = new StringBuilder(capacity);
+                var copied = GetWindowTextW(new IntPtr(hwnd), sb, sb.Capacity);
+                return copied > 0 ? sb.ToString().Trim() : string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
+            }
         }
 
         public static bool IsGenericReceptionTitle(string value)
@@ -177,7 +209,9 @@ namespace Bot.Automation.ChatDeskNs.Automators
             }
 
             // Do not pass seller text as a regex pattern. Enumerate all Qt top-level windows
-            // in this AliWorkbench process and compare their actual text locally.
+            // in this AliWorkbench process and compare their native captions locally. Avoid the
+            // legacy WinApi.GetText/WM_GETTEXT path here because a hung Qt HWND must never block
+            // or poison the reception-window scan.
             var found = false;
             try
             {
@@ -187,9 +221,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
                     (windowHwnd, ignoredTitle) =>
                     {
                         if (windowHwnd == 0 || found) return;
-                        string title;
-                        try { title = WinApi.GetText(windowHwnd); }
-                        catch { title = string.Empty; }
+                        var title = ReadNativeWindowTitle(windowHwnd);
                         if (tokens.Any(token => ContainsIdentity(title, token))) found = true;
                     },
                     pid);
@@ -232,9 +264,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
                             if (qnHwnd == 0 || !WinApi.IsVisible(qnHwnd)) return;
                             if (!handles.Add(qnHwnd)) return;
 
-                            string nativeTitle;
-                            try { nativeTitle = (WinApi.GetText(qnHwnd) ?? string.Empty).Trim(); }
-                            catch { nativeTitle = string.Empty; }
+                            var nativeTitle = ReadNativeWindowTitle(qnHwnd);
                             if (!IsReceptionCandidate(qnHwnd, nativeTitle, qns)) return;
 
                             var seller = ResolveSellerNameForWindow(pid, qnHwnd, nativeTitle);
@@ -297,9 +327,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
                         (hwnd, ignoredTitle) =>
                         {
                             if (hwnd == 0) return;
-                            string title;
-                            try { title = (WinApi.GetText(hwnd) ?? string.Empty).Trim(); }
-                            catch { title = string.Empty; }
+                            var title = ReadNativeWindowTitle(hwnd);
                             if (IsReceptionCandidate(hwnd, title, qns)) count++;
                         },
                         pid);
