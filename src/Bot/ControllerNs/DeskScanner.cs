@@ -113,9 +113,10 @@ namespace Bot.ControllerNs
                 var title = QnAccountFinder.ReadNativeWindowTitle(chatWnd.Hwnd);
                 if (QnAccountFinder.IsSystemNotificationTitle(title)) return false;
 
-                // A full-size candidate with an empty native caption is valid on recent Qianniu.
-                // The finder has already applied size/class filtering, so an empty caption must not
-                // tear down the Desk and stop QnRuntimeSafetyMonitor from probing the current buyer.
+                // seller identity and window size alone are still not proof for arbitrary Qt windows;
+                // the finder already applied class/size/reception filtering before this second guard.
+                // A full-size candidate with an empty native caption is valid on recent Qianniu, so
+                // an unavailable caption must not tear down the Desk or stop current-buyer probing.
                 if (string.IsNullOrWhiteSpace(title)) return true;
 
                 if (title.Equals("千牛接待台", StringComparison.OrdinalIgnoreCase)) return true;
