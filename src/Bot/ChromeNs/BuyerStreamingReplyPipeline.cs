@@ -29,7 +29,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
             PatchExisting();
             _patchTimer = new Timer(_ => PatchExisting(), null, 100, 300);
-            Log.Info("买家文本回复流式管线已启动：Smart Reply Router 会区分本地直答、知识上下文和通用AI，新消息仍会取消旧AI流。" );
+            Log.Info("买家文本回复流式管线已启动：回复模式支持AI优先/本地优先；本地优先只在高置信知识命中时免AI直答，新消息仍会取消旧AI流。" );
         }
 
         private static void PatchExisting()
@@ -396,11 +396,15 @@ namespace Bot.ChromeNs
 
             var plan = SmartReplyRouterService.BuildPlan(seller, buyer, question);
             var best = plan.BestCandidate;
-            if (plan.Route == SmartReplyRouteKind.DirectKnowledge && best != null && best.Entry != null)
+            var replyMode = ReplyModeService.GetMode(seller);
+            if (replyMode == BotReplyMode.LocalFirst
+                && plan.Route == SmartReplyRouteKind.DirectKnowledge
+                && best != null
+                && best.Entry != null)
             {
                 var directAnswer = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
                 KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, directAnswer, "智能路由-本地直答");
-                Log.Info("Smart Reply Router本地直答: buyer=" + buyer
+                Log.Info("本地优先高置信知识直答: buyer=" + buyer
                     + ", knowledgeId=" + best.Entry.Id
                     + ", score=" + best.FinalScore.ToString("0.00")
                     + ", contextDependency=" + plan.ContextDependencyScore.ToString("0.00"));
@@ -461,6 +465,7 @@ namespace Bot.ChromeNs
             messages.Add(Message("user", "[当前消息 " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") + " 买家] " + question));
 
             Log.Info("Smart Reply Router选择: buyer=" + buyer
+                + ", replyMode=" + ReplyModeService.GetDisplayName(replyMode)
                 + ", route=" + plan.Route
                 + ", contextDependency=" + plan.ContextDependencyScore.ToString("0.00")
                 + ", candidates=" + (plan.Candidates == null ? 0 : plan.Candidates.Count)
