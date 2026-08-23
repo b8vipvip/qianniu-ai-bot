@@ -23,10 +23,10 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Qianniu can expose several recent.html/iframe WebSocket pages for one logged-in seller.
-    /// Buyer notifications may arrive on a different page from the page that currently owns the
-    /// visible conversation. Buyer-message events are forwarded into the current QN pipeline, and
-    /// an explicit active-conversation event may promote its source CDP so outbound commands follow
-    /// the page that actually observed the user's chat switch.
+    /// MyWebSocketServer intentionally keeps exactly one authoritative CDP for commands/sending,
+    /// but buyer notifications and conversation-change events can arrive on a different page.
+    /// This bridge forwards inbound/state events into the authoritative CDP without ever changing
+    /// outbound ownership or opening/switching the visible conversation itself.
     /// </summary>
     internal static class DuplicateCdpInboundRecoveryBridge
     {
@@ -53,7 +53,7 @@ namespace Bot.ChromeNs
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 _retryTimer = new Timer(_ => DrainPending(), null, 250, 250);
-                Log.Info("重复千牛CDP恢复桥已启动：买家消息可跨页面转交，当前聊天活动页可提升为发送CDP。");
+                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话。" );
             }
             return new object();
         }
@@ -71,20 +71,9 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            if (!IsRecoverableInboundType(e.Type)) return;
             var response = e.Value ?? string.Empty;
             if (response.Length == 0) return;
-
-            // qnbotStatus exists on many recent.html/iframe pages and is not proof that a page owns
-            // the visible chat. onChatDlgActive/onConversationChange are much stronger evidence: the
-            // source page just observed the real user conversation changing. Promote that exact CDP
-            // so GetCurrentConversationID/OpenChat/send operations do not remain bound to a stale page.
-            if (IsActiveConversationType(e.Type))
-            {
-                TryPromoteActiveConversationSession(sessionId, e.Type, response);
-                return;
-            }
-
-            if (!IsRecoverableInboundType(e.Type)) return;
 
             var seller = ResolveSeller(sessionId, e.Type, response);
             if (seller.Length == 0)
@@ -112,92 +101,18 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static bool IsActiveConversationType(string type)
-        {
-            return string.Equals(type, "onChatDlgActive", StringComparison.Ordinal)
-                || string.Equals(type, "onConversationChange", StringComparison.Ordinal);
-        }
-
         private static bool IsRecoverableInboundType(string type)
         {
+            // onChatDlgActive may be synthesized by periodic page polling and therefore must never
+            // drive current-buyer state across duplicate pages. onConversationChange is different:
+            // it is emitted from the Qianniu conversation-change event and contains the changed
+            // Conversation object itself. We may forward that state notification to QN, but still
+            // never replace outbound CDP ownership, call OpenChat, or mutate the real Qianniu UI.
+            // This preserves the original onChatDlgActive/onConversationChange safety boundary while
+            // allowing the precise conversation-change event to repair a stale Bot-side buyer.
             return string.Equals(type, "receiveNewMsg", StringComparison.Ordinal)
-                || string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal);
-        }
-
-        private static void TryPromoteActiveConversationSession(
-            string sessionId,
-            string type,
-            string response)
-        {
-            try
-            {
-                var active = JsonConvert.DeserializeObject<ActiveLocalUser>(response);
-                var seller = active == null || active.LoginID == null
-                    ? string.Empty
-                    : (active.LoginID.Nick ?? string.Empty).Trim();
-                var buyer = active == null || active.Conversation == null
-                    ? string.Empty
-                    : (active.Conversation.Nick ?? string.Empty).Trim();
-                if (seller.Length == 0 || buyer.Length == 0) return;
-
-                SessionSellers[sessionId] = seller;
-                var source = CDPClient.FindBySessionId(sessionId);
-                if (source == null)
-                {
-                    Log.Info("当前聊天活动事件暂无法提升CDP：源session客户端未就绪。seller="
-                        + seller + ", buyer=" + buyer + ", session=" + sessionId + ", type=" + type);
-                    return;
-                }
-
-                // A session that already completed initialization records its seller Nick. If the
-                // value is present and disagrees with the event payload, fail closed rather than
-                // moving one shop's outbound ownership to another shop.
-                var sourceSeller = (source.Nick ?? string.Empty).Trim();
-                if (sourceSeller.Length > 0
-                    && !string.Equals(sourceSeller, seller, StringComparison.Ordinal))
-                {
-                    Log.ErrorWithMaxCount("当前聊天活动事件seller与CDP登录身份不一致，拒绝提升发送会话: eventSeller="
-                        + seller + ", cdpSeller=" + sourceSeller + ", session=" + sessionId, 10);
-                    return;
-                }
-
-                BuyerIdentityAliasService.Observe(
-                    seller,
-                    active.Conversation.Nick,
-                    active.Conversation.Display,
-                    active.Conversation.TargetId);
-                buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
-
-                var qn = QN.FindExistingBySellerNick(seller);
-                if (qn == null)
-                {
-                    qn = QN.GetByNick(active.LoginID);
-                }
-                if (qn == null) return;
-
-                var previousSession = qn.CDP == null ? string.Empty : qn.CDP.SessionId;
-                if (!string.Equals(previousSession, sessionId, StringComparison.Ordinal))
-                {
-                    qn.CDP = source;
-                    Log.Info("当前聊天活动页已提升为发送CDP: seller=" + seller
-                        + ", buyer=" + buyer
-                        + ", fromSession=" + previousSession
-                        + ", toSession=" + sessionId
-                        + ", source=" + type);
-                }
-
-                qn.SetActiveConversationByNick(seller, buyer, "activeConversationSession:" + type);
-                BotConnectionDiagnostics.RecordCdpStatus(
-                    true,
-                    "已跟随当前聊天活动会话",
-                    seller,
-                    buyer);
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("当前聊天活动页提升CDP失败: session=" + sessionId
-                    + ", type=" + type + ", error=" + ex.Message, 20);
-            }
+                || string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal)
+                || string.Equals(type, "onConversationChange", StringComparison.Ordinal);
         }
 
         private static void ObserveStatusSeller(string sessionId, string response)
@@ -222,7 +137,8 @@ namespace Bot.ChromeNs
                 return known.Trim();
             }
 
-            if (string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal))
+            if (string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal)
+                || string.Equals(type, "onConversationChange", StringComparison.Ordinal))
             {
                 try
                 {
@@ -276,13 +192,13 @@ namespace Bot.ChromeNs
             var target = qn == null ? null : qn.CDP;
             if (target == null || target.IsInvalidated) return false;
 
-            // The current outbound page already receives its own live global event normally.
-            // Only events from another page need explicit forwarding.
+            // The authoritative page already receives its own live global event normally.
+            // Only duplicate-page events need explicit forwarding.
             if (string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
                 return true;
 
             target.DispatchInboundEvent(item.Type, item.Response);
-            Log.Info("重复千牛CDP入站消息已转交当前发送会话: seller=" + item.Seller
+            Log.Info("重复千牛CDP入站消息已转交权威会话: seller=" + item.Seller
                 + ", fromSession=" + item.SourceSession
                 + ", toSession=" + target.SessionId
                 + ", type=" + item.Type);
