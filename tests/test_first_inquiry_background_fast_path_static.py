@@ -59,3 +59,16 @@ def test_later_background_notifications_do_not_restart_active_first_inquiry_reco
     assert "_firstInquiryFastRecoveryActive.TryAdd(key, 0)" in source
     assert "后续同买家通知已合并" in source
     assert "_firstInquiryFastRecoveryWindowStart" in source
+
+
+def test_completed_fast_recovery_keeps_window_until_age_expiry_to_block_replay():
+    source = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
+
+    finally_start = source.index("finally\n                {", source.index("Task.Run(async () =>"))
+    finally_end = source.index("                }\n            });", finally_start)
+    finally_block = source[finally_start:finally_end]
+
+    assert "recovered ||" not in finally_block
+    assert "Keep the original recovery window after success as a short replay guard" in finally_block
+    assert "DateTime.Now - windowStart > TimeSpan.FromSeconds(30)" in finally_block
+    assert "_firstInquiryFastRecoveryWindowStart.TryRemove(key, out ignoredStart)" in finally_block
