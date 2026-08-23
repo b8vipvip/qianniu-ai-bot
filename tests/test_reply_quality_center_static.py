@@ -50,7 +50,7 @@ def test_response_progress_records_route_answer_latency_and_cancellation():
     assert "ResolveQualityRoute" in code
     assert 'return "DIRECT_KNOWLEDGE"' in code
     assert 'return "CONTEXTUAL_KNOWLEDGE"' in code
-    assert 'return "VISION"' in code
+    assert 'return "VISION"'' in code
 
 
 def test_real_send_metrics_use_seller_echo_or_watchdog_timeout():
@@ -66,7 +66,7 @@ def test_real_send_metrics_use_seller_echo_or_watchdog_timeout():
     assert "false," in code[timeout_metric:timeout_metric + 500]
 
 
-def test_validator_and_human_review_feed_quality_metrics():
+def test_validator_and_reviewed_knowledge_feed_quality_metrics():
     dedup = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     review = read("src/Bot/ChromeNs/ReviewedKnowledgeLearningService.cs")
     assert dedup.count("ReplyQualityMetricsService.RecordValidation") >= 3
@@ -74,7 +74,8 @@ def test_validator_and_human_review_feed_quality_metrics():
     assert "ReplyQualityMetricsService.RecordRepair(true)" in dedup
     assert "ReplyQualityMetricsService.RecordDuplicateRewrite()" in dedup
     assert "ReplyQualityMetricsService.RecordHumanEvidence(evidenceType)" in review
-    assert 'ReplyQualityMetricsService.RecordHumanEvidence("human_confirmed")' in review
+    assert '"human_confirmed"' in review
+    assert '"conversation_synthesis"' in review
 
 
 def test_quality_center_is_built_initialized_and_flushed():
