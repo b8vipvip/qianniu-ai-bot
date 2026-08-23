@@ -1,4 +1,5 @@
 ﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.IO;
@@ -9,6 +10,7 @@ namespace BotLib
     {
         private static LogWriter _writer;
         private static ConcurrentDictionary<string, int> _errorWithMaxCountDict = new ConcurrentDictionary<string, int>();
+        private const string ImsdkVerboseTraceEnvironmentKey = "QNBOT_IMSDK_VERBOSE_TRACE";
 
         private static LogWriter Writer
         {
@@ -128,8 +130,96 @@ namespace BotLib
 
         public static void Info(string text)
         {
+            text = NormalizeProductionDiagnostic(text);
+            if (string.IsNullOrWhiteSpace(text)) return;
             Writer.Info(text);
             ScopedLogRouter.TryWrite("Info", text);
+        }
+
+        /// <summary>
+        /// IMSDK discovery is useful during explicit protocol research but its raw payload can
+        /// include complete function source, buyer targetId/ccode and very high frequency calls.
+        /// Production logs keep only slow/error summaries. Full payload is opt-in through
+        /// QNBOT_IMSDK_VERBOSE_TRACE=1.
+        /// </summary>
+        internal static string NormalizeProductionDiagnostic(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return text;
+
+            var verbose = IsImsdkVerboseTraceEnabled();
+            if (text.IndexOf("收到千牛WebSocket事件: type=imsdkInvokeTrace", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("收到千牛WebSocket事件: type=imsdkApiScan", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return verbose ? text : null;
+            }
+
+            var isApiScan = text.IndexOf("IMSDK API扫描结果", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("IMSDK API鎵", StringComparison.OrdinalIgnoreCase) >= 0;
+            var isInvokeTrace = text.IndexOf("IMSDK调用追踪", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("IMSDK调用跟踪", StringComparison.OrdinalIgnoreCase) >= 0
+                || text.IndexOf("IMSDK璋", StringComparison.OrdinalIgnoreCase) >= 0;
+            if (!isApiScan && !isInvokeTrace) return text;
+
+            var json = ExtractJsonObject(text);
+            if (verbose)
+            {
+                if (isApiScan) return "IMSDK API扫描结果: " + json;
+                return "IMSDK调用追踪: " + json;
+            }
+
+            if (string.IsNullOrWhiteSpace(json)) return null;
+            try
+            {
+                var payload = JObject.Parse(json);
+                if (isApiScan)
+                {
+                    var version = (payload["version"] ?? string.Empty).ToString();
+                    var scanKind = (payload["scanKind"] ?? string.Empty).ToString();
+                    var objectCount = payload["objects"] is JArray objects ? objects.Count : 0;
+                    var candidateCount = payload["result"]?["candidates"] is JArray candidates ? candidates.Count : 0;
+                    return "IMSDK API扫描摘要: version=" + SafeToken(version)
+                        + ", scanKind=" + SafeToken(scanKind)
+                        + ", objects=" + objectCount
+                        + ", candidates=" + candidateCount;
+                }
+
+                var method = (payload["method"] ?? string.Empty).ToString();
+                var phase = (payload["phase"] ?? string.Empty).ToString();
+                var elapsed = payload["elapsedMs"] == null ? 0L : payload["elapsedMs"].Value<long>();
+                var error = (payload["error"] ?? string.Empty).ToString();
+                if (string.IsNullOrWhiteSpace(error) && elapsed < 2000) return null;
+
+                return "IMSDK调用追踪摘要: method=" + SafeToken(method)
+                    + ", phase=" + SafeToken(phase)
+                    + ", elapsedMs=" + elapsed
+                    + ", success=" + string.IsNullOrWhiteSpace(error);
+            }
+            catch
+            {
+                // Malformed protocol discovery data is intentionally not written raw in production.
+                return null;
+            }
+        }
+
+        private static bool IsImsdkVerboseTraceEnabled()
+        {
+            var value = (Environment.GetEnvironmentVariable(ImsdkVerboseTraceEnvironmentKey) ?? string.Empty).Trim();
+            return value == "1"
+                || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static string ExtractJsonObject(string text)
+        {
+            var index = (text ?? string.Empty).IndexOf('{');
+            return index >= 0 ? text.Substring(index).Trim() : string.Empty;
+        }
+
+        private static string SafeToken(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length > 160) value = value.Substring(0, 160);
+            return value.Replace("\r", " ").Replace("\n", " ");
         }
 
         public static void Debug(string text)
