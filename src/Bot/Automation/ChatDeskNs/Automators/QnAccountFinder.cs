@@ -26,6 +26,15 @@ namespace Bot.Automation.ChatDeskNs.Automators
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
         private static extern int GetWindowTextLengthW(IntPtr hWnd);
 
+        private sealed class ReceptionCandidate
+        {
+            public int Pid { get; set; }
+            public int Hwnd { get; set; }
+            public string Title { get; set; }
+            public string Seller { get; set; }
+            public int Score { get; set; }
+        }
+
         static QnAccountFinder()
         {
             currenrQNChatWnd = null;
@@ -70,8 +79,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
         {
             value = (value ?? string.Empty).Trim();
             return value.Length == 0
-                || value.Equals("千牛接待台", StringComparison.OrdinalIgnoreCase)
-                || value.Equals("千牛工作台", StringComparison.OrdinalIgnoreCase);
+                || value.Equals("千牛接待台", StringComparison.OrdinalIgnoreCase);
         }
 
         public static bool IsSystemNotificationTitle(string value)
@@ -81,6 +89,25 @@ namespace Bot.Automation.ChatDeskNs.Automators
             return value.Equals("千牛系统消息", StringComparison.OrdinalIgnoreCase)
                 || value.Equals("千牛系统通知", StringComparison.OrdinalIgnoreCase)
                 || value.Equals("千牛消息通知", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Login/workbench shells are top-level Qt windows too, but they are not reception desks.
+        /// They can temporarily expose a seller identity and used to race the real 千牛接待台 HWND,
+        /// producing a second Desk for the same seller. Reject them before seller binding.
+        /// </summary>
+        public static bool IsNonReceptionWorkbenchTitle(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length == 0) return false;
+            if (value.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0
+                || value.IndexOf("客服", StringComparison.OrdinalIgnoreCase) >= 0)
+                return false;
+
+            return value.IndexOf("千牛登录", StringComparison.OrdinalIgnoreCase) >= 0
+                || value.Equals("千牛工作台", StringComparison.OrdinalIgnoreCase)
+                || value.EndsWith("-千牛工作台", StringComparison.OrdinalIgnoreCase)
+                || value.EndsWith(" - 千牛工作台", StringComparison.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -94,7 +121,8 @@ namespace Bot.Automation.ChatDeskNs.Automators
             int hwnd,
             string nativeWindowTitle)
         {
-            if (IsSystemNotificationTitle(nativeWindowTitle)) return string.Empty;
+            if (IsSystemNotificationTitle(nativeWindowTitle) || IsNonReceptionWorkbenchTitle(nativeWindowTitle))
+                return string.Empty;
             var qns = GetRuntimeQns();
             var direct = MatchUniqueSellerFromTitle(nativeWindowTitle, qns);
             if (direct.Length > 0) return direct;
@@ -201,7 +229,8 @@ namespace Bot.Automation.ChatDeskNs.Automators
             {
                 var process = Process.GetProcessById(pid);
                 var mainTitle = (process.MainWindowTitle ?? string.Empty).Trim();
-                if (tokens.Any(token => ContainsIdentity(mainTitle, token)))
+                if (!IsNonReceptionWorkbenchTitle(mainTitle)
+                    && tokens.Any(token => ContainsIdentity(mainTitle, token)))
                     return true;
             }
             catch
@@ -222,6 +251,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
                     {
                         if (windowHwnd == 0 || found) return;
                         var title = ReadNativeWindowTitle(windowHwnd);
+                        if (IsNonReceptionWorkbenchTitle(title)) return;
                         if (tokens.Any(token => ContainsIdentity(title, token))) found = true;
                     },
                     pid);
@@ -244,12 +274,13 @@ namespace Bot.Automation.ChatDeskNs.Automators
         /// <summary>
         /// Qianniu no longer guarantees that every reception HWND exposes exactly the title
         /// "千牛接待台". Enumerate all visible Qt top-level windows in AliWorkbench first,
-        /// then retain only reception-sized candidates. This prevents the second shop window
-        /// from disappearing merely because its accessible title is empty or seller-specific.
+        /// reject known login/workbench shells, then keep only the strongest candidate per seller.
+        /// An empty full-size title remains a compatibility fallback but can never beat an explicit
+        /// reception/seller-title window for the same authenticated seller.
         /// </summary>
         public virtual IList<QnChatWnd> GetOpenChatWnds()
         {
-            var result = new List<QnChatWnd>();
+            var candidates = new List<ReceptionCandidate>();
             var handles = new HashSet<int>();
             var qns = GetRuntimeQns();
             foreach (var pid in GetAliWorkbenchPids().OrderBy(x => x))
@@ -269,7 +300,14 @@ namespace Bot.Automation.ChatDeskNs.Automators
 
                             var seller = ResolveSellerNameForWindow(pid, qnHwnd, nativeTitle);
                             if (string.IsNullOrWhiteSpace(seller)) return;
-                            result.Add(new QnChatWnd(seller, qnHwnd, pid));
+                            candidates.Add(new ReceptionCandidate
+                            {
+                                Pid = pid,
+                                Hwnd = qnHwnd,
+                                Title = nativeTitle,
+                                Seller = seller.Trim(),
+                                Score = GetReceptionEvidenceScore(nativeTitle, qns)
+                            });
                         },
                         pid);
                 }
@@ -279,10 +317,28 @@ namespace Bot.Automation.ChatDeskNs.Automators
                 }
             }
 
-            return result
+            return candidates
+                .GroupBy(candidate => candidate.Seller, StringComparer.Ordinal)
+                .Select(group => group
+                    .OrderByDescending(candidate => candidate.Score)
+                    .ThenBy(candidate => candidate.Pid)
+                    .ThenBy(candidate => candidate.Hwnd)
+                    .First())
+                .Select(candidate => new QnChatWnd(candidate.Seller, candidate.Hwnd, candidate.Pid))
                 .OrderBy(x => x.Pid)
                 .ThenBy(x => x.Hwnd)
                 .ToList();
+        }
+
+        private static int GetReceptionEvidenceScore(string title, IList<QN> qns)
+        {
+            title = (title ?? string.Empty).Trim();
+            if (title.Equals("千牛接待台", StringComparison.OrdinalIgnoreCase)) return 100;
+            if (title.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0) return 95;
+            if (title.IndexOf("客服", StringComparison.OrdinalIgnoreCase) >= 0) return 90;
+            if (MatchUniqueSellerFromTitle(title, qns).Length > 0) return 85;
+            if (title.Length == 0) return 20;
+            return 40;
         }
 
         private static bool IsReceptionCandidate(int hwnd, string title, IList<QN> qns)
@@ -290,7 +346,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
             try
             {
                 if (!WinApi.IsVisible(hwnd) || WinApi.IsWindowMinimized(hwnd)) return false;
-                if (IsSystemNotificationTitle(title)) return false;
+                if (IsSystemNotificationTitle(title) || IsNonReceptionWorkbenchTitle(title)) return false;
                 var rect = WinApi.GetWindowRectangle(hwnd);
                 if (rect.Width < 560 || rect.Height < 380) return false;
 
@@ -298,8 +354,7 @@ namespace Bot.Automation.ChatDeskNs.Automators
                 if (MatchUniqueSellerFromTitle(title, qns).Length > 0) return true;
 
                 title = (title ?? string.Empty).Trim();
-                if (title.IndexOf("千牛", StringComparison.OrdinalIgnoreCase) >= 0
-                    || title.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0
+                if (title.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0
                     || title.IndexOf("客服", StringComparison.OrdinalIgnoreCase) >= 0)
                     return true;
 
