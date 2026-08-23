@@ -28,8 +28,6 @@ namespace Bot.ChromeNs
         public event EventHandler<MessageNotifyEventArgs> EvMessageNotity;
         public event EventHandler<RecieveNewMessageEventArgs> EvRecieveNewMessage;
         public event EventHandler<ShopRobotReceriveNewMessageEventArgs> EvShopRobotReceriveNewMessage;
-        private static readonly ConcurrentDictionary<string, CDPClient> ClientsBySession =
-            new ConcurrentDictionary<string, CDPClient>(StringComparer.Ordinal);
         private ConcurrentQueue<ManualResetEventSlim> _requestWaitHandles = new ConcurrentQueue<ManualResetEventSlim>();
         private ConcurrentQueue<string> _responses = new ConcurrentQueue<string>();
         private readonly SemaphoreSlim _executeGate = new SemaphoreSlim(1, 1);
@@ -48,22 +46,9 @@ namespace Bot.ChromeNs
             get { return Volatile.Read(ref _sessionInvalidated) != 0; }
         }
 
-        internal static CDPClient FindBySessionId(string sessionId)
-        {
-            sessionId = (sessionId ?? string.Empty).Trim();
-            if (sessionId.Length == 0) return null;
-            CDPClient client;
-            if (!ClientsBySession.TryGetValue(sessionId, out client) || client == null) return null;
-            return client.IsInvalidated ? null : client;
-        }
-
         public CDPClient(WebSocketSession session)
         {
             _webSocketSession = session;
-            if (session != null && !string.IsNullOrWhiteSpace(session.SessionID))
-            {
-                ClientsBySession[session.SessionID] = this;
-            }
             MyWebSocketServer.WSocketSvrInst.OnRecieveMessage -= OnWSocketRecieveMessage;
             MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWSocketRecieveMessage;
         }
@@ -202,10 +187,7 @@ namespace Bot.ChromeNs
         private void InvalidateSession(string reason)
         {
             if (Interlocked.Exchange(ref _sessionInvalidated, 1) != 0) return;
-            var sessionId = SessionId;
-            CDPClient ignored;
-            if (!string.IsNullOrWhiteSpace(sessionId)) ClientsBySession.TryRemove(sessionId, out ignored);
-            Log.Error("CDP会话已失效并请求WebSocket重连: session=" + sessionId + ", reason=" + (reason ?? string.Empty));
+            Log.Error("CDP会话已失效并请求WebSocket重连: session=" + SessionId + ", reason=" + (reason ?? string.Empty));
             BotConnectionDiagnostics.RecordCdpStatus(false, "CDP会话已失效，等待注入重连", Nick, string.Empty);
             try
             {
