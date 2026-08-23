@@ -106,18 +106,25 @@ namespace Bot.ControllerNs
             try
             {
                 if (!WinApi.IsVisible(chatWnd.Hwnd) || WinApi.IsWindowMinimized(chatWnd.Hwnd)) return false;
-                var title = (WinApi.GetText(chatWnd.Hwnd) ?? string.Empty).Trim();
+
+                // QnAccountFinder already limits candidates to visible, reception-sized Qt windows.
+                // Do not send WM_GETTEXT again here: recent Qianniu Qt windows can reject that call,
+                // causing one SendForGetText failure per second and making the verified Desk vanish.
+                var title = QnAccountFinder.ReadNativeWindowTitle(chatWnd.Hwnd);
                 if (QnAccountFinder.IsSystemNotificationTitle(title)) return false;
 
-                // Account/login pickers, the generic workbench home page and other full-size
-                // Qt windows can share the same AliWorkbench class and can even expose a seller
-                // nickname. Seller identity and window size are therefore NOT sufficient proof
-                // that this is the reception chat window. Only reception/customer-service title
-                // evidence is allowed to host the attached Bot UI.
+                // A full-size candidate with an empty native caption is valid on recent Qianniu.
+                // The finder has already applied size/class filtering, so an empty caption must not
+                // tear down the Desk and stop QnRuntimeSafetyMonitor from probing the current buyer.
+                if (string.IsNullOrWhiteSpace(title)) return true;
+
                 if (title.Equals("千牛接待台", StringComparison.OrdinalIgnoreCase)) return true;
                 if (title.IndexOf("接待", StringComparison.OrdinalIgnoreCase) >= 0) return true;
                 if (title.IndexOf("客服", StringComparison.OrdinalIgnoreCase) >= 0) return true;
-                return false;
+
+                // Seller-specific titles are also accepted when QnAccountFinder has already resolved
+                // this candidate to a concrete authenticated seller.
+                return !QnAccountFinder.IsGenericReceptionTitle(chatWnd.Name);
             }
             catch (Exception ex)
             {
