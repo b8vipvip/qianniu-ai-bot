@@ -81,7 +81,9 @@ namespace Bot.ChromeNs
                         return new KnowledgeLearningResult
                         {
                             Success = true,
-                            Message = "现有知识答案与人工复盘结论一致，已提高该知识的人工确认可靠度"
+                            Message = evidenceType == "conversation_synthesis"
+                                ? "现有知识与本轮会话AI复盘结论一致，已完成去重并刷新知识元数据"
+                                : "现有知识答案与人工复盘结论一致，已提高该知识的人工确认可靠度"
                         };
                     }
 
@@ -91,7 +93,8 @@ namespace Bot.ChromeNs
                         && !existingSource.Contains("智能导入")
                         && !existingSource.Contains("历史扫描")
                         && !existingSource.Contains("AI生成")
-                        && !existingSource.Contains("人工接待复盘");
+                        && !existingSource.Contains("人工接待复盘")
+                        && !existingSource.Contains("会话AI复盘");
 
                     if (existingLooksCurated && (!strongCorrection || confidence < 0.95))
                     {
@@ -116,7 +119,9 @@ namespace Bot.ChromeNs
                     {
                         Success = true,
                         Updated = true,
-                        Message = "已根据本轮人工接待最终回复优化现有知识答案，并降低旧答案直答可靠度"
+                        Message = evidenceType == "conversation_synthesis"
+                            ? "已根据本轮完整会话复盘优化相似知识答案"
+                            : "已根据本轮人工接待最终回复优化现有知识答案，并降低旧答案直答可靠度"
                     };
                 }
 
@@ -125,11 +130,11 @@ namespace Bot.ChromeNs
                     && KnowledgeAiService.ContentHash(x.Title, x.Answer) == contentHash))
                 {
                     KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
-                    ReplyQualityMetricsService.RecordHumanEvidence("human_confirmed");
+                    ReplyQualityMetricsService.RecordHumanEvidence(evidenceType == "conversation_synthesis" ? "conversation_synthesis" : "human_confirmed");
                     return new KnowledgeLearningResult
                     {
                         Success = true,
-                        Message = "知识库已存在相同问答内容，并记录了一次人工确认"
+                        Message = "知识库已存在相同问答内容，已去重，不重复新增"
                     };
                 }
 
@@ -149,13 +154,15 @@ namespace Bot.ChromeNs
                 list.Add(added);
                 BotFeatureStore.SaveKnowledgeBase(list);
                 KnowledgePolicyProfileService.RecordKnowledgeAccepted(question, answer);
-                ReplyQualityMetricsService.RecordHumanEvidence("human_confirmed");
+                ReplyQualityMetricsService.RecordHumanEvidence(evidenceType == "conversation_synthesis" ? "conversation_synthesis" : "human_confirmed");
                 RaiseChanged();
                 return new KnowledgeLearningResult
                 {
                     Success = true,
                     Added = true,
-                    Message = "已根据本轮人工接待复盘加入新的可复用知识，并建立初始可靠度"
+                    Message = evidenceType == "conversation_synthesis"
+                        ? "已根据本轮完整会话AI复盘加入新的可复用知识"
+                        : "已根据本轮人工接待复盘加入新的可复用知识，并建立初始可靠度"
                 };
             }
         }
