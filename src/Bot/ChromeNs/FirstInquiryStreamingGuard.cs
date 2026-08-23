@@ -124,10 +124,9 @@ namespace Bot.ChromeNs
 
             Task.Run(async () =>
             {
-                var recovered = false;
                 try
                 {
-                    recovered = await TryRecoverFirstInquiryFromNotificationAsync(
+                    await TryRecoverFirstInquiryFromNotificationAsync(
                         seller,
                         buyer,
                         ccode,
@@ -142,7 +141,14 @@ namespace Bot.ChromeNs
                 {
                     byte ignored;
                     _firstInquiryFastRecoveryActive.TryRemove(key, out ignored);
-                    if (recovered || DateTime.Now - windowStart > TimeSpan.FromSeconds(30))
+
+                    // Keep the original recovery window after success as a short replay guard.
+                    // Product/system notifications can arrive after the first task has already
+                    // completed; if success removed the window immediately, those notifications
+                    // could create a fresh window and re-select the just-processed buyer message
+                    // from the 12-second history lookback. Expire the window only by age so the
+                    // existing observed-message marker can suppress those late duplicate triggers.
+                    if (DateTime.Now - windowStart > TimeSpan.FromSeconds(30))
                     {
                         DateTime ignoredStart;
                         _firstInquiryFastRecoveryWindowStart.TryRemove(key, out ignoredStart);
