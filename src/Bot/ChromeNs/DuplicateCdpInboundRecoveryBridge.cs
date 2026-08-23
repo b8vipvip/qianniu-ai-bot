@@ -24,9 +24,9 @@ namespace Bot.ChromeNs
     /// <summary>
     /// Qianniu can expose several recent.html/iframe WebSocket pages for one logged-in seller.
     /// MyWebSocketServer intentionally keeps exactly one authoritative CDP for commands/sending,
-    /// but buyer notifications can arrive on a different page. This bridge accepts inbound-only
-    /// notifications from those duplicate pages and replays them through the authoritative CDP
-    /// without ever changing outbound ownership or the visible conversation.
+    /// but buyer notifications and conversation-change events can arrive on a different page.
+    /// This bridge forwards inbound/state events into the authoritative CDP without ever changing
+    /// outbound ownership or opening/switching the visible conversation itself.
     /// </summary>
     internal static class DuplicateCdpInboundRecoveryBridge
     {
@@ -53,7 +53,7 @@ namespace Bot.ChromeNs
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 _retryTimer = new Timer(_ => DrainPending(), null, 250, 250);
-                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话。");
+                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话。" );
             }
             return new object();
         }
@@ -103,10 +103,16 @@ namespace Bot.ChromeNs
 
         private static bool IsRecoverableInboundType(string type)
         {
-            // onChatDlgActive/onConversationChange can mutate active UI state and must never be
-            // replayed from a duplicate page. Only buyer-message notifications are bridged.
+            // onChatDlgActive may be synthesized by periodic page polling and therefore must never
+            // drive current-buyer state across duplicate pages. onConversationChange is different:
+            // it is emitted from the Qianniu conversation-change event and contains the changed
+            // Conversation object itself. We may forward that state notification to QN, but still
+            // never replace outbound CDP ownership, call OpenChat, or mutate the real Qianniu UI.
+            // This preserves the original onChatDlgActive/onConversationChange safety boundary while
+            // allowing the precise conversation-change event to repair a stale Bot-side buyer.
             return string.Equals(type, "receiveNewMsg", StringComparison.Ordinal)
-                || string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal);
+                || string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal)
+                || string.Equals(type, "onConversationChange", StringComparison.Ordinal);
         }
 
         private static void ObserveStatusSeller(string sessionId, string response)
@@ -131,7 +137,8 @@ namespace Bot.ChromeNs
                 return known.Trim();
             }
 
-            if (string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal))
+            if (string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal)
+                || string.Equals(type, "onConversationChange", StringComparison.Ordinal))
             {
                 try
                 {
@@ -186,7 +193,7 @@ namespace Bot.ChromeNs
             if (target == null || target.IsInvalidated) return false;
 
             // The authoritative page already receives its own live global event normally.
-            // Only duplicate-page live events need explicit forwarding.
+            // Only duplicate-page events need explicit forwarding.
             if (string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
                 return true;
 
