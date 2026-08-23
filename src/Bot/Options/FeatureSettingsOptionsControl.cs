@@ -29,6 +29,7 @@ namespace Bot.Options
         private readonly FeatureSettingsWindow _legacyWindow;
         private readonly TabControl _tabs;
         private readonly MethodInfo _saveAllMethod;
+        private ComboBox _replyMode;
         private CheckBox _firstInquiryFixedReplyEnabled;
         private TextBox _firstInquiryFixedReplyAnswer;
         private CheckBox _offHoursEnabled;
@@ -98,10 +99,11 @@ namespace Bot.Options
             pageTitle = (pageTitle ?? string.Empty).Trim();
             if (pageTitle.Length == 0) return;
 
-            // Compatibility alias for old callers/bookmarks. The user-visible and real tab name is
-            // now “转人工策略”; “消息通知” is no longer used as a displayed page title.
+            // Compatibility aliases for old callers/bookmarks and the new reply-mode entry.
             if (string.Equals(pageTitle, "消息通知", StringComparison.Ordinal))
                 pageTitle = "转人工策略";
+            if (string.Equals(pageTitle, "消息策略", StringComparison.Ordinal))
+                pageTitle = "自动回复规则";
 
             foreach (TabItem tab in _tabs.Items)
             {
@@ -130,10 +132,17 @@ namespace Bot.Options
             {
                 SyncOffHoursToLegacyControls();
                 _saveAllMethod.Invoke(_legacyWindow, null);
+                var effectiveSeller = seller ?? Seller;
+                if (_replyMode != null)
+                {
+                    ReplyModeService.Save(
+                        effectiveSeller,
+                        _replyMode.SelectedIndex == 1 ? BotReplyMode.LocalFirst : BotReplyMode.AiFirst);
+                }
                 if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)
                 {
                     FirstInquiryFixedReplyService.Save(
-                        seller ?? Seller,
+                        effectiveSeller,
                         _firstInquiryFixedReplyEnabled.IsChecked == true,
                         _firstInquiryFixedReplyAnswer.Text ?? string.Empty);
                 }
@@ -252,6 +261,17 @@ namespace Bot.Options
             var firstSettings = FirstInquiryFixedReplyService.Load(Seller)
                 ?? new FirstInquiryFixedReplySettings();
             var cfg = BotFeatureStore.GetAutoReplyRules();
+            var replyMode = ReplyModeService.GetMode(Seller);
+
+            _replyMode = new ComboBox
+            {
+                Height = 30,
+                MinWidth = 180,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                SelectedIndex = replyMode == BotReplyMode.LocalFirst ? 1 : 0
+            };
+            _replyMode.Items.Add("AI优先");
+            _replyMode.Items.Add("本地优先");
 
             _firstInquiryFixedReplyEnabled = new CheckBox
             {
@@ -335,6 +355,18 @@ namespace Bot.Options
         private List<UIElement> BuildDeterministicRuleControls()
         {
             var result = new List<UIElement>();
+
+            result.Add(MakeSectionTitle("消息策略"));
+            result.Add(MakeLabeledControl(
+                "回复模式",
+                _replyMode,
+                "AI优先：本地知识作为上下文，由AI生成最终答案。 本地优先：先检索本地知识库，高置信命中时直接回复且不调用AI；未达到高置信阈值时再调用AI。买家5分钟无新消息后，会把本轮买家、Bot和人工客服完整消息交给AI复盘，生成去重后的可复用问答进入本地知识库。"));
+            result.Add(new Border
+            {
+                Height = 1,
+                Background = new SolidColorBrush(Color.FromRgb(226, 232, 240)),
+                Margin = new Thickness(0, 6, 0, 14)
+            });
 
             result.Add(MakeSectionTitle("首条咨询固定回复"));
             result.Add(_firstInquiryFixedReplyEnabled);
