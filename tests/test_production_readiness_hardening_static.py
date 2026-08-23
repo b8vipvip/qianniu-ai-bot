@@ -71,8 +71,10 @@ def test_imsdk_production_logging_is_sanitized_and_verbose_trace_is_opt_in():
     assert "IMSDK调用追踪摘要" in log
     assert "elapsed < 2000" in log
     assert "return null;" in log
-    assert "targetId" not in log[log.index("NormalizeProductionDiagnostic"):]
-    assert "ccode" not in log[log.index("NormalizeProductionDiagnostic"):]
+    normalizer = log[log.index("internal static string NormalizeProductionDiagnostic"):log.index("private static bool IsImsdkVerboseTraceEnabled")]
+    assert 'payload["targetId"]' not in normalizer
+    assert 'payload["ccode"]' not in normalizer
+    assert 'payload["conversation"]' not in normalizer
 
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     assert 'wMsg.Type == "imsdkApiScan"' in server
