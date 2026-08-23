@@ -7,21 +7,28 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_qianniu_system_message_window_is_never_treated_as_reception_desk():
+def test_qianniu_system_message_and_workbench_shells_are_never_treated_as_reception_desk():
     finder = read("src/Bot/Automation/ChatDeskNs/Automators/QnAccountFinder.cs")
 
     assert "IsSystemNotificationTitle" in finder
     assert 'value.Equals("千牛系统消息"' in finder
     assert 'value.Equals("千牛系统通知"' in finder
-    assert 'if (IsSystemNotificationTitle(title)) return false;' in finder
-    assert 'if (IsSystemNotificationTitle(nativeWindowTitle)) return string.Empty;' in finder
-    assert 'if (string.IsNullOrWhiteSpace(seller)) return;' in finder
+    assert "IsNonReceptionWorkbenchTitle" in finder
+    assert 'value.IndexOf("千牛登录"' in finder
+    assert 'value.Equals("千牛工作台"' in finder
 
-    # The explicit exclusion must happen before the broad fallback that accepts titles
-    # containing “千牛/接待/客服”.
-    reject = finder.index("if (IsSystemNotificationTitle(title)) return false;")
-    broad = finder.index('title.IndexOf("千牛"')
-    assert reject < broad
+    resolver = finder[finder.index("public static string ResolveSellerNameForWindow"):finder.index("private static IList<QN> GetRuntimeQns")]
+    assert "IsSystemNotificationTitle(nativeWindowTitle)" in resolver
+    assert "IsNonReceptionWorkbenchTitle(nativeWindowTitle)" in resolver
+    assert "return string.Empty;" in resolver
+
+    candidate = finder[finder.index("private static bool IsReceptionCandidate"):finder.index("private static int GetReceptionCandidateCount")]
+    assert "IsSystemNotificationTitle(title)" in candidate
+    assert "IsNonReceptionWorkbenchTitle(title)" in candidate
+    assert 'title.IndexOf("千牛"' not in candidate
+    assert 'title.IndexOf("接待"' in candidate
+    assert 'title.IndexOf("客服"' in candidate
+    assert 'if (string.IsNullOrWhiteSpace(seller)) return;' in finder
 
 
 def test_duplicate_cdp_pages_forward_only_inbound_buyer_events_to_authoritative_session():
