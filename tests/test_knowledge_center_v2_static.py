@@ -29,6 +29,16 @@ def test_v2_query_does_not_periodically_rebuild_full_index():
     assert 'Recall(snapshot, query)' in public
 
 
+def test_buyer_runtime_never_waits_for_cold_v2_snapshot():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    assert 'public static bool IsSnapshotReady' in public
+    assert 'if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))' in runtime
+    assert 'QueueWarm(burst.SellerNick);' in runtime
+    assert 'await inner(lease);' in runtime
+    assert 'WarmingSellers.TryAdd' in runtime
+
+
 def test_v2_edits_use_atomic_incremental_snapshot_updates():
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
@@ -68,13 +78,24 @@ def test_learning_candidates_require_explicit_approval_before_direct_reply():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
-    assert 'string.Equals(best.Record.Type, "learning_candidate"' in public
-    assert '&& !unapprovedLearning' in public
+    assert 'productionMatches = rankedMatches' in public
+    assert '.Where(IsApprovedProductionMatch)' in public
+    assert 'var best = productionMatches.FirstOrDefault();' in public
+    assert 'var visibleMatches = rankedMatches.Take(5).ToList();' in public
+    assert 'if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);' in public
+    assert '!string.Equals(record.Type, "learning_candidate"' in public
+    assert '当前只命中尚未批准的学习候选' in public
     assert 'record.Type = "learning_candidate";' in bridge
     assert 'record.Status = "candidate";' in bridge
     assert 'KnowledgeV2Record existing = null;' in bridge
     assert '!string.Equals(record.Status, "candidate"' in repo
     assert '!string.Equals(record.Type, "learning_candidate"' in repo
+
+
+def test_disabled_records_remain_visible_to_knowledge_center_management():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    assert 'return KnowledgeEngineV2Repository.LoadAll(seller)' in public
+    assert '.Select(Clone)' in public
 
 
 def test_new_knowledge_center_has_required_navigation_and_debugger():
