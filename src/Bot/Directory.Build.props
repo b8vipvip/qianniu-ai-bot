@@ -68,6 +68,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2OperationsPages.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2RuntimeBridge.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2LearningBridge.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs')">
