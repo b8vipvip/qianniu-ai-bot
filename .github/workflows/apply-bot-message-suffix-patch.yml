@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - feature/configurable-bot-message-suffix-20260824
+  pull_request:
+    branches:
+      - master
 
 permissions:
   contents: write
@@ -43,8 +46,6 @@ jobs:
               text = text.replace(old, new, 1)
               write_text(path, text, had_bom)
 
-          # 1) Shop-scoped Bot message suffix service. Missing setting keeps the historical [AI]
-          # default; a deliberately saved empty value means no suffix.
           reply_mode = Path('src/Bot/ChromeNs/ReplyModeService.cs')
           text, had_bom = read_text(reply_mode)
           end = '\n}\n'
@@ -137,63 +138,24 @@ jobs:
           text = text[:-len(end)] + service + end
           write_text(reply_mode, text, had_bom)
 
-          # 2) Settings UI: remove redundant inner "消息策略" heading and add Bot suffix input.
           ui = 'src/Bot/Options/FeatureSettingsOptionsControl.cs'
-          replace_once(
-              ui,
-              '        private ComboBox _replyMode;\n        private CheckBox _firstInquiryFixedReplyEnabled;',
-              '        private ComboBox _replyMode;\n        private TextBox _botMessageSuffix;\n        private CheckBox _firstInquiryFixedReplyEnabled;')
-
-          replace_once(
-              ui,
-              '''                if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)''',
-              '''                if (_botMessageSuffix != null)\n                {\n                    BotMessageSuffixService.Save(effectiveSeller, _botMessageSuffix.Text ?? string.Empty);\n                }\n                if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)''')
-
-          replace_once(
-              ui,
-              '''            _replyMode.Items.Add("AI优先");\n            _replyMode.Items.Add("本地优先");\n\n            _firstInquiryFixedReplyEnabled = new CheckBox''',
-              '''            _replyMode.Items.Add("AI优先");\n            _replyMode.Items.Add("本地优先");\n\n            _botMessageSuffix = new TextBox\n            {\n                Text = BotMessageSuffixService.GetSuffix(Seller),\n                Width = 180,\n                Height = 26,\n                MaxLength = BotMessageSuffixService.MaxSuffixLength,\n                HorizontalAlignment = HorizontalAlignment.Left,\n                Padding = new Thickness(6, 3, 6, 3)\n            };\n\n            _firstInquiryFixedReplyEnabled = new CheckBox''')
-
-          replace_once(
-              ui,
-              '            result.Add(MakeSectionTitle("消息策略"));\n',
-              '')
-
+          replace_once(ui, '        private ComboBox _replyMode;\n        private CheckBox _firstInquiryFixedReplyEnabled;', '        private ComboBox _replyMode;\n        private TextBox _botMessageSuffix;\n        private CheckBox _firstInquiryFixedReplyEnabled;')
+          replace_once(ui, '''                if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)''', '''                if (_botMessageSuffix != null)\n                {\n                    BotMessageSuffixService.Save(effectiveSeller, _botMessageSuffix.Text ?? string.Empty);\n                }\n                if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)''')
+          replace_once(ui, '''            _replyMode.Items.Add("AI优先");\n            _replyMode.Items.Add("本地优先");\n\n            _firstInquiryFixedReplyEnabled = new CheckBox''', '''            _replyMode.Items.Add("AI优先");\n            _replyMode.Items.Add("本地优先");\n\n            _botMessageSuffix = new TextBox\n            {\n                Text = BotMessageSuffixService.GetSuffix(Seller),\n                Width = 180,\n                Height = 26,\n                MaxLength = BotMessageSuffixService.MaxSuffixLength,\n                HorizontalAlignment = HorizontalAlignment.Left,\n                Padding = new Thickness(6, 3, 6, 3)\n            };\n\n            _firstInquiryFixedReplyEnabled = new CheckBox''')
+          replace_once(ui, '            result.Add(MakeSectionTitle("消息策略"));\n', '')
           reply_hint = '''            result.Add(MakeLabeledControl(\n                "回复模式",\n                _replyMode,\n                "AI优先：本地知识作为上下文，由AI生成最终答案。 本地优先：先检索本地知识库，高置信命中时直接回复且不调用AI；未达到高置信阈值时再调用AI。买家5分钟无新消息后，会把本轮买家、Bot和人工客服完整消息交给AI复盘，生成去重后的可复用问答进入本地知识库。"));'''
-          replace_once(
-              ui,
-              reply_hint,
-              reply_hint + '''\n            result.Add(MakeLabeledControl(\n                "Bot消息后缀",\n                _botMessageSuffix,\n                "每条 Bot 自动发送的文本消息末尾附加此后缀，默认 [AI]；留空表示不添加后缀。"));''')
+          replace_once(ui, reply_hint, reply_hint + '''\n            result.Add(MakeLabeledControl(\n                "Bot消息后缀",\n                _botMessageSuffix,\n                "每条 Bot 自动发送的文本消息末尾附加此后缀，默认 [AI]；留空表示不添加后缀。"));''')
 
-          # 3) Send path: apply seller-scoped suffix before acquiring the send gate, so all echo/
-          # retry comparisons use the exact text actually sent. Segmented messages recurse first,
-          # therefore every real segment receives exactly one suffix.
           qn = 'src/Bot/ChromeNs/QN.cs'
-          replace_once(
-              qn,
-              '''                return true;\n            }\n\n            await _sendGate.WaitAsync();''',
-              '''                return true;\n            }\n\n            text = BotMessageSuffixService.Apply(\n                Seller == null ? string.Empty : Seller.Nick,\n                text);\n\n            await _sendGate.WaitAsync();''')
+          replace_once(qn, '''                return true;\n            }\n\n            await _sendGate.WaitAsync();''', '''                return true;\n            }\n\n            text = BotMessageSuffixService.Apply(\n                Seller == null ? string.Empty : Seller.Nick,\n                text);\n\n            await _sendGate.WaitAsync();''')
 
-          # 4) Make the normal formatter display/store the configured suffix in scoped reply flows.
           dedup = 'src/Bot/ChromeNs/ReplyDeduplicationService.cs'
-          replace_once(
-              dedup,
-              '''            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;\n            if (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase)) return value;\n            return value + " " + AiMarker;''',
-              '''            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;\n            var suffix = BotMessageSuffixService.GetCurrentSuffix();\n            value = StripAiMarker(value);\n            if (suffix.Length == 0) return value;\n            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return value;\n            return value + " " + suffix;''')
+          replace_once(dedup, '''            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;\n            if (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase)) return value;\n            return value + " " + AiMarker;''', '''            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;\n            var suffix = BotMessageSuffixService.GetCurrentSuffix();\n            value = StripAiMarker(value);\n            if (suffix.Length == 0) return value;\n            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return value;\n            return value + " " + suffix;''')
+          replace_once(dedup, '''            value = (value ?? string.Empty).Trim();\n            while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))\n                value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();\n            return value;''', '''            value = (value ?? string.Empty).Trim();\n            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();\n            if (!string.IsNullOrWhiteSpace(configuredSuffix))\n            {\n                while (value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))\n                    value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();\n            }\n            while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))\n                value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();\n            return value;''')
 
-          replace_once(
-              dedup,
-              '''            value = (value ?? string.Empty).Trim();\n            while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))\n                value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();\n            return value;''',
-              '''            value = (value ?? string.Empty).Trim();\n            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();\n            if (!string.IsNullOrWhiteSpace(configuredSuffix))\n            {\n                while (value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))\n                    value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();\n            }\n            while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))\n                value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();\n            return value;''')
-
-          # 5) Safety guard must ignore the configured suffix just like the legacy [AI] marker.
           guard = 'src/Bot/ChromeNs/BuyerReplyOutputGuard.cs'
-          replace_once(
-              guard,
-              '''            value = (value ?? string.Empty).Trim();\n            foreach (var suffix in new[] { "[AI]", "【AI】", "［AI］" })''',
-              '''            value = (value ?? string.Empty).Trim();\n            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();\n            if (!string.IsNullOrWhiteSpace(configuredSuffix)\n                && value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))\n            {\n                value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();\n            }\n            foreach (var suffix in new[] { "[AI]", "【AI】", "［AI］" })''')
+          replace_once(guard, '''            value = (value ?? string.Empty).Trim();\n            foreach (var suffix in new[] { "[AI]", "【AI】", "［AI］" })''', '''            value = (value ?? string.Empty).Trim();\n            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();\n            if (!string.IsNullOrWhiteSpace(configuredSuffix)\n                && value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))\n            {\n                value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();\n            }\n            foreach (var suffix in new[] { "[AI]", "【AI】", "［AI］" })''')
 
-          # 6) Static regression coverage for UI, persistence, formatter and final send path.
           Path('tests/test_bot_message_suffix_static.py').write_text(r'''from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
