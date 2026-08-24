@@ -27,7 +27,7 @@ def test_store_rule_import_backs_up_before_overwrite():
     assert "导入前会自动备份当前配置" in source
 
 
-def test_knowledge_policy_export_contains_only_portable_fields():
+def test_knowledge_policy_export_contains_complete_config_and_learning_stats():
     source = read(SOURCE)
     start = source.index("private static JObject BuildPolicyExportObject")
     end = source.index("private static string BackupKnowledgePolicies", start)
@@ -35,18 +35,20 @@ def test_knowledge_policy_export_contains_only_portable_fields():
     assert '"qianniu-ai-bot.knowledge-policies"' in source
     assert '"answerMode"' in block
     assert '"confidence"' in block
-    assert "DirectSelectedCount" not in block
-    assert "ContextualSelectedCount" not in block
-    assert "SellerCorrectionCount" not in block
-    assert "SellerWithdrawCount" not in block
+    assert "DirectSelectedCount" in block
+    assert "ContextualSelectedCount" in block
+    assert "AcceptedCount" in block
+    assert "SellerCorrectionCount" in block
+    assert "SellerWithdrawCount" in block
+    assert '"enabled"' in block
 
 
-def test_knowledge_policy_import_is_merge_only_and_preserves_learning_stats():
+def test_knowledge_policy_import_merges_and_restores_learning_stats():
     source = read(SOURCE)
     assert "FindKnowledgeForImport" in source
-    assert "KnowledgePolicyProfileService.SaveProfile(entry, imported)" in source
+    assert "KnowledgePolicyProfileService.ImportCompleteProfile(entry, imported)" in source
     assert "不会删除现有策略" in source
-    assert "可靠度学习统计也不会被覆盖" in source
+    assert "完整恢复配置和可靠度学习统计" in source
     assert "var backup = BackupKnowledgePolicies(window)" in source
 
 
