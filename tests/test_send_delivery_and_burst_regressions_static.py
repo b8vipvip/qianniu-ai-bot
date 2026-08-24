@@ -38,7 +38,7 @@ def test_inflight_burst_is_detached_before_ai_handler_and_new_message_can_start_
     assert clear_index < handler_index
     assert "state.WorkerRunning = false;" in source[clear_index:handler_index]
     assert "var dispatchedItems = state.Items.ToList();" in source
-    assert "return state.Version == capturedVersion;" in source
+    assert "return state.HardCancelVersion == capturedHardCancelVersion;" in source
 
 
 def test_manual_seller_reply_invalidates_old_ai_generation():
@@ -48,6 +48,7 @@ def test_manual_seller_reply_invalidates_old_ai_generation():
     assert "CancelActiveBuyerGeneration" in monitor
     assert "_buyerMessageBurstCoordinator.CancelBuyer" in partial
     assert "state.Version++;" in coordinator
+    assert "state.HardCancelVersion++;" in coordinator
     assert "检测到客服回复" in monitor
 
 
