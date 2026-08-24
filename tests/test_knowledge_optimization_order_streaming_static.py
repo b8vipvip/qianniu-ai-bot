@@ -44,7 +44,7 @@ def test_order_auto_reply_uses_segment_sender_but_keeps_legacy_bypass_for_non_pr
     assert "CtlConversation.OrderAutoReplyGuard.cs" not in targets
 
 
-def test_streaming_pipeline_cancels_stale_buyer_generation_and_only_sends_final_answer():
+def test_streaming_pipeline_hard_cancels_only_invalid_work_and_allows_relevant_parallel_completion():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     formatter = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
     app = read("src/Bot/App.xaml.cs")
@@ -54,7 +54,9 @@ def test_streaming_pipeline_cancels_stale_buyer_generation_and_only_sends_final_
     assert "HttpCompletionOption.ResponseHeadersRead" in pipeline
     assert "if (!lease.IsCurrent)" in pipeline
     assert "generationCts.Cancel();" in pipeline
-    assert "旧AI流已取消" in pipeline
+    assert "人工接管或显式取消" in pipeline
+    assert "ParallelReplyRelevanceGate.ShouldSend" in pipeline
+    assert "买家后续消息明确纠正/取消了前一问题" in pipeline
     assert "await lease.ConfirmStableAsync(180)" in pipeline
     assert "await qn.SendTextWithRetryAsync" in pipeline
     assert "正在流式生成答案" in pipeline

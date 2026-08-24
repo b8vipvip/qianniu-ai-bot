@@ -29,7 +29,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
             PatchExisting();
             _patchTimer = new Timer(_ => PatchExisting(), null, 100, 300);
-            Log.Info("买家文本回复流式管线已启动：回复模式支持AI优先/本地优先；本地优先只在高置信知识命中时免AI直答，新消息仍会取消旧AI流。" );
+            Log.Info("买家文本回复流式管线已启动：回复模式支持AI优先/本地优先；本地优先只在高置信知识命中时免AI直答，新消息可并发处理；已派发AI仅在人工接管/显式失效时取消。" );
         }
 
         private static void PatchExisting()
@@ -67,7 +67,7 @@ namespace Bot.ChromeNs
                     Func<BuyerMessageBurstLease, Task> wrapped = lease => HandleAsync(qn, original, lease);
                     handlerField.SetValue(coordinator, wrapped);
                     PatchedCoordinators[key] = true;
-                    Log.Info("已为客服实例启用可取消Smart Reply流式管线: seller="
+                    Log.Info("已为客服实例启用并发Smart Reply流式管线: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                 }
             }
@@ -135,10 +135,10 @@ namespace Bot.ChromeNs
                 {
                     conversationCtl.SetProcessing(lease.IsCurrent
                         ? "AI请求已取消"
-                        : "买家补充了新消息，旧AI流已取消");
+                        : "当前任务已被人工接管或显式取消");
                     conversationCtl.SetStatus(lease.IsCurrent
                         ? "AI请求已取消"
-                        : "已转入买家最新一轮消息，旧答案不会发送", false);
+                        : "当前任务已失效，答案不会发送", false);
                 }
                 Log.Info("文本AI流已取消: buyer=" + burst.BuyerNick
                     + ", superseded=" + (!lease.IsCurrent));
@@ -160,7 +160,7 @@ namespace Bot.ChromeNs
             {
                 if (conversationCtl != null)
                 {
-                    conversationCtl.SetProcessing("买家补充了新消息，旧AI结果已丢弃");
+                    conversationCtl.SetProcessing("当前任务已失效，AI结果已丢弃");
                     conversationCtl.SetStatus("已转入买家最新一轮消息，旧答案不会发送", false);
                 }
                 return;
@@ -186,8 +186,17 @@ namespace Bot.ChromeNs
             {
                 if (conversationCtl != null)
                 {
-                    conversationCtl.SetStatus("发送前收到买家新消息，旧答案已取消", false);
+                    conversationCtl.SetStatus("发送前任务已失效，答案已取消", false);
                 }
+                return;
+            }
+
+            string relevanceReason;
+            if (!ParallelReplyRelevanceGate.ShouldSend(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
+            {
+                if (conversationCtl != null) conversationCtl.SetStatus("并发旧答案已抑制：" + relevanceReason, false);
+                Log.Info("并发旧答案已抑制: buyer=" + burst.BuyerNick + ", reason=" + relevanceReason);
                 return;
             }
 
@@ -228,7 +237,7 @@ namespace Bot.ChromeNs
             {
                 if (conversationCtl != null)
                 {
-                    conversationCtl.SetSendResult(false, "未发送：买家刚刚补充了新消息，正在重新组织回复");
+                    conversationCtl.SetSendResult(false, "未发送：任务已因人工接管或显式取消而失效");
                 }
                 return;
             }
@@ -287,6 +296,43 @@ namespace Bot.ChromeNs
             value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
             while (value.Contains("  ")) value = value.Replace("  ", " ");
             return value.Length <= max ? value : "…" + value.Substring(value.Length - max);
+        }
+    }
+
+    internal static class ParallelReplyRelevanceGate
+    {
+        private static readonly Regex SupersedeRegex = new Regex(
+            @"(?:^|\s)(?:不是|不对|说错了|我说的是|改一下|改成|算了|不用了|不用|取消|撤回|别回|不要回复|前面错了)(?:$|[，。！？\s])",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+        public static bool ShouldSend(string seller, string buyer, string originalQuestion, DateTime dispatchedAt, out string reason)
+        {
+            reason = string.Empty;
+            try
+            {
+                var newerBuyer = ConversationContextStore.GetRecentTurns(seller, buyer, originalQuestion, 20)
+                    .Where(x => x != null
+                        && x.Role == "user"
+                        && !x.Withdrawn
+                        && x.Timestamp != DateTime.MinValue
+                        && x.Timestamp > dispatchedAt.AddMilliseconds(120)
+                        && !string.IsNullOrWhiteSpace(x.Text))
+                    .OrderBy(x => x.Timestamp)
+                    .ToList();
+                if (newerBuyer.Count == 0) return true;
+                var latest = newerBuyer[newerBuyer.Count - 1].Text ?? string.Empty;
+                if (SupersedeRegex.IsMatch(latest))
+                {
+                    reason = "买家后续消息明确纠正/取消了前一问题";
+                    return false;
+                }
+                reason = "买家有后续消息，但未明确否定前一问题，允许作为补充答案发送";
+                return true;
+            }
+            catch
+            {
+                return true;
+            }
         }
     }
 

@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using BotLib;
 using Microsoft.Win32;
 using Newtonsoft.Json;
@@ -30,7 +31,8 @@ namespace Bot.Knowledge
     {
         private const string StoreSchema = "qianniu-ai-bot.store-rules";
         private const string PolicySchema = "qianniu-ai-bot.knowledge-policies";
-        private const int ExportVersion = 1;
+        private const string KnowledgePackageSchema = "qianniu-ai-bot.knowledge-package";
+        private const int ExportVersion = 2;
 
         private static readonly ConditionalWeakTable<Window, object> Attached =
             new ConditionalWeakTable<Window, object>();
@@ -93,6 +95,11 @@ namespace Bot.Knowledge
         {
             var window = sender as KnowledgePolicyProfileWindow;
             if (window == null || IsAttached(window)) return;
+            if (FindButton(window, "导入全部") != null || FindButton(window, "导出全部") != null)
+            {
+                MarkAttached(window);
+                return;
+            }
 
             var save = FindButton(window, "保存策略");
             var panel = save == null ? null : save.Parent as Panel;
@@ -272,7 +279,7 @@ namespace Bot.Knowledge
             status.Foreground = brush;
         }
 
-        private static void ExportKnowledgePolicies(KnowledgePolicyProfileWindow window)
+        internal static void ExportKnowledgePolicies(KnowledgePolicyProfileWindow window)
         {
             try
             {
@@ -292,7 +299,7 @@ namespace Bot.Knowledge
                     + ", profiles=" + profiles.Count);
                 MessageBox.Show(
                     "已导出 " + profiles.Count + " 条知识策略。"
-                    + "\n可靠度统计属于本机学习数据，未写入迁移文件。",
+                    + "\n已包含回答模式、条件、可靠度及全部学习统计。",
                     "知识策略",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
@@ -303,7 +310,7 @@ namespace Bot.Knowledge
             }
         }
 
-        private static void ImportKnowledgePolicies(KnowledgePolicyProfileWindow window)
+        internal static void ImportKnowledgePolicies(KnowledgePolicyProfileWindow window)
         {
             try
             {
@@ -319,10 +326,17 @@ namespace Bot.Knowledge
                 ValidateSchema(root, PolicySchema);
                 var profiles = root["profiles"] as JArray ?? root["Profiles"] as JArray;
                 if (profiles == null) throw new Exception("文件中没有 profiles 策略数组。");
+                if (root["enabled"] != null)
+                {
+                    bool enabled;
+                    var policyShop = GetField<ShopContext>(window, "_shop") ?? ShopSettingsScope.Current;
+                    if (policyShop != null && bool.TryParse(Convert.ToString(root["enabled"]), out enabled))
+                        KnowledgePolicyProfileService.SetEnabled(policyShop, enabled);
+                }
 
                 var confirm = MessageBox.Show(
                     "将按知识ID或问题文本合并导入 " + profiles.Count + " 条策略。"
-                    + "\n不会删除现有策略，可靠度学习统计也不会被覆盖。"
+                    + "\n不会删除现有策略；匹配到的策略将完整恢复配置和可靠度学习统计。"
                     + "\n导入前会自动备份。是否继续？",
                     "确认导入知识策略",
                     MessageBoxButton.YesNo,
@@ -363,9 +377,16 @@ namespace Bot.Knowledge
                         DoNotApplyWhen = ReadString(item, "doNotApplyWhen", "DoNotApplyWhen"),
                         RequiredContext = ReadString(item, "requiredContext", "RequiredContext"),
                         AnswerMode = ReadString(item, "answerMode", "AnswerMode"),
-                        Confidence = ReadDouble(item, 0.80, "confidence", "Confidence")
+                        Confidence = ReadDouble(item, 0.80, "confidence", "Confidence"),
+                        DirectSelectedCount = ReadInt(item, 0, "directSelectedCount", "DirectSelectedCount"),
+                        ContextualSelectedCount = ReadInt(item, 0, "contextualSelectedCount", "ContextualSelectedCount"),
+                        AcceptedCount = ReadInt(item, 0, "acceptedCount", "AcceptedCount"),
+                        SellerCorrectionCount = ReadInt(item, 0, "sellerCorrectionCount", "SellerCorrectionCount"),
+                        SellerWithdrawCount = ReadInt(item, 0, "sellerWithdrawCount", "SellerWithdrawCount"),
+                        LastEvidenceType = ReadString(item, "lastEvidenceType", "LastEvidenceType"),
+                        UpdatedAt = ReadString(item, "updatedAt", "UpdatedAt")
                     };
-                    KnowledgePolicyProfileService.SaveProfile(entry, imported);
+                    KnowledgePolicyProfileService.ImportCompleteProfile(entry, imported);
                     updated++;
                 }
 
@@ -410,15 +431,178 @@ namespace Bot.Knowledge
                     ["doNotApplyWhen"] = x.DoNotApplyWhen ?? string.Empty,
                     ["requiredContext"] = x.RequiredContext ?? string.Empty,
                     ["answerMode"] = KnowledgeAnswerModes.Normalize(x.AnswerMode),
-                    ["confidence"] = x.Confidence <= 0 ? 0.80 : x.Confidence
+                    ["confidence"] = x.Confidence <= 0 ? 0.80 : x.Confidence,
+                    ["directSelectedCount"] = x.DirectSelectedCount,
+                    ["contextualSelectedCount"] = x.ContextualSelectedCount,
+                    ["acceptedCount"] = x.AcceptedCount,
+                    ["sellerCorrectionCount"] = x.SellerCorrectionCount,
+                    ["sellerWithdrawCount"] = x.SellerWithdrawCount,
+                    ["lastEvidenceType"] = x.LastEvidenceType ?? string.Empty,
+                    ["updatedAt"] = x.UpdatedAt ?? string.Empty
                 });
             return new JObject
             {
                 ["schema"] = PolicySchema,
                 ["version"] = ExportVersion,
                 ["exportedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["enabled"] = KnowledgePolicyProfileService.IsEnabled(),
                 ["profiles"] = new JArray(items)
             };
+        }
+
+        internal static void ExportKnowledgePackage(KnowledgeCenterWindow window)
+        {
+            try
+            {
+                var dialog = new SaveFileDialog
+                {
+                    Title = "导出知识库完整包",
+                    Filter = "知识库JSON包 (*.json)|*.json",
+                    FileName = "qianniu-knowledge-package-" + DateTime.Now.ToString("yyyyMMdd-HHmmss") + ".json",
+                    AddExtension = true,
+                    DefaultExt = ".json"
+                };
+                if (dialog.ShowDialog(window) != true) return;
+                var payload = BuildKnowledgePackage(window);
+                WriteJson(dialog.FileName, payload);
+                Log.Info("知识库完整包已导出: file=" + Path.GetFileName(dialog.FileName)
+                    + ", knowledge=" + ((JArray)payload["knowledge"]).Count);
+                MessageBox.Show("知识库完整包已导出，包含全部问答、知识策略/可靠度统计和知识相关设置。",
+                    "知识库", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("导出知识库完整包失败：" + ex.Message, "知识库", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        internal static bool ImportKnowledgePackage(KnowledgeCenterWindow window)
+        {
+            try
+            {
+                var dialog = new OpenFileDialog
+                {
+                    Title = "导入知识库完整包",
+                    Filter = "知识库JSON包 (*.json)|*.json",
+                    Multiselect = false
+                };
+                if (dialog.ShowDialog(window) != true) return false;
+                var root = ReadObject(dialog.FileName);
+                ValidateSchema(root, KnowledgePackageSchema);
+                var knowledgeToken = root["knowledge"] as JArray;
+                if (knowledgeToken == null) throw new Exception("文件中没有 knowledge 问答数据。");
+                var importedKnowledge = knowledgeToken.ToObject<List<KnowledgeBaseEntry>>() ?? new List<KnowledgeBaseEntry>();
+                var confirm = MessageBox.Show(
+                    "将完整替换当前店铺知识库为 " + importedKnowledge.Count + " 条问答，并恢复知识策略/可靠度统计和知识相关设置。"
+                    + "\n导入前会自动备份当前知识库完整包。是否继续？",
+                    "确认导入知识库完整包", MessageBoxButton.YesNo, MessageBoxImage.Question);
+                if (confirm != MessageBoxResult.Yes) return false;
+
+                var backup = BuildBackupPath("knowledge-package-before-import");
+                WriteJson(backup, BuildKnowledgePackage(window));
+                BotFeatureStore.SaveKnowledgeBase(importedKnowledge);
+
+                var policy = root["policy"] as JObject;
+                if (policy != null)
+                {
+                    var enabledToken = policy["enabled"];
+                    bool enabled;
+                    var shop = ResolveShop(window);
+                    if (enabledToken != null && bool.TryParse(Convert.ToString(enabledToken), out enabled) && shop != null)
+                        KnowledgePolicyProfileService.SetEnabled(shop, enabled);
+                    var profiles = policy["profiles"] as JArray;
+                    if (profiles != null)
+                    {
+                        foreach (var token in profiles.OfType<JObject>())
+                        {
+                            var entry = FindKnowledgeForImport(
+                                importedKnowledge,
+                                ReadString(token, "knowledgeId", "KnowledgeId"),
+                                ReadString(token, "questionSnapshot", "QuestionSnapshot"));
+                            if (entry == null) continue;
+                            KnowledgePolicyProfileService.ImportCompleteProfile(entry, ReadCompleteProfile(token));
+                        }
+                    }
+                }
+
+                var settings = root["settings"] as JObject;
+                var resolvedShop = ResolveShop(window);
+                if (settings != null && resolvedShop != null)
+                {
+                    var values = settings.Properties().ToDictionary(
+                        x => x.Name, x => Convert.ToString(x.Value) ?? string.Empty, StringComparer.Ordinal);
+                    new ShopScopedSettingsStore(resolvedShop, new ShopScopedPathProvider()).MergeValues(values, true);
+                }
+
+                Log.Info("知识库完整包已导入: file=" + Path.GetFileName(dialog.FileName)
+                    + ", knowledge=" + importedKnowledge.Count + ", backup=" + Path.GetFileName(backup));
+                MessageBox.Show("知识库完整包导入成功。\n原配置备份：" + backup,
+                    "知识库", MessageBoxButton.OK, MessageBoxImage.Information);
+                return true;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("导入知识库完整包失败：" + ex.Message, "知识库", MessageBoxButton.OK, MessageBoxImage.Error);
+                return false;
+            }
+        }
+
+        private static JObject BuildKnowledgePackage(Window window)
+        {
+            var knowledge = BotFeatureStore.GetKnowledgeBase() ?? new List<KnowledgeBaseEntry>();
+            var policy = BuildPolicyExportObject(KnowledgePolicyProfileService.GetProfilesForKnowledge(knowledge));
+            var settings = new JObject();
+            var shop = ResolveShop(window);
+            if (shop != null)
+            {
+                var values = new ShopScopedSettingsStore(shop, new ShopScopedPathProvider()).ExportValues();
+                foreach (var pair in values.Where(x =>
+                    x.Key.StartsWith("knowledge.", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(x.Key, ReplyModeService.SettingsKey, StringComparison.Ordinal)))
+                {
+                    settings[pair.Key] = pair.Value ?? string.Empty;
+                }
+            }
+            return new JObject
+            {
+                ["schema"] = KnowledgePackageSchema,
+                ["version"] = ExportVersion,
+                ["exportedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
+                ["shopKey"] = shop == null ? string.Empty : shop.ShopKey,
+                ["knowledge"] = JArray.FromObject(knowledge),
+                ["policy"] = policy,
+                ["settings"] = settings
+            };
+        }
+
+        private static KnowledgePolicyProfile ReadCompleteProfile(JObject item)
+        {
+            return new KnowledgePolicyProfile
+            {
+                KnowledgeId = ReadString(item, "knowledgeId", "KnowledgeId"),
+                QuestionSnapshot = ReadString(item, "questionSnapshot", "QuestionSnapshot"),
+                Intent = ReadString(item, "intent", "Intent"),
+                Entities = ReadString(item, "entities", "Entities"),
+                ApplyWhen = ReadString(item, "applyWhen", "ApplyWhen"),
+                DoNotApplyWhen = ReadString(item, "doNotApplyWhen", "DoNotApplyWhen"),
+                RequiredContext = ReadString(item, "requiredContext", "RequiredContext"),
+                AnswerMode = ReadString(item, "answerMode", "AnswerMode"),
+                Confidence = ReadDouble(item, 0.80, "confidence", "Confidence"),
+                DirectSelectedCount = ReadInt(item, 0, "directSelectedCount", "DirectSelectedCount"),
+                ContextualSelectedCount = ReadInt(item, 0, "contextualSelectedCount", "ContextualSelectedCount"),
+                AcceptedCount = ReadInt(item, 0, "acceptedCount", "AcceptedCount"),
+                SellerCorrectionCount = ReadInt(item, 0, "sellerCorrectionCount", "SellerCorrectionCount"),
+                SellerWithdrawCount = ReadInt(item, 0, "sellerWithdrawCount", "SellerWithdrawCount"),
+                LastEvidenceType = ReadString(item, "lastEvidenceType", "LastEvidenceType"),
+                UpdatedAt = ReadString(item, "updatedAt", "UpdatedAt")
+            };
+        }
+
+        private static ShopContext ResolveShop(Window window)
+        {
+            return ShopSettingsScope.Current
+                ?? ShopScopedUiBridge.Get(window)
+                ?? (window == null ? null : ShopScopedUiBridge.Get(window.Owner));
         }
 
         private static string BackupKnowledgePolicies(KnowledgePolicyProfileWindow window)
@@ -521,6 +705,12 @@ namespace Bot.Knowledge
         {
             double parsed;
             return double.TryParse(ReadString(value, names), out parsed) ? parsed : fallback;
+        }
+
+        private static int ReadInt(JObject value, int fallback, params string[] names)
+        {
+            int parsed;
+            return int.TryParse(ReadString(value, names), out parsed) ? parsed : fallback;
         }
 
         private static T GetField<T>(object target, string name) where T : class

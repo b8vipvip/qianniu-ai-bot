@@ -35,10 +35,11 @@ def test_burst_waits_for_fragments_and_collapses_input_artifacts():
     assert "TimeSpan.FromSeconds(4)" in coordinator
 
 
-def test_versioned_lease_invalidates_answers_when_buyer_adds_messages():
+def test_dispatched_lease_survives_new_messages_but_manual_cancel_invalidates_it():
     coordinator = text("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     assert "state.Version++" in coordinator
-    assert "return state.Version == capturedVersion;" in coordinator
+    assert "state.HardCancelVersion++" in coordinator
+    assert "return state.HardCancelVersion == capturedHardCancelVersion;" in coordinator
     assert "if (state.Version != capturedVersion) continue;" in coordinator
     assert "state.DelayCancellation.Cancel()" in coordinator
 

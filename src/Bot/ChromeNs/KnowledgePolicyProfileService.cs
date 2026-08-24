@@ -1,4 +1,5 @@
 using Bot.Knowledge;
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using System;
@@ -105,6 +106,38 @@ namespace Bot.ChromeNs
 
         private static readonly object Sync = new object();
         private static PolicyFile _cache;
+        internal const string EnabledSettingsKey = "knowledge.policy_reliability_enabled";
+        private static readonly IShopScopedPathProvider SettingsPaths = new ShopScopedPathProvider();
+
+        public static bool IsEnabled(ShopContext shop = null)
+        {
+            shop = shop ?? ShopSettingsScope.Current;
+            if (shop == null) return true;
+            try
+            {
+                string value;
+                var store = new ShopScopedSettingsStore(shop, SettingsPaths);
+                if (!store.TryGetString(EnabledSettingsKey, out value)) return true;
+                value = (value ?? string.Empty).Trim();
+                return !(value == "0"
+                    || value.Equals("false", StringComparison.OrdinalIgnoreCase)
+                    || value.Equals("off", StringComparison.OrdinalIgnoreCase));
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取知识策略与可靠度开关失败，按启用运行: " + ex.Message, 10);
+                return true;
+            }
+        }
+
+        public static void SetEnabled(ShopContext shop, bool enabled)
+        {
+            shop = shop ?? ShopSettingsScope.Current;
+            if (shop == null) throw new InvalidOperationException("保存知识策略开关需要当前店铺上下文。");
+            var store = new ShopScopedSettingsStore(shop, SettingsPaths);
+            store.SetString(EnabledSettingsKey, enabled ? "1" : "0");
+            Log.Info("知识策略与可靠度已" + (enabled ? "启用" : "关闭") + ": shop=" + shop.ShopKey);
+        }
 
         public static KnowledgePolicyProfile GetProfile(KnowledgeBaseEntry entry)
         {
@@ -156,6 +189,42 @@ namespace Bot.ChromeNs
             }
         }
 
+        public static void ImportCompleteProfile(KnowledgeBaseEntry entry, KnowledgePolicyProfile imported)
+        {
+            if (entry == null || imported == null) return;
+            lock (Sync)
+            {
+                var file = LoadInternal();
+                var id = StableId(entry);
+                var existing = file.Profiles.FirstOrDefault(x => x != null
+                    && string.Equals(x.KnowledgeId, id, StringComparison.Ordinal));
+                if (existing == null)
+                {
+                    existing = NewProfile(entry);
+                    file.Profiles.Add(existing);
+                }
+                existing.KnowledgeId = id;
+                existing.QuestionSnapshot = Clean(entry.Title, 400);
+                existing.Intent = Clean(imported.Intent, 80);
+                existing.Entities = Clean(imported.Entities, 500);
+                existing.ApplyWhen = Clean(imported.ApplyWhen, 1000);
+                existing.DoNotApplyWhen = Clean(imported.DoNotApplyWhen, 1000);
+                existing.RequiredContext = Clean(imported.RequiredContext, 1000);
+                existing.AnswerMode = KnowledgeAnswerModes.Normalize(imported.AnswerMode);
+                existing.Confidence = Clamp(imported.Confidence <= 0 ? 0.80 : imported.Confidence);
+                existing.DirectSelectedCount = Math.Max(0, imported.DirectSelectedCount);
+                existing.ContextualSelectedCount = Math.Max(0, imported.ContextualSelectedCount);
+                existing.AcceptedCount = Math.Max(0, imported.AcceptedCount);
+                existing.SellerCorrectionCount = Math.Max(0, imported.SellerCorrectionCount);
+                existing.SellerWithdrawCount = Math.Max(0, imported.SellerWithdrawCount);
+                existing.LastEvidenceType = Clean(imported.LastEvidenceType, 120);
+                existing.UpdatedAt = string.IsNullOrWhiteSpace(imported.UpdatedAt)
+                    ? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")
+                    : Clean(imported.UpdatedAt, 40);
+                SaveInternal(file);
+            }
+        }
+
         public static KnowledgePolicyEvaluation Evaluate(
             KnowledgeBaseEntry entry,
             string currentQuestion,
@@ -164,6 +233,19 @@ namespace Bot.ChromeNs
             string recentContext)
         {
             var profile = GetProfile(entry);
+            if (!IsEnabled())
+            {
+                return new KnowledgePolicyEvaluation
+                {
+                    Profile = profile,
+                    Excluded = false,
+                    ForceContextual = false,
+                    ConstraintOnly = false,
+                    AllowDirect = true,
+                    ScoreAdjustment = 0,
+                    Reason = "知识策略与可靠度已关闭，仅保留基础相关度、上下文和高风险安全判断"
+                };
+            }
             var mode = KnowledgeAnswerModes.Normalize(profile.AnswerMode);
             var haystack = BuildContextText(currentQuestion, resolvedQuestion, state, recentContext);
             var doNotApply = MatchConditions(profile.DoNotApplyWhen, haystack);

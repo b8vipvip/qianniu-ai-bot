@@ -49,10 +49,11 @@ def test_router_uses_rewritten_query_and_structured_state_before_top3_prompt():
     assert "当前会话状态" in read("src/Bot/ChromeNs/ConversationStateService.cs")
 
 
-def test_rewritten_queries_cannot_take_direct_fixed_answer_path():
+def test_rewritten_queries_are_contextual_except_explicit_self_contained_demonstratives():
     router = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
     assert "resolution != null && resolution.Rewritten" in router
-    assert "if (resolution != null && resolution.Rewritten) return false;" in router
+    assert "if (resolution != null && resolution.Rewritten && !selfContainedDemonstrative) return false;" in router
+    assert "IsSelfContainedDemonstrativeQuestion" in router
     assert "plan.QueryResolution == null || !plan.QueryResolution.Rewritten" in router
 
 

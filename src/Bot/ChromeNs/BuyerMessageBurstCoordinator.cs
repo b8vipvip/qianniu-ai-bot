@@ -165,6 +165,7 @@ namespace Bot.ChromeNs
             public CancellationTokenSource DelayCancellation = new CancellationTokenSource();
             public bool WorkerRunning;
             public int Version;
+            public int HardCancelVersion;
             public DateTime StartedAt = DateTime.MinValue;
             public BotActivityLease ActivityLease;
         }
@@ -194,10 +195,9 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // A buyer message must invalidate an answer that has already been dispatched to the
-            // Smart Reply/AI handler before we spend time evaluating deterministic rules. This is
-            // what lets “好的” cancel the previous in-flight AI and immediately use a local reply.
-            InvalidateDispatchedAnswerOnArrival(item.SellerNick, item.BuyerNick);
+            // New buyer messages may start another independent work item. Only messages still
+            // inside the short pre-dispatch merge window are merged; dispatched AI/vision work is
+            // not cancelled merely because the buyer continues typing.
             var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
 
             // Fixed business rules are evaluated on the individual incoming message before it is
@@ -316,6 +316,7 @@ namespace Bot.ChromeNs
             lock (state.Sync)
             {
                 state.Version++;
+                state.HardCancelVersion++;
                 state.Items.Clear();
                 state.StartedAt = DateTime.MinValue;
                 try { state.DelayCancellation.Cancel(); } catch { }
@@ -337,6 +338,7 @@ namespace Bot.ChromeNs
             {
                 CancellationToken token;
                 int capturedVersion;
+                int capturedHardCancelVersion;
                 int delayMilliseconds;
                 lock (state.Sync)
                 {
@@ -350,6 +352,7 @@ namespace Bot.ChromeNs
                     }
                     token = state.DelayCancellation.Token;
                     capturedVersion = state.Version;
+                    capturedHardCancelVersion = state.HardCancelVersion;
                     delayMilliseconds = QuietDelayMilliseconds(state.Items, state.StartedAt);
                 }
 
@@ -385,7 +388,7 @@ namespace Bot.ChromeNs
                     {
                         lock (state.Sync)
                         {
-                            return state.Version == capturedVersion;
+                            return state.HardCancelVersion == capturedHardCancelVersion;
                         }
                     });
 

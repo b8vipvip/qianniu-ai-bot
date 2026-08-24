@@ -1,4 +1,5 @@
 using Bot.ChromeNs;
+using Bot.ShopScope;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -52,10 +53,13 @@ namespace Bot.Knowledge
             };
             button.Click += (s, args) =>
             {
-                var window = new KnowledgePolicyProfileWindow
+                var owner = Window.GetWindow(manager);
+                var shop = ShopSettingsScope.Current ?? ShopScopedUiBridge.Get(owner);
+                var window = new KnowledgePolicyProfileWindow(shop)
                 {
-                    Owner = Window.GetWindow(manager)
+                    Owner = owner
                 };
+                if (shop != null) ShopScopedUiBridge.Attach(window, shop);
                 window.ShowDialog();
             };
             top.Children.Add(button);
@@ -197,9 +201,12 @@ namespace Bot.Knowledge
         private readonly List<KnowledgeBaseEntry> _knowledge;
         private List<KnowledgePolicyProfile> _profiles;
         private bool _loading;
+        private readonly ShopContext _shop;
+        private readonly CheckBox _enabled;
 
-        public KnowledgePolicyProfileWindow()
+        public KnowledgePolicyProfileWindow(ShopContext shop = null)
         {
+            _shop = shop ?? ShopSettingsScope.Current;
             Title = "知识策略与可靠度";
             Width = 1080;
             Height = 720;
@@ -282,6 +289,24 @@ namespace Bot.Knowledge
             var form = new StackPanel();
             right.Content = form;
 
+            _enabled = new CheckBox
+            {
+                Content = "启用知识策略与可靠度",
+                IsChecked = KnowledgePolicyProfileService.IsEnabled(_shop),
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 6),
+                ToolTip = "关闭后不再用每条知识的回答模式、适用/禁用/必要上下文和可靠度限制直答；仍保留基础相关度、上下文依赖与高风险安全判断。"
+            };
+            _enabled.Click += (s, e) => KnowledgePolicyProfileService.SetEnabled(_shop, _enabled.IsChecked == true);
+            form.Children.Add(_enabled);
+            form.Children.Add(new TextBlock
+            {
+                Text = "关闭仅绕过本页策略/可靠度约束，不会关闭知识库，也不会绕过订单流程、上下文或高风险安全校验。",
+                TextWrapping = TextWrapping.Wrap,
+                Foreground = Brushes.DimGray,
+                Margin = new Thickness(0, 0, 0, 12)
+            });
+
             AddLabel(form, "回答模式");
             _mode = new ComboBox { Height = 30, Margin = new Thickness(0, 0, 0, 10) };
             _mode.Items.Add(new ComboBoxItem { Content = "自动判断", Tag = KnowledgeAnswerModes.Auto });
@@ -311,6 +336,12 @@ namespace Bot.Knowledge
             form.Children.Add(_stats);
 
             var buttons = new StackPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+            var importAll = new Button { Content = "导入全部", Width = 82, Height = 30, Margin = new Thickness(0, 0, 8, 0), Tag = "knowledge-policies-import-full" };
+            importAll.Click += (s, e) => RulePolicyImportExportUi.ImportKnowledgePolicies(this);
+            buttons.Children.Add(importAll);
+            var exportAll = new Button { Content = "导出全部", Width = 82, Height = 30, Margin = new Thickness(0, 0, 8, 0), Tag = "knowledge-policies-export-full" };
+            exportAll.Click += (s, e) => RulePolicyImportExportUi.ExportKnowledgePolicies(this);
+            buttons.Children.Add(exportAll);
             var save = new Button { Content = "保存策略", Width = 90, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
             save.Click += (s, e) => SaveSelected();
             buttons.Children.Add(save);

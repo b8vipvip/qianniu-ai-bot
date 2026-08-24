@@ -35,14 +35,32 @@ namespace Bot.Knowledge
             Width = 1100;
             Height = 720;
             WindowStartupLocation = WindowStartupLocation.CenterOwner;
+            var root = new DockPanel();
+            Content = root;
+            var toolbar = new WrapPanel { Margin = new Thickness(10, 10, 10, 4) };
+            DockPanel.SetDock(toolbar, Dock.Top);
+            var importPackage = new Button { Content = "导入知识库完整包", Width = 140, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
+            var exportPackage = new Button { Content = "导出知识库完整包", Width = 140, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
+            toolbar.Children.Add(importPackage);
+            toolbar.Children.Add(exportPackage);
+            root.Children.Add(toolbar);
             _tabs = new TabControl();
-            Content = _tabs;
+            root.Children.Add(_tabs);
             _manager = new KnowledgeManagerControl();
             _import = new KnowledgeImportControl(delegate { ShowManager(); });
             _optimizationHistory = new AiOptimizationHistoryControl();
             _tabs.Items.Add(new TabItem { Header = "智能导入", Content = _import });
             _tabs.Items.Add(new TabItem { Header = "问答管理", Content = _manager });
             _tabs.Items.Add(new TabItem { Header = "AI优化记录", Content = _optimizationHistory });
+            importPackage.Click += (s, e) =>
+            {
+                if (RulePolicyImportExportUi.ImportKnowledgePackage(this))
+                {
+                    _manager.RefreshData();
+                    ShowManager();
+                }
+            };
+            exportPackage.Click += (s, e) => RulePolicyImportExportUi.ExportKnowledgePackage(this);
         }
 
         public void ShowManager()

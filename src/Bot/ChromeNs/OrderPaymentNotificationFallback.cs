@@ -447,7 +447,13 @@ namespace Bot.ChromeNs
         {
             var qn = sender as QN;
             var raw = e == null ? string.Empty : (e.NotifyContent ?? string.Empty).Trim();
-            if (qn == null || raw.Length == 0) return;
+            if (qn == null) return;
+            if (raw.Length == 0)
+            {
+                OrderAutomationCoordinator.ObserveGenericPaymentSignal(qn, "messageCenterNotify空载荷");
+                Log.Info("付款通知收到空载荷，已转入独立订单补扫，不等待买家文本/图片处理。");
+                return;
+            }
 
             var hash = Hash(raw);
             CleanupReservations();
