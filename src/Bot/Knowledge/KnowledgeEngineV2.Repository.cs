@@ -47,8 +47,7 @@ namespace Bot.Knowledge
             NormalizeForSave(record);
             lock (state.Sync) state.Db.SaveOneRecord(ToRow(record));
             MirrorOneToLegacy(shop, record);
-            if (record.Enabled) KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
-            else KnowledgeEngineV2Service.Invalidate(seller);
+            KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
         }
 
         public static bool Delete(string seller, string id)
@@ -64,7 +63,7 @@ namespace Bot.Knowledge
                 state.Db.Delete(row);
             }
             MirrorDeleteToLegacy(shop, id);
-            KnowledgeEngineV2Service.Invalidate(seller);
+            KnowledgeEngineV2Service.ApplyRecordDelete(seller, id);
             return true;
         }
 
@@ -89,7 +88,7 @@ namespace Bot.Knowledge
                 });
             }
             MirrorAllToLegacy(shop, normalized);
-            KnowledgeEngineV2Service.Invalidate(seller);
+            KnowledgeEngineV2Service.ReplaceSnapshot(seller, normalized);
         }
 
         public static string GetDatabasePath(string seller)
@@ -105,7 +104,8 @@ namespace Bot.Knowledge
             lock (state.Sync)
                 state.Db.ClearTable(new List<Type> { typeof(KnowledgeV2RecordRow), typeof(KnowledgeV2MetaRow) });
             EnsureMigrated(shop, state);
-            KnowledgeEngineV2Service.Invalidate(seller);
+            var records = LoadAll(seller);
+            KnowledgeEngineV2Service.ReplaceSnapshot(seller, records);
         }
 
         private static RepositoryState GetState(ShopContext shop)
