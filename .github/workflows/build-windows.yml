@@ -48,6 +48,7 @@ jobs:
       - name: Apply and test configurable suffix changes
         shell: bash
         run: |
+          python -m pip install --disable-pip-version-check pytest
           python tools/apply_bot_message_suffix_patch.py
           python -m pytest -q tests/test_bot_message_suffix_static.py tests/test_buyer_alias_send_confirmation_static.py
 
