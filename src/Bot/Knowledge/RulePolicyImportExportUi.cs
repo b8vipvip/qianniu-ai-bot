@@ -329,8 +329,9 @@ namespace Bot.Knowledge
                 if (root["enabled"] != null)
                 {
                     bool enabled;
-                    if (bool.TryParse(Convert.ToString(root["enabled"]), out enabled))
-                        KnowledgePolicyProfileService.SetEnabled(ShopSettingsScope.Current, enabled);
+                    var policyShop = GetField<ShopContext>(window, "_shop") ?? ShopSettingsScope.Current;
+                    if (policyShop != null && bool.TryParse(Convert.ToString(root["enabled"]), out enabled))
+                        KnowledgePolicyProfileService.SetEnabled(policyShop, enabled);
                 }
 
                 var confirm = MessageBox.Show(
@@ -533,7 +534,6 @@ namespace Bot.Knowledge
                     new ShopScopedSettingsStore(resolvedShop, new ShopScopedPathProvider()).MergeValues(values, true);
                 }
 
-                KnowledgeLearningService.NotifyKnowledgeBaseChanged();
                 Log.Info("知识库完整包已导入: file=" + Path.GetFileName(dialog.FileName)
                     + ", knowledge=" + importedKnowledge.Count + ", backup=" + Path.GetFileName(backup));
                 MessageBox.Show("知识库完整包导入成功。\n原配置备份：" + backup,
