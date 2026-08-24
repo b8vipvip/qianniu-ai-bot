@@ -63,6 +63,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Repository.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Semantics.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Index.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Incremental.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Public.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2Ui.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
