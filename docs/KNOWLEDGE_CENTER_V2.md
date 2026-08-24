@@ -78,7 +78,9 @@ Answer: ...
 
 旧问答知识在首次运行时自动迁移。迁移不会要求用户重新录入现有知识。
 
-V2 编辑的基本问答会同步镜像回旧知识列表，供过渡期兼容链路继续读取；生产本地直答以 V2 Repository 和 V2 Snapshot 为准。
+V2 编辑的正式知识会同步镜像回旧知识列表，供过渡期兼容链路继续读取；生产本地直答以 V2 Repository 和 V2 Snapshot 为准。
+
+学习候选即使在 V2 内处于 Enabled，也会在旧知识镜像中强制 `Enabled=false`，避免 Smart Reply / AI 兼容回退链路提前使用尚未批准的候选答案。批准候选后才会转换为正式知识并重新启用兼容镜像。
 
 ## 索引
 
@@ -103,7 +105,7 @@ V2 编辑的基本问答会同步镜像回旧知识列表，供过渡期兼容�
 
 与 Memory Engine v1 不同，查询不再对全部知识逐条执行策略文件读取与全表 Score。
 
-Snapshot 没有“10 分钟过期后自动全量重建”的时间过期规则。只有知识变更、导入、迁移或显式重建时才使当前店铺 Snapshot 失效。
+Snapshot 没有“10 分钟过期后自动全量重建”的时间过期规则。普通启用知识的新增/编辑通过 `KnowledgeEngineV2.Service.Incremental.cs` 对当前店铺 Snapshot 做原子增量更新：先复制当前完整 Snapshot、只删除/增加该知识对应的索引 posting，再一次性替换 Snapshot 引用，因此并发买家查询只会看到更新前或更新后的完整状态。删除、停用、完整包替换和重新迁移等结构性操作才使 Snapshot 失效并在后台/下次预热时重建。
 
 ## Working Memory
 
@@ -143,6 +145,8 @@ Compact(Subject) + "|" + Predicate
 电视会员 | purchase_channel
 ```
 
+学习候选不参与生产事实冲突统计，避免未批准建议把正常 active 知识错误标成冲突。
+
 ## 学习候选
 
 旧人工回复/会话学习事件仍可作为数据来源，但 V2 学习桥会把新学习内容转换为：
@@ -152,7 +156,7 @@ Type = learning_candidate
 Status = candidate
 ```
 
-候选知识默认不能直接发送，需要在 Knowledge Center V2 的“学习”页面批准后才进入 active 状态。
+候选知识默认不能直接发送，需要在 Knowledge Center V2 的“学习”页面批准后才进入 active 状态。V2 本地直答层和旧知识兼容镜像都会同时阻止未批准候选进入生产回复。
 
 如果学习内容是在修正已存在知识，V2 会生成独立候选修正记录，避免自动覆盖生产事实。
 
@@ -267,7 +271,7 @@ TotalMs
 - 是否本地直答
 - 拒绝原因
 
-支持 30 次热查询性能测试并计算 P50 / P95 / MAX。
+支持 30 次热查询性能测试并计算 P50 / P95 / MAX。单次测试与性能循环都在后台 Task 中运行，不阻塞 WPF UI 线程。
 
 ### 导入导出
 
@@ -288,6 +292,7 @@ V2 完整包包含：
 ```text
 约 800 条知识：热查询 P95 <= 50ms
 普通明确问题本地决策：尽量 <= 30ms
+普通启用知识新增/编辑：增量 Snapshot 更新时间 <= 100ms
 买家消息：不得承担定时全量索引重建
 UI 测试：不得在 WPF 主线程同步执行完整检索/性能循环
 ```
@@ -302,8 +307,9 @@ UI 测试：不得在 WPF 主线程同步执行完整检索/性能循环
 4. Memory Engine v1 运行时停用。
 5. Production 模式下 V2 高置信本地直答。
 6. 其余消息暂时继续兼容 Smart Reply / AI。
-7. 新人工学习进入 V2 candidate，不自动污染 active 知识。
-8. 生产数据稳定后，再逐步删除旧检索实现；旧格式只保留导入兼容。
+7. 新人工学习进入 V2 candidate，不自动污染 active 知识，也不会被旧兼容知识链提前使用。
+8. 普通知识编辑使用原子增量 Snapshot 更新；结构性批量操作才重建。
+9. 生产数据稳定后，再逐步删除旧检索实现；旧格式只保留导入兼容。
 
 原则：**保数据，不保旧运行时架构。**
 
@@ -314,6 +320,7 @@ src/Bot/Knowledge/KnowledgeEngineV2.Models.cs
 src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs
 src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs
 src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs
+src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs
 src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs
 src/Bot/Knowledge/KnowledgeCenterV2Ui.cs
 src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs
