@@ -54,7 +54,7 @@ namespace Bot.ChromeNs
                 var added = 0;
                 foreach (var entry in legacy.Where(IsLearningEntry))
                 {
-                    KnowledgeV2Record existing;
+                    KnowledgeV2Record existing = null;
                     if (!string.IsNullOrWhiteSpace(entry.Id)
                         && byId.TryGetValue(entry.Id, out existing)
                         && Same(existing.Answer, entry.Answer))
