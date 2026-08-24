@@ -63,3 +63,5 @@ def test_demonstrative_question_can_still_use_high_confidence_local_direct():
     source = read("src/Bot/ChromeNs/SmartReplyRouterService.cs")
     assert "IsSelfContainedDemonstrativeQuestion" in source
     assert "selfContainedDemonstrative" in source
+
+# CI trigger: final feature branch contains no temporary workflow or patch helper files.
