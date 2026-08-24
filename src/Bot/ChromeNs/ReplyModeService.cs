@@ -111,9 +111,9 @@ namespace Bot.ChromeNs
         {
             try
             {
-                var shop = ShopSettingsScope.Current;
-                if (shop == null) return DefaultSuffix;
-                return GetSuffix(new ShopScopedSettingsStore(shop, Paths));
+                var qn = QN.CurQN;
+                var seller = qn == null || qn.Seller == null ? string.Empty : qn.Seller.Nick;
+                return GetSuffix(seller);
             }
             catch (Exception ex)
             {
