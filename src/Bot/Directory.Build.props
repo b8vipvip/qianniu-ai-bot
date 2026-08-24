@@ -49,6 +49,14 @@
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\ReplyModeService.cs" />
   </ItemGroup>
 
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)ChromeNs\KnowledgeMemoryEngine.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeMemoryEngine.cs" />
+  </ItemGroup>
+
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeMemoryEngineUi.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeMemoryEngineUi.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs" />
   </ItemGroup>
