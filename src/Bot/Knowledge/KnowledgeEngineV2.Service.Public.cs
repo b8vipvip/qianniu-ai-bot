@@ -127,22 +127,26 @@ namespace Bot.Knowledge
             decision.RecallMs = recallSw.ElapsedMilliseconds;
 
             var rankSw = Stopwatch.StartNew();
-            var matches = candidates
+            var rankedMatches = candidates
                 .Select(i => Score(snapshot.Records[i], query))
                 .Where(x => x != null && x.Score >= 0.30)
                 .OrderByDescending(x => x.Score)
                 .ThenByDescending(x => x.ConfidenceScore)
+                .ToList();
+            var productionMatches = rankedMatches
+                .Where(IsApprovedProductionMatch)
                 .Take(5)
                 .ToList();
-            decision.Matches = matches;
+            var best = productionMatches.FirstOrDefault();
+            var visibleMatches = rankedMatches.Take(5).ToList();
+            if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);
+            decision.Matches = visibleMatches;
             decision.RankMs = rankSw.ElapsedMilliseconds;
 
             var decideSw = Stopwatch.StartNew();
-            var productionMatches = matches.Where(IsApprovedProductionMatch).ToList();
-            var best = productionMatches.FirstOrDefault();
             if (best == null)
             {
-                decision.Reason = matches.Count > 0
+                decision.Reason = rankedMatches.Count > 0
                     ? "当前只命中尚未批准的学习候选，继续兼容上下文/AI链路"
                     : "结构化索引没有找到足够相关的候选知识";
                 Finish(decision, total, decideSw);
