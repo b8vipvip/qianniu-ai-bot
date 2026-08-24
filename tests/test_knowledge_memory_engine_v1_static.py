@@ -23,9 +23,10 @@ def test_memory_engine_has_working_memory_conflict_detection_and_learned_reliabi
     assert "TimeSpan.FromMinutes(45)" in source
     assert "HasMaterialConflict" in source
     assert "ReliabilityScore" in source
-    assert "SellerCorrection" not in source or "ReliabilityScore" in source
     assert "memoryConfidence" in source
     assert "高分记忆之间存在实质答案冲突" in source
+    assert "AnswersEquivalent" in source
+    assert "近似同答案候选已合并判断" in source
 
 
 def test_local_first_memory_can_bypass_ai_but_delegates_when_not_proven():
@@ -45,10 +46,28 @@ def test_memory_direct_gate_requires_meaning_confidence_margin_policy_and_safety
     assert "DefaultDirectThreshold = 0.88" in source
     assert "DefaultMinConfidence = 0.70" in source
     assert "PolicyAllowsDirect" in source
-    assert "margin >= 0.055" in source
+    assert "effectiveMargin >= 0.055" in source
     assert "strongMeaning" in source
     assert "HighRiskRegex" in source
     assert "ConversationProgressGuardService.RequiresContextualHandling" in source
+
+
+def test_memory_semantic_key_supports_paraphrases_instead_of_raw_wording_only():
+    source = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    assert "DetectMemoryIntent" in source
+    assert "Semantic-key boost" in source
+    assert "currentMatched >= 2" in source
+    assert "currentMatched >= 3 ? 0.92 : 0.89" in source
+    assert 'return "capability"' in source
+    assert "StripDemonstratives" in source
+
+
+def test_memory_runtime_reasserts_outer_wrapper_after_streaming_pipeline():
+    source = read("src/Bot/ChromeNs/KnowledgeMemoryEngine.cs")
+    assert "MemoryHandlerWrapper" in source
+    assert "current.Target is MemoryHandlerWrapper" in source
+    assert "new Timer(_ => PatchExisting(), null, 700, 700)" in source
+    assert "Memory remains the outermost text decision layer" in source
 
 
 def test_memory_settings_are_shop_scoped_and_exportable_with_existing_knowledge_package():
