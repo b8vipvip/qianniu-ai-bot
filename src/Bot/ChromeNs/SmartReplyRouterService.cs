@@ -495,17 +495,23 @@ namespace Bot.ChromeNs
             ContextualQueryResolution resolution)
         {
             if (best == null || best.Entry == null) return false;
-            if (dependency > 0.20) return false;
-            if (resolution != null && resolution.Rewritten) return false;
+            var selfContainedDemonstrative = IsSelfContainedDemonstrativeQuestion(question, best);
+            if (dependency > 0.20 && !selfContainedDemonstrative) return false;
+            if (resolution != null && resolution.Rewritten && !selfContainedDemonstrative) return false;
             if (!PolicyAllowsDirect(best)) return false;
             if (Compact(question).Length < 4) return false;
-            if (ContextCues.Any(x => Compact(question).Contains(Compact(x)))) return false;
+            if (ContextCues.Any(x => Compact(question).Contains(Compact(x))) && !selfContainedDemonstrative) return false;
             if (IsUnsafeDirectAnswer(best.Entry.Answer)) return false;
 
             var policy = best.PolicyEvaluation == null ? null : best.PolicyEvaluation.Profile;
             var mode = policy == null ? KnowledgeAnswerModes.Auto : KnowledgeAnswerModes.Normalize(policy.AnswerMode);
             var reliability = policy == null ? 0.75 : policy.ReliabilityScore;
             if (best.ExactQuestionMatch && best.RetrievalScore >= 0.95) return reliability >= 0.58;
+            if (selfContainedDemonstrative
+                && reliability >= 0.58
+                && best.FinalScore >= 0.88
+                && (best.RetrievalScore >= 0.80 || best.ResolvedQueryScore >= 0.84 || best.SemanticScore >= 0.86)
+                && margin >= 0.08) return true;
             if (mode == KnowledgeAnswerModes.Direct && reliability >= 0.78)
             {
                 return best.FinalScore >= 0.86 && margin >= 0.10 && best.RetrievalScore >= 0.82;
@@ -514,6 +520,19 @@ namespace Bot.ChromeNs
                 && best.FinalScore >= 0.90
                 && margin >= 0.14
                 && best.RetrievalScore >= 0.88;
+        }
+
+        private static bool IsSelfContainedDemonstrativeQuestion(string question, SmartKnowledgeCandidate best)
+        {
+            if (best == null || best.Entry == null) return false;
+            var compact = Compact(question);
+            if (!Regex.IsMatch(compact, @"^(这个|那个|这款|那款|这种|那种)")) return false;
+            var stripped = Regex.Replace(compact, @"^(这个|那个|这款|那款|这种|那种)", string.Empty);
+            if (stripped.Length < 8) return false;
+            if (!Regex.IsMatch(stripped, @"会员|电视|tv|手机|电脑|平板|酷狗|音乐|充值|账号|设备|软件|app|价格|退款|订单", RegexOptions.IgnoreCase)) return false;
+            if (HighRiskTerms.Any(x => stripped.Contains(Compact(x)))) return false;
+            return best.FinalScore >= 0.84
+                && (best.RetrievalScore >= 0.72 || best.ResolvedQueryScore >= 0.78 || best.SemanticScore >= 0.82);
         }
 
         private static bool PolicyAllowsDirect(SmartKnowledgeCandidate candidate)
