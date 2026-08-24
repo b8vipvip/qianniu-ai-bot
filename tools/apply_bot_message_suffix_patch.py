@@ -1,0 +1,279 @@
+from pathlib import Path
+
+BOM = b"\xef\xbb\xbf"
+
+
+def read_text(path):
+    raw = Path(path).read_bytes()
+    return raw.decode("utf-8-sig"), raw.startswith(BOM)
+
+
+def write_text(path, text, had_bom):
+    data = text.encode("utf-8")
+    Path(path).write_bytes((BOM if had_bom else b"") + data)
+
+
+def replace_once(path, old, new):
+    text, had_bom = read_text(path)
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{path}: expected exactly one match, found {count}\nPATTERN:\n{old}")
+    text = text.replace(old, new, 1)
+    write_text(path, text, had_bom)
+
+
+reply_mode = Path("src/Bot/ChromeNs/ReplyModeService.cs")
+text, had_bom = read_text(reply_mode)
+end = "\n}\n"
+if not text.endswith(end):
+    raise SystemExit("ReplyModeService.cs unexpected ending")
+service = r'''
+
+    internal static class BotMessageSuffixService
+    {
+        internal const string SettingsKey = "message.bot_message_suffix";
+        internal const string DefaultSuffix = "[AI]";
+        internal const int MaxSuffixLength = 32;
+
+        private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
+
+        public static string GetSuffix(string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return DefaultSuffix;
+
+            try
+            {
+                var shop = ShopContextLocator.ResolveBySellerNick(seller);
+                return GetSuffix(new ShopScopedSettingsStore(shop, Paths));
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取Bot消息后缀失败，已使用默认[AI]: seller=" + seller + ", error=" + ex.Message, 10);
+                return DefaultSuffix;
+            }
+        }
+
+        public static string GetCurrentSuffix()
+        {
+            try
+            {
+                var shop = ShopSettingsScope.Current;
+                if (shop == null) return DefaultSuffix;
+                return GetSuffix(new ShopScopedSettingsStore(shop, Paths));
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取当前店铺Bot消息后缀失败，已使用默认[AI]: " + ex.Message, 10);
+                return DefaultSuffix;
+            }
+        }
+
+        public static void Save(string seller, string suffix)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) throw new ArgumentException("保存Bot消息后缀需要卖家身份。", nameof(seller));
+
+            var normalized = Normalize(suffix);
+            var shop = ShopContextLocator.ResolveBySellerNick(seller);
+            var store = new ShopScopedSettingsStore(shop, Paths);
+            store.SetString(SettingsKey, normalized);
+            Log.Info("Bot消息后缀已保存: seller=" + seller + ", suffix=" + normalized);
+        }
+
+        public static string Apply(string seller, string value)
+        {
+            value = BotOutboundMessageFormatter.StripAiMarker((value ?? string.Empty).Trim());
+            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;
+
+            var suffix = GetSuffix(seller);
+            if (suffix.Length == 0) return value;
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return value;
+            return value + " " + suffix;
+        }
+
+        public static string Normalize(string suffix)
+        {
+            suffix = (suffix ?? string.Empty)
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .Trim();
+            if (suffix.Length > MaxSuffixLength)
+                suffix = suffix.Substring(0, MaxSuffixLength).Trim();
+            return suffix;
+        }
+
+        private static string GetSuffix(ShopScopedSettingsStore store)
+        {
+            string value;
+            if (store == null || !store.TryGetString(SettingsKey, out value)) return DefaultSuffix;
+            return Normalize(value);
+        }
+    }
+'''
+text = text[:-len(end)] + service + end
+write_text(reply_mode, text, had_bom)
+
+ui = "src/Bot/Options/FeatureSettingsOptionsControl.cs"
+replace_once(
+    ui,
+    "        private ComboBox _replyMode;\n        private CheckBox _firstInquiryFixedReplyEnabled;",
+    "        private ComboBox _replyMode;\n        private TextBox _botMessageSuffix;\n        private CheckBox _firstInquiryFixedReplyEnabled;",
+)
+replace_once(
+    ui,
+    '''                if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)''',
+    '''                if (_botMessageSuffix != null)
+                {
+                    BotMessageSuffixService.Save(effectiveSeller, _botMessageSuffix.Text ?? string.Empty);
+                }
+                if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)''',
+)
+replace_once(
+    ui,
+    '''            _replyMode.Items.Add("AI优先");
+            _replyMode.Items.Add("本地优先");
+
+            _firstInquiryFixedReplyEnabled = new CheckBox''',
+    '''            _replyMode.Items.Add("AI优先");
+            _replyMode.Items.Add("本地优先");
+
+            _botMessageSuffix = new TextBox
+            {
+                Text = BotMessageSuffixService.GetSuffix(Seller),
+                Width = 180,
+                Height = 26,
+                MaxLength = BotMessageSuffixService.MaxSuffixLength,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(6, 3, 6, 3)
+            };
+
+            _firstInquiryFixedReplyEnabled = new CheckBox''',
+)
+replace_once(ui, '            result.Add(MakeSectionTitle("消息策略"));\n', "")
+reply_hint = '''            result.Add(MakeLabeledControl(
+                "回复模式",
+                _replyMode,
+                "AI优先：本地知识作为上下文，由AI生成最终答案。 本地优先：先检索本地知识库，高置信命中时直接回复且不调用AI；未达到高置信阈值时再调用AI。买家5分钟无新消息后，会把本轮买家、Bot和人工客服完整消息交给AI复盘，生成去重后的可复用问答进入本地知识库。"));'''
+replace_once(
+    ui,
+    reply_hint,
+    reply_hint
+    + '''
+            result.Add(MakeLabeledControl(
+                "Bot消息后缀",
+                _botMessageSuffix,
+                "每条 Bot 自动发送的文本消息末尾附加此后缀，默认 [AI]；留空表示不添加后缀。"));''',
+)
+
+qn = "src/Bot/ChromeNs/QN.cs"
+replace_once(
+    qn,
+    '''                return true;
+            }
+
+            await _sendGate.WaitAsync();''',
+    '''                return true;
+            }
+
+            text = BotMessageSuffixService.Apply(
+                Seller == null ? string.Empty : Seller.Nick,
+                text);
+
+            await _sendGate.WaitAsync();''',
+)
+
+dedup = "src/Bot/ChromeNs/ReplyDeduplicationService.cs"
+replace_once(
+    dedup,
+    '''            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;
+            if (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase)) return value;
+            return value + " " + AiMarker;''',
+    '''            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;
+            var suffix = BotMessageSuffixService.GetCurrentSuffix();
+            value = StripAiMarker(value);
+            if (suffix.Length == 0) return value;
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return value;
+            return value + " " + suffix;''',
+)
+replace_once(
+    dedup,
+    '''            value = (value ?? string.Empty).Trim();
+            while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))
+                value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();
+            return value;''',
+    '''            value = (value ?? string.Empty).Trim();
+            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();
+            if (!string.IsNullOrWhiteSpace(configuredSuffix))
+            {
+                while (value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))
+                    value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();
+            }
+            while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))
+                value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();
+            return value;''',
+)
+
+guard = "src/Bot/ChromeNs/BuyerReplyOutputGuard.cs"
+replace_once(
+    guard,
+    '''            value = (value ?? string.Empty).Trim();
+            foreach (var suffix in new[] { "[AI]", "【AI】", "［AI］" })''',
+    '''            value = (value ?? string.Empty).Trim();
+            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();
+            if (!string.IsNullOrWhiteSpace(configuredSuffix)
+                && value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();
+            }
+            foreach (var suffix in new[] { "[AI]", "【AI】", "［AI］" })''',
+)
+
+Path("tests/test_bot_message_suffix_static.py").write_text(
+    r'''from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+def test_message_strategy_removes_redundant_inner_heading_and_adds_suffix_field():
+    source = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
+    assert 'result.Add(MakeSectionTitle("消息策略"));' not in source
+    assert 'private TextBox _botMessageSuffix;' in source
+    assert '"Bot消息后缀"' in source
+    assert 'BotMessageSuffixService.GetSuffix(Seller)' in source
+    assert 'BotMessageSuffixService.Save(effectiveSeller, _botMessageSuffix.Text ?? string.Empty)' in source
+
+
+def test_suffix_setting_is_shop_scoped_and_defaults_to_ai_marker():
+    source = read("src/Bot/ChromeNs/ReplyModeService.cs")
+    assert 'SettingsKey = "message.bot_message_suffix"' in source
+    assert 'DefaultSuffix = "[AI]"' in source
+    assert 'MaxSuffixLength = 32' in source
+    assert 'store.SetString(SettingsKey, normalized)' in source
+    assert 'if (store == null || !store.TryGetString(SettingsKey, out value)) return DefaultSuffix;' in source
+
+
+def test_final_send_path_applies_suffix_before_echo_tracking_and_retry():
+    source = read("src/Bot/ChromeNs/QN.cs")
+    start = source.index("public async Task<bool> SendTextWithRetryAsync")
+    block = source[start:start + 5000]
+    apply_pos = block.index("BotMessageSuffixService.Apply(")
+    gate_pos = block.index("await _sendGate.WaitAsync()")
+    send_pos = block.index("var ok = await SendTextAsync(buyer, text)")
+    assert apply_pos < gate_pos < send_pos
+    assert 'HasRecentSellerEcho(buyer, text, sendStartedAt)' in block
+
+
+def test_formatter_and_guard_understand_configured_suffix():
+    formatter = read("src/Bot/ChromeNs/ReplyDeduplicationService.cs")
+    guard = read("src/Bot/ChromeNs/BuyerReplyOutputGuard.cs")
+    assert 'var suffix = BotMessageSuffixService.GetCurrentSuffix();' in formatter
+    assert 'var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();' in formatter
+    assert 'var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();' in guard
+''',
+    encoding="utf-8",
+)
