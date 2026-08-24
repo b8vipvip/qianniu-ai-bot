@@ -45,6 +45,7 @@ namespace Bot.ChromeNs
         public double ContextScore { get; set; }
         public double MemoryConfidence { get; set; }
         public bool PolicyAllowsDirect { get; set; }
+        public int StrongEntityMatches { get; set; }
         public string Reason { get; set; }
     }
 
@@ -122,8 +123,6 @@ namespace Bot.ChromeNs
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ConcurrentDictionary<string, MemoryIndex> Indexes =
             new ConcurrentDictionary<string, MemoryIndex>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, ConversationWorkingMemorySnapshot> WorkingMemories =
-            new ConcurrentDictionary<string, ConversationWorkingMemorySnapshot>(StringComparer.Ordinal);
 
         private static readonly Regex HighRiskRegex = new Regex(
             @"退款|退货|赔偿|投诉|差评|举报|仲裁|验证码|密码|身份证|银行卡|封号|解封|法律|起诉",
@@ -232,6 +231,8 @@ namespace Bot.ChromeNs
 
             var second = matches.Count > 1 ? matches[1] : null;
             var margin = second == null ? decision.Best.Score : decision.Best.Score - second.Score;
+            var answersEquivalent = AnswersEquivalent(decision.Best, second);
+            var effectiveMargin = answersEquivalent ? Math.Max(margin, 0.08) : margin;
             decision.HasConflict = HasMaterialConflict(decision.Best, second, margin);
 
             var threshold = ReadDouble(seller, DirectThresholdSettingsKey, DefaultDirectThreshold, 0.78, 0.98);
@@ -247,7 +248,7 @@ namespace Bot.ChromeNs
                 && decision.Best.PolicyAllowsDirect
                 && decision.Best.Score >= threshold
                 && decision.Best.MemoryConfidence >= minConfidence
-                && margin >= 0.055
+                && effectiveMargin >= 0.055
                 && strongMeaning;
 
             decision.Answer = decision.CanDirectReply && decision.Best.Card != null
@@ -256,8 +257,9 @@ namespace Bot.ChromeNs
             decision.Reason = decision.CanDirectReply
                 ? "本地记忆高置信直答：score=" + decision.Best.Score.ToString("0.00")
                     + ", confidence=" + decision.Best.MemoryConfidence.ToString("0.00")
-                    + ", margin=" + margin.ToString("0.00")
-                : BuildRejectReason(decision, threshold, minConfidence, margin, strongMeaning, highRisk);
+                    + ", margin=" + effectiveMargin.ToString("0.00")
+                    + (answersEquivalent ? "（近似同答案候选已合并判断）" : string.Empty)
+                : BuildRejectReason(decision, threshold, minConfidence, effectiveMargin, strongMeaning, highRisk);
             decision.ElapsedMilliseconds = Elapsed(started);
             return decision;
         }
@@ -312,6 +314,7 @@ namespace Bot.ChromeNs
                     .Append(" confidence=").Append(match.MemoryConfidence.ToString("0.00"))
                     .Append(" type=").Append(match.Card.MemoryType)
                     .Append(" intent=").Append(match.Card.Intent)
+                    .Append(" entities=").Append(match.StrongEntityMatches)
                     .Append("\r\nQ: ").Append(Safe(match.Card.CanonicalQuestion, 260))
                     .Append("\r\nA: ").Append(Safe(match.Card.Answer, 500))
                     .Append("\r\n原因: ").Append(match.Reason ?? string.Empty);
@@ -357,23 +360,30 @@ namespace Bot.ChromeNs
         {
             if (entry == null) return null;
             var profile = KnowledgePolicyProfileService.GetProfile(entry);
-            var intent = NormalizeIntent(!string.IsNullOrWhiteSpace(profile.Intent)
-                ? profile.Intent
-                : ConversationStateService.DetectIntent((entry.Title ?? string.Empty) + " " + (entry.Keywords ?? string.Empty)));
+            var intent = NormalizeIntent(profile.Intent);
+            if (string.IsNullOrWhiteSpace(intent) || intent == "general")
+            {
+                intent = DetectMemoryIntent((entry.Title ?? string.Empty) + " "
+                    + (entry.Keywords ?? string.Empty) + " " + (entry.Answer ?? string.Empty));
+            }
+
             var entities = new List<string>();
             entities.AddRange(SplitTerms(profile.Entities));
             entities.AddRange(SplitTerms(entry.Keywords));
-            entities.AddRange(ExtractDomainEntities((entry.Title ?? string.Empty) + " " + (entry.Category ?? string.Empty)));
+            entities.AddRange(ExtractDomainEntities((entry.Title ?? string.Empty) + " "
+                + (entry.Category ?? string.Empty) + " " + (entry.Answer ?? string.Empty)));
             entities = entities
                 .Select(CleanTerm)
                 .Where(x => x.Length >= 2)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(16)
+                .Take(18)
                 .ToList();
 
-            var aliases = new List<string>();
-            aliases.Add(entry.Title ?? string.Empty);
-            aliases.Add(StripDemonstratives(entry.Title));
+            var aliases = new List<string>
+            {
+                entry.Title ?? string.Empty,
+                StripDemonstratives(entry.Title)
+            };
             aliases.AddRange(SplitTerms(entry.Keywords));
             if (!string.IsNullOrWhiteSpace(entry.Category)) aliases.Add(entry.Category);
             aliases.AddRange(entities);
@@ -381,7 +391,7 @@ namespace Bot.ChromeNs
                 .Select(x => (x ?? string.Empty).Trim())
                 .Where(x => x.Length >= 2)
                 .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(24)
+                .Take(28)
                 .ToList();
 
             var mode = KnowledgeAnswerModes.Normalize(profile.AnswerMode);
@@ -426,17 +436,29 @@ namespace Bot.ChromeNs
                     local = Math.Max(local, 0.92);
                 aliasScore = Math.Max(aliasScore, local);
             }
-            aliasScore = Math.Max(aliasScore, TextSimilarity(Compact(StripDemonstratives(rawQuestion)), Compact(card.CanonicalQuestion)));
+            aliasScore = Math.Max(aliasScore,
+                TextSimilarity(Compact(StripDemonstratives(rawQuestion)), Compact(card.CanonicalQuestion)));
 
-            var queryEntities = new List<string>();
-            if (state != null && state.Entities != null) queryEntities.AddRange(state.Entities);
-            queryEntities.AddRange(ExtractDomainEntities(rawQuestion));
-            queryEntities = queryEntities.Select(CleanTerm).Where(x => x.Length >= 2)
+            // Current-message entities are intentionally weighted before inherited context entities.
+            // This prevents an older product/topic from overpowering a clear new buyer question.
+            var currentEntities = ExtractDomainEntities(rawQuestion)
+                .Select(CleanTerm).Where(x => x.Length >= 2)
                 .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-            var entityScore = EntityCoverage(queryEntities, card.Entities);
+            var inheritedEntities = state == null || state.Entities == null
+                ? new List<string>()
+                : state.Entities.Select(CleanTerm).Where(x => x.Length >= 2)
+                    .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            var currentMatched = CountEntityMatches(currentEntities, card.Entities);
+            var inheritedMatched = CountEntityMatches(inheritedEntities, card.Entities);
+            var currentEntityScore = currentEntities.Count == 0 ? 0
+                : Clamp(currentMatched / (double)Math.Min(4, currentEntities.Count));
+            var inheritedEntityScore = inheritedEntities.Count == 0 ? 0
+                : Clamp(inheritedMatched / (double)Math.Min(4, inheritedEntities.Count));
+            var entityScore = Clamp(currentEntityScore * 0.80 + inheritedEntityScore * 0.20);
 
-            var queryIntent = NormalizeIntent(state == null ? string.Empty : state.BuyerGoal);
-            if (string.IsNullOrWhiteSpace(queryIntent)) queryIntent = NormalizeIntent(ConversationStateService.DetectIntent(rawQuestion));
+            var queryIntent = DetectMemoryIntent(rawQuestion);
+            if (queryIntent == "general" && state != null)
+                queryIntent = NormalizeIntent(state.BuyerGoal);
             var intentScore = string.IsNullOrWhiteSpace(queryIntent) || string.IsNullOrWhiteSpace(card.Intent)
                 ? 0.35
                 : (string.Equals(queryIntent, card.Intent, StringComparison.OrdinalIgnoreCase) ? 1.0 : 0.0);
@@ -444,7 +466,9 @@ namespace Bot.ChromeNs
             var recent = string.Join(" ", (turns ?? new List<ConversationContextTurn>())
                 .Skip(Math.Max(0, (turns == null ? 0 : turns.Count) - 4))
                 .Select(x => x.Text ?? string.Empty));
-            var contextScore = TextSimilarity(Compact(recent), Compact(card.CanonicalQuestion + " " + string.Join(" ", card.Entities)));
+            var contextScore = TextSimilarity(
+                Compact(recent),
+                Compact(card.CanonicalQuestion + " " + string.Join(" ", card.Entities)));
 
             var memoryConfidence = Clamp(card.Confidence * 0.44 + card.Reliability * 0.36 + card.Authority * 0.20);
             var score = Clamp(aliasScore * 0.50
@@ -452,6 +476,16 @@ namespace Bot.ChromeNs
                 + intentScore * 0.15
                 + contextScore * 0.05
                 + memoryConfidence * 0.08);
+
+            // Semantic-key boost: a paraphrase does not need to look textually identical when its
+            // intent and multiple strong business entities line up. This is the local equivalent of
+            // resolving a memory by meaning instead of by raw wording.
+            if (intentScore >= 0.99 && currentMatched >= 2)
+            {
+                var semanticFloor = currentMatched >= 3 ? 0.92 : 0.89;
+                if (aliasScore >= 0.72) semanticFloor += 0.025;
+                score = Math.Max(score, Math.Min(0.96, semanticFloor));
+            }
 
             var policy = KnowledgePolicyProfileService.Evaluate(
                 card.Entry,
@@ -477,9 +511,11 @@ namespace Bot.ChromeNs
                 ContextScore = contextScore,
                 MemoryConfidence = memoryConfidence,
                 PolicyAllowsDirect = allowsDirect,
+                StrongEntityMatches = currentMatched,
                 Reason = "alias=" + aliasScore.ToString("0.00")
                     + ", entity=" + entityScore.ToString("0.00")
                     + ", intent=" + intentScore.ToString("0.00")
+                    + ", currentEntityMatches=" + currentMatched
                     + ", context=" + contextScore.ToString("0.00")
             };
         }
@@ -493,6 +529,13 @@ namespace Bot.ChromeNs
             return answerSimilarity < 0.55;
         }
 
+        private static bool AnswersEquivalent(KnowledgeMemoryMatch best, KnowledgeMemoryMatch second)
+        {
+            if (best == null || second == null || best.Card == null || second.Card == null) return false;
+            if (best.Score < 0.80 || second.Score < 0.76) return false;
+            return TextSimilarity(Compact(best.Card.Answer), Compact(second.Card.Answer)) >= 0.72;
+        }
+
         private static bool IsStrongMeaningMatch(
             string question,
             KnowledgeMemoryMatch best,
@@ -502,7 +545,8 @@ namespace Bot.ChromeNs
             var stripped = Compact(StripDemonstratives(question));
             if (stripped.Length < 4) return false;
             if (best.AliasScore >= 0.90) return true;
-            if (best.EntityScore >= 0.66 && best.IntentScore >= 0.95 && best.AliasScore >= 0.68) return true;
+            if (best.StrongEntityMatches >= 2 && best.IntentScore >= 0.95) return true;
+            if (best.EntityScore >= 0.66 && best.IntentScore >= 0.95 && best.AliasScore >= 0.62) return true;
             if (state != null && !string.IsNullOrWhiteSpace(state.CurrentEntity)
                 && best.EntityScore >= 0.50 && best.AliasScore >= 0.76) return true;
             return false;
@@ -513,8 +557,7 @@ namespace Bot.ChromeNs
             ConversationStateSnapshot state,
             IList<ConversationContextTurn> turns)
         {
-            var pieces = new List<string>();
-            pieces.Add(StripDemonstratives(question));
+            var pieces = new List<string> { StripDemonstratives(question) };
             if (state != null)
             {
                 if (!string.IsNullOrWhiteSpace(state.CurrentEntity)) pieces.Add(state.CurrentEntity);
@@ -524,10 +567,26 @@ namespace Bot.ChromeNs
             if (Compact(question).Length <= 10)
             {
                 var previousBuyer = (turns ?? new List<ConversationContextTurn>())
-                    .LastOrDefault(x => x != null && x.Role == "user" && !string.IsNullOrWhiteSpace(x.Text));
-                if (previousBuyer != null && !SameCompact(previousBuyer.Text, question)) pieces.Add(previousBuyer.Text);
+                    .LastOrDefault(x => x != null && x.Role == "user" && !string.IsNullOrWhiteSpace(x.Text)
+                        && !SameCompact(x.Text, question));
+                if (previousBuyer != null) pieces.Add(previousBuyer.Text);
             }
             return string.Join(" ", pieces.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        private static string DetectMemoryIntent(string text)
+        {
+            var value = Compact(text);
+            if (value.Length == 0) return "general";
+            if (Regex.IsMatch(value, @"退款|退货|售后|赔偿|投诉")) return "after_sale";
+            if (Regex.IsMatch(value, @"多少钱|价格|费用|收费")) return "price";
+            if (Regex.IsMatch(value, @"多久|什么时候|几天|时效")) return "time";
+            if (Regex.IsMatch(value, @"怎么|如何|步骤|操作|登录|绑定|充值方法|怎么充|如何充")) return "how_to";
+            if (Regex.IsMatch(value, @"为什么|失败|不行|报错|异常|不能用|没反应")) return "troubleshoot";
+            if (Regex.IsMatch(value, @"需要什么|提供什么|要什么|资料|条件")) return "requirements";
+            if (Regex.IsMatch(value, @"是不是|是否|能不能|能否|可以|支持|可不可以|是.+吗|会员吗|能用吗|可以用吗"))
+                return "capability";
+            return "general";
         }
 
         private static string ResolveMemoryType(string intent, string answer)
@@ -551,7 +610,8 @@ namespace Bot.ChromeNs
             if (value.Contains("故障") || value == "troubleshoot") return "troubleshoot";
             if (value.Contains("支持") || value == "capability") return "capability";
             if (value.Contains("条件") || value == "requirements") return "requirements";
-            return value == "一般咨询" ? "general" : value;
+            if (value.Contains("一般咨询") || value == "general") return "general";
+            return value;
         }
 
         private static IEnumerable<string> ExtractDomainEntities(string value)
@@ -571,13 +631,11 @@ namespace Bot.ChromeNs
             return result;
         }
 
-        private static double EntityCoverage(IEnumerable<string> queryEntities, IEnumerable<string> cardEntities)
+        private static int CountEntityMatches(IEnumerable<string> queryEntities, IEnumerable<string> cardEntities)
         {
             var q = (queryEntities ?? Enumerable.Empty<string>()).Select(Compact).Where(x => x.Length >= 2).Distinct().ToList();
             var c = (cardEntities ?? Enumerable.Empty<string>()).Select(Compact).Where(x => x.Length >= 2).Distinct().ToList();
-            if (q.Count == 0 || c.Count == 0) return 0;
-            var matched = q.Count(query => c.Any(card => card.Contains(query) || query.Contains(card)));
-            return Clamp(matched / (double)Math.Min(4, q.Count));
+            return q.Count(query => c.Any(card => card.Contains(query) || query.Contains(card)));
         }
 
         internal static double TextSimilarity(string left, string right)
@@ -735,10 +793,6 @@ namespace Bot.ChromeNs
         {
             var best = decision == null ? null : decision.Best;
             if (best == null) return "没有记忆候选";
-            if (!ReplyModeService.IsLocalFirst(best.Card == null || best.Card.Entry == null ? string.Empty : ResolveSellerFromScope()))
-            {
-                // The caller logs reply mode separately. Keep the reason useful even when scope lookup fails.
-            }
             if (decision.HasConflict) return "高分记忆之间存在实质答案冲突，禁止本地直答";
             if (highRisk) return "命中高风险内容，必须走上下文/AI安全链路";
             if (!best.PolicyAllowsDirect) return "知识策略/必要上下文要求禁止机械直答";
@@ -747,12 +801,6 @@ namespace Bot.ChromeNs
             if (best.MemoryConfidence < minConfidence) return "记忆可信度不足：" + best.MemoryConfidence.ToString("0.00") + " < " + minConfidence.ToString("0.00");
             if (margin < 0.055) return "前两条记忆分差过小，需要结合上下文判断";
             return "当前回复模式或安全门控不允许本地直答";
-        }
-
-        private static string ResolveSellerFromScope()
-        {
-            var shop = ShopSettingsScope.Current;
-            return shop == null || shop.Profile == null ? string.Empty : (shop.Profile.SellerNick ?? string.Empty);
         }
 
         private static string NormalizeSeller(string seller)
@@ -868,8 +916,23 @@ namespace Bot.ChromeNs
     /// </summary>
     internal static class KnowledgeMemoryRuntimeBridge
     {
-        private static readonly ConcurrentDictionary<int, bool> PatchedCoordinators =
-            new ConcurrentDictionary<int, bool>();
+        private sealed class MemoryHandlerWrapper
+        {
+            private readonly QN _qn;
+            private readonly Func<BuyerMessageBurstLease, Task> _inner;
+
+            public MemoryHandlerWrapper(QN qn, Func<BuyerMessageBurstLease, Task> inner)
+            {
+                _qn = qn;
+                _inner = inner;
+            }
+
+            public Task HandleAsync(BuyerMessageBurstLease lease)
+            {
+                return KnowledgeMemoryRuntimeBridge.HandleAsync(_qn, _inner, lease);
+            }
+        }
+
         private static Timer _timer;
         private static int _initialized;
 
@@ -878,8 +941,10 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
                 try { Bot.Knowledge.KnowledgeMemoryEngineUi.Initialize(); } catch { }
-                PatchExisting();
-                _timer = new Timer(_ => PatchExisting(), null, 180, 450);
+                // BuyerStreamingReplyPipeline installs its wrapper very early (100ms). Start later
+                // and keep checking so Memory remains the outermost text decision layer even if a
+                // coordinator is created after startup.
+                _timer = new Timer(_ => PatchExisting(), null, 700, 700);
                 Log.Info("Knowledge Memory Engine v1已启动：权威知识库 + Working Memory + Learned Reliability；仅高置信本地直答，其他请求保持原Smart Reply/AI链路。");
             }
             return new object();
@@ -902,13 +967,11 @@ namespace Bot.ChromeNs
                     if (qn == null) continue;
                     var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
                     if (coordinator == null) continue;
-                    var key = System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(coordinator);
-                    if (PatchedCoordinators.ContainsKey(key)) continue;
-                    var inner = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
-                    if (inner == null) continue;
-                    Func<BuyerMessageBurstLease, Task> wrapped = lease => HandleAsync(qn, inner, lease);
-                    handlerField.SetValue(coordinator, wrapped);
-                    PatchedCoordinators[key] = true;
+                    var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
+                    if (current == null || current.Target is MemoryHandlerWrapper) continue;
+
+                    var wrapper = new MemoryHandlerWrapper(qn, current);
+                    handlerField.SetValue(coordinator, new Func<BuyerMessageBurstLease, Task>(wrapper.HandleAsync));
                     Log.Info("已为客服实例挂载Knowledge Memory本地直答层: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
                 }
@@ -989,6 +1052,16 @@ namespace Bot.ChromeNs
             if (!lease.IsCurrent || !await lease.ConfirmStableAsync(80))
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");
+                return;
+            }
+
+            string relevanceReason;
+            if (!ParallelReplyRelevanceGate.ShouldSend(
+                burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
+            {
+                if (ctl != null) ctl.SetSendResult(false, "未发送：" + relevanceReason);
+                Log.Info("Knowledge Memory发送前被并发相关性门控抑制: buyer=" + burst.BuyerNick
+                    + ", reason=" + relevanceReason);
                 return;
             }
 
