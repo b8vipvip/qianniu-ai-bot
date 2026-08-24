@@ -30,6 +30,8 @@ namespace Bot.ChromeNs
 
         private static readonly ConcurrentDictionary<string, byte> PreparedSellers =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, byte> WarmingSellers =
+            new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static Timer _timer;
         private static int _initialized;
 
@@ -129,6 +131,14 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("关闭Knowledge Memory v1店铺开关失败: seller=" + seller + ", error=" + ex.Message, 10);
             }
+            QueueWarm(seller);
+        }
+
+        private static void QueueWarm(string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0 || KnowledgeEngineV2Service.IsSnapshotReady(seller)) return;
+            if (!WarmingSellers.TryAdd(seller, 1)) return;
             Task.Run(() =>
             {
                 try
@@ -144,6 +154,11 @@ namespace Bot.ChromeNs
                 {
                     Log.ErrorWithMaxCount("Knowledge Engine V2后台预热失败: seller=" + seller + ", error=" + ex.Message, 10);
                 }
+                finally
+                {
+                    byte ignored;
+                    WarmingSellers.TryRemove(seller, out ignored);
+                }
             });
         }
 
@@ -158,6 +173,18 @@ namespace Bot.ChromeNs
             }
             if (!ReplyModeService.IsLocalFirst(burst.SellerNick) || !KnowledgeEngineV2Service.IsEnabled(burst.SellerNick))
             {
+                await inner(lease);
+                return;
+            }
+
+            // A buyer message must never pay the cost of first migration/index construction. If the
+            // snapshot is cold (startup, bulk import, delete/disable, explicit rebuild), queue one
+            // background warm and immediately continue the compatibility reply path for this turn.
+            if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
+            {
+                QueueWarm(burst.SellerNick);
+                Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
+                    + burst.BuyerNick);
                 await inner(lease);
                 return;
             }
@@ -204,7 +231,7 @@ namespace Bot.ChromeNs
             var autoSend = Params.Robot.GetIsAutoReply();
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
 
-            var best = decision.Matches.FirstOrDefault();
+            var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
             Log.Info("Knowledge Engine V2本地答案已就绪: buyer=" + burst.BuyerNick
                 + ", score=" + (best == null ? "-" : best.Score.ToString("0.00"))
                 + ", predicate=" + (decision.Query == null ? "" : decision.Query.Predicate)
@@ -252,6 +279,14 @@ namespace Bot.ChromeNs
                 + ", success=" + sendOk
                 + ", totalMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds));
             ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
+        }
+
+        private static bool IsApprovedMatchForLogging(KnowledgeV2Match match)
+        {
+            return match != null && match.Record != null
+                && match.Record.Enabled
+                && !string.Equals(match.Record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(match.Record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
         }
     }
 }
