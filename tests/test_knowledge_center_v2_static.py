@@ -78,7 +78,11 @@ def test_learning_candidates_require_explicit_approval_before_direct_reply():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
     repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
-    assert 'matches.Where(IsApprovedProductionMatch)' in public
+    assert 'productionMatches = rankedMatches' in public
+    assert '.Where(IsApprovedProductionMatch)' in public
+    assert 'var best = productionMatches.FirstOrDefault();' in public
+    assert 'var visibleMatches = rankedMatches.Take(5).ToList();' in public
+    assert 'if (best != null && !visibleMatches.Contains(best)) visibleMatches.Add(best);' in public
     assert '!string.Equals(record.Type, "learning_candidate"' in public
     assert '当前只命中尚未批准的学习候选' in public
     assert 'record.Type = "learning_candidate";' in bridge
