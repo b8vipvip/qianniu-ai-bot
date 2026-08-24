@@ -53,6 +53,16 @@ def test_v2_runtime_retires_memory_v1_and_preserves_safe_send_path():
     assert 'SendTextWithRetryAsync' in runtime
 
 
+def test_learning_candidates_require_explicit_approval_before_direct_reply():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    assert 'string.Equals(best.Record.Type, "learning_candidate"' in public
+    assert '&& !unapprovedLearning' in public
+    assert 'record.Type = "learning_candidate";' in bridge
+    assert 'record.Status = "candidate";' in bridge
+    assert 'KnowledgeV2Record existing = null;' in bridge
+
+
 def test_new_knowledge_center_has_required_navigation_and_debugger():
     ui = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     ops = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
@@ -77,5 +87,6 @@ def test_build_props_compiles_all_v2_sources():
         "KnowledgeCenterV2RecordsPage.cs",
         "KnowledgeCenterV2OperationsPages.cs",
         "KnowledgeEngineV2RuntimeBridge.cs",
+        "KnowledgeEngineV2LearningBridge.cs",
     ]:
         assert name in props
