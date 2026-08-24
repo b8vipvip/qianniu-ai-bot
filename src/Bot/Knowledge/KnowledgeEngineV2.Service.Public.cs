@@ -145,6 +145,8 @@ namespace Bot.Knowledge
             var highRisk = KnowledgeEngineV2Semantics.IsHighRisk(message)
                 || KnowledgeEngineV2Semantics.IsHighRisk(best.Record.Answer)
                 || string.Equals(best.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase);
+            var unapprovedLearning = string.Equals(best.Record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(best.Record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
             var sameFactSecond = second != null
                 && string.Equals(KnowledgeEngineV2Semantics.FactKey(best.Record),
                     KnowledgeEngineV2Semantics.FactKey(second.Record), StringComparison.Ordinal);
@@ -155,7 +157,7 @@ namespace Bot.Knowledge
                 && decision.Mode == KnowledgeEngineV2Constants.ModeProduction
                 && !decision.HasConflict
                 && !highRisk
-                && !string.Equals(best.Record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                && !unapprovedLearning
                 && best.Record.Enabled
                 && best.Score >= threshold
                 && best.ConfidenceScore >= minConfidence
@@ -165,7 +167,9 @@ namespace Bot.Knowledge
             decision.Reason = decision.CanDirectReply
                 ? "V2结构化知识高置信直答：score=" + best.Score.ToString("0.00")
                     + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count
-                : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk);
+                : (unapprovedLearning
+                    ? "学习候选尚未人工批准，禁止本地直答"
+                    : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk));
             Finish(decision, total, decideSw);
             return decision;
         }
@@ -178,7 +182,9 @@ namespace Bot.Knowledge
         public static List<KnowledgeV2Conflict> GetConflicts(string seller)
         {
             return GetSnapshot(seller).Records
-                .Where(x => x.Enabled && !string.Equals(x.Status, "candidate", StringComparison.OrdinalIgnoreCase))
+                .Where(x => x.Enabled
+                    && !string.Equals(x.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(x.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase))
                 .GroupBy(KnowledgeEngineV2Semantics.FactKey)
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
                 .Select(g => new KnowledgeV2Conflict
