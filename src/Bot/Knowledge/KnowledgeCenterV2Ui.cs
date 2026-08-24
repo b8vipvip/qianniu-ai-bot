@@ -76,8 +76,8 @@ namespace Bot.Knowledge
         private readonly string _seller;
         private readonly ListBox _nav;
         private readonly ContentControl _content;
-        private readonly TextBox _globalSearch;
-        private readonly TextBlock _status;
+        private TextBox _globalSearch;
+        private TextBlock _status;
         private readonly Dictionary<string, UIElement> _pages = new Dictionary<string, UIElement>(StringComparer.Ordinal);
 
         public KnowledgeCenterV2Shell(KnowledgeCenterWindow owner)
