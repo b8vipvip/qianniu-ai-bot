@@ -30,6 +30,7 @@ namespace Bot.Options
         private readonly TabControl _tabs;
         private readonly MethodInfo _saveAllMethod;
         private ComboBox _replyMode;
+        private TextBox _botMessageSuffix;
         private CheckBox _firstInquiryFixedReplyEnabled;
         private TextBox _firstInquiryFixedReplyAnswer;
         private CheckBox _offHoursEnabled;
@@ -138,6 +139,10 @@ namespace Bot.Options
                     ReplyModeService.Save(
                         effectiveSeller,
                         _replyMode.SelectedIndex == 1 ? BotReplyMode.LocalFirst : BotReplyMode.AiFirst);
+                }
+                if (_botMessageSuffix != null)
+                {
+                    BotMessageSuffixService.Save(effectiveSeller, _botMessageSuffix.Text ?? string.Empty);
                 }
                 if (_firstInquiryFixedReplyEnabled != null && _firstInquiryFixedReplyAnswer != null)
                 {
@@ -273,6 +278,16 @@ namespace Bot.Options
             _replyMode.Items.Add("AI优先");
             _replyMode.Items.Add("本地优先");
 
+            _botMessageSuffix = new TextBox
+            {
+                Text = BotMessageSuffixService.GetSuffix(Seller),
+                Width = 180,
+                Height = 26,
+                MaxLength = BotMessageSuffixService.MaxSuffixLength,
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Padding = new Thickness(6, 3, 6, 3)
+            };
+
             _firstInquiryFixedReplyEnabled = new CheckBox
             {
                 Content = "启用首条咨询固定回复",
@@ -356,11 +371,14 @@ namespace Bot.Options
         {
             var result = new List<UIElement>();
 
-            result.Add(MakeSectionTitle("消息策略"));
             result.Add(MakeLabeledControl(
                 "回复模式",
                 _replyMode,
                 "AI优先：本地知识作为上下文，由AI生成最终答案。 本地优先：先检索本地知识库，高置信命中时直接回复且不调用AI；未达到高置信阈值时再调用AI。买家5分钟无新消息后，会把本轮买家、Bot和人工客服完整消息交给AI复盘，生成去重后的可复用问答进入本地知识库。"));
+            result.Add(MakeLabeledControl(
+                "Bot消息后缀",
+                _botMessageSuffix,
+                "每条 Bot 自动发送的文本消息末尾附加此后缀，默认 [AI]；留空表示不添加后缀。"));
             result.Add(new Border
             {
                 Height = 1,

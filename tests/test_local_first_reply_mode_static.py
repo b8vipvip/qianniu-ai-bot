@@ -25,12 +25,15 @@ def test_reply_mode_is_shop_scoped_and_defaults_to_ai_first():
 def test_message_strategy_ui_exposes_ai_first_and_local_first():
     ui = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
 
-    assert 'MakeSectionTitle("消息策略")' in ui
+    assert 'result.Add(MakeSectionTitle("消息策略"));' not in ui
     assert '"回复模式"' in ui
+    assert '"Bot消息后缀"' in ui
     assert '_replyMode.Items.Add("AI优先")' in ui
     assert '_replyMode.Items.Add("本地优先")' in ui
     assert 'ReplyModeService.GetMode(Seller)' in ui
     assert 'ReplyModeService.Save(' in ui
+    assert 'BotMessageSuffixService.GetSuffix(Seller)' in ui
+    assert 'BotMessageSuffixService.Save(' in ui
     assert 'pageTitle, "消息策略"' in ui
     assert 'pageTitle = "自动回复规则"' in ui
     assert '买家5分钟无新消息后' in ui

@@ -130,6 +130,10 @@ namespace Bot.ChromeNs
                 return true;
             }
 
+            text = BotMessageSuffixService.Apply(
+                Seller == null ? string.Empty : Seller.Nick,
+                text);
+
             await _sendGate.WaitAsync();
             try
             {

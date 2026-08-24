@@ -582,13 +582,22 @@ namespace Bot.ChromeNs
                 return "错误：AI流式输出中断，已阻止发送半截答案，请重新获取完整答案。";
             }
             if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;
-            if (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase)) return value;
-            return value + " " + AiMarker;
+            var suffix = BotMessageSuffixService.GetCurrentSuffix();
+            value = StripAiMarker(value);
+            if (suffix.Length == 0) return value;
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return value;
+            return value + " " + suffix;
         }
 
         public static string StripAiMarker(string value)
         {
             value = (value ?? string.Empty).Trim();
+            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();
+            if (!string.IsNullOrWhiteSpace(configuredSuffix))
+            {
+                while (value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))
+                    value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();
+            }
             while (value.EndsWith(AiMarker, StringComparison.OrdinalIgnoreCase))
                 value = value.Substring(0, value.Length - AiMarker.Length).TrimEnd();
             return value;

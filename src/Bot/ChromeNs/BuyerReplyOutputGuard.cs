@@ -67,6 +67,12 @@ namespace Bot.ChromeNs
         private static string StripAiMarker(string value)
         {
             value = (value ?? string.Empty).Trim();
+            var configuredSuffix = BotMessageSuffixService.GetCurrentSuffix();
+            if (!string.IsNullOrWhiteSpace(configuredSuffix)
+                && value.EndsWith(configuredSuffix, StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.Substring(0, value.Length - configuredSuffix.Length).TrimEnd();
+            }
             foreach (var suffix in new[] { "[AI]", "【AI】", "［AI］" })
             {
                 if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
