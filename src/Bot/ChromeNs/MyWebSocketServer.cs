@@ -527,23 +527,18 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static bool LastSendStatusIsOk()
+        private static string BuildSummary(bool wsOk, bool injectionOk, bool qnOk, bool sellerOk, bool uiOk, bool buttonOk, bool inputOk)
         {
-            if (string.IsNullOrWhiteSpace(lastSendStatus)) return true;
-            if (lastSendStatus == "未测试") return true;
-            return lastSendStatus.StartsWith("成功", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static string BuildSummary(bool wsOk, bool injectionOk, bool qnOk, bool sellerOk, bool uiOk, bool buttonOk, bool inputOk, bool sendOk)
-        {
-            if (wsOk && injectionOk && qnOk && sellerOk && uiOk && buttonOk && inputOk && sendOk) return "连接正常";
+            // Connection health describes the transport/session/UI prerequisites only. A failed
+            // business send remains visible through SendStatus, but must not relabel an otherwise
+            // healthy Qianniu connection as disconnected or unhealthy.
+            if (wsOk && injectionOk && qnOk && sellerOk && uiOk && buttonOk && inputOk) return "连接正常";
             if (!wsStarted) return string.IsNullOrWhiteSpace(lastWsError) ? "WS服务未启动" : "WS服务异常";
             if (!wsOk) return "WS未连接";
             if (!injectionOk) return "注入未连接";
             if (!qnOk) return "千牛参数未获取";
             if (!sellerOk) return "客服ID未识别";
             if (!uiOk || !buttonOk || !inputOk) return "无障碍/按钮未就绪";
-            if (!sendOk) return "最近发送失败";
             return "检测中/需检查";
         }
 
@@ -570,8 +565,7 @@ namespace Bot.ChromeNs
                 var uiOk = uiAccessible;
                 var buttonOk = sendButtonFound;
                 var inputOk = inputFound;
-                var sendOk = LastSendStatusIsOk();
-                var summary = BuildSummary(wsOk, injectionOk, qnOk, sellerOk, uiOk, buttonOk, inputOk, sendOk);
+                var summary = BuildSummary(wsOk, injectionOk, qnOk, sellerOk, uiOk, buttonOk, inputOk);
 
                 return new ConnectionDiagnosticsSnapshot
                 {
