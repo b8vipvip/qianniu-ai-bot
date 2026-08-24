@@ -57,6 +57,21 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeMemoryEngineUi.cs" />
   </ItemGroup>
 
+  <!-- Knowledge Center V2 is explicitly included for the normal Bot project and WPF *_wpftmp projects. -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Models.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Models.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Repository.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Semantics.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Index.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Incremental.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Public.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2Ui.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2OperationsPages.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2RuntimeBridge.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2LearningBridge.cs" />
+  </ItemGroup>
+
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs')">
     <Compile Include="$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs" />
   </ItemGroup>

@@ -4,7 +4,7 @@
 
 当前项目由三部分组成：
 
-1. **Windows 千牛 Bot**：接收会话消息、聚合连续消息、调用 AI、查询知识库并通过 UI Automation 发送回复；
+1. **Windows 千牛 Bot**：接收会话消息、聚合连续消息、使用 Knowledge Center V2 / 本地知识引擎或 AI 生成答案，并通过 UI Automation 发送回复；
 2. **Ubuntu API 控制面**：管理 AI 供应商、模型、测试、Bot 客户端令牌、路由记录与企业微信配置；
 3. **企业微信双向人工接管**：转人工通知、加密回调、工单回复队列和精确买家发送。
 
@@ -13,17 +13,20 @@
 ## 当前状态
 
 - 连续短消息聚合、补充、纠错、催促和重复去重已接入生产链路；
-- AI 生成期间买家补发消息时，旧草稿会失效；
+- 文本、图片、订单等业务任务可独立处理，最终千牛输入/发送仍由安全发送链路串行协调；
 - 发送前执行稳定检查、目标会话确认和重复答案保护；
+- **Knowledge Center V2 已进入重构主线**：SQLite 结构化知识、Intent/Subject/Predicate、倒排索引、Working Memory 补全、冲突页、学习候选、异步测试台和完整包导入导出；
+- Knowledge Memory Engine v1 作为旧运行时实现退场，V2 无法证明本地直答时暂时兼容现有 Smart Reply / AI 链路；
 - 企业微信双向人工接管已接入；
 - 企业微信参数已迁移到控制面网页配置；
 - Secret、回调 Token 和 EncodingAESKey 经 Fernet 加密后保存到 SQLite；
 - Ubuntu 控制面、企业微信测试消息和加密回调已完成实机验收；
-- API control plane CI、Windows CI 和 Windows x64 release build 均已通过。
+- API control plane CI、Windows CI 和 Windows x64 release build 由 GitHub Actions 自动验证。
 
 完整的架构、功能矩阵、里程碑和后续计划：
 
 - [`docs/PROJECT_STATUS_AND_ARCHITECTURE.md`](docs/PROJECT_STATUS_AND_ARCHITECTURE.md)
+- [`docs/KNOWLEDGE_CENTER_V2.md`](docs/KNOWLEDGE_CENTER_V2.md)
 
 ## 总体架构
 
@@ -31,8 +34,12 @@
 千牛聊天页面
   → 注入脚本 / WebSocket / CDP-QN 事件
   → 卖家和买家识别
-  → 连续消息聚合、去重和草稿失效
-  → 本地知识库或 AI 供应商
+  → 消息聚合 / 并发业务任务协调
+  → Knowledge Center V2
+      → 结构化消息理解
+      → Exact / Intent / Predicate / Entity / Ngram 索引
+      → 高置信本地直答
+      → 否则兼容 Smart Reply / AI
   → 重复答案与发送前稳定检查
   → QNRpa / FlaUI / UI Automation
   → 确认目标会话并发送给买家
@@ -44,6 +51,43 @@ Ubuntu FastAPI 控制面
 企业微信自建应用 / 个人微信插件入口
 ```
 
+## Knowledge Center V2
+
+V2 不再把知识仅保存为“问题 + 答案 + 相似度”。核心知识单元包含：
+
+```text
+Type
+Intent
+Subject
+Predicate
+Entities
+Aliases
+Answer
+Conditions / Exclusions / RequiredContext
+ProductIds
+RiskLevel
+Authority / Confidence
+Learning / correction evidence
+```
+
+每个店铺使用独立 SQLite：
+
+```text
+<shop knowledge root>/knowledge-center-v2.db
+```
+
+运行时建立常驻内存倒排索引，买家查询不使用“定时过期后全量重建”方式。当前性能目标：约 800 条知识的热查询 `P95 <= 50ms`。
+
+Knowledge Center V2 UI 一级导航：
+
+```text
+知识 / 商品知识 / 流程 / 学习 / 冲突 / 测试台 / 导入导出 / 设置
+```
+
+“测试台”会显示 Parse / Recall / Rank / Decision / Total 独立耗时，并支持 30 次热查询 P50/P95 测试。
+
+详细设计与迁移策略参见 [`docs/KNOWLEDGE_CENTER_V2.md`](docs/KNOWLEDGE_CENTER_V2.md)。
+
 ## 核心功能
 
 ### Windows 千牛 Bot
@@ -53,9 +97,9 @@ Ubuntu FastAPI 控制面
 - 多 AI 供应商、多模型和失败切换；
 - 文本与视觉模型；
 - 自动回复、人工确认和规则控制；
-- 店铺/商品知识库；
+- 店铺隔离的 Knowledge Center V2；
 - 文本、HTML、图片资料的 AI 智能导入；
-- 知识搜索、分类、编辑、启停、删除和 JSON 导入导出；
+- 结构化知识搜索、编辑、商品绑定、冲突处理、学习候选和完整包导入导出；
 - UIA/FlaUI 输入、发送和结果确认；
 - 重复答案保护和真实发送成功后的知识学习；
 - 企业微信人工回复任务领取和精确买家发送。
@@ -93,9 +137,9 @@ QN-XXXXXXXX 回复内容
 ```text
 src/Bot/                         Windows WPF Bot 主程序
 src/Bot/ChromeNs/                千牛连接、AI、消息协调和发送链路
-src/Bot/Knowledge/               AI 知识库
+src/Bot/Knowledge/               Knowledge Center V2 / 知识导入与学习
 src/Bot/Automation/              Windows 自动化
-src/BotLib/                      通用基础库
+src/BotLib/                      通用基础库与 SQLite
 src/DbEntity/                    数据实体
 services/api-control-plane/      Ubuntu FastAPI 控制面
 services/api-control-plane/static/ 控制面网页
@@ -106,6 +150,21 @@ docs/                            架构、进度、验证与交接文档
 ```
 
 ## 关键代码
+
+### Knowledge Center V2
+
+```text
+src/Bot/Knowledge/KnowledgeEngineV2.Models.cs
+src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs
+src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs
+src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs
+src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs
+src/Bot/Knowledge/KnowledgeCenterV2Ui.cs
+src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs
+src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs
+src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs
+src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs
+```
 
 ### Windows 消息与发送链路
 
@@ -212,10 +271,11 @@ msbuild src\Bot.sln /m /t:Rebuild /p:Configuration=Debug /p:Platform=x64
 ## 使用提醒
 
 1. 先使用测试店铺和测试会话验证自动回复；
-2. 自动发送前必须确认目标会话；
-3. 退款、投诉、赔偿、订单隐私等高风险问题应优先人工处理；
-4. 千牛升级后应重新验证消息接收、输入框定位和发送确认；
-5. 生产升级前必须备份并保留所有用户数据。
+2. Knowledge Engine V2 可先切到 `shadow` 比较命中结果，再切 `production`；
+3. 自动发送前必须确认目标会话；
+4. 退款、投诉、赔偿、订单隐私等高风险问题应优先人工处理；
+5. 千牛升级后应重新验证消息接收、输入框定位和发送确认；
+6. 生产升级前必须备份并保留所有用户数据。
 
 ## 免责声明
 
