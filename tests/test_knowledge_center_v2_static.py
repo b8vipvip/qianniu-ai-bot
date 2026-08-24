@@ -29,6 +29,17 @@ def test_v2_query_does_not_periodically_rebuild_full_index():
     assert 'Recall(snapshot, query)' in public
 
 
+def test_v2_edits_use_atomic_incremental_snapshot_updates():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+    assert 'KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record)' in repo
+    assert 'internal static void ApplyRecordUpdate' in incremental
+    assert 'CloneSnapshot(current)' in incremental
+    assert 'RemoveRecordFromIndexes' in incremental
+    assert 'AddRecordToIndexes' in incremental
+    assert 'Snapshots[shop.ShopKey] = next;' in incremental
+
+
 def test_conflict_is_scoped_to_same_fact_key():
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
@@ -56,11 +67,14 @@ def test_v2_runtime_retires_memory_v1_and_preserves_safe_send_path():
 def test_learning_candidates_require_explicit_approval_before_direct_reply():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
     assert 'string.Equals(best.Record.Type, "learning_candidate"' in public
     assert '&& !unapprovedLearning' in public
     assert 'record.Type = "learning_candidate";' in bridge
     assert 'record.Status = "candidate";' in bridge
     assert 'KnowledgeV2Record existing = null;' in bridge
+    assert '!string.Equals(record.Status, "candidate"' in repo
+    assert '!string.Equals(record.Type, "learning_candidate"' in repo
 
 
 def test_new_knowledge_center_has_required_navigation_and_debugger():
@@ -82,6 +96,7 @@ def test_build_props_compiles_all_v2_sources():
         "KnowledgeEngineV2.Repository.cs",
         "KnowledgeEngineV2.Semantics.cs",
         "KnowledgeEngineV2.Service.Index.cs",
+        "KnowledgeEngineV2.Service.Incremental.cs",
         "KnowledgeEngineV2.Service.Public.cs",
         "KnowledgeCenterV2Ui.cs",
         "KnowledgeCenterV2RecordsPage.cs",
