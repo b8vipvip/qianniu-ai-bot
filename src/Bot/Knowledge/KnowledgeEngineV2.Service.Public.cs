@@ -51,6 +51,14 @@ namespace Bot.Knowledge
             return GetSettings(seller).Mode;
         }
 
+        public static bool IsSnapshotReady(string seller)
+        {
+            var shop = ResolveShop(seller);
+            if (shop == null) return false;
+            Snapshot snapshot;
+            return Snapshots.TryGetValue(shop.ShopKey, out snapshot) && snapshot != null;
+        }
+
         public static KnowledgeV2Settings GetSettingsView(string seller)
         {
             var settings = GetSettings(seller);
@@ -130,14 +138,17 @@ namespace Bot.Knowledge
             decision.RankMs = rankSw.ElapsedMilliseconds;
 
             var decideSw = Stopwatch.StartNew();
-            var best = matches.FirstOrDefault();
+            var productionMatches = matches.Where(IsApprovedProductionMatch).ToList();
+            var best = productionMatches.FirstOrDefault();
             if (best == null)
             {
-                decision.Reason = "结构化索引没有找到足够相关的候选知识";
+                decision.Reason = matches.Count > 0
+                    ? "当前只命中尚未批准的学习候选，继续兼容上下文/AI链路"
+                    : "结构化索引没有找到足够相关的候选知识";
                 Finish(decision, total, decideSw);
                 return decision;
             }
-            var second = matches.Count > 1 ? matches[1] : null;
+            var second = productionMatches.Count > 1 ? productionMatches[1] : null;
             decision.HasConflict = HasConflict(best, second);
             var margin = second == null ? best.Score : best.Score - second.Score;
             var threshold = settings.DirectThreshold;
@@ -145,8 +156,6 @@ namespace Bot.Knowledge
             var highRisk = KnowledgeEngineV2Semantics.IsHighRisk(message)
                 || KnowledgeEngineV2Semantics.IsHighRisk(best.Record.Answer)
                 || string.Equals(best.Record.RiskLevel, "high", StringComparison.OrdinalIgnoreCase);
-            var unapprovedLearning = string.Equals(best.Record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
-                || string.Equals(best.Record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
             var sameFactSecond = second != null
                 && string.Equals(KnowledgeEngineV2Semantics.FactKey(best.Record),
                     KnowledgeEngineV2Semantics.FactKey(second.Record), StringComparison.Ordinal);
@@ -157,7 +166,6 @@ namespace Bot.Knowledge
                 && decision.Mode == KnowledgeEngineV2Constants.ModeProduction
                 && !decision.HasConflict
                 && !highRisk
-                && !unapprovedLearning
                 && best.Record.Enabled
                 && best.Score >= threshold
                 && best.ConfidenceScore >= minConfidence
@@ -167,16 +175,26 @@ namespace Bot.Knowledge
             decision.Reason = decision.CanDirectReply
                 ? "V2结构化知识高置信直答：score=" + best.Score.ToString("0.00")
                     + ", predicate=" + query.Predicate + ", candidates=" + candidates.Count
-                : (unapprovedLearning
-                    ? "学习候选尚未人工批准，禁止本地直答"
-                    : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk));
+                : BuildRejectReason(best, decision, threshold, minConfidence, effectiveMargin, highRisk);
             Finish(decision, total, decideSw);
             return decision;
         }
 
+        private static bool IsApprovedProductionMatch(KnowledgeV2Match match)
+        {
+            var record = match == null ? null : match.Record;
+            return record != null
+                && record.Enabled
+                && !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static List<KnowledgeV2Record> GetRecords(string seller)
         {
-            return GetSnapshot(seller).Records.Select(Clone).ToList();
+            return KnowledgeEngineV2Repository.LoadAll(seller)
+                .Where(x => x != null)
+                .Select(Clone)
+                .ToList();
         }
 
         public static List<KnowledgeV2Conflict> GetConflicts(string seller)
@@ -201,14 +219,15 @@ namespace Bot.Knowledge
         public static KnowledgeV2Stats GetStats(string seller)
         {
             var snapshot = GetSnapshot(seller);
+            var all = KnowledgeEngineV2Repository.LoadAll(seller).Where(x => x != null).ToList();
             return new KnowledgeV2Stats
             {
-                Total = snapshot.Records.Count,
-                BusinessFacts = snapshot.Records.Count(x => x.Type == "business_fact" || x.Type == "presale"),
-                Procedures = snapshot.Records.Count(x => x.Type == "procedure"),
-                SafetyRules = snapshot.Records.Count(x => x.Type == "safety_rule"),
-                LearningCandidates = snapshot.Records.Count(x => x.Status == "candidate" || x.Type == "learning_candidate"),
-                ProductBound = snapshot.Records.Count(x => x.ProductIds != null && x.ProductIds.Count > 0),
+                Total = all.Count,
+                BusinessFacts = all.Count(x => x.Type == "business_fact" || x.Type == "presale"),
+                Procedures = all.Count(x => x.Type == "procedure"),
+                SafetyRules = all.Count(x => x.Type == "safety_rule"),
+                LearningCandidates = all.Count(x => x.Status == "candidate" || x.Type == "learning_candidate"),
+                ProductBound = all.Count(x => x.ProductIds != null && x.ProductIds.Count > 0),
                 Conflicts = GetConflicts(seller).Count,
                 SnapshotBuiltAt = snapshot.BuiltAt,
                 DatabasePath = KnowledgeEngineV2Repository.GetDatabasePath(seller)
