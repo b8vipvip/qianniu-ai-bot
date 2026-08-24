@@ -47,7 +47,8 @@ namespace Bot.Knowledge
             NormalizeForSave(record);
             lock (state.Sync) state.Db.SaveOneRecord(ToRow(record));
             MirrorOneToLegacy(shop, record);
-            KnowledgeEngineV2Service.Invalidate(seller);
+            if (record.Enabled) KnowledgeEngineV2Service.ApplyRecordUpdate(seller, record);
+            else KnowledgeEngineV2Service.Invalidate(seller);
         }
 
         public static bool Delete(string seller, string id)
@@ -346,7 +347,9 @@ namespace Bot.Knowledge
         private static void ApplyToLegacy(KnowledgeV2Record record, KnowledgeBaseEntry item)
         {
             item.Id = record.Id;
-            item.Enabled = record.Enabled;
+            item.Enabled = record.Enabled
+                && !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
             item.Category = DisplayType(record.Type);
             item.Title = record.Title ?? string.Empty;
             item.Answer = record.Answer ?? string.Empty;
