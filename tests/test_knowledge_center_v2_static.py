@@ -50,6 +50,19 @@ def test_v2_edits_use_atomic_incremental_snapshot_updates():
     assert 'Snapshots[shop.ShopKey] = next;' in incremental
 
 
+def test_v2_disable_delete_and_bulk_replace_keep_snapshot_hot():
+    repo = read("src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs")
+    incremental = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Incremental.cs")
+    assert 'KnowledgeEngineV2Service.ApplyRecordDelete(seller, id)' in repo
+    assert 'KnowledgeEngineV2Service.ReplaceSnapshot(seller, normalized)' in repo
+    assert 'internal static void ApplyRecordDelete' in incremental
+    assert 'tombstone.Status = "deleted";' in incremental
+    assert 'internal static void ReplaceSnapshot' in incremental
+    assert 'BuildSnapshot(shop.ShopKey, enabled)' in incremental
+    assert 'if (record.Enabled && index >= 0)' in incremental
+    assert 'else KnowledgeEngineV2Service.Invalidate(seller);' not in repo
+
+
 def test_conflict_is_scoped_to_same_fact_key():
     index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
