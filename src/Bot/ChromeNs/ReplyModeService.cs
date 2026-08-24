@@ -81,4 +81,87 @@ namespace Bot.ChromeNs
             return mode == BotReplyMode.LocalFirst ? "本地优先" : "AI优先";
         }
     }
+
+    internal static class BotMessageSuffixService
+    {
+        internal const string SettingsKey = "message.bot_message_suffix";
+        internal const string DefaultSuffix = "[AI]";
+        internal const int MaxSuffixLength = 32;
+
+        private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
+
+        public static string GetSuffix(string seller)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) return DefaultSuffix;
+
+            try
+            {
+                var shop = ShopContextLocator.ResolveBySellerNick(seller);
+                return GetSuffix(new ShopScopedSettingsStore(shop, Paths));
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取Bot消息后缀失败，已使用默认[AI]: seller=" + seller + ", error=" + ex.Message, 10);
+                return DefaultSuffix;
+            }
+        }
+
+        public static string GetCurrentSuffix()
+        {
+            try
+            {
+                var shop = ShopSettingsScope.Current;
+                if (shop == null) return DefaultSuffix;
+                return GetSuffix(new ShopScopedSettingsStore(shop, Paths));
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("读取当前店铺Bot消息后缀失败，已使用默认[AI]: " + ex.Message, 10);
+                return DefaultSuffix;
+            }
+        }
+
+        public static void Save(string seller, string suffix)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            if (seller.Length == 0) throw new ArgumentException("保存Bot消息后缀需要卖家身份。", nameof(seller));
+
+            var normalized = Normalize(suffix);
+            var shop = ShopContextLocator.ResolveBySellerNick(seller);
+            var store = new ShopScopedSettingsStore(shop, Paths);
+            store.SetString(SettingsKey, normalized);
+            Log.Info("Bot消息后缀已保存: seller=" + seller + ", suffix=" + normalized);
+        }
+
+        public static string Apply(string seller, string value)
+        {
+            value = BotOutboundMessageFormatter.StripAiMarker((value ?? string.Empty).Trim());
+            if (value.Length == 0 || value.StartsWith("错误：", StringComparison.Ordinal)) return value;
+
+            var suffix = GetSuffix(seller);
+            if (suffix.Length == 0) return value;
+            if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase)) return value;
+            return value + " " + suffix;
+        }
+
+        public static string Normalize(string suffix)
+        {
+            suffix = (suffix ?? string.Empty)
+                .Replace("\r", " ")
+                .Replace("\n", " ")
+                .Trim();
+            if (suffix.Length > MaxSuffixLength)
+                suffix = suffix.Substring(0, MaxSuffixLength).Trim();
+            return suffix;
+        }
+
+        private static string GetSuffix(ShopScopedSettingsStore store)
+        {
+            string value;
+            if (store == null || !store.TryGetString(SettingsKey, out value)) return DefaultSuffix;
+            return Normalize(value);
+        }
+    }
+
 }
