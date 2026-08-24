@@ -222,16 +222,26 @@ namespace Bot.ChromeNs
         {
             buyer = (buyer ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(buyer) || cdp == null) return false;
+            var sellerNick = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
 
             for (var attempt = 0; attempt < 22; attempt++)
             {
                 try
                 {
                     var current = await GetCurrentConversationID();
-                    var currentNick = current == null || current.Result == null ? string.Empty : (current.Result.Nick ?? string.Empty).Trim();
-                    if (currentNick == buyer)
+                    var currentConversation = current == null ? null : current.Result;
+                    var currentNick = currentConversation == null ? string.Empty : (currentConversation.Nick ?? string.Empty).Trim();
+                    if (currentConversation != null)
                     {
-                        SetActiveConversationByNick(Seller == null ? string.Empty : Seller.Nick, buyer, "sendVerified");
+                        BuyerIdentityAliasService.Observe(
+                            sellerNick,
+                            currentConversation.Nick,
+                            currentConversation.Display,
+                            currentConversation.TargetId);
+                    }
+                    if (BuyerIdentityAliasService.AreEquivalent(sellerNick, currentNick, buyer))
+                    {
+                        SetActiveConversationByNick(sellerNick, currentNick, "sendVerified");
                         return true;
                     }
                     if (attempt == 0)
@@ -307,7 +317,8 @@ namespace Bot.ChromeNs
             lock (_sellerEchoLock)
             {
                 if (_lastSellerEchoTime < since.AddMilliseconds(-500)) return false;
-                if (_lastSellerEchoBuyer != buyerNick) return false;
+                var sellerNick = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+                if (!BuyerIdentityAliasService.AreEquivalent(sellerNick, _lastSellerEchoBuyer, buyerNick)) return false;
                 return _lastSellerEchoText == text;
             }
         }
@@ -398,6 +409,7 @@ namespace Bot.ChromeNs
         private Task ProcessIncomingMessageAsync(QNChatMessage message)
         {
             if (message == null) return Task.CompletedTask;
+            BuyerIdentityAliasService.ObserveMessage(_seller == null ? string.Empty : _seller.Nick, message);
             var messageText = GetMessageText(message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
             if (!_incomingMessageDeduplicator.TryAccept(messageKey))
@@ -405,7 +417,6 @@ namespace Bot.ChromeNs
                 Log.Info("重复消息已跳过: key=" + messageKey);
                 return Task.CompletedTask;
             }
-
             if (IsSellerMessage(message))
             {
                 ConversationContextStore.RefreshAndRecord(message, messageText);
