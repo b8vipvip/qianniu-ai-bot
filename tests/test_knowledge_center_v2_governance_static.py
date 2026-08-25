@@ -4,7 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SERVICE = (ROOT / "src/Bot/Knowledge/KnowledgeEngineV2GovernanceService.cs").read_text(encoding="utf-8")
 UI = (ROOT / "src/Bot/Knowledge/KnowledgeCenterV2GovernanceUi.cs").read_text(encoding="utf-8")
 BOOTSTRAP = (ROOT / "src/Bot/Knowledge/KnowledgeEngineV2GovernanceBootstrap.cs").read_text(encoding="utf-8")
-TARGETS = (ROOT / "src/Bot/Directory.Build.targets").read_text(encoding="utf-8")
+PROPS = (ROOT / "src/Bot/Directory.Build.props").read_text(encoding="utf-8")
 
 
 def test_governance_scan_covers_priority_issue_classes():
@@ -75,7 +75,8 @@ def test_revision_review_and_governance_bridges_are_bootstrapped_for_app():
 
 
 def test_legacy_msbuild_and_wpf_temp_projects_receive_governance_sources():
-    assert "KnowledgeEngineV2GovernanceService.cs" in TARGETS
-    assert "KnowledgeCenterV2GovernanceUi.cs" in TARGETS
-    assert "KnowledgeEngineV2GovernanceBootstrap.cs" in TARGETS
-    assert "<Compile Include=" in TARGETS
+    assert "..\\Directory.Build.props" in PROPS
+    assert "Knowledge\\KnowledgeEngineV2GovernanceService.cs" in PROPS
+    assert "Knowledge\\KnowledgeCenterV2GovernanceUi.cs" in PROPS
+    assert "Knowledge\\KnowledgeEngineV2GovernanceBootstrap.cs" in PROPS
+    assert not (ROOT / "src/Bot/Directory.Build.targets").exists()
