@@ -1,0 +1,8 @@
+<Project>
+  <!-- Keep governance sources visible to the legacy Bot project and generated WPF *_wpftmp projects. -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceService.cs')">
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceService.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2GovernanceUi.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceBootstrap.cs" />
+  </ItemGroup>
+</Project>
