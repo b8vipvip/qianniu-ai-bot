@@ -209,6 +209,10 @@ V2 启动后会停止 Memory Engine v1 的运行时 Timer，并剥离已经挂�
 
 ## Knowledge Center V2 UI
 
+### 客户端使用帮助
+
+客户端在 `设置 → 知识库` 以及 Knowledge Center V2 顶部都提供 `使用帮助`。帮助窗口为只读内容，覆盖首次配置、字段填写、回复工作原理、学习/质量/修订/治理、备份和常见排查，不会修改知识或店铺设置。完整文字版见 `docs/KNOWLEDGE_CENTER_V2_USER_HELP.md`。
+
 旧知识中心显示层由 V2 Shell 替换，新一级导航：
 
 ```text

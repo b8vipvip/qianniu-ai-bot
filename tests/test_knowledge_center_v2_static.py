@@ -133,6 +133,7 @@ def test_build_props_compiles_all_v2_sources():
         "KnowledgeEngineV2.Service.Incremental.cs",
         "KnowledgeEngineV2.Service.Public.cs",
         "KnowledgeCenterV2Ui.cs",
+        "KnowledgeCenterHelpWindow.cs",
         "KnowledgeCenterV2RecordsPage.cs",
         "KnowledgeCenterV2OperationsPages.cs",
         "KnowledgeEngineV2RuntimeBridge.cs",

@@ -70,6 +70,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceAuditService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2GovernanceBootstrap.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterHelpWindow.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2Ui.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2OperationsPages.cs" />

@@ -79,6 +79,8 @@ def test_feature_pages_are_embedded_and_obsolete_license_page_is_removed():
     assert '_legacyWindow.Content = null;' in code
     assert 'HideLegacyTabHeaders();' in code
     assert 'KnowledgeCenterWindow.MyShow(Window.GetWindow(this));' in code
+    assert 'Content = "使用帮助"' in code
+    assert 'KnowledgeCenterHelpWindow.MyShow(Window.GetWindow(this), Seller);' in code
 
 
 def test_feature_business_data_cannot_be_cleared_by_restore_default():
