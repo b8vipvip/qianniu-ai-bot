@@ -65,11 +65,14 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Index.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Incremental.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2.Service.Public.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeEngineV2FeedbackService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2Ui.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RecordsPage.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2OperationsPages.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2QualityUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2RuntimeBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2LearningBridge.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2FeedbackBridge.cs" />
   </ItemGroup>
 
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)AssistWindow\Widget\RightPanel.SettingsEntry.cs')">
