@@ -15,6 +15,7 @@ def test_revision_candidates_use_real_manual_corrections_and_cross_buyer_evidenc
     assert "cluster.Samples.Count < minEvidence || distinctBuyers < minBuyers" in service
     assert "dominance < 0.50" in service
     assert "BuildClusters(samples)" in service
+    assert 'Clean(x.Event.Buyer).ToLowerInvariant() + "|" + NormalizeComparable(x.Text)' in service
 
 
 def test_revision_generation_never_auto_overwrites_knowledge():
