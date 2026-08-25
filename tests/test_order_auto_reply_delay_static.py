@@ -33,17 +33,17 @@ def test_order_reply_keeps_delay_gate_but_forced_zero_reaches_segment_sender_imm
     delay_lookup = 'var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();'
     delay_guard = 'if (delaySeconds > 0)'
     preset_send = 'presetSendResult = await SendOrderPresetAnswerAsync(plan, answer);'
-    legacy_bypass = 'KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);'
     legacy_send = 'sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);'
 
     assert delay_lookup in order
     assert delay_guard in order
     assert preset_send in order
-    assert legacy_bypass in order
     assert legacy_send in order
+    assert 'KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);' not in order
+    assert 'ResponseProgressTracker.HasActiveManualIntervention' in order
     assert 'return ForcedDelaySeconds;' in settings
     assert order.index(delay_lookup) < order.index(delay_guard) < order.index(preset_send)
-    assert order.index(preset_send) < order.index(legacy_bypass) < order.index(legacy_send)
+    assert order.index(preset_send) < order.index(legacy_send)
 
 
 def test_direct_order_event_is_dispatched_before_normal_message_loop_and_uses_shared_send_gate():

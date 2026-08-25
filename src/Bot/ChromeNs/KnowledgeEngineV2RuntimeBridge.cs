@@ -32,6 +32,8 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, byte> WarmingSellers =
             new ConcurrentDictionary<string, byte>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<BuyerMessageBurstCoordinator, byte> PatchedCoordinators =
+            new ConcurrentDictionary<BuyerMessageBurstCoordinator, byte>();
         private static Timer _timer;
         private static int _initialized;
 
@@ -86,17 +88,42 @@ namespace Bot.ChromeNs
                     PrepareSeller(seller);
                     var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
                     if (coordinator == null) continue;
+                    // Several runtime features wrap the same handler on independent timers. Looking
+                    // only at current.Target is not idempotent: as soon as another feature becomes
+                    // the outer wrapper, V2 used to wrap the full chain again. VisionFollowUp then
+                    // moved itself outside V2, and the two timers grew an unbounded K(V(K(V(...))))
+                    // chain. Track the coordinator itself so this layer is installed exactly once.
+                    if (!PatchedCoordinators.TryAdd(coordinator, 0)) continue;
                     var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
-                    if (current == null) continue;
+                    if (current == null)
+                    {
+                        byte ignored;
+                        PatchedCoordinators.TryRemove(coordinator, out ignored);
+                        continue;
+                    }
                     current = StripLegacyMemoryWrapper(current);
-                    if (current == null) continue;
+                    if (current == null)
+                    {
+                        byte ignored;
+                        PatchedCoordinators.TryRemove(coordinator, out ignored);
+                        continue;
+                    }
                     if (current.Target is V2HandlerWrapper)
                     {
                         handlerField.SetValue(coordinator, current);
                         continue;
                     }
                     var wrapper = new V2HandlerWrapper(qn, current);
-                    handlerField.SetValue(coordinator, new Func<BuyerMessageBurstLease, Task>(wrapper.HandleAsync));
+                    try
+                    {
+                        handlerField.SetValue(coordinator, new Func<BuyerMessageBurstLease, Task>(wrapper.HandleAsync));
+                    }
+                    catch
+                    {
+                        byte ignored;
+                        PatchedCoordinators.TryRemove(coordinator, out ignored);
+                        throw;
+                    }
                     Log.Info("已为客服实例挂载Knowledge Engine V2本地决策层: seller=" + seller);
                 }
             }

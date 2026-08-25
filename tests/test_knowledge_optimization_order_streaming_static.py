@@ -26,20 +26,19 @@ def test_knowledge_manager_has_ai_optimization_runtime_ui():
     assert "Knowledge\\KnowledgeOptimizationUi.cs" in targets
 
 
-def test_order_auto_reply_uses_segment_sender_but_keeps_legacy_bypass_for_non_preset_answers():
+def test_order_auto_reply_uses_segment_sender_without_bypassing_manual_takeover():
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     app = read("src/Bot/App.xaml.cs")
     targets = read("src/Directory.Build.targets")
 
     preset_send = "presetSendResult = await SendOrderPresetAnswerAsync(plan, answer);"
-    bypass = "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);"
     legacy_send = "sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);"
     assert preset_send in order
-    assert bypass in order
     assert legacy_send in order
-    assert order.index(preset_send) < order.index(bypass) < order.index(legacy_send)
-    assert "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, segment);" in order
-    assert "下单固定预设分段已登记精确发送豁免" in order
+    assert order.index(preset_send) < order.index(legacy_send)
+    assert "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);" not in order
+    assert "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, segment);" not in order
+    assert "ResponseProgressTracker.HasActiveManualIntervention" in order
     assert "InstallOrderAutoReplyGuard" not in app
     assert "CtlConversation.OrderAutoReplyGuard.cs" not in targets
 

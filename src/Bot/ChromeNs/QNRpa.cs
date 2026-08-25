@@ -715,7 +715,11 @@ namespace Bot.ChromeNs
             await Task.Delay(180).ConfigureAwait(false);
             string manualQuestion;
             string manualAnswer;
-            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer)) return false;
+            if (KnowledgeLearningService.TryBlockForManualReply(_qn, buyer, text, out manualQuestion, out manualAnswer))
+            {
+                SetSendCancellation("人工接管", "检测到客服已人工回复，本次Bot发送已停止");
+                return false;
+            }
             return await OpenAndSendText(buyer, text).ConfigureAwait(false);
         }
 
@@ -1047,7 +1051,8 @@ namespace Bot.ChromeNs
                     CompleteAttemptLease(buyer, text);
                 }
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer
-                    + ", method=CDP页面按钮+HWND安全消息+UIA安全回退, failure=" + GetSendFailureReason() + ", text=" + text);
+                    + ", method=CDP页面按钮+HWND安全消息+UIA安全回退, failure="
+                    + (sendResult ? string.Empty : GetSendFailureReason()) + ", text=" + text);
             }
             catch (Exception ex)
             {

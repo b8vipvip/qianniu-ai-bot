@@ -152,6 +152,14 @@ namespace Bot.ChromeNs
             if (decision == null) return false;
             if (string.Equals(decision.MessageLabel, "历史消息", StringComparison.Ordinal)) return false;
             if (string.Equals(decision.MessageLabel, "[充值进度查询]", StringComparison.Ordinal)) return false;
+            // Platform cards are delivered with the buyer as fromid, but they are not authored by
+            // the buyer. VisionMessageDecision asks this service before applying the ordinary skip
+            // decision so these labels must be rejected here as well. Otherwise an order-entry card
+            // such as “当前用户来自 订单...” consumes the first-inquiry reservation and sends the
+            // configured greeting to a buyer who has not actually asked anything.
+            if (string.Equals(decision.MessageLabel, "[淘宝系统提示]", StringComparison.Ordinal)) return false;
+            if (string.Equals(decision.MessageLabel, "[撤回提示]", StringComparison.Ordinal)) return false;
+            if (string.Equals(decision.MessageLabel, "[空白或未知消息]", StringComparison.Ordinal)) return false;
             return true;
         }
 

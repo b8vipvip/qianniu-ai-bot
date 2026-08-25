@@ -13,19 +13,28 @@ namespace Bot.ChromeNs
         internal const string SendButtonAutomationId = "UIWindow.mutilcentralwidget.stackedWidget.SingleChatView.centralwidget.stackedWidget.SubChatView.ChatDisplayWidget.ChatContentView.splitter.sendMsgWidget.enterAreaKeyWidget.sendMsg";
 
         public string LastSendFailureReason { get; private set; } = string.Empty;
+        internal bool LastSendWasCancelled { get; private set; }
 
         internal void ResetSendFailure()
         {
             LastSendFailureReason = string.Empty;
+            LastSendWasCancelled = false;
         }
 
         internal void SetSendFailure(string stage, string detail)
         {
+            LastSendWasCancelled = false;
             stage = (stage ?? string.Empty).Trim();
             detail = (detail ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
             LastSendFailureReason = string.IsNullOrWhiteSpace(detail) ? stage : stage + "：" + detail;
             BotConnectionDiagnostics.RecordSendAttempt(false, LastSendFailureReason);
             Log.Info("发送阶段失败: " + LastSendFailureReason);
+        }
+
+        internal void SetSendCancellation(string stage, string detail)
+        {
+            SetSendFailure(stage, detail);
+            LastSendWasCancelled = true;
         }
 
         internal void InvalidateChatControls()

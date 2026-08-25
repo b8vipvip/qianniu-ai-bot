@@ -69,13 +69,21 @@ def test_trace_console_is_visible_and_beijing_time_aware():
     assert 'data-page="message-traces"' in html
     assert 'id="page-message-traces"' in html
     assert 'id="messageTraceTable"' in html
-    assert '/static/message-traces.js?v=1' in html
+    assert '/static/message-traces.js?v=2' in html
     assert '/api/admin/message-processing-traces?' in js
+    assert '查询消息处理日志失败' in js
     assert 'cnTime(' in js
     assert 'traceShopKey' in js
     assert 'traceSeller' in js
     assert 'traceBuyer' in js
     assert 'traceId' in js
+
+
+def test_trace_admin_dependency_receives_typed_fastapi_request():
+    source = read("services/api-control-plane/message_processing_traces.py")
+    assert "def _require_admin(request: Request)" in source
+    assert "Depends(_require_admin)" in source
+    assert "Depends(lambda request:" not in source
 
 
 def test_new_runtime_modules_are_bootstrapped_and_packaged():

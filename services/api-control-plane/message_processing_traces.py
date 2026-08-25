@@ -37,6 +37,13 @@ def install(control_plane: Any) -> None:
     control_plane.app.include_router(router)
 
 
+def _require_admin(request: Request) -> str:
+    # FastAPI injects Request only when the parameter carries the Request annotation.
+    # An untyped anonymous request parameter is treated as a required query parameter
+    # and makes the console endpoint return 422 before authentication runs.
+    return _cp.require_admin(request)
+
+
 def init_db() -> None:
     with _cp.db() as conn:
         conn.executescript(
@@ -172,7 +179,7 @@ def admin_message_processing_traces(
     status: str = Query("", max_length=40),
     trace_id: str = Query("", max_length=80),
     limit: int = Query(300, ge=1, le=1000),
-    _: str = Depends(lambda request: _cp.require_admin(request)),
+    _: str = Depends(_require_admin),
 ) -> List[Dict[str, Any]]:
     where: List[str] = []
     values: List[Any] = []

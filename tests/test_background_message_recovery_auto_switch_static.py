@@ -52,6 +52,19 @@ def test_live_detailed_event_still_cancels_pending_recovery_without_replay():
     assert "后台消息补偿处理前检测到详细买家事件已到，取消历史重放" in source
 
 
+def test_bypass_recovery_cannot_requeue_a_message_already_handled_by_authority():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    recovery = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
+
+    assert "_handledBuyerMessageDeduplicator" in qn
+    assert "_handledBuyerMessageDeduplicator.TryAccept(messageKey)" in qn
+    assert "_handledBuyerMessageDeduplicator.TryAccept(messageKey)" in recovery
+    assert "后台补偿跳过已由权威业务链处理的买家消息" in recovery
+    handled = qn.index("_handledBuyerMessageDeduplicator.TryAccept(messageKey)")
+    order_route = qn.index("OrderPlacedAutoReplyService.TryCreatePlan(", handled)
+    assert handled < order_route
+
+
 def test_recovery_does_not_hold_navigation_locks_while_processing_answers():
     source = read("src/Bot/ChromeNs/QN.MessageRecovery.cs")
 

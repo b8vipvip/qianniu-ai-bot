@@ -52,10 +52,12 @@ function traceQuery(){
 async function loadMessageTraces(){
   const box=$("messageTraceTable");
   if(!box)return;
-  const rows=await api("/api/admin/message-processing-traces?"+traceQuery());
-  state.messageTraces=rows;
-  if(!rows.length){box.innerHTML=`<div class="empty">暂无符合条件的消息处理日志。新版 Windows Bot 在线后会自动上报。</div>`;return;}
-  box.innerHTML=`<table><thead><tr><th>时间（北京时间）</th><th>客户端 / 店铺</th><th>客服 → 买家</th><th>链路ID</th><th>阶段</th><th>状态</th><th>耗时</th><th>摘要 / 详情</th></tr></thead><tbody>${rows.map(r=>`<tr>
+  box.innerHTML=`<div class="empty">正在查询消息处理日志...</div>`;
+  try{
+    const rows=await api("/api/admin/message-processing-traces?"+traceQuery());
+    state.messageTraces=rows;
+    if(!rows.length){box.innerHTML=`<div class="empty">暂无符合条件的消息处理日志。新版 Windows Bot 在线后会自动上报。</div>`;return;}
+    box.innerHTML=`<table><thead><tr><th>时间（北京时间）</th><th>客户端 / 店铺</th><th>客服 → 买家</th><th>链路ID</th><th>阶段</th><th>状态</th><th>耗时</th><th>摘要 / 详情</th></tr></thead><tbody>${rows.map(r=>`<tr>
     <td>${esc(cnTime(r.occurred_at||r.created_at,""))}</td>
     <td><strong>${esc(r.client_name||("#"+r.client_id))}</strong><div class="hint">${esc(r.shop_key||"-")}</div></td>
     <td>${esc(r.seller||"-")}<div class="hint">→ ${esc(r.buyer||"-")}</div></td>
@@ -65,6 +67,11 @@ async function loadMessageTraces(){
     <td>${Number(r.duration_ms||0)>0?esc(r.duration_ms+"ms"):"-"}</td>
     <td><strong>${esc(r.summary||"-")}</strong>${r.detail?`<div class="hint">${esc(r.detail)}</div>`:""}</td>
   </tr>`).join("")}</tbody></table>`;
+  }catch(err){
+    const message=err&&err.message?err.message:String(err||"未知错误");
+    box.innerHTML=`<div class="empty">查询消息处理日志失败：${esc(message)}<div class="actions" style="justify-content:center;margin-top:12px"><button class="secondary" onclick="loadMessageTraces()">重试</button></div></div>`;
+    throw err;
+  }
 }
 
 function filterTrace(traceId){

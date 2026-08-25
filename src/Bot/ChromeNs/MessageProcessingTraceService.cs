@@ -257,9 +257,19 @@ namespace Bot.ChromeNs
             Task.Run(async () =>
             {
                 try { await SyncOnceAsync(state); }
+                catch (TaskCanceledException)
+                {
+                    Log.ErrorWithMaxCount(
+                        "上传消息处理链路追踪超时：事件已保留并将在下一轮重试，pending="
+                        + state.Pending.Count,
+                        10);
+                }
                 catch (Exception ex)
                 {
-                    Log.ErrorWithMaxCount("上传消息处理链路追踪失败：" + Safe(ex.Message, 300), 10);
+                    Log.ErrorWithMaxCount(
+                        "上传消息处理链路追踪失败：事件已保留并将在下一轮重试，pending="
+                        + state.Pending.Count + "，error=" + Safe(ex.Message, 300),
+                        10);
                 }
                 finally { Interlocked.Exchange(ref state.Syncing, 0); }
             });
