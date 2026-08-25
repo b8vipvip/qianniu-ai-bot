@@ -1,3 +1,4 @@
+using Bot.ChromeNs;
 using Bot.ShopScope;
 using BotLib.Db.Sqlite;
 using System;
@@ -81,8 +82,7 @@ namespace Bot.Knowledge
 
         private sealed class AggregateCache
         {
-            public DateTime ExpiresAt;
-            public Dictionary<string, Aggregate> ByKnowledgeId;
+            public ConcurrentDictionary<string, Aggregate> ByKnowledgeId;
         }
 
         private static readonly IShopScopedPathProvider Paths = new ShopScopedPathProvider();
@@ -93,6 +93,11 @@ namespace Bot.Knowledge
         private static readonly ConcurrentDictionary<string, AggregateCache> AggregateCaches =
             new ConcurrentDictionary<string, AggregateCache>(StringComparer.Ordinal);
         private static int _cleanupCounter;
+
+        public static void Warm(string seller)
+        {
+            GetAggregates(seller);
+        }
 
         public static void RecordDirectSend(string seller, string buyer, string knowledgeId,
             string question, string answer, bool success, string failureReason)
@@ -133,12 +138,13 @@ namespace Bot.Knowledge
                 return;
             }
 
+            var negative = IsNegativeReaction(text);
             lock (pending.Sync)
             {
                 pending.BuyerFollowup = true;
-                if (IsNegativeReaction(text)) pending.NegativeBuyerReaction = true;
+                if (negative) pending.NegativeBuyerReaction = true;
             }
-            if (IsNegativeReaction(text))
+            if (negative)
             {
                 AppendEvent(pending.Seller, pending.Buyer, pending.KnowledgeId, "buyer_negative",
                     pending.Question, pending.Answer, Truncate(text, 160));
@@ -162,7 +168,7 @@ namespace Bot.Knowledge
             var similarity = KnowledgeEngineV2Semantics.TextSimilarity(pending.Answer, text);
             if (similarity >= 0.92 && age <= TimeSpan.FromSeconds(20))
             {
-                // This is normally the seller-side echo of the Bot message, not human approval.
+                // Normally the seller-side echo of the Bot message, not human approval.
                 return;
             }
             if (similarity >= 0.92)
@@ -203,17 +209,28 @@ namespace Bot.Knowledge
             if (knowledgeId.Length == 0) return 0;
             Aggregate aggregate;
             if (!GetAggregates(seller).TryGetValue(knowledgeId, out aggregate) || aggregate == null) return 0;
-            if (aggregate.Sent < 2) return 0;
+            int sent;
+            int accepted;
+            int correction;
+            int withdraw;
+            lock (aggregate)
+            {
+                sent = aggregate.Sent;
+                accepted = aggregate.Accepted;
+                correction = aggregate.Correction;
+                withdraw = aggregate.Withdraw;
+            }
+            if (sent < 2) return 0;
 
-            var uses = Math.Max(1, aggregate.Sent);
-            var acceptedRatio = aggregate.Accepted / (double)uses;
-            var correctionRatio = aggregate.Correction / (double)uses;
-            var withdrawRatio = aggregate.Withdraw / (double)uses;
+            var uses = Math.Max(1, sent);
+            var acceptedRatio = accepted / (double)uses;
+            var correctionRatio = correction / (double)uses;
+            var withdrawRatio = withdraw / (double)uses;
             // Transport send failures are intentionally excluded from knowledge-quality penalties.
             var adjustment = Math.Min(0.04, acceptedRatio * 0.04)
                 - correctionRatio * 0.14
                 - withdrawRatio * 0.18;
-            if (aggregate.Correction + aggregate.Withdraw >= 2) adjustment -= 0.025;
+            if (correction + withdraw >= 2) adjustment -= 0.025;
             return Math.Max(-0.18, Math.Min(0.05, adjustment));
         }
 
@@ -229,10 +246,27 @@ namespace Bot.Knowledge
                 Aggregate aggregate;
                 aggregates.TryGetValue(record.Id ?? string.Empty, out aggregate);
                 aggregate = aggregate ?? new Aggregate();
-                var useCount = Math.Max(0, record.UseCount) + aggregate.Sent;
-                var accepted = Math.Max(0, record.AcceptedCount) + aggregate.Accepted;
-                var correction = Math.Max(0, record.CorrectionCount) + aggregate.Correction;
-                var withdraw = Math.Max(0, record.WithdrawCount) + aggregate.Withdraw;
+                int sent;
+                int acceptedEvidence;
+                int correctionEvidence;
+                int withdrawEvidence;
+                int sendFailed;
+                DateTime lastUsed;
+                string lastEvidence;
+                lock (aggregate)
+                {
+                    sent = aggregate.Sent;
+                    acceptedEvidence = aggregate.Accepted;
+                    correctionEvidence = aggregate.Correction;
+                    withdrawEvidence = aggregate.Withdraw;
+                    sendFailed = aggregate.SendFailed;
+                    lastUsed = aggregate.LastUsedAt;
+                    lastEvidence = aggregate.LastEvidence;
+                }
+                var useCount = Math.Max(0, record.UseCount) + sent;
+                var accepted = Math.Max(0, record.AcceptedCount) + acceptedEvidence;
+                var correction = Math.Max(0, record.CorrectionCount) + correctionEvidence;
+                var withdraw = Math.Max(0, record.WithdrawCount) + withdrawEvidence;
                 var correctionRate = (correction + withdraw) / (double)Math.Max(1, useCount);
                 var acceptedRatio = accepted / (double)Math.Max(1, useCount);
                 var quality = Clamp(record.Confidence * 0.55
@@ -255,12 +289,12 @@ namespace Bot.Knowledge
                     AcceptedCount = accepted,
                     CorrectionCount = correction,
                     WithdrawCount = withdraw,
-                    SendFailureCount = aggregate.SendFailed,
+                    SendFailureCount = sendFailed,
                     CorrectionRate = correctionRate,
                     QualityScore = quality,
-                    LastUsedAt = aggregate.LastUsedAt,
+                    LastUsedAt = lastUsed,
                     HealthStatus = status,
-                    LastEvidence = aggregate.LastEvidence ?? string.Empty
+                    LastEvidence = lastEvidence ?? string.Empty
                 });
             }
             return result
@@ -274,10 +308,7 @@ namespace Bot.Knowledge
         {
             var state = GetState(ResolveShopRequired(seller));
             List<KnowledgeV2FeedbackEventRow> rows;
-            lock (state.Sync)
-            {
-                rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
-            }
+            lock (state.Sync) rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
             knowledgeId = Clean(knowledgeId);
             return rows.Where(x => x != null && (knowledgeId.Length == 0 || x.KnowledgeId == knowledgeId))
                 .OrderByDescending(x => x.CreatedAtTicks)
@@ -303,8 +334,10 @@ namespace Bot.Knowledge
                 CreatedAtTicks = DateTime.Now.Ticks
             };
             lock (state.Sync) state.Db.SaveOneRecord(row);
-            AggregateCache ignored;
-            AggregateCaches.TryRemove(shop.ShopKey, out ignored);
+
+            AggregateCache cached;
+            if (AggregateCaches.TryGetValue(shop.ShopKey, out cached) && cached != null && cached.ByKnowledgeId != null)
+                ApplyEventToAggregate(cached.ByKnowledgeId, row);
 
             if (Interlocked.Increment(ref _cleanupCounter) % 200 == 0)
             {
@@ -313,31 +346,38 @@ namespace Bot.Knowledge
                     var cutoff = DateTime.Now.AddDays(-180).Ticks;
                     lock (state.Sync)
                         state.Db.Execute("delete from KnowledgeV2FeedbackEventRow where CreatedAtTicks < ?", cutoff);
+                    AggregateCache ignored;
+                    AggregateCaches.TryRemove(shop.ShopKey, out ignored);
                 }
                 catch { }
             }
         }
 
-        private static Dictionary<string, Aggregate> GetAggregates(string seller)
+        private static ConcurrentDictionary<string, Aggregate> GetAggregates(string seller)
         {
             var shop = ResolveShopRequired(seller);
             AggregateCache cached;
             if (AggregateCaches.TryGetValue(shop.ShopKey, out cached)
-                && cached != null && cached.ExpiresAt >= DateTime.Now && cached.ByKnowledgeId != null)
+                && cached != null && cached.ByKnowledgeId != null)
                 return cached.ByKnowledgeId;
 
             var state = GetState(shop);
             List<KnowledgeV2FeedbackEventRow> rows;
             lock (state.Sync) rows = state.Db.ReadRecords<KnowledgeV2FeedbackEventRow>(null);
-            var result = new Dictionary<string, Aggregate>(StringComparer.Ordinal);
+            var result = new ConcurrentDictionary<string, Aggregate>(StringComparer.Ordinal);
             foreach (var row in rows.Where(x => x != null && !string.IsNullOrWhiteSpace(x.KnowledgeId)))
+                ApplyEventToAggregate(result, row);
+            var next = new AggregateCache { ByKnowledgeId = result };
+            AggregateCaches[shop.ShopKey] = next;
+            return next.ByKnowledgeId;
+        }
+
+        private static void ApplyEventToAggregate(ConcurrentDictionary<string, Aggregate> target, KnowledgeV2FeedbackEventRow row)
+        {
+            if (target == null || row == null || string.IsNullOrWhiteSpace(row.KnowledgeId)) return;
+            var item = target.GetOrAdd(row.KnowledgeId, _ => new Aggregate());
+            lock (item)
             {
-                Aggregate item;
-                if (!result.TryGetValue(row.KnowledgeId, out item))
-                {
-                    item = new Aggregate();
-                    result[row.KnowledgeId] = item;
-                }
                 var type = (row.EventType ?? string.Empty).Trim().ToLowerInvariant();
                 if (type == "sent") item.Sent++;
                 else if (type == "accepted") item.Accepted++;
@@ -352,12 +392,6 @@ namespace Bot.Knowledge
                     item.LastEvidence = type + (string.IsNullOrWhiteSpace(row.Evidence) ? string.Empty : "：" + row.Evidence);
                 }
             }
-            AggregateCaches[shop.ShopKey] = new AggregateCache
-            {
-                ExpiresAt = DateTime.Now.AddSeconds(20),
-                ByKnowledgeId = result
-            };
-            return result;
         }
 
         private static StoreState GetState(ShopContext shop)
@@ -387,7 +421,15 @@ namespace Bot.Knowledge
         private static bool TryGetPending(string seller, string buyer, out PendingReply pending)
         {
             pending = null;
-            if (!Pending.TryGetValue(PendingKey(seller, buyer), out pending) || pending == null) return false;
+            seller = Clean(seller);
+            buyer = Clean(buyer);
+            if (!Pending.TryGetValue(PendingKey(seller, buyer), out pending) || pending == null)
+            {
+                pending = Pending.Values.FirstOrDefault(x => x != null
+                    && string.Equals(x.Seller, seller, StringComparison.Ordinal)
+                    && BuyerIdentityAliasService.AreEquivalent(seller, x.Buyer, buyer));
+                if (pending == null) return false;
+            }
             if (pending.SentAt < DateTime.Now.AddMinutes(-3))
             {
                 RemovePending(pending);
