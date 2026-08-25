@@ -92,7 +92,7 @@ namespace Bot.Knowledge
             return result;
         }
 
-        private static KnowledgeV2Match Score(KnowledgeV2Record record, KnowledgeV2Query query)
+        private static KnowledgeV2Match Score(string seller, KnowledgeV2Record record, KnowledgeV2Query query)
         {
             if (record == null || query == null) return null;
             var alias = (record.Aliases ?? new List<string>()).Concat(new[] { record.Title })
@@ -104,7 +104,8 @@ namespace Bot.Knowledge
             var intent = string.Equals(query.Intent, record.Intent, StringComparison.OrdinalIgnoreCase) ? 1.0
                 : (query.Intent == "general" || record.Intent == "general" ? 0.35 : 0.0);
             var entity = EntitySimilarity(query.Entities, record.Entities);
-            var confidence = Clamp(record.Confidence * 0.72 + record.Authority * 0.28);
+            var feedbackAdjustment = KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id);
+            var confidence = Clamp(record.Confidence * 0.72 + record.Authority * 0.28 + feedbackAdjustment);
             var score = Clamp(predicate * 0.34 + entity * 0.25 + intent * 0.17 + alias * 0.16 + confidence * 0.08);
             if (alias >= 0.98) score = Math.Max(score, 0.97);
             else if (predicate >= 0.99 && entity >= 0.66 && intent >= 0.99) score = Math.Max(score, 0.89);
@@ -122,6 +123,7 @@ namespace Bot.Knowledge
                     + ", intent=" + intent.ToString("0.00")
                     + ", alias=" + alias.ToString("0.00")
                     + ", confidence=" + confidence.ToString("0.00")
+                    + ", feedback=" + feedbackAdjustment.ToString("+0.000;-0.000;0.000")
             };
         }
 

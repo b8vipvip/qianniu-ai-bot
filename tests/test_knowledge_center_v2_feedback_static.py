@@ -1,0 +1,80 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+def test_direct_send_outcomes_are_recorded_without_treating_transport_failure_as_bad_knowledge():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert "KnowledgeEngineV2FeedbackService.RecordDirectSend" in runtime
+    assert 'success ? "sent" : "send_failed"' in feedback
+    assert "Transport send failures are intentionally excluded from knowledge-quality penalties" in feedback
+    adjustment = feedback.split("public static double GetQualityAdjustment", 1)[1].split("public static List<KnowledgeV2QualityItem>", 1)[0]
+    assert "SendFailed" not in adjustment
+
+
+def test_feedback_loop_uses_explicit_evidence_and_ignores_fast_bot_echo():
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert '"buyer_positive:"' in feedback
+    assert '"buyer_negative"' in feedback
+    assert '"manual_reply:"' in feedback
+    assert '"withdrawal"' in feedback
+    assert "similarity >= 0.92 && age <= TimeSpan.FromSeconds(20)" in feedback
+    assert "Normally the seller-side echo of the Bot message" in feedback
+    assert "BuyerIdentityAliasService.AreEquivalent" in feedback
+
+
+def test_feedback_is_append_only_and_keeps_hot_aggregate_cache():
+    feedback = read("src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs")
+    assert 'knowledge-feedback-v2.db' in feedback
+    assert "KnowledgeV2FeedbackEventRow" in feedback
+    assert "ConcurrentDictionary<string, Aggregate> ByKnowledgeId" in feedback
+    assert "ApplyEventToAggregate(cached.ByKnowledgeId, row)" in feedback
+    assert "public static void Warm(string seller)" in feedback
+
+
+def test_feedback_quality_influences_ranking_conservatively():
+    public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
+    index = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs")
+    assert "Score(seller, snapshot.Records[i], query)" in public
+    assert "KnowledgeEngineV2FeedbackService.GetQualityAdjustment(seller, record.Id)" in index
+    assert "record.Confidence * 0.72 + record.Authority * 0.28 + feedbackAdjustment" in index
+    assert 'feedback=" + feedbackAdjustment' in index
+
+
+def test_raw_qn_messages_feed_quality_evidence():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2FeedbackBridge.cs")
+    assert "EvRecieveNewMessage" in bridge
+    assert "ConversationContextStore.IsWithdrawalNotice" in bridge
+    assert "KnowledgeEngineV2FeedbackService.ObserveBuyerMessage" in bridge
+    assert "KnowledgeEngineV2FeedbackService.ObserveSellerMessage" in bridge
+    assert "KnowledgeEngineV2FeedbackService.ObserveWithdrawal" in bridge
+
+
+def test_quality_dashboard_exposes_required_operational_metrics():
+    ui = read("src/Bot/Knowledge/KnowledgeCenterV2QualityUi.cs")
+    for label in ["知识质量与真实使用反馈", "命中次数", "人工纠正", "撤回", "纠错率", "发送失败", "最近使用", "低质量"]:
+        assert label in ui
+    assert 'Content = "质量"' in ui
+    assert "GetQualityItems" in ui
+    assert "GetRecentEvents" in ui
+
+
+def test_feedback_components_are_compiled_for_wpf_and_normal_bot_projects():
+    props = read("src/Bot/Directory.Build.props")
+    for name in [
+        "KnowledgeEngineV2FeedbackService.cs",
+        "KnowledgeCenterV2QualityUi.cs",
+        "KnowledgeEngineV2FeedbackBridge.cs",
+    ]:
+        assert name in props
+
+
+def test_runtime_bootstraps_feedback_observer_and_quality_ui():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    assert "KnowledgeV2QualityUiBridge.Initialize()" in runtime
+    assert "KnowledgeEngineV2FeedbackBridge.Initialize()" in runtime

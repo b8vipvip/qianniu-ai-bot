@@ -40,13 +40,15 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
                 try { KnowledgeCenterV2UiBridge.Initialize(); } catch { }
+                try { KnowledgeV2QualityUiBridge.Initialize(); } catch { }
+                try { KnowledgeEngineV2FeedbackBridge.Initialize(); } catch { }
                 StopLegacyMemoryTimer();
                 _timer = new Timer(_ =>
                 {
                     StopLegacyMemoryTimer();
                     PatchExisting();
                 }, null, 850, 850);
-                Log.Info("Knowledge Engine V2已启动：SQLite Knowledge Repository + 结构化倒排索引 + Working Memory补全 + 可解释调试；Memory Engine v1运行时已进入兼容退场模式。");
+                Log.Info("Knowledge Engine V2已启动：SQLite Knowledge Repository + 结构化倒排索引 + Working Memory补全 + 真实反馈质量闭环；Memory Engine v1运行时已进入兼容退场模式。");
             }
             return new object();
         }
@@ -265,15 +267,34 @@ namespace Bot.ChromeNs
             }
 
             var sendOk = await qn.SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
+            var failureReason = sendOk || qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason();
             if (sendOk)
                 ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
+            try
+            {
+                if (best != null && best.Record != null && !string.IsNullOrWhiteSpace(best.Record.Id))
+                {
+                    KnowledgeEngineV2FeedbackService.RecordDirectSend(
+                        burst.SellerNick,
+                        burst.BuyerNick,
+                        best.Record.Id,
+                        burst.CombinedQuestion,
+                        answer,
+                        sendOk,
+                        failureReason);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("记录Knowledge V2发送反馈失败: " + ex.Message, 10);
+            }
             if (ctl != null)
             {
                 ctl.SetSendResult(
                     sendOk,
                     sendOk
                         ? "已发送（Knowledge Engine V2本地直答，无AI调用）"
-                        : "发送失败：" + (qn.Rpa == null ? string.Empty : qn.Rpa.GetSendFailureReason()));
+                        : "发送失败：" + failureReason);
             }
             Log.Info("Knowledge Engine V2本地直答完成: buyer=" + burst.BuyerNick
                 + ", success=" + sendOk
