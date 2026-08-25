@@ -128,7 +128,7 @@ namespace Bot.Knowledge
 
             var rankSw = Stopwatch.StartNew();
             var rankedMatches = candidates
-                .Select(i => Score(snapshot.Records[i], query))
+                .Select(i => Score(seller, snapshot.Records[i], query))
                 .Where(x => x != null && x.Score >= 0.30)
                 .OrderByDescending(x => x.Score)
                 .ThenByDescending(x => x.ConfidenceScore)
