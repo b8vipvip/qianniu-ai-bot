@@ -85,6 +85,8 @@ namespace Bot.Knowledge
         {
             public List<KnowledgeV2GovernanceIssue> Issues;
             public List<KnowledgeV2RevisionImpactItem> Impacts;
+            public List<KnowledgeV2GovernanceAuditEntry> Audits;
+            public KnowledgeV2GovernanceSettings Settings;
         }
 
         private readonly string _seller;
@@ -92,16 +94,28 @@ namespace Bot.Knowledge
             new ObservableCollection<KnowledgeV2GovernanceIssue>();
         private readonly ObservableCollection<KnowledgeV2RevisionImpactItem> _impactView =
             new ObservableCollection<KnowledgeV2RevisionImpactItem>();
+        private readonly ObservableCollection<KnowledgeV2GovernanceAuditEntry> _auditView =
+            new ObservableCollection<KnowledgeV2GovernanceAuditEntry>();
         private List<KnowledgeV2GovernanceIssue> _allIssues = new List<KnowledgeV2GovernanceIssue>();
         private List<KnowledgeV2RevisionImpactItem> _allImpacts = new List<KnowledgeV2RevisionImpactItem>();
+        private List<KnowledgeV2GovernanceAuditEntry> _allAudits = new List<KnowledgeV2GovernanceAuditEntry>();
         private DataGrid _issueGrid;
         private DataGrid _impactGrid;
+        private DataGrid _auditGrid;
         private TextBox _issueDetails;
         private TextBox _impactDetails;
+        private TextBox _auditDetails;
         private TextBox _search;
+        private TextBox _auditSearch;
         private ComboBox _filter;
+        private ComboBox _auditFilter;
         private TextBlock _issueSummary;
         private TextBlock _impactSummary;
+        private TextBlock _auditSummary;
+        private TextBlock _settingsStatus;
+        private TextBox _normalVerificationDays;
+        private TextBox _highRiskVerificationDays;
+        private TextBox _unusedStaleDays;
         private Button _verify;
         private Button _disable;
         private Button _rollback;
@@ -146,6 +160,8 @@ namespace Bot.Knowledge
             var tabs = new TabControl();
             tabs.Items.Add(new TabItem { Header = "治理队列", Content = BuildGovernanceTab() });
             tabs.Items.Add(new TabItem { Header = "修订效果", Content = BuildImpactTab() });
+            tabs.Items.Add(new TabItem { Header = "治理历史", Content = BuildAuditTab() });
+            tabs.Items.Add(new TabItem { Header = "治理设置", Content = BuildSettingsTab() });
             Grid.SetRow(tabs, 1);
             root.Children.Add(tabs);
             Content = root;
@@ -298,6 +314,148 @@ namespace Bot.Knowledge
             return root;
         }
 
+        private UIElement BuildAuditTab()
+        {
+            var root = new Grid { Margin = new Thickness(0, 10, 0, 0) };
+            root.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            root.RowDefinitions.Add(new RowDefinition { Height = new GridLength(210) });
+
+            var toolbar = new WrapPanel { Margin = new Thickness(0, 0, 0, 8) };
+            var refresh = Btn("刷新历史", 86);
+            refresh.Click += delegate { RefreshAll(); };
+            _auditFilter = new ComboBox { Width = 132, Height = 30, Margin = new Thickness(0, 0, 8, 0) };
+            foreach (var value in new[] { "全部", "确认仍有效", "停用知识", "应用修订", "驳回修订", "回滚修订", "生成修订候选", "更新治理设置" })
+                _auditFilter.Items.Add(value);
+            _auditFilter.SelectedIndex = 0;
+            _auditFilter.SelectionChanged += delegate { ApplyAuditFilter(); };
+            _auditSearch = new TextBox
+            {
+                Width = 240,
+                Height = 30,
+                Margin = new Thickness(0, 0, 8, 0),
+                ToolTip = "搜索操作、知识标题、摘要或目标ID"
+            };
+            _auditSearch.TextChanged += delegate { ApplyAuditFilter(); };
+            _auditSummary = new TextBlock
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Brushes.DimGray,
+                Margin = new Thickness(8, 6, 0, 0)
+            };
+            toolbar.Children.Add(refresh);
+            toolbar.Children.Add(_auditFilter);
+            toolbar.Children.Add(_auditSearch);
+            toolbar.Children.Add(_auditSummary);
+            root.Children.Add(toolbar);
+
+            _auditGrid = new DataGrid
+            {
+                AutoGenerateColumns = false,
+                IsReadOnly = true,
+                CanUserAddRows = false,
+                ItemsSource = _auditView,
+                SelectionMode = DataGridSelectionMode.Single
+            };
+            _auditGrid.Columns.Add(Col("时间", "CreatedAtText", 150));
+            _auditGrid.Columns.Add(Col("操作", "ActionText", 112));
+            _auditGrid.Columns.Add(Col("目标类型", "TargetType", 105));
+            _auditGrid.Columns.Add(Col("知识/对象", "TargetTitle", 260));
+            _auditGrid.Columns.Add(Col("结果", "ResultText", 68));
+            _auditGrid.Columns.Add(new DataGridTextColumn
+            {
+                Header = "摘要",
+                Binding = new Binding("Summary"),
+                Width = new DataGridLength(1, DataGridLengthUnitType.Star)
+            });
+            _auditGrid.SelectionChanged += delegate { LoadAuditDetails(_auditGrid.SelectedItem as KnowledgeV2GovernanceAuditEntry); };
+            Grid.SetRow(_auditGrid, 1);
+            root.Children.Add(_auditGrid);
+
+            _auditDetails = ReadOnlyDetails();
+            Grid.SetRow(_auditDetails, 2);
+            root.Children.Add(_auditDetails);
+            return root;
+        }
+
+        private UIElement BuildSettingsTab()
+        {
+            var scroll = new ScrollViewer
+            {
+                VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Margin = new Thickness(0, 10, 0, 0)
+            };
+            var panel = new StackPanel { MaxWidth = 820, HorizontalAlignment = HorizontalAlignment.Left };
+            panel.Children.Add(new TextBlock
+            {
+                Text = "治理阈值（当前店铺独立）",
+                FontSize = 18,
+                FontWeight = FontWeights.SemiBold,
+                Margin = new Thickness(0, 0, 0, 6)
+            });
+            panel.Children.Add(new TextBlock
+            {
+                Text = "这些设置只决定知识何时进入人工治理队列，不会自动修改、停用或删除知识，也不会放宽修订回滚的安全门槛。",
+                Foreground = Brushes.DimGray,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 18)
+            });
+
+            _normalVerificationDays = SettingTextBox();
+            _highRiskVerificationDays = SettingTextBox();
+            _unusedStaleDays = SettingTextBox();
+            panel.Children.Add(SettingsRow("普通知识验证过期", _normalVerificationDays,
+                "30–730 天；默认 180 天。超过该时间未人工确认，会进入“验证已过期”。"));
+            panel.Children.Add(SettingsRow("高风险知识验证过期", _highRiskVerificationDays,
+                "7–365 天，且不能大于普通知识阈值；默认 60 天。"));
+            panel.Children.Add(SettingsRow("长期未使用提醒", _unusedStaleDays,
+                "30–730 天；默认 120 天。仅在没有有效使用记录时提示，不会自动删除。"));
+
+            var buttons = new WrapPanel { Margin = new Thickness(0, 12, 0, 0) };
+            var save = Btn("保存设置", 94);
+            save.Click += delegate { SaveGovernanceSettings(); };
+            var defaults = Btn("填入默认值", 104);
+            defaults.Click += delegate
+            {
+                LoadSettingsValues(new KnowledgeV2GovernanceSettings
+                {
+                    NormalVerificationDays = KnowledgeEngineV2GovernanceAuditService.DefaultNormalVerificationDays,
+                    HighRiskVerificationDays = KnowledgeEngineV2GovernanceAuditService.DefaultHighRiskVerificationDays,
+                    UnusedStaleDays = KnowledgeEngineV2GovernanceAuditService.DefaultUnusedStaleDays
+                });
+                if (_settingsStatus != null) _settingsStatus.Text = "已填入默认值；点击“保存设置”后才会生效。";
+            };
+            _settingsStatus = new TextBlock
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+                Foreground = Brushes.DimGray,
+                Margin = new Thickness(8, 6, 0, 0),
+                TextWrapping = TextWrapping.Wrap
+            };
+            buttons.Children.Add(save);
+            buttons.Children.Add(defaults);
+            buttons.Children.Add(_settingsStatus);
+            panel.Children.Add(buttons);
+
+            panel.Children.Add(new Border
+            {
+                Background = new SolidColorBrush(Color.FromRgb(248, 250, 253)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(220, 226, 234)),
+                BorderThickness = new Thickness(1),
+                Padding = new Thickness(12),
+                Margin = new Thickness(0, 22, 0, 0),
+                Child = new TextBlock
+                {
+                    Text = "保存后会立即重新扫描当前店铺治理队列，并在“治理历史”中追加一条设置变更审计。其他店铺保持自己的阈值和审计记录。",
+                    TextWrapping = TextWrapping.Wrap,
+                    Foreground = Brushes.DimGray
+                }
+            });
+            scroll.Content = panel;
+            return scroll;
+        }
+
         private void RefreshAll()
         {
             if (string.IsNullOrWhiteSpace(_seller))
@@ -308,10 +466,14 @@ namespace Bot.Knowledge
             if (_refresh != null) _refresh.IsEnabled = false;
             if (_issueSummary != null) _issueSummary.Text = "正在扫描治理队列...";
             if (_impactSummary != null) _impactSummary.Text = "正在计算修订前后效果...";
+            if (_auditSummary != null) _auditSummary.Text = "正在读取本店治理历史...";
+            if (_settingsStatus != null) _settingsStatus.Text = "正在读取本店治理设置...";
             Task.Run(() => new GovernanceLoadResult
             {
                 Issues = KnowledgeEngineV2GovernanceService.Scan(_seller),
-                Impacts = KnowledgeEngineV2GovernanceService.GetRevisionImpacts(_seller)
+                Impacts = KnowledgeEngineV2GovernanceService.GetRevisionImpacts(_seller),
+                Audits = KnowledgeEngineV2GovernanceAuditService.GetEntries(_seller, 500),
+                Settings = KnowledgeEngineV2GovernanceAuditService.GetSettings(_seller)
             }).ContinueWith(t => Dispatcher.BeginInvoke(new Action(() =>
             {
                 if (_refresh != null) _refresh.IsEnabled = true;
@@ -320,6 +482,8 @@ namespace Bot.Knowledge
                     var message = t.Exception.GetBaseException().Message;
                     if (_issueSummary != null) _issueSummary.Text = "治理扫描失败：" + message;
                     if (_impactSummary != null) _impactSummary.Text = "效果评估失败：" + message;
+                    if (_auditSummary != null) _auditSummary.Text = "治理历史读取失败：" + message;
+                    if (_settingsStatus != null) _settingsStatus.Text = "治理设置读取失败：" + message;
                     return;
                 }
                 _allIssues = t.Result.Issues ?? new List<KnowledgeV2GovernanceIssue>();
@@ -328,6 +492,10 @@ namespace Bot.Knowledge
                 _impactView.Clear();
                 foreach (var item in _allImpacts) _impactView.Add(item);
                 UpdateImpactSummary();
+                _allAudits = t.Result.Audits ?? new List<KnowledgeV2GovernanceAuditEntry>();
+                ApplyAuditFilter();
+                LoadSettingsValues(t.Result.Settings);
+                if (_settingsStatus != null) _settingsStatus.Text = "当前店铺设置已加载。";
             })));
         }
 
@@ -370,6 +538,36 @@ namespace Bot.Knowledge
             var improved = _allImpacts.Count(x => x.Status == "效果改善");
             _impactSummary.Text = "已应用修订 " + _allImpacts.Count + "｜建议回滚 " + rollback
                 + "｜观察中 " + observing + "｜效果改善 " + improved;
+        }
+
+        private void ApplyAuditFilter()
+        {
+            var filter = _auditFilter == null ? "全部" : Convert.ToString(_auditFilter.SelectedItem) ?? "全部";
+            var search = (_auditSearch == null ? string.Empty : _auditSearch.Text ?? string.Empty).Trim();
+            IEnumerable<KnowledgeV2GovernanceAuditEntry> items = _allAudits ?? new List<KnowledgeV2GovernanceAuditEntry>();
+            if (filter != "全部") items = items.Where(x => string.Equals(x.ActionText, filter, StringComparison.Ordinal));
+            if (search.Length > 0)
+            {
+                items = items.Where(x => Contains(x.ActionText, search)
+                    || Contains(x.TargetTitle, search)
+                    || Contains(x.Summary, search)
+                    || Contains(x.KnowledgeId, search)
+                    || Contains(x.CandidateId, search));
+            }
+            var list = items.ToList();
+            _auditView.Clear();
+            foreach (var item in list) _auditView.Add(item);
+            UpdateAuditSummary();
+        }
+
+        private void UpdateAuditSummary()
+        {
+            if (_auditSummary == null) return;
+            var knowledgeActions = _allAudits.Count(x => x.TargetType == "knowledge");
+            var revisionActions = _allAudits.Count(x => x.TargetType == "revision");
+            var settingActions = _allAudits.Count(x => x.ActionType == "update_settings");
+            _auditSummary.Text = "历史 " + _allAudits.Count + "｜知识动作 " + knowledgeActions
+                + "｜修订动作 " + revisionActions + "｜设置变更 " + settingActions + "｜当前显示 " + _auditView.Count;
         }
 
         private async Task GenerateRevisionCandidatesAsync()
@@ -445,6 +643,60 @@ namespace Bot.Knowledge
             RefreshAll();
         }
 
+        private void SaveGovernanceSettings()
+        {
+            int normal;
+            int highRisk;
+            int unused;
+            if (!TryReadSetting(_normalVerificationDays, "普通知识验证过期", out normal)
+                || !TryReadSetting(_highRiskVerificationDays, "高风险知识验证过期", out highRisk)
+                || !TryReadSetting(_unusedStaleDays, "长期未使用提醒", out unused)) return;
+            if (normal < KnowledgeEngineV2GovernanceAuditService.MinNormalVerificationDays
+                || normal > KnowledgeEngineV2GovernanceAuditService.MaxNormalVerificationDays)
+            {
+                MessageBox.Show(this, "普通知识验证过期必须为 30–730 天。", "治理设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (highRisk < KnowledgeEngineV2GovernanceAuditService.MinHighRiskVerificationDays
+                || highRisk > KnowledgeEngineV2GovernanceAuditService.MaxHighRiskVerificationDays
+                || highRisk > normal)
+            {
+                MessageBox.Show(this, "高风险知识验证过期必须为 7–365 天，且不能大于普通知识阈值。",
+                    "治理设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (unused < KnowledgeEngineV2GovernanceAuditService.MinUnusedStaleDays
+                || unused > KnowledgeEngineV2GovernanceAuditService.MaxUnusedStaleDays)
+            {
+                MessageBox.Show(this, "长期未使用提醒必须为 30–730 天。", "治理设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+            if (MessageBox.Show(this,
+                "确定保存当前店铺的治理阈值吗？\n\n普通验证：" + normal + " 天\n高风险验证：" + highRisk
+                + " 天\n长期未使用：" + unused + " 天\n\n保存后只会重新计算治理提示，不会自动修改生产知识。",
+                "保存治理设置", MessageBoxButton.YesNo, MessageBoxImage.Question) != MessageBoxResult.Yes) return;
+            try
+            {
+                var saved = KnowledgeEngineV2GovernanceAuditService.SaveSettings(_seller, normal, highRisk, unused);
+                LoadSettingsValues(saved);
+                if (_settingsStatus != null) _settingsStatus.Text = "设置已保存，正在重新扫描治理队列...";
+                RefreshAll();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, "保存治理设置失败：" + ex.Message, "治理设置", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (_settingsStatus != null) _settingsStatus.Text = "保存失败：" + ex.Message;
+            }
+        }
+
+        private void LoadSettingsValues(KnowledgeV2GovernanceSettings settings)
+        {
+            if (settings == null) return;
+            if (_normalVerificationDays != null) _normalVerificationDays.Text = settings.NormalVerificationDays.ToString();
+            if (_highRiskVerificationDays != null) _highRiskVerificationDays.Text = settings.HighRiskVerificationDays.ToString();
+            if (_unusedStaleDays != null) _unusedStaleDays.Text = settings.UnusedStaleDays.ToString();
+        }
+
         private void LoadIssueDetails(KnowledgeV2GovernanceIssue item)
         {
             if (_issueDetails == null) return;
@@ -484,6 +736,23 @@ namespace Bot.Knowledge
                 + Environment.NewLine + Environment.NewLine + "【当前知识答案】" + Environment.NewLine + (item.CurrentAnswer ?? string.Empty);
         }
 
+        private void LoadAuditDetails(KnowledgeV2GovernanceAuditEntry item)
+        {
+            if (_auditDetails == null) return;
+            if (item == null)
+            {
+                _auditDetails.Text = string.Empty;
+                return;
+            }
+            _auditDetails.Text = "时间：" + item.CreatedAtText + "　操作：" + item.ActionText + "　结果：" + item.ResultText + Environment.NewLine
+                + "店铺客服：" + (item.Seller ?? string.Empty) + "　目标类型：" + (item.TargetType ?? string.Empty) + Environment.NewLine
+                + "对象：" + (item.TargetTitle ?? string.Empty) + Environment.NewLine
+                + "Knowledge ID：" + (item.KnowledgeId ?? string.Empty) + "　Candidate ID：" + (item.CandidateId ?? string.Empty) + Environment.NewLine
+                + Environment.NewLine + "【操作摘要】" + Environment.NewLine + (item.Summary ?? string.Empty)
+                + Environment.NewLine + Environment.NewLine + "【操作前状态】" + Environment.NewLine + (item.BeforeState ?? string.Empty)
+                + Environment.NewLine + Environment.NewLine + "【操作后状态】" + Environment.NewLine + (item.AfterState ?? string.Empty);
+        }
+
         private static TextBox ReadOnlyDetails()
         {
             return new TextBox
@@ -496,6 +765,53 @@ namespace Bot.Knowledge
                 Margin = new Thickness(0, 8, 0, 0),
                 Background = new SolidColorBrush(Color.FromRgb(248, 250, 253))
             };
+        }
+
+        private static TextBox SettingTextBox()
+        {
+            return new TextBox
+            {
+                Width = 90,
+                Height = 30,
+                HorizontalContentAlignment = HorizontalAlignment.Right,
+                VerticalContentAlignment = VerticalAlignment.Center
+            };
+        }
+
+        private static UIElement SettingsRow(string title, TextBox input, string description)
+        {
+            var row = new Grid { Margin = new Thickness(0, 0, 0, 14) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(190) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(110) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var label = new TextBlock
+            {
+                Text = title,
+                VerticalAlignment = VerticalAlignment.Center,
+                FontWeight = FontWeights.SemiBold
+            };
+            row.Children.Add(label);
+            Grid.SetColumn(input, 1);
+            row.Children.Add(input);
+            var help = new TextBlock
+            {
+                Text = description,
+                Foreground = Brushes.DimGray,
+                VerticalAlignment = VerticalAlignment.Center,
+                TextWrapping = TextWrapping.Wrap
+            };
+            Grid.SetColumn(help, 2);
+            row.Children.Add(help);
+            return row;
+        }
+
+        private bool TryReadSetting(TextBox input, string label, out int value)
+        {
+            value = 0;
+            if (input != null && int.TryParse((input.Text ?? string.Empty).Trim(), out value)) return true;
+            MessageBox.Show(this, label + "必须填写整数天数。", "治理设置", MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (input != null) input.Focus();
+            return false;
         }
 
         private static DataGridTextColumn Col(string header, string path, double width)

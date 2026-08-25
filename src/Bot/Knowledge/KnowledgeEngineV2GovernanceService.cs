@@ -93,15 +93,13 @@ namespace Bot.Knowledge
 
     internal static class KnowledgeEngineV2GovernanceService
     {
-        private const int NormalVerificationDays = 180;
-        private const int HighRiskVerificationDays = 60;
-        private const int UnusedStaleDays = 120;
         private const int ImpactWindowDays = 30;
 
         public static List<KnowledgeV2GovernanceIssue> Scan(string seller)
         {
             seller = Clean(seller);
             if (seller.Length == 0) throw new InvalidOperationException("无法识别当前店铺客服账号。");
+            var governanceSettings = KnowledgeEngineV2GovernanceAuditService.GetSettings(seller);
 
             var records = KnowledgeEngineV2Repository.LoadAll(seller)
                 .Where(x => x != null && !string.Equals(x.Status, "deleted", StringComparison.OrdinalIgnoreCase))
@@ -194,7 +192,9 @@ namespace Bot.Knowledge
                             "进入修订页查看原答案、建议答案和真实人工纠正证据。"));
                     }
 
-                    var verificationDays = IsHighRisk(record) ? HighRiskVerificationDays : NormalVerificationDays;
+                    var verificationDays = IsHighRisk(record)
+                        ? governanceSettings.HighRiskVerificationDays
+                        : governanceSettings.NormalVerificationDays;
                     var verifiedAt = record.LastVerifiedAt == DateTime.MinValue ? record.UpdatedAt : record.LastVerifiedAt;
                     if (verifiedAt == DateTime.MinValue || verifiedAt < DateTime.Now.AddDays(-verificationDays))
                     {
@@ -208,7 +208,8 @@ namespace Bot.Knowledge
                     }
 
                     var freshness = MaxDate(record.LastVerifiedAt, record.UpdatedAt, record.CreatedAt);
-                    if (q.UseCount == 0 && freshness != DateTime.MinValue && freshness < DateTime.Now.AddDays(-UnusedStaleDays))
+                    if (q.UseCount == 0 && freshness != DateTime.MinValue
+                        && freshness < DateTime.Now.AddDays(-governanceSettings.UnusedStaleDays))
                     {
                         issues.Add(BuildIssue(record, q, pendingCount,
                             "unused_stale", "low",
@@ -346,14 +347,21 @@ namespace Bot.Knowledge
         public static bool MarkVerified(string seller, string knowledgeId, out string error)
         {
             error = string.Empty;
+            seller = Clean(seller);
             var record = FindRecord(seller, knowledgeId);
             if (record == null)
             {
                 error = "知识不存在。";
                 return false;
             }
+            var beforeState = KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record);
             record.LastVerifiedAt = DateTime.Now;
             KnowledgeEngineV2Repository.Save(seller, record);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
+                "mark_verified", "knowledge", record.Id, string.Empty, record.Title,
+                beforeState, KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
+                "人工确认知识当前仍有效，仅刷新LastVerifiedAt，未修改答案。", "success", out auditError);
             KnowledgeEngineV2Service.Warm(seller);
             Log.Info("Knowledge V2治理：人工确认知识仍有效: seller=" + seller + ", knowledgeId=" + knowledgeId);
             return true;
@@ -362,6 +370,7 @@ namespace Bot.Knowledge
         public static bool DisableKnowledge(string seller, string knowledgeId, out string error)
         {
             error = string.Empty;
+            seller = Clean(seller);
             var record = FindRecord(seller, knowledgeId);
             if (record == null)
             {
@@ -373,10 +382,16 @@ namespace Bot.Knowledge
                 error = "该知识已经停用。";
                 return false;
             }
+            var beforeState = KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record);
             record.Enabled = false;
             record.Status = "disabled";
             record.LastVerifiedAt = DateTime.Now;
             KnowledgeEngineV2Repository.Save(seller, record);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
+                "disable_knowledge", "knowledge", record.Id, string.Empty, record.Title,
+                beforeState, KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
+                "人工停用知识；记录仍保留，知识退出生产召回和本地直答。", "success", out auditError);
             KnowledgeEngineV2Service.Warm(seller);
             Log.Info("Knowledge V2治理：人工停用知识: seller=" + seller + ", knowledgeId=" + knowledgeId);
             return true;
@@ -411,9 +426,15 @@ namespace Bot.Knowledge
                 return false;
             }
 
+            var beforeState = KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record);
             record.Answer = candidate.OriginalAnswer.Trim();
             record.LastVerifiedAt = DateTime.Now;
             KnowledgeEngineV2Repository.Save(seller, record);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
+                "rollback_revision", "revision", record.Id, candidate.Id, candidate.KnowledgeTitle,
+                beforeState, KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
+                "人工确认后恢复修订前答案；后续人工编辑保护已通过。", "success", out auditError);
             KnowledgeEngineV2Service.Warm(seller);
             Log.Info("Knowledge V2治理：人工回滚修订: seller=" + seller + ", knowledgeId=" + candidate.KnowledgeId
                 + ", candidateId=" + candidate.Id + ", beforeNegative=" + candidate.OriginalAnswer.Length

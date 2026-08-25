@@ -244,6 +244,14 @@ namespace Bot.Knowledge
                 result.Generated++;
             }
 
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
+                "generate_revision_candidates", "governance", string.Empty, string.Empty, "Knowledge V2修订候选",
+                "correction_events=" + result.CorrectionEvents,
+                "generated=" + result.Generated + ";existing_pending=" + result.ExistingPending,
+                "人工触发纠正证据聚类：扫描知识=" + result.ScannedKnowledge + "，新增候选=" + result.Generated
+                    + "，证据不足=" + result.SkippedInsufficientEvidence + "，答案未变化=" + result.SkippedUnchanged + "。",
+                "success", out auditError);
             return result;
         }
 
@@ -266,6 +274,7 @@ namespace Bot.Knowledge
         public static bool ApplyCandidate(string seller, string candidateId, out string error)
         {
             error = string.Empty;
+            seller = Clean(seller);
             var row = FindRow(seller, candidateId);
             if (row == null)
             {
@@ -298,11 +307,18 @@ namespace Bot.Knowledge
                 return false;
             }
 
+            var beforeState = KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record);
             record.Answer = row.ProposedAnswer.Trim();
             record.LastVerifiedAt = DateTime.Now;
             KnowledgeEngineV2Repository.Save(seller, record);
-            KnowledgeEngineV2Service.Warm(seller);
             MarkStatus(seller, row, "applied", "人工复核通过并应用；原答案已保留在修订审计记录中。", true);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
+                "apply_revision", "revision", row.KnowledgeId, row.Id, row.KnowledgeTitle,
+                beforeState, KnowledgeEngineV2GovernanceAuditService.DescribeRecord(record),
+                "人工应用修订候选；证据=" + row.EvidenceCount + "，不同买家=" + row.DistinctBuyerCount + "。",
+                "success", out auditError);
+            KnowledgeEngineV2Service.Warm(seller);
             Log.Info("Knowledge V2修订候选已应用: seller=" + seller + ", knowledgeId=" + row.KnowledgeId
                 + ", evidence=" + row.EvidenceCount + ", buyers=" + row.DistinctBuyerCount);
             return true;
@@ -311,6 +327,7 @@ namespace Bot.Knowledge
         public static bool RejectCandidate(string seller, string candidateId, string reason, out string error)
         {
             error = string.Empty;
+            seller = Clean(seller);
             var row = FindRow(seller, candidateId);
             if (row == null)
             {
@@ -322,7 +339,14 @@ namespace Bot.Knowledge
                 error = "该候选已处理，当前状态：" + row.Status;
                 return false;
             }
-            MarkStatus(seller, row, "rejected", string.IsNullOrWhiteSpace(reason) ? "人工复核驳回。" : reason.Trim(), false);
+            var beforeState = "status=" + Clean(row.Status) + ";updated_at_ticks=" + row.UpdatedAtTicks;
+            var note = string.IsNullOrWhiteSpace(reason) ? "人工复核驳回。" : reason.Trim();
+            MarkStatus(seller, row, "rejected", note, false);
+            string auditError;
+            KnowledgeEngineV2GovernanceAuditService.TryAppendAction(seller,
+                "reject_revision", "revision", row.KnowledgeId, row.Id, row.KnowledgeTitle,
+                beforeState, "status=" + Clean(row.Status) + ";updated_at_ticks=" + row.UpdatedAtTicks,
+                note, "success", out auditError);
             return true;
         }
 
