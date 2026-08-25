@@ -1,3 +1,4 @@
+using Bot.ChatRecord;
 using Bot.Knowledge;
 using BotLib;
 using DbEntity.Response;
@@ -8,6 +9,7 @@ using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -43,6 +45,16 @@ namespace Bot.ChromeNs
                     if (!Attached.TryAdd(key, true)) continue;
                     var captured = qn;
                     captured.EvRecieveNewMessage += (s, e) => OnRawMessages(captured, e);
+                    var seller = captured.Seller == null ? string.Empty : (captured.Seller.Nick ?? string.Empty).Trim();
+                    if (!string.IsNullOrWhiteSpace(seller))
+                    {
+                        var capturedSeller = seller;
+                        Task.Run(() =>
+                        {
+                            try { KnowledgeEngineV2FeedbackService.Warm(capturedSeller); }
+                            catch (Exception ex) { Log.ErrorWithMaxCount("Knowledge V2反馈缓存预热失败: " + ex.Message, 10); }
+                        });
+                    }
                 }
                 CleanupSeen();
             }
