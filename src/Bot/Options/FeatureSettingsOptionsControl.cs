@@ -171,6 +171,11 @@ namespace Bot.Options
         public void NavHelp()
         {
             var page = string.IsNullOrWhiteSpace(_currentPage) ? "当前页面" : _currentPage;
+            if (string.Equals(page, "知识库", StringComparison.Ordinal))
+            {
+                KnowledgeCenterHelpWindow.MyShow(Window.GetWindow(this), Seller);
+                return;
+            }
             MessageBox.Show(
                 Window.GetWindow(this),
                 page + "的修改会按当前 ShopKey 独立保存。完成修改后点击设置窗口右下角的“保存设置”。",
@@ -226,6 +231,7 @@ namespace Bot.Options
                 Foreground = new SolidColorBrush(Color.FromRgb(102, 112, 133)),
                 Margin = new Thickness(0, 10, 0, 18)
             });
+            var actions = new WrapPanel();
             var button = new Button
             {
                 Content = "打开知识库中心",
@@ -241,7 +247,25 @@ namespace Bot.Options
             {
                 KnowledgeCenterWindow.MyShow(Window.GetWindow(this));
             };
-            panel.Children.Add(button);
+            var help = new Button
+            {
+                Content = "使用帮助",
+                Width = 110,
+                Height = 36,
+                Margin = new Thickness(10, 0, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Background = Brushes.White,
+                Foreground = new SolidColorBrush(Color.FromRgb(37, 99, 235)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(147, 172, 222)),
+                Cursor = System.Windows.Input.Cursors.Hand
+            };
+            help.Click += delegate
+            {
+                KnowledgeCenterHelpWindow.MyShow(Window.GetWindow(this), Seller);
+            };
+            actions.Children.Add(button);
+            actions.Children.Add(help);
+            panel.Children.Add(actions);
             knowledgeTab.Content = new Border
             {
                 Background = Brushes.White,

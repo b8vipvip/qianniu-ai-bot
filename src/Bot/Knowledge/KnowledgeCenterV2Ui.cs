@@ -204,9 +204,12 @@ namespace Bot.Knowledge
             debug.Click += delegate { SelectNav("测试台"); };
             var transfer = Button("导入导出", 92);
             transfer.Click += delegate { SelectNav("导入导出"); };
+            var help = Button("使用帮助", 92);
+            help.Click += delegate { KnowledgeCenterHelpWindow.MyShow(_owner, _seller); };
             buttonPanel.Children.Add(refresh);
             buttonPanel.Children.Add(debug);
             buttonPanel.Children.Add(transfer);
+            buttonPanel.Children.Add(help);
             Grid.SetColumn(buttonPanel, 2);
             grid.Children.Add(buttonPanel);
             return grid;
