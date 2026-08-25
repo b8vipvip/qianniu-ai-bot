@@ -156,7 +156,7 @@ namespace Bot.Knowledge
                 var samples = events
                     .Select(x => new CorrectionSample { Event = x, Text = ExtractManualReply(x.Evidence) })
                     .Where(x => !string.IsNullOrWhiteSpace(x.Text))
-                    .GroupBy(x => NormalizeComparable(x.Text), StringComparer.Ordinal)
+                    .GroupBy(x => Clean(x.Event.Buyer).ToLowerInvariant() + "|" + NormalizeComparable(x.Text), StringComparer.Ordinal)
                     .Select(x => x.OrderByDescending(y => y.Event.CreatedAtTicks).First())
                     .Take(60)
                     .ToList();
