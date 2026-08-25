@@ -25,6 +25,12 @@ namespace Bot.Knowledge
                 new RoutedEventHandler(OnLoaded), true);
         }
 
+        public static object InitializeForApp()
+        {
+            Initialize();
+            return new object();
+        }
+
         private static void OnLoaded(object sender, RoutedEventArgs e)
         {
             var window = sender as KnowledgeCenterWindow;
@@ -357,5 +363,13 @@ namespace Bot.Knowledge
         {
             return new DataGridTextColumn { Header = header, Binding = new Binding(path), Width = width };
         }
+    }
+}
+
+namespace Bot
+{
+    public partial class App
+    {
+        private readonly object _knowledgeV2RevisionUiBootstrap = Knowledge.KnowledgeV2RevisionUiBridge.InitializeForApp();
     }
 }
