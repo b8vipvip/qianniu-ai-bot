@@ -263,8 +263,26 @@ namespace Bot.Options
             {
                 KnowledgeCenterHelpWindow.MyShow(Window.GetWindow(this), Seller);
             };
+            var legacyPreview = new Button
+            {
+                Content = "旧版知识库预览",
+                Width = 150,
+                Height = 36,
+                Margin = new Thickness(10, 0, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                Background = Brushes.White,
+                Foreground = new SolidColorBrush(Color.FromRgb(71, 85, 105)),
+                BorderBrush = new SolidColorBrush(Color.FromRgb(148, 163, 184)),
+                Cursor = System.Windows.Input.Cursors.Hand,
+                ToolTip = "只读查看当前店铺的旧版知识库，不启用旧版功能"
+            };
+            legacyPreview.Click += delegate
+            {
+                LegacyKnowledgePreviewWindow.MyShow(Window.GetWindow(this), Seller);
+            };
             actions.Children.Add(button);
             actions.Children.Add(help);
+            actions.Children.Add(legacyPreview);
             panel.Children.Add(actions);
             knowledgeTab.Content = new Border
             {

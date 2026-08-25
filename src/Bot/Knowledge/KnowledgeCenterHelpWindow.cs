@@ -341,6 +341,10 @@ namespace Bot.Knowledge
             document.Blocks.Add(LabelBlock("仅导出结构化知识", "只导出记录，不包含完整 V2 设置，适合审阅或转换。"));
             document.Blocks.Add(LabelBlock("从旧知识重新迁移", "会清空并重建当前店铺 V2 数据；必须先导出完整包，只在确认需要重新迁移时使用。"));
 
+            document.Blocks.Add(HeadingBlock("旧版知识库预览"));
+            document.Blocks.Add(BodyBlock(
+                "“设置 → 知识库 → 旧版知识库预览”只读取当前 ShopKey 已保存的旧版问答快照，便于核对分类、问题、答案、关键词、来源和时间。它不挂载旧版管理界面，不提供新增、编辑、删除、导入导出或 AI 优化，也不会启用旧版检索、匹配或自动回复。多店铺环境不会猜测旧全局数据归属；列表为空且仍有旧数据时，请先在“店铺绑定”确认归属。"));
+
             document.Blocks.Add(HeadingBlock("为什么没有本地直答"));
             document.Blocks.Add(Numbered(
                 "先确认当前店铺正确，自动回复已开启，回复模式是“本地优先”。",
