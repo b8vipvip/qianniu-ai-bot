@@ -25,9 +25,9 @@ namespace Bot.ChromeNs
                 return Skip("[未知消息]", "已跳过：消息安全检查失败，未调用AI，也未发送给买家。");
 
             // The first-inquiry fixed reply sits in front of the ordinary content-type router.
-            // Therefore text, images, files, emoji, withdrawal/platform tips and other fresh
-            // buyer-side events can all trigger the same configured greeting. Historical startup
-            // messages remain excluded by FirstInquiryFixedReplyService.TryPrepare.
+            // Therefore buyer-authored text, images, files and emoji can trigger the same configured
+            // greeting. Platform/system/withdrawal records may carry the buyer as fromid, but
+            // FirstInquiryFixedReplyService must reject them before this compatibility route.
             var seller = message == null || message.toid == null
                 ? string.Empty
                 : (message.toid.nick ?? string.Empty).Trim();

@@ -71,7 +71,7 @@ def test_first_inquiry_session_is_committed_after_real_delivery():
     assert "TriggeredAt[key] = DateTime.Now" in delivered
 
 
-def test_any_fresh_buyer_or_system_message_can_prepare_fixed_reply():
+def test_fresh_buyer_authored_message_can_prepare_fixed_reply():
     service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
     router = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
     assert "public static bool TryPrepare(" in service
@@ -86,10 +86,14 @@ def test_any_fresh_buyer_or_system_message_can_prepare_fixed_reply():
     assert "首条咨询固定回复已预留" in service
 
 
-def test_platform_system_tips_are_eligible_before_normal_skip_routing():
+def test_platform_system_tips_are_rejected_before_fixed_reply_can_override_skip():
     safety = read("src/Bot/ChromeNs/IncomingMessageSafety.cs")
+    service = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
     router = read("src/Bot/ChromeNs/VisionMessageDecision.cs")
     assert 'Skip("[淘宝系统提示]"' in safety
+    assert 'decision.MessageLabel, "[淘宝系统提示]"' in service
+    assert 'decision.MessageLabel, "[撤回提示]"' in service
+    assert 'decision.MessageLabel, "[空白或未知消息]"' in service
     prepare = router.index("FirstInquiryFixedReplyService.TryPrepare(")
     normal_skip = router.index("return Skip(safetyDecision.MessageLabel, safetyDecision.Note);", prepare)
     assert prepare < normal_skip

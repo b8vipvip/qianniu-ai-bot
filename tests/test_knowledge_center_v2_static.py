@@ -87,6 +87,16 @@ def test_v2_runtime_retires_memory_v1_and_preserves_safe_send_path():
     assert 'SendTextWithRetryAsync' in runtime
 
 
+def test_v2_runtime_wraps_each_coordinator_only_once_even_when_other_layers_move_outermost():
+    runtime = read("src/Bot/ChromeNs/KnowledgeEngineV2RuntimeBridge.cs")
+    assert "ConcurrentDictionary<BuyerMessageBurstCoordinator, byte> PatchedCoordinators" in runtime
+    assert "PatchedCoordinators.TryAdd(coordinator, 0)" in runtime
+    assert "PatchedCoordinators.TryRemove(coordinator, out ignored)" in runtime
+    add = runtime.index("PatchedCoordinators.TryAdd(coordinator, 0)")
+    read_handler = runtime.index("handlerField.GetValue(coordinator)", add)
+    assert add < read_handler
+
+
 def test_learning_candidates_require_explicit_approval_before_direct_reply():
     public = read("src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs")
     bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")

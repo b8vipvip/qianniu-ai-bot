@@ -394,6 +394,12 @@ namespace Bot.ChromeNs
             var messageText = GetMessageText(message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
             var detectedAt = DateTime.Now;
+            if (!_handledBuyerMessageDeduplicator.TryAccept(messageKey))
+            {
+                Log.Info("后台补偿跳过已由权威业务链处理的买家消息: seller=" + sellerNick
+                    + ", buyer=" + buyerNick + ", key=" + messageKey);
+                return Task.CompletedTask;
+            }
             MarkBuyerMessageObserved(sellerNick, buyerNick);
 
             OrderPlacedReplyPlan orderPlan;
@@ -405,6 +411,8 @@ namespace Bot.ChromeNs
                 _messageSafetyStartedAt,
                 out orderPlan))
             {
+                if (orderPlan != null && orderPlan.IsBuyerFollowUp)
+                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick);
                 return orderPlan == null
                     ? Task.CompletedTask
                     : ProcessOrderPlacedReplyAsync(orderPlan);

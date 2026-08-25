@@ -27,10 +27,12 @@ def _normalize_inputs(value: Any) -> List[str]:
     else:
         return []
     output: List[str] = []
-    for item in items[:EMBEDDING_MAX_INPUTS]:
+    for item in items:
         text = (item or "").strip()
         if text:
             output.append(text[:12000])
+            if len(output) >= EMBEDDING_MAX_INPUTS:
+                break
     return output
 
 

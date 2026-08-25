@@ -77,6 +77,12 @@ namespace Bot.ChromeNs
         private readonly SemaphoreSlim _incomingMessageGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
         private readonly IncomingMessageDeduplicator _incomingMessageDeduplicator = new IncomingMessageDeduplicator(2000);
+        // The transport deduplicator can be consumed by a duplicate CDP page before the authoritative
+        // QN instance reaches the reply queue. Background recovery therefore has a deliberate bypass.
+        // Keep a second ledger for messages that the authoritative business path actually handled so
+        // that bypass never replays a question which already started (or was stopped by) a human reply.
+        private readonly IncomingMessageDeduplicator _handledBuyerMessageDeduplicator =
+            new IncomingMessageDeduplicator(4000);
         private readonly DateTime _messageSafetyStartedAt = DateTime.Now;
         private readonly VisionRequestService _visionRequestService = new VisionRequestService();
         private readonly BuyerMessageBurstCoordinator _buyerMessageBurstCoordinator;
@@ -146,6 +152,12 @@ namespace Bot.ChromeNs
 
                 var sendStartedAt = DateTime.Now;
                 var ok = await SendTextAsync(buyer, text);
+                if (!ok && rpa.LastSendWasCancelled)
+                {
+                    Log.Info("自动发送因人工接管取消，禁止重试: buyer=" + buyer
+                        + ", reason=" + rpa.GetSendFailureReason());
+                    return false;
+                }
                 if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900))
                 {
                     rpa.ResetSendFailure();
@@ -179,6 +191,12 @@ namespace Bot.ChromeNs
                         return false;
                     }
                     ok = await SendTextAsync(buyer, text);
+                    if (!ok && rpa.LastSendWasCancelled)
+                    {
+                        Log.Info("自动发送重试期间检测到人工接管，立即停止后续重试: buyer=" + buyer
+                            + ", reason=" + rpa.GetSendFailureReason());
+                        return false;
+                    }
                     if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900))
                     {
                         rpa.ResetSendFailure();
@@ -432,6 +450,12 @@ namespace Bot.ChromeNs
             var sellerNick = message.toid.nick;
             var buyerNick = message.fromid.nick;
             var detectedAt = DateTime.Now;
+
+            if (!_handledBuyerMessageDeduplicator.TryAccept(messageKey))
+            {
+                Log.Info("已实际处理的买家消息不再重复入队: key=" + messageKey);
+                return Task.CompletedTask;
+            }
             MarkBuyerMessageObserved(sellerNick, buyerNick);
 
             OrderPlacedReplyPlan orderPlan;
@@ -443,6 +467,8 @@ namespace Bot.ChromeNs
                 _messageSafetyStartedAt,
                 out orderPlan))
             {
+                if (orderPlan != null && orderPlan.IsBuyerFollowUp)
+                    ResponseProgressTracker.ObserveNewBuyerTurn(sellerNick, buyerNick);
                 return orderPlan == null
                     ? Task.CompletedTask
                     : ProcessOrderPlacedReplyAsync(orderPlan);

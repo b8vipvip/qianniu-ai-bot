@@ -32,6 +32,8 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, Entry>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DeliveryUiEntry> DeliveryUi =
             new ConcurrentDictionary<string, DeliveryUiEntry>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> ManualInterventions =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
         private static string Key(string seller, string buyer)
         {
@@ -72,6 +74,7 @@ namespace Bot.ChromeNs
             question = (question ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return null;
 
+            ObserveNewBuyerTurn(seller, buyer);
             SendDeliveryWatchdog.OnBuyerMessageObserved(seller, buyer, detectedAt);
             CleanupDeliveryUi();
             if (ShouldDeferUnsupportedMediaCard(question)) return null;
@@ -238,6 +241,7 @@ namespace Bot.ChromeNs
 
         public static void MarkManualIntervention(string seller, string buyer, string sellerReply)
         {
+            ManualInterventions[Key(seller, buyer)] = DateTime.Now;
             SendDeliveryWatchdog.CancelConversation(seller, buyer, "检测到客服人工回复");
             MessageProcessingTraceService.RecordManualIntervention(seller, buyer, sellerReply);
             Entry entry;
@@ -252,6 +256,25 @@ namespace Bot.ChromeNs
             ReplyQualityMetricsService.RecordCancellation(false);
             Log.Info("本店回复进度因人工客服介入结束: seller=" + seller + ", buyer=" + buyer
                 + ", reply=" + (sellerReply ?? string.Empty));
+        }
+
+        public static void ObserveNewBuyerTurn(string seller, string buyer)
+        {
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
+            DateTime ignored;
+            ManualInterventions.TryRemove(Key(seller, buyer), out ignored);
+        }
+
+        public static bool HasActiveManualIntervention(string seller, string buyer)
+        {
+            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
+            var key = Key(seller, buyer);
+            DateTime observedAt;
+            if (!ManualInterventions.TryGetValue(key, out observedAt)) return false;
+            if (observedAt >= DateTime.Now.AddMinutes(-30)) return true;
+            DateTime ignored;
+            ManualInterventions.TryRemove(key, out ignored);
+            return false;
         }
 
         public static void Fail(string seller, string buyer, string detail)

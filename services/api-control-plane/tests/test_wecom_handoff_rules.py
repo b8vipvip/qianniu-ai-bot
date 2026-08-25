@@ -241,7 +241,7 @@ def test_publish_rejects_failed_required_safety_case(tmp_path: Path):
         raise AssertionError("unsafe policy should be rejected")
 
 
-def test_admin_page_policy_router_runtime_and_docker_are_wired():
+def test_legacy_admin_page_remains_visible_but_policy_engine_is_migrated_out_of_runtime():
     root = Path(__file__).resolve().parents[1]
     page = (root / "static" / "wecom.html").read_text(encoding="utf-8")
     settings = (root / "wecom_settings.py").read_text(encoding="utf-8")
@@ -262,7 +262,9 @@ def test_admin_page_policy_router_runtime_and_docker_are_wired():
     assert '@router.post("/api/admin/wecom/handoff-policy/compile")' in policy
     assert "control_plane.dispatch_chat" in policy
     assert "validate_policy" in policy
-    assert "include_router(wecom_handoff_policy.router)" in bootstrap
-    assert "wecom_handoff_policy.py" in dockerfile
+    assert "include_router(wecom_handoff_policy.router)" not in bootstrap
+    assert "wecom_policy_migration.install(control_plane)" in bootstrap
+    assert "wecom_handoff_policy.py" not in dockerfile
+    assert "wecom_policy_migration.py" in dockerfile
     assert '@router.get("/api/runtime/v1/handoff/rules")' in settings
     assert "Depends(require_runtime_client)" in settings

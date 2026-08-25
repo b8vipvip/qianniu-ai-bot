@@ -478,7 +478,8 @@ namespace Bot.ChromeNs
         {
             Failed = 0,
             Sent = 1,
-            SatisfiedByManual = 2
+            SatisfiedByManual = 2,
+            CancelledByManual = 3
         }
 
         private sealed class OrderPresetSendResult
@@ -486,6 +487,7 @@ namespace Bot.ChromeNs
             public bool Success { get; set; }
             public int SentSegments { get; set; }
             public int ManualSatisfiedSegments { get; set; }
+            public bool CancelledByManual { get; set; }
         }
 
         private static List<string> SplitOrderPresetSegments(string answer)
@@ -601,6 +603,14 @@ namespace Bot.ChromeNs
             // Let the most recent seller echo enter ConversationContextStore before deciding.
             await Task.Delay(120);
 
+            if (ResponseProgressTracker.HasActiveManualIntervention(plan.Seller, plan.Buyer))
+            {
+                Log.Info("下单固定预设因人工接管停止全部剩余分段: seller=" + plan.Seller
+                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                    + ", nextSegment=" + segmentIndex + "/" + segmentCount);
+                return OrderPresetSegmentOutcome.CancelledByManual;
+            }
+
             string matched;
             if (TryFindRecentEquivalentSellerReply(plan, segment, out matched))
             {
@@ -621,41 +631,22 @@ namespace Bot.ChromeNs
 
             string blockReason;
             string manualAnswer;
-            if (KnowledgeLearningService.TryTakeSendBlock(
-                plan.Seller,
-                plan.Buyer,
-                segment,
-                out blockReason,
-                out manualAnswer))
+            var manuallyCancelled = rpa.LastSendWasCancelled;
+            if (!manuallyCancelled)
             {
-                if (OrderGuidanceDeliveryGuard.EquivalentGuidance(manualAnswer, segment))
-                {
-                    Log.Info("人工客服已发送相同固定预设分段，跳过本段并继续剩余分段: seller=" + plan.Seller
-                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                        + ", segment=" + segmentIndex + "/" + segmentCount
-                        + ", matched=" + ShortOrderPresetLog(manualAnswer, 140));
-                    return OrderPresetSegmentOutcome.SatisfiedByManual;
-                }
-
-                Log.Info("人工回复与当前固定预设分段不同，继续发送本段: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                    + ", segment=" + segmentIndex + "/" + segmentCount
-                    + ", manual=" + ShortOrderPresetLog(manualAnswer, 120));
-                await Task.Delay(120);
-                if (TryFindRecentEquivalentSellerReply(plan, segment, out matched))
-                {
-                    Log.Info("固定预设强制继续前检测到人工已补发相同分段，跳过本段: seller=" + plan.Seller
-                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                        + ", segment=" + segmentIndex + "/" + segmentCount);
-                    return OrderPresetSegmentOutcome.SatisfiedByManual;
-                }
-
-                KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, segment);
-                Log.Info("下单固定预设分段已登记精确发送豁免: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                manuallyCancelled = KnowledgeLearningService.TryTakeSendBlock(
+                    plan.Seller,
+                    plan.Buyer,
+                    segment,
+                    out blockReason,
+                    out manualAnswer);
+            }
+            if (manuallyCancelled)
+            {
+                Log.Info("下单固定预设发送检测到人工客服介入，停止本段及全部剩余分段: seller="
+                    + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                     + ", segment=" + segmentIndex + "/" + segmentCount);
-                sent = await SendTextWithRetryAsync(plan.Buyer, segment, 1);
-                return sent ? OrderPresetSegmentOutcome.Sent : OrderPresetSegmentOutcome.Failed;
+                return OrderPresetSegmentOutcome.CancelledByManual;
             }
 
             // No manual block was recorded, so this was a real delivery/UI failure. Preserve the
@@ -663,27 +654,22 @@ namespace Bot.ChromeNs
             sent = await SendTextWithRetryAsync(plan.Buyer, segment, 1);
             if (sent) return OrderPresetSegmentOutcome.Sent;
 
-            if (KnowledgeLearningService.TryTakeSendBlock(
-                plan.Seller,
-                plan.Buyer,
-                segment,
-                out blockReason,
-                out manualAnswer))
+            manuallyCancelled = rpa.LastSendWasCancelled;
+            if (!manuallyCancelled)
             {
-                if (OrderGuidanceDeliveryGuard.EquivalentGuidance(manualAnswer, segment))
-                {
-                    Log.Info("固定预设重试期间人工已发送相同分段，视为本段完成并继续: seller=" + plan.Seller
-                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                        + ", segment=" + segmentIndex + "/" + segmentCount);
-                    return OrderPresetSegmentOutcome.SatisfiedByManual;
-                }
-
-                Log.Info("固定预设重试期间检测到不同人工回复，按原计划继续本段: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                manuallyCancelled = KnowledgeLearningService.TryTakeSendBlock(
+                    plan.Seller,
+                    plan.Buyer,
+                    segment,
+                    out blockReason,
+                    out manualAnswer);
+            }
+            if (manuallyCancelled)
+            {
+                Log.Info("下单固定预设重试期间检测到人工客服介入，停止全部剩余分段: seller="
+                    + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                     + ", segment=" + segmentIndex + "/" + segmentCount);
-                KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, segment);
-                sent = await SendTextWithRetryAsync(plan.Buyer, segment, 0);
-                return sent ? OrderPresetSegmentOutcome.Sent : OrderPresetSegmentOutcome.Failed;
+                return OrderPresetSegmentOutcome.CancelledByManual;
             }
 
             return OrderPresetSegmentOutcome.Failed;
@@ -701,6 +687,12 @@ namespace Bot.ChromeNs
             {
                 if (i > 0) await Task.Delay(220);
                 var outcome = await SendOrderPresetSegmentAsync(plan, segments[i], i + 1, segments.Count);
+                if (outcome == OrderPresetSegmentOutcome.CancelledByManual)
+                {
+                    result.Success = false;
+                    result.CancelledByManual = true;
+                    return result;
+                }
                 if (outcome == OrderPresetSegmentOutcome.Failed)
                 {
                     result.Success = false;
@@ -745,6 +737,20 @@ namespace Bot.ChromeNs
                         : rawReply + " [AI]")
                     : BotOutboundMessageFormatter.EnsureAiMarker(
                         BotFeatureStore.ApplyOutputPolicy(rawReply));
+
+                if (ResponseProgressTracker.HasActiveManualIntervention(plan.Seller, plan.Buyer))
+                {
+                    OrderPlacedAutoReplyService.Complete(plan, false);
+                    OrderAttentionUiService.SetReplyResult(plan.Snapshot, false);
+                    AddSkippedConversation(
+                        plan.Seller,
+                        plan.Buyer,
+                        BuildPlanQuestion(plan),
+                        "未发送：检测到人工客服已回复，本轮订单自动回复已停止。");
+                    Log.Info("下单自动回复在答案生成后因人工接管停止: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    return;
+                }
 
                 string duplicateReason;
                 if (preserveTemplateLayout
@@ -802,7 +808,18 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                // 延时期间人工客服可能已经发送了固定预设的某一段；只跳过命中段，不能中止剩余预设。
+                if (ResponseProgressTracker.HasActiveManualIntervention(plan.Seller, plan.Buyer))
+                {
+                    OrderPlacedAutoReplyService.Complete(plan, false);
+                    OrderAttentionUiService.SetReplyResult(plan.Snapshot, false);
+                    if (ctl != null)
+                        ctl.SetSendResult(false, "已停止：检测到人工客服已回复，Bot未继续发送订单预设");
+                    Log.Info("下单自动回复发送前因人工接管停止: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    return;
+                }
+
+                // 在没有人工接管的前提下，发送前仍需抑制已由 Bot 或历史记录确认完成的重复内容。
                 if (preserveTemplateLayout
                     ? ShouldSuppressOrderPresetBeforeSend(plan, answer, out duplicateReason)
                     : OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer, out duplicateReason))
@@ -825,9 +842,6 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);
-                    Log.Info("下单自动回复已登记精确发送豁免: seller=" + plan.Seller
-                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
                     sendOk = await SendTextWithRetryAsync(plan.Buyer, answer, 1);
                 }
 
@@ -860,7 +874,11 @@ namespace Bot.ChromeNs
                     }
                     ctl.SetSendResult(
                         sendOk,
-                        sendOk ? successDetail : "发送失败：" + rpa.GetSendFailureReason());
+                        sendOk
+                            ? successDetail
+                            : ((presetSendResult != null && presetSendResult.CancelledByManual)
+                                ? "已停止：检测到人工客服已回复，Bot未继续发送剩余订单预设"
+                                : "发送失败：" + rpa.GetSendFailureReason()));
                 }
             }
         }

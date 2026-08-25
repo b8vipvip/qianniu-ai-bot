@@ -64,7 +64,8 @@ def test_fallback_reuses_existing_enrichment_guard_and_safe_send_pipeline():
 
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     assert "OrderGuidanceDeliveryGuard.ShouldSuppressBeforeSend(this, plan, answer" in order
-    assert "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);" in order
+    assert "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, answer);" not in order
+    assert "ResponseProgressTracker.HasActiveManualIntervention" in order
     assert "SendTextWithRetryAsync(plan.Buyer, answer, 1)" in order
     assert "OrderGuidanceDeliveryGuard.MarkDelivered(" in order
 
