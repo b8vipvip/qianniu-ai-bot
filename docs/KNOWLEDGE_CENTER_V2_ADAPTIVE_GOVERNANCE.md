@@ -126,7 +126,7 @@ Knowledge Center 顶部新增 `治理` 按钮。
 
 ## 构建兼容
 
-仓库仍使用 .NET Framework 4.8 + legacy csproj。新增 `src/Bot/Directory.Build.targets` 将治理 Service、UI 和 bootstrap 显式加入普通 Bot 项目以及 WPF `*_wpftmp` 临时项目，避免 XAML 临时编译阶段缺少类型。
+仓库仍使用 .NET Framework 4.8 + legacy csproj。治理 Service、UI 和 bootstrap 继续遵循仓库既有约定，显式加入 `src/Bot/Directory.Build.props` 的 Knowledge V2 Compile 项中，让普通 Bot 项目以及 WPF `*_wpftmp` 临时项目都能看到这些类型，同时保持 `src/Bot/Directory.Build.targets` 不存在，避免改变现有 MSBuild 继承规则。
 
 ## 后续方向
 
