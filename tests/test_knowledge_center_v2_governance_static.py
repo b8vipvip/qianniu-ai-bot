@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVICE = (ROOT / "src/Bot/Knowledge/KnowledgeEngineV2GovernanceService.cs").read_text(encoding="utf-8")
+AUDIT = (ROOT / "src/Bot/Knowledge/KnowledgeEngineV2GovernanceAuditService.cs").read_text(encoding="utf-8")
 UI = (ROOT / "src/Bot/Knowledge/KnowledgeCenterV2GovernanceUi.cs").read_text(encoding="utf-8")
 BOOTSTRAP = (ROOT / "src/Bot/Knowledge/KnowledgeEngineV2GovernanceBootstrap.cs").read_text(encoding="utf-8")
 PROPS = (ROOT / "src/Bot/Directory.Build.props").read_text(encoding="utf-8")
@@ -19,9 +20,11 @@ def test_governance_scan_covers_priority_issue_classes():
 
 
 def test_governance_uses_stricter_verification_for_high_risk_knowledge():
-    assert "NormalVerificationDays = 180" in SERVICE
-    assert "HighRiskVerificationDays = 60" in SERVICE
-    assert "IsHighRisk(record) ? HighRiskVerificationDays : NormalVerificationDays" in SERVICE
+    assert "DefaultNormalVerificationDays = 180" in AUDIT
+    assert "DefaultHighRiskVerificationDays = 60" in AUDIT
+    assert "KnowledgeEngineV2GovernanceAuditService.GetSettings(seller)" in SERVICE
+    assert "governanceSettings.HighRiskVerificationDays" in SERVICE
+    assert "governanceSettings.NormalVerificationDays" in SERVICE
 
 
 def test_revision_effect_comparison_uses_real_feedback_windows():
@@ -59,6 +62,8 @@ def test_governance_dashboard_exposes_queue_revision_effects_and_safe_actions():
     assert 'Content = "治理"' in UI
     assert 'Header = "治理队列"' in UI
     assert 'Header = "修订效果"' in UI
+    assert 'Header = "治理历史"' in UI
+    assert 'Header = "治理设置"' in UI
     assert 'Btn("生成修订候选"' in UI
     assert 'Btn("打开修订"' in UI
     assert 'Btn("确认仍有效"' in UI
@@ -77,6 +82,7 @@ def test_revision_review_and_governance_bridges_are_bootstrapped_for_app():
 def test_legacy_msbuild_and_wpf_temp_projects_receive_governance_sources():
     assert "..\\Directory.Build.props" in PROPS
     assert "Knowledge\\KnowledgeEngineV2GovernanceService.cs" in PROPS
+    assert "Knowledge\\KnowledgeEngineV2GovernanceAuditService.cs" in PROPS
     assert "Knowledge\\KnowledgeCenterV2GovernanceUi.cs" in PROPS
     assert "Knowledge\\KnowledgeEngineV2GovernanceBootstrap.cs" in PROPS
     assert not (ROOT / "src/Bot/Directory.Build.targets").exists()

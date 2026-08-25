@@ -74,6 +74,9 @@ Learning / correction evidence
 
 ```text
 <shop knowledge root>/knowledge-center-v2.db
+<shop knowledge root>/knowledge-feedback-v2.db
+<shop knowledge root>/knowledge-revision-v2.db
+<shop knowledge root>/knowledge-governance-v2.db
 ```
 
 运行时建立常驻内存倒排索引，买家查询不使用“定时过期后全量重建”方式。当前性能目标：约 800 条知识的热查询 `P95 <= 50ms`。
@@ -86,7 +89,9 @@ Knowledge Center V2 UI 一级导航：
 
 “测试台”会显示 Parse / Recall / Rank / Decision / Total 独立耗时，并支持 30 次热查询 P50/P95 测试。
 
-详细设计与迁移策略参见 [`docs/KNOWLEDGE_CENTER_V2.md`](docs/KNOWLEDGE_CENTER_V2.md)。
+顶部 `质量 / 修订 / 治理` 入口使用真实反馈形成质量闭环、人工复核修订和治理队列。治理窗口包含店铺隔离的操作历史以及可配置验证过期阈值；扫描本身只读，任何停用、应用或回滚都需要人工确认。
+
+详细设计与迁移策略参见 [`docs/KNOWLEDGE_CENTER_V2.md`](docs/KNOWLEDGE_CENTER_V2.md) 和 [`docs/KNOWLEDGE_CENTER_V2_GOVERNANCE_AUDIT_SETTINGS.md`](docs/KNOWLEDGE_CENTER_V2_GOVERNANCE_AUDIT_SETTINGS.md)。
 
 ## 核心功能
 
@@ -159,6 +164,10 @@ src/Bot/Knowledge/KnowledgeEngineV2.Repository.cs
 src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs
 src/Bot/Knowledge/KnowledgeEngineV2.Service.Index.cs
 src/Bot/Knowledge/KnowledgeEngineV2.Service.Public.cs
+src/Bot/Knowledge/KnowledgeEngineV2FeedbackService.cs
+src/Bot/Knowledge/KnowledgeEngineV2RevisionService.cs
+src/Bot/Knowledge/KnowledgeEngineV2GovernanceService.cs
+src/Bot/Knowledge/KnowledgeEngineV2GovernanceAuditService.cs
 src/Bot/Knowledge/KnowledgeCenterV2Ui.cs
 src/Bot/Knowledge/KnowledgeCenterV2RecordsPage.cs
 src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs
