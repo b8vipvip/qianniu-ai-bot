@@ -31,7 +31,7 @@ def test_websocket_dispatch_is_singleton_and_does_not_root_closed_clients():
 def test_precise_conversation_change_selects_runtime_command_webview():
     source = read("src/Bot/ChromeNs/CDPClient.cs")
 
-    assert 'PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange")' in source
+    assert 'PreferRuntimeSession(sellerNick, physicalSourceSession, buyerNick, "onConversationChange")' in source
     assert "ResolvePreferredRuntimeClient" in source
     assert 'desc + "@runtime-active-session"' in source
     assert "活动CDP会话失效，已撤销会话偏好并回退权威通道" in source
@@ -45,12 +45,13 @@ def test_duplicate_status_cannot_overwrite_logical_current_buyer():
     assert "BotConnectionDiagnostics.RecordBuyerSeller(sellerNick, logicalBuyer)" in source
 
 
-def test_forwarded_conversation_change_does_not_revert_physical_route():
+def test_forwarded_conversation_change_preserves_physical_source_without_rebinding_qn():
     bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+    client = read("src/Bot/ChromeNs/CDPClient.cs")
 
-    assert "TryApplyConversationChange" in bridge
-    assert 'string.Equals(item.Type, "onConversationChange", StringComparison.Ordinal)' in bridge
-    assert 'qn.SetActiveConversationByNick(item.Seller, buyer, "duplicateCdpConversationChange")' in bridge
-    conversation_block = bridge[bridge.index("private static bool TryDeliverLive"):bridge.index("private static void DrainPending")]
-    assert "return TryApplyConversationChange(qn, item);" in conversation_block
-    assert "target.DispatchInboundEvent(item.Type, item.Response);" in conversation_block
+    assert "CDPClient.BeginForwardedInbound(item.SourceSession)" in bridge
+    assert "target.DispatchInboundEvent(item.Type, item.Response);" in bridge
+    assert "SetActiveConversationByNick" not in bridge
+    assert "qn.CDP =" not in bridge
+    assert "ForwardedInboundSourceSession" in client
+    assert "physicalSourceSession = (ForwardedInboundSourceSession.Value" in client
