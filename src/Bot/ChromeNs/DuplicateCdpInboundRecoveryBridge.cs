@@ -197,7 +197,13 @@ namespace Bot.ChromeNs
             if (string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
                 return true;
 
-            target.DispatchInboundEvent(item.Type, item.Response);
+            // Preserve the physical source while dispatching through the logical authoritative
+            // CDP. CDPClient may use precise onConversationChange source evidence for command routing,
+            // but the bridge itself still never changes qn.CDP or opens/switches the visible chat.
+            using (CDPClient.BeginForwardedInbound(item.SourceSession))
+            {
+                target.DispatchInboundEvent(item.Type, item.Response);
+            }
             Log.Info("重复千牛CDP入站消息已转交权威会话: seller=" + item.Seller
                 + ", fromSession=" + item.SourceSession
                 + ", toSession=" + target.SessionId
@@ -232,7 +238,10 @@ namespace Bot.ChromeNs
 
                     // This item was queued specifically because no QN event consumer was ready at
                     // arrival time. Replay even if that same source page later became authoritative.
-                    target.DispatchInboundEvent(item.Type, item.Response);
+                    using (CDPClient.BeginForwardedInbound(item.SourceSession))
+                    {
+                        target.DispatchInboundEvent(item.Type, item.Response);
+                    }
                     Log.Info("已补发初始化期间暂存的千牛入站消息: seller=" + item.Seller
                         + ", fromSession=" + item.SourceSession
                         + ", toSession=" + target.SessionId
