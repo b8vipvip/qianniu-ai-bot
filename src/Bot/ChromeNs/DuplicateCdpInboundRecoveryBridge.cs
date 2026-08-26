@@ -23,10 +23,10 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Qianniu can expose several recent.html/iframe WebSocket pages for one logged-in seller.
-    /// MyWebSocketServer keeps one logical authoritative QN instance, while CDPClient follows the
-    /// physical WebView that emitted a precise onConversationChange for command execution. Buyer
-    /// notifications can still arrive on another page, so this bridge forwards inbound events into
-    /// the logical QN instance without opening/switching the visible conversation itself.
+    /// MyWebSocketServer intentionally keeps exactly one authoritative CDP for commands/sending,
+    /// but buyer notifications and conversation-change events can arrive on a different page.
+    /// This bridge forwards inbound/state events into the authoritative CDP without ever changing
+    /// outbound ownership or opening/switching the visible conversation itself.
     /// </summary>
     internal static class DuplicateCdpInboundRecoveryBridge
     {
@@ -53,7 +53,7 @@ namespace Bot.ChromeNs
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 _retryTimer = new Timer(_ => DrainPending(), null, 250, 250);
-                Log.Info("重复千牛CDP入站消息恢复桥已启动：逻辑客服实例唯一，命令通道可跟随真实活动WebView。" );
+                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话。" );
             }
             return new object();
         }
@@ -106,8 +106,10 @@ namespace Bot.ChromeNs
             // onChatDlgActive may be synthesized by periodic page polling and therefore must never
             // drive current-buyer state across duplicate pages. onConversationChange is different:
             // it is emitted from the Qianniu conversation-change event and contains the changed
-            // Conversation object itself. CDPClient uses that precise physical event to select the
-            // command WebView; this bridge only synchronizes the logical QN buyer state.
+            // Conversation object itself. We may forward that state notification to QN, but still
+            // never replace outbound CDP ownership, call OpenChat, or mutate the real Qianniu UI.
+            // This preserves the original onChatDlgActive/onConversationChange safety boundary while
+            // allowing the precise conversation-change event to repair a stale Bot-side buyer.
             return string.Equals(type, "receiveNewMsg", StringComparison.Ordinal)
                 || string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal)
                 || string.Equals(type, "onConversationChange", StringComparison.Ordinal);
@@ -184,54 +186,24 @@ namespace Bot.ChromeNs
             return string.Empty;
         }
 
-        private static bool TryApplyConversationChange(QN qn, PendingInboundEvent item)
-        {
-            if (qn == null || item == null
-                || !string.Equals(item.Type, "onConversationChange", StringComparison.Ordinal))
-            {
-                return false;
-            }
-
-            try
-            {
-                var active = JsonConvert.DeserializeObject<ActiveLocalUser>(item.Response ?? string.Empty);
-                var buyer = active == null || active.Conversation == null
-                    ? string.Empty
-                    : (active.Conversation.Nick ?? string.Empty).Trim();
-                if (buyer.Length == 0) return false;
-                qn.SetActiveConversationByNick(item.Seller, buyer, "duplicateCdpConversationChange");
-                BotConnectionDiagnostics.RecordBuyerSeller(item.Seller, buyer);
-                Log.Info("重复千牛CDP精确会话切换已同步到逻辑客服实例: seller=" + item.Seller
-                    + ", buyer=" + buyer + ", sourceSession=" + item.SourceSession);
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("同步重复CDP会话切换失败: " + ex.Message, 10);
-                return false;
-            }
-        }
-
         private static bool TryDeliverLive(PendingInboundEvent item)
         {
             var qn = QN.FindExistingBySellerNick(item.Seller);
             var target = qn == null ? null : qn.CDP;
             if (target == null || target.IsInvalidated) return false;
 
-            // The physical source CDPClient already observed onConversationChange and selected that
-            // WebView for future commands. Do not replay this event through target.DispatchInboundEvent,
-            // otherwise the logical owner's SessionId would immediately overwrite that preference.
-            if (string.Equals(item.Type, "onConversationChange", StringComparison.Ordinal))
-            {
-                return TryApplyConversationChange(qn, item);
-            }
-
             // The authoritative page already receives its own live global event normally.
             // Only duplicate-page events need explicit forwarding.
             if (string.Equals(target.SessionId, item.SourceSession, StringComparison.Ordinal))
                 return true;
 
-            target.DispatchInboundEvent(item.Type, item.Response);
+            // Preserve the physical source while dispatching through the logical authoritative
+            // CDP. CDPClient may use precise onConversationChange source evidence for command routing,
+            // but the bridge itself still never changes qn.CDP or opens/switches the visible chat.
+            using (CDPClient.BeginForwardedInbound(item.SourceSession))
+            {
+                target.DispatchInboundEvent(item.Type, item.Response);
+            }
             Log.Info("重复千牛CDP入站消息已转交权威会话: seller=" + item.Seller
                 + ", fromSession=" + item.SourceSession
                 + ", toSession=" + target.SessionId
@@ -264,15 +236,12 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    if (string.Equals(item.Type, "onConversationChange", StringComparison.Ordinal))
-                    {
-                        if (!TryApplyConversationChange(qn, item)) Pending.Enqueue(item);
-                        continue;
-                    }
-
                     // This item was queued specifically because no QN event consumer was ready at
                     // arrival time. Replay even if that same source page later became authoritative.
-                    target.DispatchInboundEvent(item.Type, item.Response);
+                    using (CDPClient.BeginForwardedInbound(item.SourceSession))
+                    {
+                        target.DispatchInboundEvent(item.Type, item.Response);
+                    }
                     Log.Info("已补发初始化期间暂存的千牛入站消息: seller=" + item.Seller
                         + ", fromSession=" + item.SourceSession
                         + ", toSession=" + target.SessionId
