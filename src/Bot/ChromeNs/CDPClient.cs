@@ -39,6 +39,7 @@ namespace Bot.ChromeNs
         private static readonly ConcurrentDictionary<string, string> PreferredSellerSessions =
             new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private static readonly object PreferredSellerSessionSync = new object();
+        private static readonly AsyncLocal<string> ForwardedInboundSourceSession = new AsyncLocal<string>();
         private static int _dispatcherInstalled;
 
         // The execute protocol has no request id, therefore each physical WebSocket session remains
@@ -51,6 +52,29 @@ namespace Bot.ChromeNs
         private const int InvokeTimeoutMs = 8000;
         private int _sessionInvalidated;
         public string Nick { get; set; }
+
+        private sealed class ForwardedInboundScope : IDisposable
+        {
+            private readonly string _previous;
+            private int _disposed;
+
+            public ForwardedInboundScope(string sourceSession)
+            {
+                _previous = ForwardedInboundSourceSession.Value;
+                ForwardedInboundSourceSession.Value = (sourceSession ?? string.Empty).Trim();
+            }
+
+            public void Dispose()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
+                ForwardedInboundSourceSession.Value = _previous;
+            }
+        }
+
+        internal static IDisposable BeginForwardedInbound(string sourceSession)
+        {
+            return new ForwardedInboundScope(sourceSession);
+        }
 
         internal string SessionId
         {
@@ -280,7 +304,8 @@ namespace Bot.ChromeNs
                 }
 
                 // 当前注入协议的 execute 响应没有请求 ID，只能保证同一 WebSocket 会话同时存在
-                // 一个等待请求。清理极端超时竞争留下的旧 waiter，但不再阻塞 ThreadPool 线程。
+                // 一个等待请求。旧实现允许多个异步调用并发时还会为每个等待额外占用线程池线程；
+                // 现在清理极端超时竞争留下的旧 waiter，但不再阻塞 ThreadPool 线程。
                 TaskCompletionSource<string> staleWaiter;
                 while (_requestWaiters.TryDequeue(out staleWaiter))
                 {
@@ -433,7 +458,9 @@ namespace Bot.ChromeNs
 
             var sellerNick = localUser.LoginID == null ? string.Empty : (localUser.LoginID.Nick ?? string.Empty).Trim();
             var buyerNick = localUser.Conversation == null ? string.Empty : (localUser.Conversation.Nick ?? string.Empty).Trim();
-            PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
+            var physicalSourceSession = (ForwardedInboundSourceSession.Value ?? string.Empty).Trim();
+            if (physicalSourceSession.Length == 0) physicalSourceSession = SessionId;
+            PreferRuntimeSession(sellerNick, physicalSourceSession, buyerNick, "onConversationChange");
 
             if (EvBuyerSwitched != null)
             {
