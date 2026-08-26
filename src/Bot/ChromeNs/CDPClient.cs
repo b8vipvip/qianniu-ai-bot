@@ -28,8 +28,24 @@ namespace Bot.ChromeNs
         public event EventHandler<MessageNotifyEventArgs> EvMessageNotity;
         public event EventHandler<RecieveNewMessageEventArgs> EvRecieveNewMessage;
         public event EventHandler<ShopRobotReceriveNewMessageEventArgs> EvShopRobotReceriveNewMessage;
-        private ConcurrentQueue<ManualResetEventSlim> _requestWaitHandles = new ConcurrentQueue<ManualResetEventSlim>();
-        private ConcurrentQueue<string> _responses = new ConcurrentQueue<string>();
+
+        // One global WebSocket dispatcher is enough for the entire Bot process. The historical
+        // implementation subscribed one bound handler per CDPClient and never unsubscribed it when
+        // a Qianniu WebView session closed. After hours of WebView churn, every inbound event was
+        // fanned out through all dead CDPClient instances. Keep only weak session references so a
+        // closed session can be collected as soon as MyWebSocketServer releases it.
+        private static readonly ConcurrentDictionary<string, WeakReference> SessionClients =
+            new ConcurrentDictionary<string, WeakReference>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, string> PreferredSellerSessions =
+            new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private static readonly object PreferredSellerSessionSync = new object();
+        private static int _dispatcherInstalled;
+
+        // The execute protocol has no request id, therefore each physical WebSocket session remains
+        // strictly single-flight. TaskCompletionSource avoids consuming a ThreadPool worker for the
+        // entire 8-second timeout window while waiting for a WebSocket response.
+        private readonly ConcurrentQueue<TaskCompletionSource<string>> _requestWaiters =
+            new ConcurrentQueue<TaskCompletionSource<string>>();
         private readonly SemaphoreSlim _executeGate = new SemaphoreSlim(1, 1);
         private WebSocketSession _webSocketSession;
         private const int InvokeTimeoutMs = 8000;
@@ -49,26 +65,132 @@ namespace Bot.ChromeNs
         public CDPClient(WebSocketSession session)
         {
             _webSocketSession = session;
-            MyWebSocketServer.WSocketSvrInst.OnRecieveMessage -= OnWSocketRecieveMessage;
-            MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWSocketRecieveMessage;
+            var sessionId = SessionId;
+            if (!string.IsNullOrWhiteSpace(sessionId))
+            {
+                SessionClients[sessionId] = new WeakReference(this);
+            }
+            EnsureDispatcherInstalled();
         }
 
-        private void OnWSocketRecieveMessage(object sender, WSocketNewMessageEventArgs e)
+        private static void EnsureDispatcherInstalled()
+        {
+            if (Interlocked.Exchange(ref _dispatcherInstalled, 1) != 0) return;
+            MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += DispatchWebSocketMessage;
+            Log.Info("CDP WebSocket事件已切换为单一会话路由器：关闭页面不再累积事件订阅。" );
+        }
+
+        private static void DispatchWebSocketMessage(object sender, WSocketNewMessageEventArgs e)
         {
             var session = sender as WebSocketSession;
+            if (session == null || e == null || string.IsNullOrWhiteSpace(session.SessionID)) return;
+
+            WeakReference weak;
+            if (!SessionClients.TryGetValue(session.SessionID, out weak) || weak == null) return;
+            var client = weak.Target as CDPClient;
+            if (client == null)
+            {
+                WeakReference ignored;
+                SessionClients.TryRemove(session.SessionID, out ignored);
+                return;
+            }
+            client.OnWSocketRecieveMessage(session, e);
+        }
+
+        internal static bool TryGetBySessionId(string sessionId, out CDPClient client)
+        {
+            client = null;
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return false;
+            WeakReference weak;
+            if (!SessionClients.TryGetValue(sessionId, out weak) || weak == null) return false;
+            client = weak.Target as CDPClient;
+            if (client != null && !client.IsInvalidated) return true;
+            WeakReference ignored;
+            SessionClients.TryRemove(sessionId, out ignored);
+            client = null;
+            return false;
+        }
+
+        private static void PreferRuntimeSession(string sellerNick, string sessionId, string buyerNick, string reason)
+        {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            sessionId = (sessionId ?? string.Empty).Trim();
+            buyerNick = (buyerNick ?? string.Empty).Trim();
+            if (sellerNick.Length == 0 || sessionId.Length == 0) return;
+
+            CDPClient client;
+            if (!TryGetBySessionId(sessionId, out client)) return;
+            client.Nick = sellerNick;
+
+            string previous = string.Empty;
+            var changed = false;
+            lock (PreferredSellerSessionSync)
+            {
+                PreferredSellerSessions.TryGetValue(sellerNick, out previous);
+                if (!string.Equals(previous, sessionId, StringComparison.Ordinal))
+                {
+                    PreferredSellerSessions[sellerNick] = sessionId;
+                    changed = true;
+                }
+            }
+
+            if (buyerNick.Length > 0)
+            {
+                BotConnectionDiagnostics.RecordBuyerSeller(sellerNick, buyerNick);
+            }
+            if (changed)
+            {
+                Log.Info("检测到真实会话切换，CDP命令已跟随活动千牛WebView: seller=" + sellerNick
+                    + ", buyer=" + buyerNick
+                    + ", previousSession=" + previous
+                    + ", currentSession=" + sessionId
+                    + ", reason=" + (reason ?? string.Empty));
+            }
+        }
+
+        private CDPClient ResolvePreferredRuntimeClient()
+        {
+            var sellerNick = (Nick ?? string.Empty).Trim();
+            if (sellerNick.Length == 0) return null;
+
+            string preferredSession;
+            if (!PreferredSellerSessions.TryGetValue(sellerNick, out preferredSession)
+                || string.IsNullOrWhiteSpace(preferredSession)
+                || string.Equals(preferredSession, SessionId, StringComparison.Ordinal))
+            {
+                return null;
+            }
+
+            CDPClient preferred;
+            if (TryGetBySessionId(preferredSession, out preferred)) return preferred;
+
+            lock (PreferredSellerSessionSync)
+            {
+                string current;
+                if (PreferredSellerSessions.TryGetValue(sellerNick, out current)
+                    && string.Equals(current, preferredSession, StringComparison.Ordinal))
+                {
+                    string ignored;
+                    PreferredSellerSessions.TryRemove(sellerNick, out ignored);
+                }
+            }
+            return null;
+        }
+
+        private void OnWSocketRecieveMessage(WebSocketSession session, WSocketNewMessageEventArgs e)
+        {
             if (session == null || _webSocketSession == null || session.SessionID != _webSocketSession.SessionID) return;
 
             var response = e.Value ?? string.Empty;
 
-            // execute 响应即使为空也必须唤醒等待线程，否则非聊天 WebView 上的初始化会永久卡住。
+            // execute 响应即使为空也必须完成等待任务，否则非聊天 WebView 上的初始化会卡到超时。
             if (e.Type == "execute")
             {
-                if (_requestWaitHandles.Count > 0)
+                TaskCompletionSource<string> waiter;
+                if (_requestWaiters.TryDequeue(out waiter) && waiter != null)
                 {
-                    _responses.Enqueue(response);
-                    ManualResetEventSlim requestMre;
-                    _requestWaitHandles.TryDequeue(out requestMre);
-                    if (requestMre != null) requestMre.Set();
+                    waiter.TrySetResult(response);
                 }
                 return;
             }
@@ -102,10 +224,51 @@ namespace Bot.ChromeNs
             else if (type == "qnbotStatus")
             {
                 Log.Info("千牛注入状态: " + response);
+                RepairDuplicateStatusDiagnostics(response);
+            }
+        }
+
+        private void RepairDuplicateStatusDiagnostics(string response)
+        {
+            try
+            {
+                var jo = JObject.Parse(response ?? "{}");
+                var sellerNick = Convert.ToString(jo["loginNick"] ?? string.Empty).Trim();
+                if (sellerNick.Length == 0) return;
+                var qn = QN.FindExistingBySellerNick(sellerNick);
+                if (qn == null) return;
+
+                string effectiveSession;
+                if (!PreferredSellerSessions.TryGetValue(sellerNick, out effectiveSession)
+                    || string.IsNullOrWhiteSpace(effectiveSession))
+                {
+                    effectiveSession = qn.CDP == null ? string.Empty : qn.CDP.SessionId;
+                }
+                if (string.IsNullOrWhiteSpace(effectiveSession)
+                    || string.Equals(effectiveSession, SessionId, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                var logicalBuyer = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
+                BotConnectionDiagnostics.RecordBuyerSeller(sellerNick, logicalBuyer);
+            }
+            catch
+            {
             }
         }
 
         private async Task<string> SendExecuteAndWaitAsync(string cmd, string desc)
+        {
+            var preferred = ResolvePreferredRuntimeClient();
+            if (preferred != null && !ReferenceEquals(preferred, this))
+            {
+                return await preferred.SendExecuteAndWaitCoreAsync(cmd, desc + "@runtime-active-session").ConfigureAwait(false);
+            }
+            return await SendExecuteAndWaitCoreAsync(cmd, desc).ConfigureAwait(false);
+        }
+
+        private async Task<string> SendExecuteAndWaitCoreAsync(string cmd, string desc)
         {
             await _executeGate.WaitAsync().ConfigureAwait(false);
             try
@@ -117,45 +280,48 @@ namespace Bot.ChromeNs
                 }
 
                 // 当前注入协议的 execute 响应没有请求 ID，只能保证同一 WebSocket 会话同时存在
-                // 一个等待请求。旧实现允许多个异步调用并发，慢请求与快请求乱序返回后会互相
-                // 领取错误响应；某次超时还可能让后续 GetCurrentConversationID 永久读到旧结果。
-                string staleResponse;
-                while (_responses.TryDequeue(out staleResponse))
+                // 一个等待请求。清理极端超时竞争留下的旧 waiter，但不再阻塞 ThreadPool 线程。
+                TaskCompletionSource<string> staleWaiter;
+                while (_requestWaiters.TryDequeue(out staleWaiter))
                 {
-                    Log.Info("已丢弃CDP调用前残留响应: desc=" + desc + ", length=" + (staleResponse ?? string.Empty).Length);
-                }
-                ManualResetEventSlim staleWaiter;
-                while (_requestWaitHandles.TryDequeue(out staleWaiter))
-                {
-                    if (staleWaiter != null) staleWaiter.Set();
+                    if (staleWaiter != null) staleWaiter.TrySetCanceled();
                 }
 
-                var requestResetEvent = new ManualResetEventSlim(false);
-                _requestWaitHandles.Enqueue(requestResetEvent);
+                var requestCompletion = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+                _requestWaiters.Enqueue(requestCompletion);
                 try
                 {
                     _webSocketSession.Send(JsonConvert.SerializeObject(new { method = "execute", expression = cmd }));
                 }
                 catch (Exception ex)
                 {
-                    ManualResetEventSlim droppedOnSend;
-                    _requestWaitHandles.TryDequeue(out droppedOnSend);
+                    TaskCompletionSource<string> droppedOnSend;
+                    _requestWaiters.TryDequeue(out droppedOnSend);
+                    if (droppedOnSend != null) droppedOnSend.TrySetCanceled();
                     InvalidateSession("发送execute请求失败: " + ex.Message);
                     return string.Empty;
                 }
 
-                var response = string.Empty;
-                var ok = await System.Threading.Tasks.Task.Run(() => requestResetEvent.Wait(InvokeTimeoutMs)).ConfigureAwait(false);
-                if (!ok)
+                var timeoutTask = Task.Delay(InvokeTimeoutMs);
+                var completed = await Task.WhenAny(requestCompletion.Task, timeoutTask).ConfigureAwait(false);
+                if (completed != requestCompletion.Task && !requestCompletion.Task.IsCompleted)
                 {
-                    ManualResetEventSlim dropped;
-                    _requestWaitHandles.TryDequeue(out dropped);
+                    TaskCompletionSource<string> dropped;
+                    _requestWaiters.TryDequeue(out dropped);
+                    requestCompletion.TrySetCanceled();
                     Log.Error("CDP调用超时: " + desc + ", session=" + SessionId);
                     InvalidateSession("调用超时: " + desc);
                     return string.Empty;
                 }
-                _responses.TryDequeue(out response);
-                return response ?? string.Empty;
+
+                try
+                {
+                    return (await requestCompletion.Task.ConfigureAwait(false)) ?? string.Empty;
+                }
+                catch (TaskCanceledException)
+                {
+                    return string.Empty;
+                }
             }
             finally
             {
@@ -187,6 +353,30 @@ namespace Bot.ChromeNs
         private void InvalidateSession(string reason)
         {
             if (Interlocked.Exchange(ref _sessionInvalidated, 1) != 0) return;
+
+            var sellerNick = (Nick ?? string.Empty).Trim();
+            if (sellerNick.Length > 0)
+            {
+                lock (PreferredSellerSessionSync)
+                {
+                    string current;
+                    if (PreferredSellerSessions.TryGetValue(sellerNick, out current)
+                        && string.Equals(current, SessionId, StringComparison.Ordinal))
+                    {
+                        string ignored;
+                        PreferredSellerSessions.TryRemove(sellerNick, out ignored);
+                        Log.Info("活动CDP会话失效，已撤销会话偏好并回退权威通道: seller="
+                            + sellerNick + ", session=" + SessionId);
+                    }
+                }
+            }
+
+            TaskCompletionSource<string> waiter;
+            while (_requestWaiters.TryDequeue(out waiter))
+            {
+                if (waiter != null) waiter.TrySetCanceled();
+            }
+
             Log.Error("CDP会话已失效并请求WebSocket重连: session=" + SessionId + ", reason=" + (reason ?? string.Empty));
             BotConnectionDiagnostics.RecordCdpStatus(false, "CDP会话已失效，等待注入重连", Nick, string.Empty);
             try
@@ -209,9 +399,11 @@ namespace Bot.ChromeNs
                 });
             }
         }
+
         private void ShopRobotReceriveNewMessage(string response)
         {
             var localUser = JsonConvert.DeserializeObject<ActiveLocalUser>(response);
+            if (localUser == null) return;
             if (EvShopRobotReceriveNewMessage != null)
             {
                 EvShopRobotReceriveNewMessage(this, new ShopRobotReceriveNewMessageEventArgs
@@ -237,6 +429,11 @@ namespace Bot.ChromeNs
         private void BuyerSwitched(string response)
         {
             var localUser = JsonConvert.DeserializeObject<ActiveLocalUser>(response);
+            if (localUser == null) return;
+
+            var sellerNick = localUser.LoginID == null ? string.Empty : (localUser.LoginID.Nick ?? string.Empty).Trim();
+            var buyerNick = localUser.Conversation == null ? string.Empty : (localUser.Conversation.Nick ?? string.Empty).Trim();
+            PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
 
             if (EvBuyerSwitched != null)
             {
@@ -251,6 +448,7 @@ namespace Bot.ChromeNs
         private void SellerSwitched(string response)
         {
             var localUser = JsonConvert.DeserializeObject<ActiveLocalUser>(response);
+            if (localUser == null) return;
 
             if (EvSellerSwitched != null)
             {
