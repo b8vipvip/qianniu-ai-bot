@@ -102,7 +102,12 @@ namespace Bot.ChromeNs
                     QuestionLabel = text,
                     Note = string.Empty
                 };
-            return Skip(safetyDecision.MessageLabel, safetyDecision.Note);
+
+            // Keep the explicit non-image skip guard for compatibility with existing safety
+            // invariants. Real images have already returned through the image branch above.
+            if (!string.Equals(safetyDecision.MessageLabel, "[图片]", StringComparison.Ordinal))
+                return Skip(safetyDecision.MessageLabel, safetyDecision.Note);
+            return Skip("[图片]", safetyDecision.Note);
         }
 
         private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints(
