@@ -22,6 +22,7 @@ namespace Bot.ChromeNs
         public VisionMessageDecision VisionDecision { get; set; }
         public long SortValue { get; set; }
         public DateTime ReceivedAt { get; set; }
+        public long SessionGeneration { get; set; }
 
         public BuyerMessageBurstItem()
         {
@@ -37,6 +38,7 @@ namespace Bot.ChromeNs
         public string CombinedQuestion { get; private set; }
         public string ModelQuestion { get; private set; }
         public int Version { get; private set; }
+        public long SessionGeneration { get; private set; }
 
         public BuyerMessageBurstItem LatestVisionItem
         {
@@ -74,6 +76,7 @@ namespace Bot.ChromeNs
                 .OrderBy(x => x.SortValue <= 0 ? x.ReceivedAt.Ticks : x.SortValue)
                 .ThenBy(x => x.ReceivedAt)
                 .ToList();
+            SessionGeneration = Items.Count < 1 ? 0 : Items.Max(x => x.SessionGeneration);
             CombinedQuestion = BuildCombinedQuestion(Items);
             ModelQuestion = Items.Count <= 1
                 ? CombinedQuestion
@@ -135,24 +138,93 @@ namespace Bot.ChromeNs
     internal sealed class BuyerMessageBurstLease
     {
         private readonly Func<bool> _isCurrent;
+        private readonly BuyerSessionAgent _sessionAgent;
 
         public BuyerMessageBurst Burst { get; private set; }
 
         public bool IsCurrent
         {
-            get { return _isCurrent != null && _isCurrent(); }
+            get
+            {
+                return _isCurrent != null
+                    && _isCurrent()
+                    && (_sessionAgent == null
+                        || _sessionAgent.IsCurrent(Burst.SellerNick, Burst.BuyerNick, Burst.SessionGeneration));
+            }
         }
 
-        public BuyerMessageBurstLease(BuyerMessageBurst burst, Func<bool> isCurrent)
+        public CancellationToken CancellationToken
+        {
+            get
+            {
+                return _sessionAgent == null
+                    ? CancellationToken.None
+                    : _sessionAgent.GetCancellationToken(Burst.SellerNick, Burst.BuyerNick, Burst.SessionGeneration);
+            }
+        }
+
+        public BuyerMessageBurstLease(
+            BuyerMessageBurst burst,
+            Func<bool> isCurrent,
+            BuyerSessionAgent sessionAgent = null)
         {
             Burst = burst;
             _isCurrent = isCurrent;
+            _sessionAgent = sessionAgent;
         }
 
         public async Task<bool> ConfirmStableAsync(int milliseconds)
         {
             await Task.Delay(Math.Max(0, milliseconds));
-            return IsCurrent;
+            if (!IsCurrent) return false;
+            MarkReady("send_barrier_stable");
+            return true;
+        }
+
+        public bool MarkProcessing(string reason)
+        {
+            return Transition(BuyerSessionAgentState.Processing, reason);
+        }
+
+        public bool MarkGenerating(string reason)
+        {
+            return Transition(BuyerSessionAgentState.Generating, reason);
+        }
+
+        public bool MarkReady(string reason)
+        {
+            return Transition(BuyerSessionAgentState.Ready, reason);
+        }
+
+        public bool MarkSending(string reason)
+        {
+            return Transition(BuyerSessionAgentState.Sending, reason);
+        }
+
+        public bool MarkWaiting(string reason)
+        {
+            return Transition(BuyerSessionAgentState.Waiting, reason);
+        }
+
+        public bool MarkCompleted(string reason)
+        {
+            return Transition(BuyerSessionAgentState.Completed, reason);
+        }
+
+        public bool MarkFailed(string reason)
+        {
+            return Transition(BuyerSessionAgentState.Failed, reason);
+        }
+
+        private bool Transition(BuyerSessionAgentState state, string reason)
+        {
+            return _sessionAgent != null
+                && _sessionAgent.TryTransition(
+                    Burst.SellerNick,
+                    Burst.BuyerNick,
+                    Burst.SessionGeneration,
+                    state,
+                    reason);
         }
     }
 
@@ -168,22 +240,25 @@ namespace Bot.ChromeNs
             public int HardCancelVersion;
             public DateTime StartedAt = DateTime.MinValue;
             public BotActivityLease ActivityLease;
+            public long LatestSessionGeneration;
         }
 
-        // Only unresolved legacy/global configuration needs serialization. Shop-scoped runtime
-        // work uses AsyncLocal<ShopContext> and is safe to dispatch concurrently.
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
         private readonly Func<BuyerMessageBurstLease, Task> _handler;
+        private readonly BuyerSessionAgent _sessionAgent = new BuyerSessionAgent();
 
         public BuyerMessageBurstCoordinator(Func<BuyerMessageBurstLease, Task> handler)
         {
             if (handler == null) throw new ArgumentNullException("handler");
             _handler = handler;
-            // Register the knowledge-center management page from a guaranteed runtime constructor.
-            // The call only installs an idempotent WPF class handler; it does not send anything.
             try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
+        }
+
+        internal BuyerSessionAgent SessionAgent
+        {
+            get { return _sessionAgent; }
         }
 
         public void Enqueue(BuyerMessageBurstItem item)
@@ -195,16 +270,21 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // New buyer messages may start another independent work item. Only messages still
-            // inside the short pre-dispatch merge window are merged; dispatched AI/vision work is
-            // not cancelled merely because the buyer continues typing.
-            var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
+            var observation = _sessionAgent.ObserveBuyerMessage(
+                item.SellerNick,
+                item.BuyerNick,
+                item.MessageKey,
+                item.SortValue,
+                item.ReceivedAt);
+            item.SessionGeneration = observation.Generation;
+            _sessionAgent.TryTransition(
+                item.SellerNick,
+                item.BuyerNick,
+                item.SessionGeneration,
+                BuyerSessionAgentState.Coalescing,
+                "pre_merge_rules");
 
-            // Fixed business rules are evaluated on the individual incoming message before it is
-            // inserted into any quiet-delay/context-merge state. This guarantees that a first
-            // inquiry greeting, off-hours reply or standalone local short reply can never be stuck
-            // behind “等待合并本轮消息”. A short acknowledgement is not consumed locally while an
-            // earlier buyer message is still waiting to be merged.
+            var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
             Task.Run(async () =>
             {
                 var continueToMerge = true;
@@ -221,7 +301,19 @@ namespace Bot.ChromeNs
                         + ", buyer=" + item.BuyerNick + ", error=" + Safe(ex.Message, 220),
                         20);
                 }
-                if (continueToMerge) EnqueueForMerge(item);
+                if (continueToMerge)
+                {
+                    EnqueueForMerge(item);
+                }
+                else
+                {
+                    _sessionAgent.TryTransition(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        item.SessionGeneration,
+                        BuyerSessionAgentState.Completed,
+                        "deterministic_rule_consumed");
+                }
             });
         }
 
@@ -235,35 +327,23 @@ namespace Bot.ChromeNs
             }
         }
 
-        private void InvalidateDispatchedAnswerOnArrival(string seller, string buyer)
-        {
-            var key = Key(seller, buyer);
-            BurstState state;
-            if (!_states.TryGetValue(key, out state) || state == null) return;
-
-            var removeEmptyState = false;
-            lock (state.Sync)
-            {
-                // RunAsync clears Items and sets WorkerRunning=false immediately before invoking the
-                // handler. That exact state means an answer is already dispatched/in-flight. A new
-                // buyer message increments Version now so BuyerMessageBurstLease.IsCurrent becomes
-                // false and the streaming monitor cancels the stale AI without waiting for merge.
-                if (state.Items.Count == 0 && !state.WorkerRunning)
-                {
-                    state.Version++;
-                    removeEmptyState = true;
-                }
-            }
-
-            if (!removeEmptyState) return;
-            BurstState ignored;
-            _states.TryRemove(key, out ignored);
-            Log.Info("收到买家新消息，已立即使上一轮已派发答案失效: seller=" + seller
-                + ", buyer=" + buyer);
-        }
-
         private void EnqueueForMerge(BuyerMessageBurstItem item)
         {
+            if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+            {
+                var snapshot = _sessionAgent.GetSnapshot(item.SellerNick, item.BuyerNick);
+                if (snapshot == null
+                    || snapshot.State == BuyerSessionAgentState.Completed
+                    || snapshot.State == BuyerSessionAgentState.Cancelled
+                    || snapshot.State == BuyerSessionAgentState.Failed)
+                {
+                    Log.Info("固定规则返回时会话代次已结束，本条旧代次不再进入合并: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick + ", generation=" + item.SessionGeneration);
+                    return;
+                }
+                item.SessionGeneration = snapshot.Generation;
+            }
+
             var key = Key(item.SellerNick, item.BuyerNick);
             var state = _states.GetOrAdd(key, _ => new BurstState());
             var startWorker = false;
@@ -292,6 +372,7 @@ namespace Bot.ChromeNs
                 state.Items.Add(item);
                 if (state.Items.Count > 12) state.Items.RemoveRange(0, state.Items.Count - 12);
                 state.Version++;
+                state.LatestSessionGeneration = item.SessionGeneration;
 
                 try { state.DelayCancellation.Cancel(); } catch { }
                 state.DelayCancellation.Dispose();
@@ -313,8 +394,10 @@ namespace Bot.ChromeNs
             BurstState state;
             if (!_states.TryGetValue(key, out state) || state == null) return;
 
+            long generation;
             lock (state.Sync)
             {
+                generation = state.LatestSessionGeneration;
                 state.Version++;
                 state.HardCancelVersion++;
                 state.Items.Clear();
@@ -326,6 +409,7 @@ namespace Bot.ChromeNs
                 DisposeActivity(state);
             }
 
+            if (generation > 0) _sessionAgent.Cancel(seller, buyer, generation, reason);
             BurstState ignored;
             _states.TryRemove(key, out ignored);
             Log.Info("买家自动回复任务已因人工介入失效: seller=" + seller
@@ -382,6 +466,13 @@ namespace Bot.ChromeNs
                         capturedVersion);
                 }
 
+                if (!_sessionAgent.IsCurrent(burst.SellerNick, burst.BuyerNick, burst.SessionGeneration))
+                {
+                    Log.Info("聚合完成时会话代次已过期，跳过旧回复: seller=" + burst.SellerNick
+                        + ", buyer=" + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
+                    continue;
+                }
+
                 var lease = new BuyerMessageBurstLease(
                     burst,
                     () =>
@@ -390,14 +481,19 @@ namespace Bot.ChromeNs
                         {
                             return state.HardCancelVersion == capturedHardCancelVersion;
                         }
-                    });
+                    },
+                    _sessionAgent);
+                lease.MarkProcessing("burst_dispatch");
+                lease.MarkGenerating("reply_generation_started");
 
                 try
                 {
                     await DispatchScopedAsync(burst, lease);
+                    if (lease.IsCurrent) lease.MarkCompleted("reply_pipeline_completed");
                 }
                 catch (Exception ex)
                 {
+                    lease.MarkFailed("reply_pipeline_exception");
                     Log.Exception(ex);
                 }
 
@@ -412,6 +508,7 @@ namespace Bot.ChromeNs
                         _states.TryRemove(key, out ignored);
                     }
                 }
+                _sessionAgent.Prune(TimeSpan.FromMinutes(30));
                 return;
             }
         }

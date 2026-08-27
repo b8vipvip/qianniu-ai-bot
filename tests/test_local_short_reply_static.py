@@ -74,17 +74,20 @@ def test_deterministic_short_reply_precedes_normal_merge_and_preserves_handoff_r
     assert "aiCalled=false" in service
 
 
-def test_new_buyer_message_can_use_short_reply_without_cancelling_dispatched_ai():
+def test_new_buyer_message_can_use_short_reply_and_supersedes_old_generation():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
 
     enqueue_start = coordinator.index("public void Enqueue(BuyerMessageBurstItem item)")
-    pending = coordinator.index("allowLocalShortReply = !HasPendingBuyerMessages", enqueue_start)
+    observe = coordinator.index("_sessionAgent.ObserveBuyerMessage(", enqueue_start)
+    pending = coordinator.index("allowLocalShortReply = !HasPendingBuyerMessages", observe)
     deterministic = coordinator.index("DeterministicAutoReplyService.HandleBeforeMergeAsync(", pending)
-    merge = coordinator.index("if (continueToMerge) EnqueueForMerge(item);", deterministic)
-    assert enqueue_start < pending < deterministic < merge
+    merge = coordinator.index("EnqueueForMerge(item);", deterministic)
+    assert enqueue_start < observe < pending < deterministic < merge
     assert "InvalidateDispatchedAnswerOnArrival(item.SellerNick, item.BuyerNick);" not in coordinator[enqueue_start:merge]
+    assert "item.SessionGeneration = observation.Generation;" in coordinator[observe:pending]
 
-    assert "state.Items.Count == 0 && !state.WorkerRunning" in coordinator
+    assert "state.Items.Count < 1" in coordinator
+    assert "!state.WorkerRunning" in coordinator
     assert "state.Version++;" in coordinator
     assert "_states.TryRemove(key, out ignored);" in coordinator
     assert "return state.Items.Count > 0;" in coordinator
