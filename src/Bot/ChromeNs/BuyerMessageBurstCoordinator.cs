@@ -166,7 +166,7 @@ namespace Bot.ChromeNs
         public BuyerMessageBurstLease(
             BuyerMessageBurst burst,
             Func<bool> isCurrent,
-            BuyerSessionAgent sessionAgent)
+            BuyerSessionAgent sessionAgent = null)
         {
             Burst = burst;
             _isCurrent = isCurrent;
@@ -243,8 +243,6 @@ namespace Bot.ChromeNs
             public long LatestSessionGeneration;
         }
 
-        // Only unresolved legacy/global configuration needs serialization. Shop-scoped runtime
-        // work uses AsyncLocal<ShopContext> and is safe to dispatch concurrently.
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
@@ -255,8 +253,6 @@ namespace Bot.ChromeNs
         {
             if (handler == null) throw new ArgumentNullException("handler");
             _handler = handler;
-            // Register the knowledge-center management page from a guaranteed runtime constructor.
-            // The call only installs an idempotent WPF class handler; it does not send anything.
             try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
         }
 
@@ -274,9 +270,6 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // The session generation is advanced as soon as an accepted buyer message arrives.
-            // This is independent of the quiet merge window: any in-flight older draft immediately
-            // loses its send permission, while the new message can still be merged with nearby input.
             var observation = _sessionAgent.ObserveBuyerMessage(
                 item.SellerNick,
                 item.BuyerNick,
@@ -292,12 +285,6 @@ namespace Bot.ChromeNs
                 "pre_merge_rules");
 
             var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
-
-            // Fixed business rules are evaluated on the individual incoming message before it is
-            // inserted into any quiet-delay/context-merge state. This guarantees that a first
-            // inquiry greeting, off-hours reply or standalone local short reply can never be stuck
-            // behind “等待合并本轮消息”. A short acknowledgement is not consumed locally while an
-            // earlier buyer message is still waiting to be merged.
             Task.Run(async () =>
             {
                 var continueToMerge = true;
@@ -344,9 +331,17 @@ namespace Bot.ChromeNs
         {
             if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
             {
-                Log.Info("固定规则返回时已有更新买家消息，本条旧代次不再进入合并: seller=" + item.SellerNick
-                    + ", buyer=" + item.BuyerNick + ", generation=" + item.SessionGeneration);
-                return;
+                var snapshot = _sessionAgent.GetSnapshot(item.SellerNick, item.BuyerNick);
+                if (snapshot == null
+                    || snapshot.State == BuyerSessionAgentState.Completed
+                    || snapshot.State == BuyerSessionAgentState.Cancelled
+                    || snapshot.State == BuyerSessionAgentState.Failed)
+                {
+                    Log.Info("固定规则返回时会话代次已结束，本条旧代次不再进入合并: seller=" + item.SellerNick
+                        + ", buyer=" + item.BuyerNick + ", generation=" + item.SessionGeneration);
+                    return;
+                }
+                item.SessionGeneration = snapshot.Generation;
             }
 
             var key = Key(item.SellerNick, item.BuyerNick);
