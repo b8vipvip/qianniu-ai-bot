@@ -47,9 +47,9 @@ def test_buyer_session_agent_invalidates_old_generations():
     assert "BuyerSessionAgent.cs" in props
     assert "state.Generation++" in agent
     assert "previous.Cancel()" in agent
-    assert "BuyerSessionAgentState.Sending" in agent
-    assert "BuyerSessionAgentState.Waiting" in agent
-    assert "BuyerSessionAgentState.Completed" in agent
+    assert "Sending = 6" in agent
+    assert "Waiting = 7" in agent
+    assert "Completed = 8" in agent
     assert "_sessionAgent.ObserveBuyerMessage" in burst
     assert "SessionGeneration" in burst
     assert "_sessionAgent.IsCurrent" in burst
