@@ -11,14 +11,11 @@ import bot_update_cache
 
 LOGGER = logging.getLogger("bot-update-prefetch")
 PREFETCH_ENABLED = os.getenv("BOT_UPDATE_PREFETCH_ENABLED", "true").strip().lower() not in {
-    "0",
-    "false",
-    "no",
-    "off",
+    "0", "false", "no", "off",
 }
 PREFETCH_POLL_SECONDS = max(
     30,
-    min(3600, int(os.getenv("BOT_UPDATE_PREFETCH_POLL_SECONDS", "60"))),
+    min(3600, int(os.getenv("BOT_UPDATE_PREFETCH_POLL_SECONDS", "300"))),
 )
 
 _STOP_EVENT = threading.Event()
@@ -27,13 +24,16 @@ _THREAD: Optional[threading.Thread] = None
 
 def _prefetch_once() -> Optional[Path]:
     metadata = bot_update_cache.get_latest_metadata()
-    path = bot_update_cache.ensure_cached_package(metadata)
-    LOGGER.info(
-        "Bot update mirror ready: tag=%s path=%s",
-        metadata.get("tag") or "",
-        path,
-    )
-    return path
+    state = bot_update_cache.start_cached_package(metadata)
+    if state.get("ready"):
+        path = bot_update_cache._package_target(metadata)
+        LOGGER.info("Bot update mirror ready: tag=%s path=%s", metadata.get("tag") or "", path)
+        return path
+    if state.get("started"):
+        LOGGER.info("Bot update mirror prefetch started: tag=%s", metadata.get("tag") or "")
+    else:
+        LOGGER.info("Bot update mirror prefetch already running: tag=%s", metadata.get("tag") or "")
+    return None
 
 
 def _prefetch_loop() -> None:
@@ -53,11 +53,7 @@ def init_bot_update_prefetch() -> None:
     if _THREAD is not None and _THREAD.is_alive():
         return
     _STOP_EVENT.clear()
-    _THREAD = threading.Thread(
-        target=_prefetch_loop,
-        name="bot-update-package-prefetch",
-        daemon=True,
-    )
+    _THREAD = threading.Thread(target=_prefetch_loop, name="bot-update-package-prefetch", daemon=True)
     _THREAD.start()
 
 
