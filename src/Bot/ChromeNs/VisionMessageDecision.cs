@@ -56,13 +56,6 @@ namespace Bot.ChromeNs
                         && !string.IsNullOrWhiteSpace(e.ApiKey)
                         && !string.IsNullOrWhiteSpace(e.BaseUrl));
 
-                if (!usable)
-                {
-                    return Skip("[图片]", firstPrepared
-                        ? "已预留首条咨询固定回复，但本店未配置可用视觉模型；固定回复资格保留，图片不调用AI。"
-                        : "已跳过：本店未配置可用的视觉模型，未向买家发送消息。");
-                }
-
                 // BuyerMessageBurstCoordinator runs DeterministicAutoReplyService before merge.
                 // Images are intentionally marked replyable here only when a first greeting was
                 // reserved, so that sender can deliver the greeting first; VisionDecisionKind stays
@@ -70,8 +63,19 @@ namespace Bot.ChromeNs
                 if (firstPrepared)
                 {
                     safetyDecision.ShouldCallAi = true;
-                    safetyDecision.Note = "首条咨询固定回复先发送，随后继续图片视觉理解。";
+                    safetyDecision.Note = usable
+                        ? "首条咨询固定回复先发送，随后继续图片视觉理解。"
+                        : "首条咨询固定回复先发送；当前无可用视觉模型，后续视觉任务将安全失败而不发送伪答案。";
+                    return new VisionMessageDecision
+                    {
+                        Kind = VisionDecisionKind.Vision,
+                        QuestionLabel = "[图片]",
+                        Note = safetyDecision.Note
+                    };
                 }
+
+                if (!usable)
+                    return Skip("[图片]", "已跳过：本店未配置可用的视觉模型，未向买家发送消息。");
 
                 return new VisionMessageDecision
                 {
@@ -98,10 +102,7 @@ namespace Bot.ChromeNs
                     QuestionLabel = text,
                     Note = string.Empty
                 };
-            if (!string.Equals(safetyDecision.MessageLabel, "[图片]", StringComparison.Ordinal))
-                return Skip(safetyDecision.MessageLabel, safetyDecision.Note);
-
-            return Skip("[图片]", "已跳过：本店未配置可用的视觉模型，未向买家发送消息。");
+            return Skip(safetyDecision.MessageLabel, safetyDecision.Note);
         }
 
         private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints(
