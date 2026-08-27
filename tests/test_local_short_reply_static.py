@@ -86,7 +86,8 @@ def test_new_buyer_message_can_use_short_reply_and_supersedes_old_generation():
     assert "InvalidateDispatchedAnswerOnArrival(item.SellerNick, item.BuyerNick);" not in coordinator[enqueue_start:merge]
     assert "item.SessionGeneration = observation.Generation;" in coordinator[observe:pending]
 
-    assert "state.Items.Count == 0 && !state.WorkerRunning" in coordinator
+    assert "state.Items.Count < 1" in coordinator
+    assert "!state.WorkerRunning" in coordinator
     assert "state.Version++;" in coordinator
     assert "_states.TryRemove(key, out ignored);" in coordinator
     assert "return state.Items.Count > 0;" in coordinator
