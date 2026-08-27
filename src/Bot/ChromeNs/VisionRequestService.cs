@@ -26,6 +26,11 @@ namespace Bot.ChromeNs
         public string VisualTags { get; set; }
         public string MatchedVisualKnowledgeId { get; set; }
         public double VisualKnowledgeScore { get; set; }
+        public string LocalOcrText { get; set; }
+        public double LocalOcrConfidence { get; set; }
+        public long LocalOcrLatencyMs { get; set; }
+        public bool LocalOcrCacheHit { get; set; }
+        public string LocalOcrEngine { get; set; }
     }
 
     internal sealed class VisionRequestService
@@ -83,7 +88,22 @@ namespace Bot.ChromeNs
                             continue;
                         }
 
-                        var result = await CallVisionAsync(endpoint, image.ImageUrl, prompt, cts.Token);
+                        // Local OCR is a pre-analysis hint only. It never uploads image bytes and a
+                        // failure never blocks the existing vision route. The vision model remains
+                        // authoritative because OCR can contain wrong characters.
+                        var localOcr = await LocalOcrService.TryRecognizeAsync(image.LocalCachePath, cts.Token);
+                        var requestPrompt = prompt + LocalOcrService.BuildPromptEvidence(localOcr);
+                        if (localOcr.Success)
+                        {
+                            Log.Info("视觉请求附加本地OCR证据: seller=" + task.SellerNick
+                                + ", buyer=" + task.BuyerNick
+                                + ", chars=" + (localOcr.Text == null ? 0 : localOcr.Text.Length)
+                                + ", confidence=" + localOcr.Confidence.ToString("0.000")
+                                + ", cacheHit=" + localOcr.CacheHit);
+                        }
+
+                        var result = await CallVisionAsync(endpoint, image.ImageUrl, requestPrompt, cts.Token);
+                        ApplyLocalOcr(result, localOcr);
                         if (result.Success && string.IsNullOrWhiteSpace(result.VisualSummary))
                         {
                             var originalAnswer = result.Answer;
@@ -92,8 +112,9 @@ namespace Bot.ChromeNs
                             var repaired = await CallVisionAsync(
                                 endpoint,
                                 image.ImageUrl,
-                                prompt + StrictSemanticRepairPrompt,
+                                requestPrompt + StrictSemanticRepairPrompt,
                                 cts.Token);
+                            ApplyLocalOcr(repaired, localOcr);
                             if (repaired.Success && !string.IsNullOrWhiteSpace(repaired.VisualSummary))
                             {
                                 if (string.IsNullOrWhiteSpace(repaired.Answer)) repaired.Answer = originalAnswer;
@@ -145,7 +166,7 @@ namespace Bot.ChromeNs
 
                             if (ConversationContextStore.IsWithdrawnAnswer(task.SellerNick, task.BuyerNick, result.Answer))
                             {
-                                return new VisionRequestResult
+                                var blocked = new VisionRequestResult
                                 {
                                     Success = false,
                                     Error = "该回复已被客服撤回，已阻止再次发送",
@@ -153,6 +174,8 @@ namespace Bot.ChromeNs
                                     VisionModel = endpoint.VisionModel,
                                     LatencyMs = result.LatencyMs
                                 };
+                                ApplyLocalOcr(blocked, localOcr);
+                                return blocked;
                             }
                             var source = string.IsNullOrWhiteSpace(result.MatchedVisualKnowledgeId) ? "AI生成" : "视觉知识";
                             KnowledgeLearningService.RegisterAnswerSource(task.SellerNick, task.BuyerNick, currentQuestion, result.Answer, source);
@@ -237,6 +260,16 @@ namespace Bot.ChromeNs
                     return ParseVisionResult(raw);
                 }
             }
+        }
+
+        private static void ApplyLocalOcr(VisionRequestResult result, LocalOcrResult localOcr)
+        {
+            if (result == null || localOcr == null) return;
+            result.LocalOcrText = localOcr.Text;
+            result.LocalOcrConfidence = localOcr.Confidence;
+            result.LocalOcrLatencyMs = localOcr.ElapsedMs;
+            result.LocalOcrCacheHit = localOcr.CacheHit;
+            result.LocalOcrEngine = localOcr.Engine;
         }
 
         private static VisionRequestResult ParseVisionResult(string raw)
