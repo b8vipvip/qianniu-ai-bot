@@ -18,7 +18,6 @@ def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
     quiet_delay = coordinator.index("QuietDelayMilliseconds", enqueue_merge)
     assert enqueue < before_merge < enqueue_merge < quiet_delay
 
-    # The post-merge dispatcher must not re-run deterministic rules.
     dispatch = coordinator.index("private async Task DispatchScopedAsync")
     assert "DeterministicAutoReplyService" not in coordinator[dispatch:]
 
@@ -55,18 +54,22 @@ def test_server_push_replaces_client_periodic_version_polling():
     assert "bot_update_push.router" in bootstrap
 
 
-def test_download_progress_identifies_server_or_github_channel():
+def test_download_progress_identifies_server_only_channel_and_prepare_state():
     download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
     auto_window = read("src/Bot/Update/BotUpdateAutoProgressWindow.Fast.cs")
     prompt = read("src/Bot/Update/BotUpdatePromptWindow.Fast.cs")
 
-    assert 'AddDownloadSource(sources, "服务器", release.MirrorUrl)' in download
-    assert 'AddDownloadSource(sources, "GitHub", release.PackageUrl)' in download
+    assert "EnsureServerPackageReadyAsync" in download
+    assert 'CurrentDownloadChannel = "服务器"' in download
+    assert 'CurrentDownloadChannel = "服务器准备中"' in download
+    assert "release.PackageUrl" not in download
+    assert 'AddDownloadSource(sources, "GitHub", release.PackageUrl)' not in download
     assert "CurrentDownloadPercent" in download
     assert "DownloadedBytes" in download
     assert "正在下载更新｜通道：" in download
     assert "下载通道：" in auto_window
     assert "下载通道：" in prompt
+    assert "客户端不会直连 GitHub 下载安装包" in prompt
 
 
 def test_external_watchdog_restarts_unexpected_process_exit_only():
@@ -85,13 +88,10 @@ def test_handoff_strategy_is_built_directly_not_only_by_loaded_runtime_patch():
     feature = read("src/Bot/Options/FeatureSettingsOptionsControl.cs")
     legacy_bridge = read("src/Bot/Update/BotUpdateHandoffSettingsUi.Fast.cs")
 
-    # Regression from 1.1.756/1.1.758: WndOption itself still used the old visible title,
-    # so opening settings on another page showed “消息通知” until the feature control Loaded.
     assert 'AddFeaturePage("回复与通知", "转人工策略"' in wnd
     assert 'OptionEnum.Notifications, "转人工策略")' in wnd
     assert 'AddFeaturePage("回复与通知", "消息通知"' not in wnd
 
-    # The real underlying tab and controls must be reorganized during constructor execution.
     constructor = feature.index("public FeatureSettingsOptionsControl(string seller)")
     direct_migration = feature.index("OrganizeHandoffStrategyPage();", constructor)
     hide_tabs = feature.index("HideLegacyTabHeaders();", direct_migration)
@@ -104,6 +104,4 @@ def test_handoff_strategy_is_built_directly_not_only_by_loaded_runtime_patch():
     assert '"_handoffText"' in feature
     assert "在构造阶段将“启用转人工规则”及关键词/话术移动到“转人工策略”" in feature
 
-    # Keep the older Loaded bridge only as compatibility fallback; correctness can no longer
-    # depend on it executing after the user opens a feature page.
     assert "HandoffSettingsUiBridge" in legacy_bridge
