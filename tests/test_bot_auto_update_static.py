@@ -29,7 +29,6 @@ def test_background_updates_are_server_push_and_manual_check_keeps_safe_fallback
     server_push = read("services/api-control-plane/bot_update_push.py")
     bootstrap = read("services/api-control-plane/bootstrap.py")
     props = read("src/Bot/Directory.Build.props")
-
     assert "mode=server-push-sse" in core
     assert "RestartServerPushListener()" in core
     assert "clientAutoCheck=False" in core
@@ -41,14 +40,12 @@ def test_background_updates_are_server_push_and_manual_check_keeps_safe_fallback
     assert "notification_mode" in server_push
     assert "StreamingResponse" in server_push
     assert "bot_update_push.router" in bootstrap
-
-    # Manual check remains available and still uses server cache first / GitHub fallback.
+    # Version discovery remains unchanged: server metadata first, GitHub metadata fallback.
     assert "/api/public/v1/bot-update/latest" in code
     assert "ServiceMetadataTimeoutSeconds = 6" in code
     assert "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest" in code
     assert "FetchLatestFromControlPlaneAsync" in code
     assert "FetchLatestFromGitHubAsync" in code
-
     assert 'Name="UseOptimizedBotUpdateService"' in props
     assert 'Compile Remove="$(MSBuildThisFileDirectory)Update\\BotUpdateService.cs"' in props
     assert "Update\\BotUpdate*.Fast.cs" in props
@@ -56,7 +53,6 @@ def test_background_updates_are_server_push_and_manual_check_keeps_safe_fallback
 
 def test_update_sha_survives_manifest_network_failure_and_shop_scoped_server_urls_are_discovered():
     network = read("src/Bot/Update/BotUpdateService.Network.Fast.cs")
-
     assert 'package.Value<string>("digest")' in network
     assert "NormalizeGitHubAssetDigest" in network
     assert "ExtractSha256FromReleaseNotes" in network
@@ -70,44 +66,40 @@ def test_update_sha_survives_manifest_network_failure_and_shop_scoped_server_url
     assert "ShopControlPlaneConnectionStore.GetLegacyGlobalServerUrl()" in network
 
 
-def test_download_prefers_server_then_falls_back_to_github_and_reports_channel_progress():
+def test_download_is_server_only_and_client_triggers_server_prepare():
     code = updater_code()
     download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
-
-    server_line = 'AddDownloadSource(sources, "服务器", release.MirrorUrl)'
-    github_line = 'AddDownloadSource(sources, "GitHub", release.PackageUrl)'
-    assert server_line in download
-    assert github_line in download
-    assert download.index(server_line) < download.index(github_line)
+    assert "EnsureServerPackageReadyAsync" in download
+    assert '"/api/public/v1/bot-update/ensure/"' in download
+    assert '"/api/public/v1/bot-update/status/"' in download
+    assert "HttpMethod.Post" in download
+    assert 'CurrentDownloadChannel = "服务器"' in download
+    assert 'CurrentDownloadChannel = "服务器准备中"' in download
+    assert "release.PackageUrl" not in download
+    assert 'channel="GitHub"' not in download
+    assert "客户端已禁止直接从 GitHub 下载安装包" in download
+    assert "客户端不会回退到 GitHub" in download
     assert "DownloadConnectTimeoutSeconds = 20" in code
-    assert "GitHubDownloadConnectTimeoutSeconds = 60" in code
     assert "DownloadReadTimeoutSeconds = 60" in code
     assert "HashFile(partial)" in code
-    assert "服务器与 GitHub 均下载失败" in code
     assert "CurrentDownloadChannel" in download
     assert "CurrentDownloadPercent" in download
     assert "RaiseDownloadStatus" in download
     assert "正在下载更新｜通道：" in download
-    assert "正在连接下载通道" in download
     assert "DownloadedBytes" in code
     assert "TotalBytes" in code
-
     assert "if (cancellationToken.IsCancellationRequested) throw;" in download
-    assert "准备尝试下一来源" in download
-    assert "非用户取消，自动切换下一来源" in download
     assert "Bot更新下载被用户取消" in download
 
 
 def test_update_download_is_single_flight_and_auto_install_enables_server_push():
     download = read("src/Bot/Update/BotUpdateService.Download.Fast.cs")
     state = read("src/Bot/Update/BotUpdateService.State.Fast.cs")
-
     assert "private static readonly SemaphoreSlim DownloadGate" in download
     assert "DownloadGate.WaitAsync(cancellationToken)" in download
     assert "DownloadGate.Release()" in download
     assert "已有Bot更新下载任务正在进行，当前请求等待复用结果" in download
     assert "Bot更新下载任务已复用已完成安装包" in download
-
     assert "if (settings.AutoInstall)" in state
     assert "settings.AutoCheck = true" in state
     assert "settings.AutoDownload = false" in state
@@ -120,29 +112,31 @@ def test_server_caches_latest_metadata_and_verified_packages():
     bootstrap = read("services/api-control-plane/bootstrap.py")
     dockerfile = read("services/api-control-plane/Dockerfile")
     env = read("services/api-control-plane/.env.example")
-
     assert 'GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"' in module
     assert '@router.get("/api/public/v1/bot-update/latest"' in module
     assert '"/api/public/v1/bot-update/download/{tag}"' in module
+    assert '@router.post("/api/public/v1/bot-update/ensure/{tag}"' in module
+    assert '@router.get("/api/public/v1/bot-update/status/{tag}"' in module
     assert "METADATA_CACHE_SECONDS" in module
     assert "METADATA_STALE_SECONDS" in module
     assert "ensure_cached_package" in module
+    assert "start_cached_package" in module
+    assert "_PACKAGE_THREADS" in module
     assert "_hash_file(target)" in module
     assert "服务端镜像安装包 SHA-256 校验失败" in module
-
     assert "bot_update_cache.get_latest_metadata()" in prefetch
-    assert "bot_update_cache.ensure_cached_package(metadata)" in prefetch
+    assert "bot_update_cache.start_cached_package(metadata)" in prefetch
     assert "BOT_UPDATE_PREFETCH_ENABLED" in prefetch
     assert "BOT_UPDATE_PREFETCH_POLL_SECONDS" in prefetch
+    assert 'os.getenv("BOT_UPDATE_PREFETCH_POLL_SECONDS", "300")' in prefetch
     assert "bot_update_prefetch.init_bot_update_prefetch()" in bootstrap
     assert "bot_update_prefetch.stop_bot_update_prefetch()" in bootstrap
     assert "bot_update_prefetch.py" in dockerfile
-
     assert "bot_update_cache.router" in bootstrap
     assert "bot_update_cache.init_bot_update_cache()" in bootstrap
     assert "BOT_UPDATE_METADATA_CACHE_SECONDS=300" in env
     assert "BOT_UPDATE_PREFETCH_ENABLED=true" in env
-    assert "BOT_UPDATE_PREFETCH_POLL_SECONDS=60" in env
+    assert "BOT_UPDATE_PREFETCH_POLL_SECONDS=300" in env
 
 
 def test_update_defaults_keep_auto_install_opt_in_and_remove_second_confirmation():
@@ -151,18 +145,15 @@ def test_update_defaults_keep_auto_install_opt_in_and_remove_second_confirmation
     prompt = read("src/Bot/Update/BotUpdatePromptWindow.Fast.cs")
     ui = read("src/Bot/Options/BotUpdateOptionsControl.cs")
     ui_bridge = read("src/Bot/Update/BotUpdateSettingsUi.Fast.cs")
-
     assert "AutoCheck = true" in code
     assert "NotifyPopup = true" in code
     assert "AutoDownload = false" in code
     assert "AutoInstall = false" in code
-
     assert 'Content = "自动更新（发现新版本后自动下载安装并重启，无需确认）"' in ui
     assert "settings.AutoInstall = _autoUpdate.IsChecked == true" in ui
     assert "if (settings.AutoInstall) settings.AutoCheck = true" in ui
     assert "接收服务端新版本通知（客户端不主动检查版本）" in ui_bridge
     assert "Visibility.Collapsed" in ui_bridge
-
     assert "if (settings.AutoInstall" in core
     assert "result.InstallStarted = true" in core
     assert "LaunchInstaller(package, release)" in core
@@ -188,7 +179,6 @@ def test_updater_backs_up_validates_restarts_and_rolls_back():
 
 def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_copy():
     script = read("src/Bot/Update/BotAutoUpdater.ps1")
-
     assert '$partialBackupDir = "$backupDir.partial"' in script
     assert "$persistentNames = @('data', 'global', 'shops')" in script
     assert "Get-DirectoryFingerprint" in script
@@ -204,7 +194,6 @@ def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_
     assert "Install directory was not modified; destructive rollback is skipped." in script
     assert "No .partial backup will be used." in script
     assert "Restore-PersistentData $backupDir $persistentRoot" in script
-
     finalized_guard = script.index("if (-not $backupFinalized -or -not (Test-BackupComplete $backupDir))")
     mutation_flag = script.index("$installMutationStarted = $true")
     destructive_clear = script.index("Clear-DirectoryContentsWithRetry $InstallDir", mutation_flag)
@@ -214,7 +203,6 @@ def test_auto_updater_backup_is_transactional_and_never_rolls_back_from_partial_
 def test_updaters_keep_locked_install_root_and_retry_only_child_cleanup():
     auto = read("src/Bot/Update/BotAutoUpdater.ps1")
     manual = read("scripts/update-bot.ps1")
-
     for script in (auto, manual):
         assert "Clear-DirectoryContentsWithRetry" in script
         assert "Get-InstallProcessIds" in script
