@@ -23,7 +23,7 @@ permissions:
 jobs:
   test-and-build:
     runs-on: windows-2022
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout
@@ -111,6 +111,68 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+      - name: Build multilingual local OCR worker
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workerOut = Join-Path $env:RUNNER_TEMP 'qianniu-local-ocr'
+          Remove-Item -LiteralPath $workerOut -Recurse -Force -ErrorAction SilentlyContinue
+
+          dotnet publish tools/LocalOcrWorker/LocalOcrWorker.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=false `
+            -p:PublishTrimmed=false `
+            -o $workerOut
+          if ($LASTEXITCODE -ne 0) { throw 'LocalOcrWorker publish failed.' }
+
+          $modelDir = Join-Path $workerOut 'models\v6'
+          New-Item -ItemType Directory -Path $modelDir -Force | Out-Null
+
+          $downloads = @(
+            @{
+              Name = 'PP-OCRv6_det_small.onnx'
+              Uri = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx'
+              Sha256 = '090f04abcd9d9a7498bc4ebf677e4cb9bdce1fe4197ddb7e529f1ef44e1ff94f'
+            },
+            @{
+              Name = 'PP-OCRv6_rec_small.onnx'
+              Uri = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/onnx/PP-OCRv6/rec/PP-OCRv6_rec_small.onnx'
+              Sha256 = '6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884'
+            }
+          )
+
+          foreach ($item in $downloads) {
+            $target = Join-Path $modelDir $item.Name
+            Invoke-WebRequest -Uri $item.Uri -OutFile $target -UseBasicParsing
+            $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash.ToLowerInvariant()
+            if ($actual -ne $item.Sha256) {
+              throw "OCR model hash mismatch: $($item.Name) expected=$($item.Sha256) actual=$actual"
+            }
+          }
+
+          $dictUri = 'https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2/paddle/PP-OCRv6/rec/PP-OCRv6_rec_small/ppocrv6_dict.txt'
+          Invoke-WebRequest -Uri $dictUri -OutFile (Join-Path $modelDir 'ppocrv6_small_dict.txt') -UseBasicParsing
+
+          $requiredOcr = @(
+            (Join-Path $workerOut 'LocalOcrWorker.exe'),
+            (Join-Path $modelDir 'PP-OCRv6_det_small.onnx'),
+            (Join-Path $modelDir 'PP-OCRv6_rec_small.onnx'),
+            (Join-Path $modelDir 'ppocrv6_small_dict.txt'),
+            (Join-Path $workerOut 'models\v5\ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx')
+          )
+          foreach ($path in $requiredOcr) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required OCR runtime file not found: $path"
+            }
+          }
+
+          Write-Host "Local OCR worker ready: $workerOut"
+          Get-ChildItem -LiteralPath $workerOut -Recurse -File |
+            Measure-Object -Property Length -Sum |
+            ForEach-Object { Write-Host ('Local OCR package bytes: ' + $_.Sum) }
+
       - name: Assemble complete runtime package
         shell: pwsh
         run: |
@@ -120,6 +182,8 @@ jobs:
           $releaseBin = Join-Path $PWD 'src\Bot\bin\x64\Release'
           $baselineBin = Join-Path $PWD 'src\Bin'
           $sourceData = Join-Path $PWD 'src\data'
+          $workerOut = Join-Path $env:RUNNER_TEMP 'qianniu-local-ocr'
+          $ocrDestination = Join-Path $packageBin 'local-ocr'
 
           Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $packageBin -Force | Out-Null
@@ -130,6 +194,10 @@ jobs:
 
           Copy-Item -Path (Join-Path $releaseBin '*') `
             -Destination $packageBin -Recurse -Force
+
+          New-Item -ItemType Directory -Path $ocrDestination -Force | Out-Null
+          Copy-Item -Path (Join-Path $workerOut '*') `
+            -Destination $ocrDestination -Recurse -Force
 
           if (Test-Path -LiteralPath $sourceData -PathType Container) {
             Get-ChildItem -LiteralPath $sourceData -Force |
@@ -160,6 +228,10 @@ jobs:
             'package\Bin\DbEntity.dll',
             'package\Bin\FlaUI.Core.dll',
             'package\Bin\FlaUI.UIA3.dll',
+            'package\Bin\local-ocr\LocalOcrWorker.exe',
+            'package\Bin\local-ocr\models\v6\PP-OCRv6_det_small.onnx',
+            'package\Bin\local-ocr\models\v6\PP-OCRv6_rec_small.onnx',
+            'package\Bin\local-ocr\models\v6\ppocrv6_small_dict.txt',
             'package\data\README-PARAMS.txt'
           )
 
