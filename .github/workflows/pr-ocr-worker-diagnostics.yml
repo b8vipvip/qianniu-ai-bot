@@ -1,0 +1,28 @@
+name: PR OCR worker diagnostics
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  worker:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish OCR worker with captured output
+        shell: pwsh
+        run: |
+          dotnet publish tools/LocalOcrWorker/LocalOcrWorker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -o $env:RUNNER_TEMP\ocr-worker 2>&1 | Tee-Object -FilePath worker-build.log
+          $code = $LASTEXITCODE
+          if ($code -ne 0) { exit $code }
+      - name: Upload OCR worker build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-ocr-worker-build-log
+          path: worker-build.log
+          if-no-files-found: warn
+          retention-days: 2
