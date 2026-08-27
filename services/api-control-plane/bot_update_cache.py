@@ -50,6 +50,9 @@ PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "").strip().rstrip("/")
 _METADATA_LOCK = threading.RLock()
 _PACKAGE_LOCKS: Dict[str, threading.Lock] = {}
 _PACKAGE_LOCKS_GUARD = threading.Lock()
+_PACKAGE_JOB_LOCK = threading.RLock()
+_PACKAGE_JOBS: Dict[str, Dict[str, Any]] = {}
+_PACKAGE_THREADS: Dict[str, threading.Thread] = {}
 _METADATA: Optional[Dict[str, Any]] = None
 _REFRESH_THREAD: Optional[threading.Thread] = None
 _STOP_EVENT = threading.Event()
@@ -124,57 +127,30 @@ def _fetch_latest_from_github() -> Dict[str, Any]:
     release = _fetch_json(GITHUB_LATEST_RELEASE_API, GITHUB_TIMEOUT_SECONDS)
     if bool(release.get("draft")) or bool(release.get("prerelease")):
         raise RuntimeError("GitHub latest Release 不是稳定版本")
-
     tag = str(release.get("tag_name") or "").strip()
     assets = release.get("assets")
     if not isinstance(assets, list):
         assets = []
-
-    package = next(
-        (
-            item
-            for item in assets
-            if isinstance(item, dict)
-            and str(item.get("name") or "").lower() == PACKAGE_ASSET_NAME.lower()
-        ),
-        None,
-    )
-    manifest = next(
-        (
-            item
-            for item in assets
-            if isinstance(item, dict)
-            and str(item.get("name") or "").lower() == MANIFEST_ASSET_NAME.lower()
-        ),
-        None,
-    )
+    package = next((x for x in assets if isinstance(x, dict) and str(x.get("name") or "").lower() == PACKAGE_ASSET_NAME.lower()), None)
+    manifest = next((x for x in assets if isinstance(x, dict) and str(x.get("name") or "").lower() == MANIFEST_ASSET_NAME.lower()), None)
     if not isinstance(package, dict) or not isinstance(manifest, dict):
         raise RuntimeError("正式 Release 缺少安装包或 update.json")
-
     manifest_url = str(manifest.get("browser_download_url") or "").strip()
     if not manifest_url.startswith("https://"):
         raise RuntimeError("update.json 下载地址无效")
     manifest_payload = _fetch_json(manifest_url, GITHUB_TIMEOUT_SECONDS)
-
     metadata = {
         "version": _normalize_version(tag),
         "tag": tag,
         "name": str(release.get("name") or tag),
         "notes": str(release.get("body") or ""),
-        "html_url": str(
-            release.get("html_url")
-            or f"https://github.com/{REPOSITORY}/releases"
-        ),
+        "html_url": str(release.get("html_url") or f"https://github.com/{REPOSITORY}/releases"),
         "download_url": str(package.get("browser_download_url") or ""),
         "manifest_url": manifest_url,
         "sha256": str(manifest_payload.get("sha256") or ""),
         "size": int(package.get("size") or manifest_payload.get("size") or 0),
         "published_at": str(release.get("published_at") or ""),
-        "commit": str(
-            manifest_payload.get("commit")
-            or release.get("target_commitish")
-            or ""
-        ),
+        "commit": str(manifest_payload.get("commit") or release.get("target_commitish") or ""),
         "source": "github-latest",
         "fetched_at_unix": _now(),
     }
@@ -196,7 +172,6 @@ def _save_metadata(metadata: Dict[str, Any]) -> None:
     temp = METADATA_CACHE_PATH.with_suffix(".json.tmp")
     temp.write_text(encoded, encoding="utf-8")
     temp.replace(METADATA_CACHE_PATH)
-
     tag_dir = _metadata_tag_dir(str(metadata["tag"]))
     tag_dir.mkdir(parents=True, exist_ok=True)
     tag_temp = tag_dir / "metadata.json.tmp"
@@ -253,7 +228,6 @@ def get_latest_metadata() -> Dict[str, Any]:
             _METADATA = _load_latest_disk_metadata()
         if _METADATA is not None and _is_fresh(_METADATA):
             return dict(_METADATA)
-
         stale = dict(_METADATA) if _METADATA is not None else None
         try:
             metadata = _fetch_latest_from_github()
@@ -275,22 +249,14 @@ def _absolute_mirror_url(request: Request, tag: str) -> str:
 
 def _public_metadata(metadata: Dict[str, Any], request: Request) -> Dict[str, Any]:
     result = {
-        "version": metadata["version"],
-        "tag": metadata["tag"],
-        "name": metadata.get("name") or metadata["tag"],
-        "notes": metadata.get("notes") or "",
-        "html_url": metadata.get("html_url") or "",
-        "download_url": metadata["download_url"],
-        "mirror_url": _absolute_mirror_url(request, metadata["tag"]),
-        "sha256": metadata["sha256"],
-        "size": metadata.get("size") or 0,
-        "published_at": metadata.get("published_at") or "",
-        "commit": metadata.get("commit") or "",
-        "source": "control-plane-cache",
+        "version": metadata["version"], "tag": metadata["tag"],
+        "name": metadata.get("name") or metadata["tag"], "notes": metadata.get("notes") or "",
+        "html_url": metadata.get("html_url") or "", "download_url": metadata["download_url"],
+        "mirror_url": _absolute_mirror_url(request, metadata["tag"]), "sha256": metadata["sha256"],
+        "size": metadata.get("size") or 0, "published_at": metadata.get("published_at") or "",
+        "commit": metadata.get("commit") or "", "source": "control-plane-cache",
         "stale": bool(metadata.get("stale")),
-        "cache_age_seconds": max(
-            0, int(_now() - float(metadata.get("fetched_at_unix") or _now()))
-        ),
+        "cache_age_seconds": max(0, int(_now() - float(metadata.get("fetched_at_unix") or _now()))),
     }
     if metadata.get("refresh_error"):
         result["refresh_error"] = _safe_text(metadata["refresh_error"], 240)
@@ -317,28 +283,12 @@ def _hash_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download_package(
-    download_url: str,
-    destination: Path,
-    expected_sha256: str,
-    expected_size: int,
-) -> None:
+def _download_package(download_url: str, destination: Path, expected_sha256: str, expected_size: int) -> None:
     partial = destination.with_suffix(destination.suffix + ".partial")
     partial.unlink(missing_ok=True)
-    response = curl_requests.get(
-        download_url,
-        headers={
-            "Accept": "application/octet-stream",
-            "User-Agent": "QianniuAiBot-UpdateMirror/1.0",
-        },
-        timeout=PACKAGE_TIMEOUT_SECONDS,
-        allow_redirects=True,
-        impersonate="chrome",
-        stream=True,
-    )
+    response = curl_requests.get(download_url, headers={"Accept": "application/octet-stream", "User-Agent": "QianniuAiBot-UpdateMirror/1.0"}, timeout=PACKAGE_TIMEOUT_SECONDS, allow_redirects=True, impersonate="chrome", stream=True)
     if response.status_code < 200 or response.status_code >= 300:
         raise RuntimeError(f"GitHub 安装包返回 HTTP {response.status_code}")
-
     digest = hashlib.sha256()
     copied = 0
     try:
@@ -346,71 +296,115 @@ def _download_package(
             for chunk in response.iter_content(chunk_size=1024 * 1024):
                 if not chunk:
                     continue
-                output.write(chunk)
-                digest.update(chunk)
-                copied += len(chunk)
+                output.write(chunk); digest.update(chunk); copied += len(chunk)
     finally:
-        try:
-            response.close()
-        except Exception:
-            pass
-
+        try: response.close()
+        except Exception: pass
     actual = digest.hexdigest()
     if actual.lower() != expected_sha256.lower():
-        partial.unlink(missing_ok=True)
-        raise RuntimeError("服务端镜像安装包 SHA-256 校验失败")
+        partial.unlink(missing_ok=True); raise RuntimeError("服务端镜像安装包 SHA-256 校验失败")
     if expected_size > 0 and copied != expected_size:
-        partial.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"服务端镜像安装包大小不一致：期望 {expected_size}，实际 {copied}"
-        )
+        partial.unlink(missing_ok=True); raise RuntimeError(f"服务端镜像安装包大小不一致：期望 {expected_size}，实际 {copied}")
     partial.replace(destination)
 
 
 def _cleanup_old_packages() -> None:
-    if not CACHE_ROOT.is_dir():
-        return
-    tag_dirs = [
-        path
-        for path in CACHE_ROOT.iterdir()
-        if path.is_dir() and TAG_PATTERN.fullmatch(path.name)
-    ]
+    if not CACHE_ROOT.is_dir(): return
+    tag_dirs = [path for path in CACHE_ROOT.iterdir() if path.is_dir() and TAG_PATTERN.fullmatch(path.name)]
     tag_dirs.sort(key=lambda path: path.stat().st_mtime, reverse=True)
-    for old in tag_dirs[KEEP_PACKAGE_VERSIONS:]:
-        shutil.rmtree(old, ignore_errors=True)
+    for old in tag_dirs[KEEP_PACKAGE_VERSIONS:]: shutil.rmtree(old, ignore_errors=True)
 
 
 def ensure_cached_package(metadata: Dict[str, Any]) -> Path:
     metadata = _validate_metadata(metadata)
-    tag = str(metadata["tag"])
-    tag_dir = _metadata_tag_dir(tag)
-    tag_dir.mkdir(parents=True, exist_ok=True)
-    target = tag_dir / PACKAGE_ASSET_NAME
-    expected_sha = str(metadata["sha256"])
-
-    if target.is_file() and _hash_file(target).lower() == expected_sha.lower():
-        return target
-
+    tag = str(metadata["tag"]); tag_dir = _metadata_tag_dir(tag); tag_dir.mkdir(parents=True, exist_ok=True)
+    target = tag_dir / PACKAGE_ASSET_NAME; expected_sha = str(metadata["sha256"])
+    if target.is_file() and _hash_file(target).lower() == expected_sha.lower(): return target
     with _package_lock(tag):
-        if target.is_file() and _hash_file(target).lower() == expected_sha.lower():
-            return target
+        if target.is_file() and _hash_file(target).lower() == expected_sha.lower(): return target
         target.unlink(missing_ok=True)
-        _download_package(
-            str(metadata["download_url"]),
-            target,
-            expected_sha,
-            int(metadata.get("size") or 0),
-        )
-        _cleanup_old_packages()
-        return target
+        _download_package(str(metadata["download_url"]), target, expected_sha, int(metadata.get("size") or 0))
+        _cleanup_old_packages(); return target
+
+
+def _resolve_tag_metadata(tag: str) -> Dict[str, Any]:
+    if not TAG_PATTERN.fullmatch(tag or ""):
+        raise HTTPException(status_code=404, detail="版本不存在")
+    metadata = _load_tag_metadata(tag)
+    if metadata is not None: return metadata
+    try:
+        latest = get_latest_metadata()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="暂时无法取得 Bot 正式版本：" + _safe_text(exc, 200))
+    if str(latest.get("tag") or "").lower() != tag.lower():
+        raise HTTPException(status_code=404, detail="版本不存在")
+    return latest
+
+
+def _package_target(metadata: Dict[str, Any]) -> Path:
+    return _metadata_tag_dir(str(metadata["tag"])) / PACKAGE_ASSET_NAME
+
+
+def _package_ready(metadata: Dict[str, Any]) -> bool:
+    target = _package_target(metadata)
+    return target.is_file() and _hash_file(target).lower() == str(metadata["sha256"]).lower()
+
+
+def _package_job_snapshot(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    tag = str(metadata["tag"])
+    with _PACKAGE_JOB_LOCK:
+        job = dict(_PACKAGE_JOBS.get(tag) or {})
+        thread = _PACKAGE_THREADS.get(tag)
+    if job.get("ready"):
+        return job
+    if _package_ready(metadata):
+        job.update({"tag": tag, "ready": True, "downloading": False, "error": "", "updated_at_unix": _now()})
+        with _PACKAGE_JOB_LOCK: _PACKAGE_JOBS[tag] = dict(job)
+        return job
+    job.setdefault("tag", tag); job.setdefault("ready", False); job.setdefault("error", "")
+    job["downloading"] = bool(thread is not None and thread.is_alive())
+    return job
+
+
+def _package_worker(metadata: Dict[str, Any]) -> None:
+    tag = str(metadata["tag"])
+    try:
+        ensure_cached_package(metadata)
+        state = {"tag": tag, "ready": True, "downloading": False, "error": "", "updated_at_unix": _now()}
+    except Exception as exc:
+        state = {"tag": tag, "ready": False, "downloading": False, "error": _safe_text(exc, 300), "updated_at_unix": _now()}
+    with _PACKAGE_JOB_LOCK:
+        _PACKAGE_JOBS[tag] = state
+        _PACKAGE_THREADS.pop(tag, None)
+
+
+def start_cached_package(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    metadata = _validate_metadata(metadata)
+    tag = str(metadata["tag"])
+    current = _package_job_snapshot(metadata)
+    if current.get("ready") or current.get("downloading"):
+        current["started"] = False
+        return current
+    with _PACKAGE_JOB_LOCK:
+        thread = _PACKAGE_THREADS.get(tag)
+        if thread is not None and thread.is_alive():
+            return {"tag": tag, "ready": False, "downloading": True, "started": False, "error": ""}
+        state = {"tag": tag, "ready": False, "downloading": True, "started": True, "error": "", "updated_at_unix": _now()}
+        _PACKAGE_JOBS[tag] = dict(state)
+        thread = threading.Thread(target=_package_worker, args=(dict(metadata),), name=f"bot-update-package-{tag}", daemon=True)
+        _PACKAGE_THREADS[tag] = thread
+        thread.start()
+        return state
+
+
+def get_cached_package_status(metadata: Dict[str, Any]) -> Dict[str, Any]:
+    return _package_job_snapshot(_validate_metadata(metadata))
 
 
 def _refresh_loop() -> None:
     while not _STOP_EVENT.is_set():
-        try:
-            refresh_latest_metadata()
-        except Exception:
-            pass
+        try: refresh_latest_metadata()
+        except Exception: pass
         _STOP_EVENT.wait(METADATA_CACHE_SECONDS)
 
 
@@ -418,16 +412,10 @@ def init_bot_update_cache() -> None:
     global _METADATA, _REFRESH_THREAD
     CACHE_ROOT.mkdir(parents=True, exist_ok=True)
     with _METADATA_LOCK:
-        if _METADATA is None:
-            _METADATA = _load_latest_disk_metadata()
-    if _REFRESH_THREAD is not None and _REFRESH_THREAD.is_alive():
-        return
+        if _METADATA is None: _METADATA = _load_latest_disk_metadata()
+    if _REFRESH_THREAD is not None and _REFRESH_THREAD.is_alive(): return
     _STOP_EVENT.clear()
-    _REFRESH_THREAD = threading.Thread(
-        target=_refresh_loop,
-        name="bot-update-cache-refresh",
-        daemon=True,
-    )
+    _REFRESH_THREAD = threading.Thread(target=_refresh_loop, name="bot-update-cache-refresh", daemon=True)
     _REFRESH_THREAD.start()
 
 
@@ -437,57 +425,34 @@ def stop_bot_update_cache() -> None:
 
 @router.get("/api/public/v1/bot-update/latest", name="get_bot_update_latest")
 def get_bot_update_latest(request: Request) -> JSONResponse:
-    try:
-        metadata = get_latest_metadata()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503,
-            detail="暂时无法取得 Bot 正式版本：" + _safe_text(exc, 240),
-        )
-    return JSONResponse(
-        _public_metadata(metadata, request),
-        headers={
-            "Cache-Control": "public, max-age=60",
-            "X-Bot-Update-Source": "control-plane-cache",
-        },
-    )
+    try: metadata = get_latest_metadata()
+    except Exception as exc: raise HTTPException(status_code=503, detail="暂时无法取得 Bot 正式版本：" + _safe_text(exc, 240))
+    return JSONResponse(_public_metadata(metadata, request), headers={"Cache-Control": "public, max-age=60", "X-Bot-Update-Source": "control-plane-cache"})
 
 
-@router.get(
-    "/api/public/v1/bot-update/download/{tag}",
-    name="download_bot_update_mirror",
-)
+@router.post("/api/public/v1/bot-update/ensure/{tag}", name="ensure_bot_update_mirror")
+def ensure_bot_update_mirror(tag: str, request: Request) -> JSONResponse:
+    metadata = _resolve_tag_metadata(tag)
+    state = start_cached_package(metadata)
+    state["mirror_url"] = _absolute_mirror_url(request, str(metadata["tag"]))
+    state["sha256"] = str(metadata["sha256"])
+    state["size"] = int(metadata.get("size") or 0)
+    return JSONResponse(state, status_code=200 if state.get("ready") else 202, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/public/v1/bot-update/status/{tag}", name="get_bot_update_mirror_status")
+def get_bot_update_mirror_status(tag: str, request: Request) -> JSONResponse:
+    metadata = _resolve_tag_metadata(tag)
+    state = get_cached_package_status(metadata)
+    state["mirror_url"] = _absolute_mirror_url(request, str(metadata["tag"]))
+    state["sha256"] = str(metadata["sha256"])
+    state["size"] = int(metadata.get("size") or 0)
+    return JSONResponse(state, headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/public/v1/bot-update/download/{tag}", name="download_bot_update_mirror")
 def download_bot_update_mirror(tag: str) -> FileResponse:
-    if not TAG_PATTERN.fullmatch(tag or ""):
-        raise HTTPException(status_code=404, detail="版本不存在")
-
-    metadata = _load_tag_metadata(tag)
-    if metadata is None:
-        try:
-            latest = get_latest_metadata()
-        except Exception as exc:
-            raise HTTPException(
-                status_code=503,
-                detail="暂时无法取得 Bot 正式版本：" + _safe_text(exc, 200),
-            )
-        if str(latest.get("tag") or "").lower() != tag.lower():
-            raise HTTPException(status_code=404, detail="版本不存在")
-        metadata = latest
-
-    try:
-        package = ensure_cached_package(metadata)
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail="服务端镜像准备失败：" + _safe_text(exc, 240),
-        )
-
-    return FileResponse(
-        path=str(package),
-        filename=PACKAGE_ASSET_NAME,
-        media_type="application/zip",
-        headers={
-            "Cache-Control": "public, max-age=86400, immutable",
-            "X-Content-SHA256": str(metadata["sha256"]),
-        },
-    )
+    metadata = _resolve_tag_metadata(tag)
+    try: package = ensure_cached_package(metadata)
+    except Exception as exc: raise HTTPException(status_code=502, detail="服务端镜像准备失败：" + _safe_text(exc, 240))
+    return FileResponse(path=str(package), filename=PACKAGE_ASSET_NAME, media_type="application/zip", headers={"Cache-Control": "public, max-age=86400, immutable", "X-Content-SHA256": str(metadata["sha256"])})
