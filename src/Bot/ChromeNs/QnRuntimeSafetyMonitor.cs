@@ -27,6 +27,8 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<QN, byte>();
         private static readonly ConcurrentDictionary<QN, int> ConsecutiveProbeFailures =
             new ConcurrentDictionary<QN, int>();
+        private static readonly ConcurrentDictionary<string, long> LatestBuyerSourceSort =
+            new ConcurrentDictionary<string, long>(StringComparer.Ordinal);
 
         private static Timer _timer;
         private static int _started;
@@ -300,8 +302,19 @@ namespace Bot.ChromeNs
                     BuyerIdentityAliasService.ObserveMessage(seller, message);
 
                     var from = (message.fromid.nick ?? string.Empty).Trim();
-                    var buyer = (message.toid.nick ?? string.Empty).Trim();
-                    if (!string.Equals(from, seller, StringComparison.Ordinal) || buyer.Length == 0) continue;
+                    var to = (message.toid.nick ?? string.Empty).Trim();
+
+                    if (!string.Equals(from, seller, StringComparison.Ordinal))
+                    {
+                        if (string.Equals(to, seller, StringComparison.Ordinal) && from.Length > 0)
+                        {
+                            RecordBuyerSourceSort(seller, from, message);
+                        }
+                        continue;
+                    }
+
+                    var buyer = to;
+                    if (buyer.Length == 0) continue;
 
                     var texts = ExtractMessageTextCandidates(message);
                     if (texts.Length == 0) continue;
@@ -331,6 +344,13 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
+                    if (IsSellerReplyOlderThanLatestBuyerTurn(seller, buyer, message))
+                    {
+                        Log.Info("延迟到达的客服旧回复早于买家最新一轮消息，未取消当前自动回复: seller="
+                            + seller + ", buyer=" + buyer + ", reply=" + Short(text, 120));
+                        continue;
+                    }
+
                     qn.CancelActiveBuyerGeneration(seller, buyer, "检测到客服回复：" + Short(text, 120));
                     ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);
                 }
@@ -339,6 +359,46 @@ namespace Bot.ChromeNs
             {
                 Log.ErrorWithMaxCount("分析卖家消息以判断人工介入失败：" + ex.Message, 10);
             }
+        }
+
+        private static void RecordBuyerSourceSort(string seller, string buyer, QNChatMessage message)
+        {
+            var texts = ExtractMessageTextCandidates(message);
+            var text = texts.Length == 0 ? string.Empty : SelectPreferredMessageText(texts);
+            if (ConversationContextStore.IsPlatformSystemTip(message, text)
+                || ConversationContextStore.IsWithdrawalNotice(message, text))
+            {
+                return;
+            }
+
+            var sort = IncomingMessageSafety.GetSortValue(message);
+            if (sort <= 0) return;
+            var key = BuyerOrderKey(seller, buyer);
+            LatestBuyerSourceSort.AddOrUpdate(key, sort, (_, previous) => Math.Max(previous, sort));
+        }
+
+        private static bool IsSellerReplyOlderThanLatestBuyerTurn(
+            string seller,
+            string buyer,
+            QNChatMessage sellerMessage)
+        {
+            var sellerSort = IncomingMessageSafety.GetSortValue(sellerMessage);
+            if (sellerSort <= 0) return false;
+
+            long buyerSort;
+            if (!LatestBuyerSourceSort.TryGetValue(BuyerOrderKey(seller, buyer), out buyerSort)
+                || buyerSort <= 0)
+            {
+                return false;
+            }
+            return buyerSort > sellerSort;
+        }
+
+        private static string BuyerOrderKey(string seller, string buyer)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
+            return seller.ToLowerInvariant() + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant();
         }
 
         private static string[] ExtractMessageTextCandidates(QNChatMessage message)

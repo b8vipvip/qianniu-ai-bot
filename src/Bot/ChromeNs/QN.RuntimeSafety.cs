@@ -56,6 +56,7 @@ namespace Bot.ChromeNs
             answer = string.Empty;
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)
                 || string.IsNullOrWhiteSpace(currentQuestion) || !IsEligibleTrigger(decision)) return false;
+            if (ShouldSuppressForOffHours(seller, buyer)) return false;
 
             var resolved = RunInShopScope(seller, delegate
             {
@@ -90,6 +91,8 @@ namespace Bot.ChromeNs
         {
             answer = string.Empty;
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer) || string.IsNullOrWhiteSpace(currentQuestion)) return false;
+            if (ShouldSuppressForOffHours(seller, buyer)) return false;
+
             var resolved = RunInShopScope(seller, delegate
             {
                 var now = DateTime.Now;
@@ -145,6 +148,56 @@ namespace Bot.ChromeNs
             PendingReply ignored;
             PendingReplies.TryRemove(key, out ignored);
             return false;
+        }
+
+        private static bool ShouldSuppressForOffHours(string seller, string buyer)
+        {
+            var offHours = RunInShopScope(seller, delegate
+            {
+                var cfg = BotFeatureStore.GetAutoReplyRules();
+                if (cfg == null || !cfg.EnableWorkHours) return false;
+
+                TimeSpan start;
+                TimeSpan end;
+                if (!TryParseClock(cfg.WorkStartTime, out start)) start = new TimeSpan(9, 0, 0);
+                if (!TryParseClock(cfg.WorkEndTime, out end)) end = new TimeSpan(18, 0, 0);
+                return !IsInsideWorkHours(DateTime.Now.TimeOfDay, start, end);
+            });
+            if (!offHours) return false;
+
+            PendingReply ignored;
+            var removed = PendingReplies.TryRemove(RuntimeKey(seller, buyer), out ignored);
+            if (removed)
+            {
+                Log.Info("首条咨询固定回复已取消：当前处于下班自动回复时段，由下班回复独占本轮。seller="
+                    + seller + ", buyer=" + buyer);
+            }
+            return true;
+        }
+
+        private static bool TryParseClock(string value, out TimeSpan time)
+        {
+            time = TimeSpan.Zero;
+            value = (value ?? string.Empty).Trim();
+            DateTime parsed;
+            if (!DateTime.TryParseExact(
+                value,
+                new[] { "H:mm", "HH:mm" },
+                System.Globalization.CultureInfo.InvariantCulture,
+                System.Globalization.DateTimeStyles.None,
+                out parsed))
+            {
+                return false;
+            }
+            time = parsed.TimeOfDay;
+            return true;
+        }
+
+        private static bool IsInsideWorkHours(TimeSpan now, TimeSpan start, TimeSpan end)
+        {
+            if (start == end) return true;
+            if (start < end) return now >= start && now < end;
+            return now >= start || now < end;
         }
 
         private static bool IsEligibleTrigger(IncomingMessageDecision decision)

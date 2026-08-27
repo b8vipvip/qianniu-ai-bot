@@ -24,10 +24,11 @@ namespace Bot.ChromeNs
             if (safetyDecision == null)
                 return Skip("[未知消息]", "已跳过：消息安全检查失败，未调用AI，也未发送给买家。");
 
-            // The first-inquiry fixed reply sits in front of the ordinary content-type router.
-            // Therefore buyer-authored text, images, files and emoji can trigger the same configured
-            // greeting. Platform/system/withdrawal records may carry the buyer as fromid, but
-            // FirstInquiryFixedReplyService must reject them before this compatibility route.
+            // First-inquiry is a delivery policy, not a content classifier. Reserve the greeting here
+            // so media can still participate, but never downgrade a real image to Text. The previous
+            // implementation returned Text as soon as the greeting was reserved; because image safety
+            // has ShouldCallAi=false, the deterministic pre-merge sender then skipped the reservation
+            // and the image also lost its Vision route.
             var seller = message == null || message.toid == null
                 ? string.Empty
                 : (message.toid.nick ?? string.Empty).Trim();
@@ -36,12 +37,55 @@ namespace Bot.ChromeNs
                 : (message.fromid.nick ?? string.Empty).Trim();
             var firstQuestion = IncomingMessageSafety.GetDisplayText(message, text);
             string fixedAnswer;
-            if (FirstInquiryFixedReplyService.TryPrepare(
+            var firstPrepared = FirstInquiryFixedReplyService.TryPrepare(
                 seller,
                 buyer,
                 firstQuestion,
                 safetyDecision,
-                out fixedAnswer))
+                out fixedAnswer);
+
+            var isImage = string.Equals(safetyDecision.MessageLabel, "[图片]", StringComparison.Ordinal);
+            if (isImage)
+            {
+                var selectedEndpoints = ResolveShopVisionEndpoints(message, endpoints);
+                var usable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
+                    e => e != null
+                        && e.Enabled
+                        && e.SupportsVision
+                        && !string.IsNullOrWhiteSpace(e.VisionModel)
+                        && !string.IsNullOrWhiteSpace(e.ApiKey)
+                        && !string.IsNullOrWhiteSpace(e.BaseUrl));
+
+                // BuyerMessageBurstCoordinator runs DeterministicAutoReplyService before merge.
+                // Images are intentionally marked replyable here only when a first greeting was
+                // reserved, so that sender can deliver the greeting first; VisionDecisionKind stays
+                // Vision and the same image is analysed immediately afterwards.
+                if (firstPrepared)
+                {
+                    safetyDecision.ShouldCallAi = true;
+                    safetyDecision.Note = usable
+                        ? "首条咨询固定回复先发送，随后继续图片视觉理解。"
+                        : "首条咨询固定回复先发送；当前无可用视觉模型，后续视觉任务将安全失败而不发送伪答案。";
+                    return new VisionMessageDecision
+                    {
+                        Kind = VisionDecisionKind.Vision,
+                        QuestionLabel = "[图片]",
+                        Note = safetyDecision.Note
+                    };
+                }
+
+                if (!usable)
+                    return Skip("[图片]", "已跳过：本店未配置可用的视觉模型，未向买家发送消息。");
+
+                return new VisionMessageDecision
+                {
+                    Kind = VisionDecisionKind.Vision,
+                    QuestionLabel = "[图片]",
+                    Note = string.Empty
+                };
+            }
+
+            if (firstPrepared)
             {
                 return new VisionMessageDecision
                 {
@@ -58,25 +102,12 @@ namespace Bot.ChromeNs
                     QuestionLabel = text,
                     Note = string.Empty
                 };
+
+            // Keep the explicit non-image skip guard for compatibility with existing safety
+            // invariants. Real images have already returned through the image branch above.
             if (!string.Equals(safetyDecision.MessageLabel, "[图片]", StringComparison.Ordinal))
                 return Skip(safetyDecision.MessageLabel, safetyDecision.Note);
-
-            var selectedEndpoints = ResolveShopVisionEndpoints(message, endpoints);
-            var usable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
-                e => e != null
-                    && e.Enabled
-                    && e.SupportsVision
-                    && !string.IsNullOrWhiteSpace(e.VisionModel)
-                    && !string.IsNullOrWhiteSpace(e.ApiKey)
-                    && !string.IsNullOrWhiteSpace(e.BaseUrl));
-            if (!usable)
-                return Skip("[图片]", "已跳过：本店未配置可用的视觉模型，未向买家发送消息。");
-            return new VisionMessageDecision
-            {
-                Kind = VisionDecisionKind.Vision,
-                QuestionLabel = "[图片]",
-                Note = string.Empty
-            };
+            return Skip("[图片]", safetyDecision.Note);
         }
 
         private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints(
