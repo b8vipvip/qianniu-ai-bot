@@ -15,44 +15,44 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DATA_DIR=/data \
     PORT=8080
 
-RUN set -eux; \
-    if [ -n "$APT_MIRROR" ]; then \
-      printf '%s\n' \
-        "Types: deb" \
-        "URIs: ${APT_MIRROR}" \
-        "Suites: bookworm bookworm-updates" \
-        "Components: main" \
-        "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \
-        > /etc/apt/sources.list.d/debian.sources; \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
+    set -eux; \
+    for source_file in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do \
+      [ -f "$source_file" ] || continue; \
       if [ -n "$APT_SECURITY_MIRROR" ]; then \
-        printf '%s\n' \
-          "Types: deb" \
-          "URIs: ${APT_SECURITY_MIRROR}" \
-          "Suites: bookworm-security" \
-          "Components: main" \
-          "Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg" \
-          > /etc/apt/sources.list.d/debian-security.sources; \
+        sed -i \
+          -e "s#http://deb.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          -e "s#https://deb.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          -e "s#http://security.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          -e "s#https://security.debian.org/debian-security#$APT_SECURITY_MIRROR#g" \
+          "$source_file"; \
       fi; \
-    fi; \
-    printf '%s\n' \
-      'Acquire::Retries "8";' \
-      'Acquire::http::Timeout "60";' \
-      'Acquire::https::Timeout "60";' \
-      > /etc/apt/apt.conf.d/99qianniu-network; \
-    apt-get update; \
-    apt-get install -y --no-install-recommends ca-certificates fonts-dejavu-core curl; \
-    rm -rf /var/lib/apt/lists/*
+      if [ -n "$APT_MIRROR" ]; then \
+        sed -i \
+          -e "s#http://deb.debian.org/debian#$APT_MIRROR#g" \
+          -e "s#https://deb.debian.org/debian#$APT_MIRROR#g" \
+          "$source_file"; \
+      fi; \
+    done; \
+    apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; \
+    apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
+      install -y --no-install-recommends ca-certificates fonts-dejavu-core curl
 
-RUN set -eux; \
-    archive="/tmp/sing-box.tar.gz"; \
+RUN --mount=type=cache,target=/root/.cache/sing-box,sharing=locked \
+    set -eux; \
+    cache_archive="/root/.cache/sing-box/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"; \
     directory="/tmp/sing-box-${SING_BOX_VERSION}-linux-amd64"; \
     url="https://github.com/SagerNet/sing-box/releases/download/v${SING_BOX_VERSION}/sing-box-${SING_BOX_VERSION}-linux-amd64.tar.gz"; \
-    curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 1500 "$url" -o "$archive"; \
-    echo "${SING_BOX_SHA256}  ${archive}" | sha256sum -c -; \
-    tar -xzf "$archive" -C /tmp; \
+    if [ ! -s "$cache_archive" ] || ! echo "${SING_BOX_SHA256}  ${cache_archive}" | sha256sum -c - >/dev/null 2>&1; then \
+      rm -f "$cache_archive"; \
+      curl -fL --retry 8 --retry-all-errors --retry-delay 2 --connect-timeout 15 --max-time 1500 "$url" -o "$cache_archive"; \
+    fi; \
+    echo "${SING_BOX_SHA256}  ${cache_archive}" | sha256sum -c -; \
+    tar -xzf "$cache_archive" -C /tmp; \
     install -m 0755 "${directory}/sing-box" /usr/local/bin/sing-box; \
     /usr/local/bin/sing-box version; \
-    rm -rf "$archive" "$directory"
+    rm -rf "$directory"
 
 WORKDIR /app
 COPY requirements.txt .
@@ -76,7 +76,10 @@ RUN useradd --create-home --uid 10001 appuser \
     && chown -R appuser:appuser /app /data
 
 USER appuser
-
 EXPOSE 8080
+VOLUME ["/data"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD curl -fsS http://127.0.0.1:8080/healthz || exit 1
 
 CMD ["python", "bootstrap.py"]
