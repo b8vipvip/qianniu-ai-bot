@@ -5,7 +5,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PREVIEW = (ROOT / "src/Bot/Knowledge/LegacyKnowledgePreviewWindow.cs").read_text(encoding="utf-8")
 SETTINGS = (ROOT / "src/Bot/Options/FeatureSettingsOptionsControl.cs").read_text(encoding="utf-8")
 PROPS = (ROOT / "src/Bot/Directory.Build.props").read_text(encoding="utf-8")
-TARGETS = (ROOT / "src/Bot/Directory.Build.targets").read_text(encoding="utf-8")
 HELP = (ROOT / "src/Bot/Knowledge/KnowledgeCenterHelpWindow.cs").read_text(encoding="utf-8")
 DOC = (ROOT / "docs/KNOWLEDGE_CENTER_V2_USER_HELP.md").read_text(encoding="utf-8")
 
@@ -32,16 +31,7 @@ def test_preview_resolves_the_current_shop_and_uses_the_real_pre_v2_v1_shell():
 
 
 def test_preview_keeps_old_ui_visible_but_mutation_controls_are_read_only():
-    for guard in [
-        "button.IsEnabled = false",
-        "text.IsReadOnly = true",
-        "password.IsEnabled = false",
-        "check.IsEnabled = false",
-        "radio.IsEnabled = false",
-        "grid.IsReadOnly = true",
-        "grid.CanUserAddRows = false",
-        "grid.CanUserDeleteRows = false",
-    ]:
+    for guard in ["button.IsEnabled = false", "text.IsReadOnly = true", "password.IsEnabled = false", "check.IsEnabled = false", "radio.IsEnabled = false", "grid.IsReadOnly = true", "grid.CanUserAddRows = false", "grid.CanUserDeleteRows = false"]:
         assert guard in PREVIEW
     assert "SaveKnowledgeBase(" not in PREVIEW
     assert "ImportKnowledgePackage(" not in PREVIEW
@@ -51,13 +41,9 @@ def test_preview_keeps_old_ui_visible_but_mutation_controls_are_read_only():
 
 def test_preview_and_operator_sources_ship_in_normal_and_wpf_temporary_builds():
     assert "Knowledge\\LegacyKnowledgePreviewWindow.cs" in PROPS
-    assert "..\\Directory.Build.targets" in TARGETS
-    for name in [
-        "KnowledgeV2NaturalLanguageService.cs",
-        "KnowledgeV2OperatorUiBridge.cs",
-        "KnowledgeV2LegacyDeltaImportService.cs",
-    ]:
-        assert name in TARGETS
+    assert not (ROOT / "src/Bot/Directory.Build.targets").exists()
+    for name in ["KnowledgeV2NaturalLanguageService.cs", "KnowledgeV2OperatorUiBridge.cs", "KnowledgeV2LegacyDeltaImportService.cs"]:
+        assert name in PROPS
 
 
 def test_help_documents_still_state_preview_is_non_activating():
