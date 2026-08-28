@@ -18,8 +18,10 @@
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerSessionAgent.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerSessionAgent.cs" />
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\BuyerSessionAgentRuntimeBridge.cs" Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BuyerSessionAgentRuntimeBridge.cs')" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\LocalOcrService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\LocalOcrService.cs" />
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OcrFirstKnowledgeDecisionService.cs" Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OcrFirstKnowledgeDecisionService.cs')" />
   </ItemGroup>
 </Project>

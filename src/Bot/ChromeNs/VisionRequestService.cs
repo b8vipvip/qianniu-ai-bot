@@ -52,8 +52,14 @@ namespace Bot.ChromeNs
 
         public async Task<VisionRequestResult> ExecuteAsync(VisionReplyTask task, CancellationToken cancellationToken)
         {
+            // OCR-first runs before provider selection. Therefore a high-confidence local OCR +
+            // Knowledge Engine V2 hit can answer without any configured or billable vision API.
+            // A local miss is soft and preserves the existing vision route unchanged.
+            var localDecision = await OcrFirstKnowledgeDecisionService.TryResolveAsync(task, cancellationToken);
+            if (localDecision != null) return localDecision;
+
             var endpoints = AiEndpointStore.GetVisionEnabledEndpoints();
-            if (endpoints.Count < 1) return Fail("未配置可用的视觉模型");
+            if (endpoints.Count < 1) return Fail("未配置可用的视觉模型，且本地OCR未命中可安全直答的知识");
 
             var currentQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion)
                 ? "[图片]"
@@ -88,9 +94,8 @@ namespace Bot.ChromeNs
                             continue;
                         }
 
-                        // Local OCR is a pre-analysis hint only. It never uploads image bytes and a
-                        // failure never blocks the existing vision route. The vision model remains
-                        // authoritative because OCR can contain wrong characters.
+                        // Local OCR remains attached as evidence for the vision fallback. Because the
+                        // OCR cache is SHA-256 keyed, this second lookup is normally a local cache hit.
                         var localOcr = await LocalOcrService.TryRecognizeAsync(image.LocalCachePath, cts.Token);
                         var requestPrompt = prompt + LocalOcrService.BuildPromptEvidence(localOcr);
                         if (localOcr.Success)
