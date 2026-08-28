@@ -100,8 +100,8 @@ async def bot_update_event_stream(request: Request, current_version: str = "") -
     """Server-driven release notification stream.
 
     A release becomes client-visible only after the server has downloaded and verified the full
-    package. Clients therefore never receive a notification that would make them fetch an installer
-    directly from GitHub.
+    package. While the mirror is incomplete this stream sends no update event. Clients therefore
+    never receive a notification that would make them fetch an installer directly from GitHub.
     """
 
     async def events() -> Iterable[str]:
