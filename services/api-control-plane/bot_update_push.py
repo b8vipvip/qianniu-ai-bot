@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+import time
 from typing import Iterable, Tuple
 
 from fastapi import APIRouter, Request
@@ -11,6 +13,11 @@ import bot_update_cache
 
 
 router = APIRouter()
+_PUSH_LOCK = threading.RLock()
+_ACTIVE_STREAMS = 0
+_LAST_PUSH_VERSION = ""
+_LAST_PUSH_AT_UNIX = 0.0
+_TOTAL_PUSH_EVENTS = 0
 
 
 def _version_tuple(value: str) -> Tuple[int, ...]:
@@ -36,18 +43,11 @@ def _is_newer(candidate: str, current: str) -> bool:
 
 
 def _encode_event(payload: dict) -> str:
-    return "event: bot-update\ndata: " + json.dumps(
-        payload, ensure_ascii=False, separators=(",", ":")
-    ) + "\n\n"
+    return "event: bot-update\ndata: " + json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n\n"
 
 
 def _mirror_ready(metadata: dict) -> bool:
-    """Return true only after the complete GitHub package is present and verified on server.
-
-    ensure_cached_package() downloads to *.partial, validates SHA-256 and expected size, and only
-    then atomically renames the file to the final package path. Re-hash the final file here before
-    announcing a release so notification/auto-install can never outrun server-side package readiness.
-    """
+    """Only announce a release after the complete server-side package is verified."""
     try:
         tag = str(metadata.get("tag") or "").strip()
         expected_sha = str(metadata.get("sha256") or "").strip().lower()
@@ -64,50 +64,75 @@ def _mirror_ready(metadata: dict) -> bool:
         return False
 
 
+def get_push_status() -> dict:
+    with _PUSH_LOCK:
+        return {
+            "active_streams": _ACTIVE_STREAMS,
+            "last_push_version": _LAST_PUSH_VERSION,
+            "last_push_at_unix": _LAST_PUSH_AT_UNIX,
+            "total_push_events": _TOTAL_PUSH_EVENTS,
+            "mode": "server-push-sse",
+        }
+
+
+def _stream_opened() -> None:
+    global _ACTIVE_STREAMS
+    with _PUSH_LOCK:
+        _ACTIVE_STREAMS += 1
+
+
+def _stream_closed() -> None:
+    global _ACTIVE_STREAMS
+    with _PUSH_LOCK:
+        _ACTIVE_STREAMS = max(0, _ACTIVE_STREAMS - 1)
+
+
+def _record_push(version: str) -> None:
+    global _LAST_PUSH_VERSION, _LAST_PUSH_AT_UNIX, _TOTAL_PUSH_EVENTS
+    with _PUSH_LOCK:
+        _LAST_PUSH_VERSION = version
+        _LAST_PUSH_AT_UNIX = time.time()
+        _TOTAL_PUSH_EVENTS += 1
+
+
 @router.get("/api/public/v1/bot-update/events", name="bot_update_event_stream")
-async def bot_update_event_stream(
-    request: Request,
-    current_version: str = "",
-) -> StreamingResponse:
+async def bot_update_event_stream(request: Request, current_version: str = "") -> StreamingResponse:
     """Server-driven release notification stream.
 
-    A GitHub release is not a client-visible update until the control plane has successfully
-    downloaded the entire package and verified its SHA-256/size. If prefetch is delayed or fails,
-    this SSE connection stays alive and sends no update event. There is deliberately no timeout
-    that falls back to notifying clients early or telling them to fetch the new package from GitHub.
+    A release becomes client-visible only after the server has downloaded and verified the full
+    package. Clients therefore never receive a notification that would make them fetch an installer
+    directly from GitHub.
     """
 
     async def events() -> Iterable[str]:
         last_sent_version = ""
         heartbeat = 0
-        while True:
-            if await request.is_disconnected():
-                break
-            try:
-                metadata = bot_update_cache.get_latest_metadata()
-                public = bot_update_cache._public_metadata(metadata, request)
-                version = str(public.get("version") or "").strip()
-
-                if (
-                    version
-                    and version != last_sent_version
-                    and _is_newer(version, current_version)
-                ):
-                    if _mirror_ready(metadata):
-                        public["notification_mode"] = "server-push-sse"
-                        public["mirror_ready"] = True
-                        public["package_verified_on_server"] = True
-                        yield _encode_event(public)
-                        last_sent_version = version
-            except Exception:
-                # Keep the stream alive. The cache refresher/prefetcher retries independently.
+        _stream_opened()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    metadata = bot_update_cache.get_latest_metadata()
+                    public = bot_update_cache._public_metadata(metadata, request)
+                    version = str(public.get("version") or "").strip()
+                    if version and version != last_sent_version and _is_newer(version, current_version):
+                        if _mirror_ready(metadata):
+                            public["notification_mode"] = "server-push-sse"
+                            public["mirror_ready"] = True
+                            public["package_verified_on_server"] = True
+                            _record_push(version)
+                            yield _encode_event(public)
+                            last_sent_version = version
+                except Exception:
+                    if heartbeat % 6 == 0:
+                        yield ": update-cache-temporarily-unavailable\n\n"
+                heartbeat += 1
                 if heartbeat % 6 == 0:
-                    yield ": update-cache-temporarily-unavailable\n\n"
-
-            heartbeat += 1
-            if heartbeat % 6 == 0:
-                yield ": keep-alive\n\n"
-            await asyncio.sleep(5)
+                    yield ": keep-alive\n\n"
+                await asyncio.sleep(5)
+        finally:
+            _stream_closed()
 
     return StreamingResponse(
         events(),
