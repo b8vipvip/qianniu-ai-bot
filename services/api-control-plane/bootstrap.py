@@ -17,6 +17,7 @@ import bot_web_console
 import bot_web_conversation_knowledge
 import chat2api_runtime_guard
 import client_data_backup
+import console_cache_guard
 import deep_test_guard
 import message_processing_traces
 import recharge_status_query
@@ -33,6 +34,7 @@ import wecom_settings
 from wecom_crypto import install_on_bridge
 
 
+console_cache_guard.install(control_plane)
 runtime_routing_guard.install(control_plane)
 chat2api_runtime_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
