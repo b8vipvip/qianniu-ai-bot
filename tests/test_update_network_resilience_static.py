@@ -36,15 +36,20 @@ def test_client_package_download_keeps_partial_and_resumes_with_range():
     assert "partial_size = partial.stat().st_size if partial.is_file() else 0" in progress
 
 
-def test_github_metadata_and_release_support_optional_proxy():
+def test_github_metadata_and_release_support_env_fallback_and_runtime_proxy():
     progress = read(SERVICE / "bot_update_progress.py")
     admin = read(SERVICE / "version_update_admin.py")
+    proxy = read(SERVICE / "github_vless_proxy.py")
     env = read(SERVICE / ".env.example")
     compose = read(SERVICE / "docker-compose.bt.yml")
-    assert 'GITHUB_PROXY = os.getenv("BOT_UPDATE_GITHUB_PROXY", "").strip()' in progress
-    assert '"proxies": {"http": GITHUB_PROXY, "https": GITHUB_PROXY}' in progress
+    assert '_DEFAULT_GITHUB_PROXY = os.getenv("BOT_UPDATE_GITHUB_PROXY", "").strip()' in progress
+    assert 'return {"proxies": {"http": proxy, "https": proxy}}' in progress
+    assert "def github_proxy()" in progress
+    assert "def set_github_proxy(" in progress
     assert "bot_update_cache._fetch_json = _fetch_json_resilient" in progress
     assert "_request_proxy_kwargs()" in admin
+    assert "bot_update_progress.github_proxy()" in admin
+    assert "set_github_proxy(LOCAL_PROXY)" in proxy
     assert "BOT_UPDATE_GITHUB_PROXY=" in env
     assert "host.docker.internal:1080" in env
     assert '"host.docker.internal:host-gateway"' in compose
@@ -52,13 +57,16 @@ def test_github_metadata_and_release_support_optional_proxy():
 
 def test_version_update_console_exposes_retry_speed_eta_and_transport():
     js = read(SERVICE / "static" / "version-update.js")
+    html = read(SERVICE / "static" / "index.html")
     assert "Git SSH 443" in js
     assert "HTTP Range 断点续传" in js
     assert "网络重试中" in js
     assert "speed_bps" in js
     assert "eta_seconds" in js
     assert "retry_in_seconds" in js
-    assert "HTTPS 代理已启用" in js
+    assert "HTTPS VLESS 代理" in js
+    assert "GitHub 下载代理" in html
+    assert 'id="githubProxyVlessUrl"' in html
 
 
 def test_host_agent_reports_git_network_transport():
