@@ -121,6 +121,8 @@ namespace Bot.Knowledge
                 Nav("冲突", () => new KnowledgeV2ConflictPage(_owner, _seller)),
                 Nav("测试台", () => new KnowledgeV2DebuggerPage(_owner, _seller)),
                 Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller)),
+                Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller)),
+                Nav("AI优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller)),
                 Nav("设置", () => new KnowledgeV2SettingsPage(_owner, _seller))
             };
             foreach (var item in items) _nav.Items.Add(item);
