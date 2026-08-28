@@ -23,7 +23,8 @@ function renderVersionUpdate(data){
   const client=data.client||{}, pkg=client.package||{}, push=client.push||{};
   const serverCurrent=server.current_short_sha||"未知";
   const serverLatest=gh.short_sha||"同步失败";
-  const serverStatus=server.sync_error?badge("GitHub 同步失败","bad"):(server.update_available?badge("发现新版本","warn"):badge("已是最新","good"));
+  const serverStatus=server.sync_error?badge("GitHub 同步失败","bad"):(!server.current_commit?badge("等待识别当前版本","gray"):(server.update_available?badge("发现新版本","warn"):badge("已是最新","good")));
+  const agentHint=agent.online?"":`<p class="hint">首次启用服务端网页更新需要在 Ubuntu 执行一次：<code>sudo bash /opt/qianniu-ai-bot/scripts/install-api-control-plane-update-agent.sh</code></p>`;
   $("serverVersionCard").innerHTML=`
     <div class="provider-card">
       <div class="provider-top"><strong>API 控制面</strong>${serverStatus}</div>
@@ -33,12 +34,13 @@ function renderVersionUpdate(data){
       </div>
       <p class="hint">${esc(gh.message||server.sync_error||"")}${gh.committed_at?` · ${esc(cnTime(gh.committed_at))}`:""}</p>
       <div class="provider-meta">${agent.online?badge("主机更新代理在线","good"):badge("主机更新代理离线","bad")}${vuStateBadge(update.state)}</div>
+      ${agentHint}
       <div style="margin-top:12px">${vuProgress(update.progress_percent)}</div>
       <p><strong>${esc(update.phase||"等待更新")}</strong> · ${esc(update.message||"")}</p>
       <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>更新服务端到 GitHub 最新版</button></div>
     </div>`;
 
-  const pkgPhase=pkg.ready?"ready":(pkg.phase|| (pkg.downloading?"downloading":"waiting"));
+  const pkgPhase=pkg.ready?"ready":(pkg.error?"failed":(pkg.phase||(pkg.downloading?"downloading":"waiting")));
   const clientProgress=pkg.ready?100:vuPercent(pkg.progress_percent);
   const downloadText=pkg.ready?`服务端已完整缓存并校验 ${vuBytes(pkg.downloaded_bytes||client.size)}`:`${vuBytes(pkg.downloaded_bytes)} / ${vuBytes(pkg.total_bytes||client.size)}`;
   $("clientVersionCard").innerHTML=`
@@ -53,7 +55,7 @@ function renderVersionUpdate(data){
       <p class="hint">发布时间：${esc(cnTime(client.published_at,"-"))}　SHA-256：${esc(client.sha256||"-")}</p>
       <div class="provider-meta">${vuStateBadge(pkgPhase)}${badge(`SSE 在线连接 ${Number(push.active_streams||0)}`,push.active_streams?"good":"gray")}${push.last_push_version?badge(`最近推送 ${push.last_push_version}`,"blue"):badge("尚无推送记录","gray")}</div>
       <div style="margin-top:12px">${vuProgress(clientProgress)}</div>
-      <p><strong>${pkg.ready?"安装包已就绪":pkgPhase==="verifying"?"正在校验安装包":"服务端正在准备安装包"}</strong> · ${esc(downloadText)}${pkg.error?` · ${esc(pkg.error)}`:""}</p>
+      <p><strong>${pkg.ready?"安装包已就绪":pkgPhase==="failed"?"安装包准备失败":pkgPhase==="verifying"?"正在校验安装包":"服务端正在准备安装包"}</strong> · ${esc(downloadText)}${pkg.error?` · ${esc(pkg.error)}`:""}</p>
       <p class="hint">服务端只有在 GitHub 安装包完整下载且 SHA-256/大小校验通过后，才通过 SSE 向客户端推送更新通知；客户端安装包不会直连 GitHub。</p>
       <div class="actions"><button class="primary" onclick="startClientReleaseUpdate()">同步并缓存 GitHub 最新正式版</button></div>
     </div>`;
