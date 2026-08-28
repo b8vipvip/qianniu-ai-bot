@@ -41,7 +41,7 @@ def test_admin_console_formats_server_timestamps_as_china_time():
 
 def test_console_cache_busts_timezone_fix():
     page = read("services/api-control-plane/static/index.html")
-    assert '/static/app.js?v=2' in page
+    assert '/static/app.js?v=3' in page
 
 
 def test_server_keeps_canonical_utc_storage():
