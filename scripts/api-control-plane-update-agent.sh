@@ -29,7 +29,8 @@ PY
 }
 
 write_json() {
-  local path="$1" payload="$2" temp="${path}.tmp.$$"
+  local path="$1" payload="$2"
+  local temp="${path}.tmp.$$"
   printf '%s\n' "$payload" > "$temp"
   mv -f "$temp" "$path"
 }
