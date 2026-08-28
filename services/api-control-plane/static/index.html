@@ -69,6 +69,15 @@
         <div class="panel-head"><div><h2>版本更新</h2><p>统一同步 GitHub 服务端源码和 Windows 客户端正式版。客户端安装包先由服务端完整下载并校验，再推送更新通知。</p></div><button id="syncVersionBtn" class="secondary" onclick="syncVersionUpdate()">同步 GitHub 状态</button></div>
         <div id="versionUpdateStatus" class="hint">页面打开后自动刷新，更新任务执行期间每秒显示实时进度。</div>
       </section>
+      <section class="panel">
+        <div class="panel-head"><div><h2>GitHub 下载代理</h2><p>可直接粘贴 VLESS 节点。只代理本控制面访问 GitHub API 和客户端 Release 安装包，不修改服务器默认路由、系统代理、DNS 或其他服务网络。</p></div><div id="githubProxyState">正在读取代理状态…</div></div>
+        <div class="form-grid">
+          <label class="span-2">VLESS 节点链接<input id="githubProxyVlessUrl" type="password" autocomplete="new-password" spellcheck="false" placeholder="vless://...（已配置时留空表示不修改）"></label>
+          <label class="check"><input id="githubProxyEnabled" type="checkbox">启用 GitHub 下载代理</label>
+        </div>
+        <div id="githubProxyDetail" class="hint" style="margin-top:10px">节点凭据加密保存在控制面数据库，浏览器刷新后不会回显完整链接。</div>
+        <div class="actions" style="margin-top:12px"><button id="saveGithubProxyBtn" class="primary" onclick="saveGithubProxySettings()">保存并应用</button><button id="testGithubProxyBtn" onclick="testGithubProxySettings()">测试节点</button><button id="clearGithubProxyBtn" class="secondary" onclick="clearGithubProxySettings()">清除节点</button></div>
+      </section>
       <div class="two-col">
         <section class="panel"><div class="panel-head"><div><h2>服务端版本</h2><p>比较当前 API 控制面与 GitHub master，并由主机代理执行安全更新、备份、健康检查和回滚。</p></div></div><div id="serverVersionCard"><div class="empty">正在读取服务端版本…</div></div></section>
         <section class="panel"><div class="panel-head"><div><h2>客户端正式版</h2><p>显示 GitHub Release、服务端安装包缓存进度和 SSE 更新通知状态。</p></div></div><div id="clientVersionCard"><div class="empty">正在读取客户端正式版…</div></div></section>
@@ -113,6 +122,6 @@
 <script src="/static/app.js?v=3"></script>
 <script src="/static/message-traces.js?v=2"></script>
 <script src="/static/client-token-copy.js"></script>
-<script src="/static/version-update.js?v=1"></script>
+<script src="/static/version-update.js?v=2"></script>
 </body>
 </html>
