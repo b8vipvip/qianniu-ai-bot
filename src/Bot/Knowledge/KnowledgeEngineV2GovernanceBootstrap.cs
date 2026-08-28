@@ -12,6 +12,7 @@ namespace Bot.Knowledge
             {
                 try { KnowledgeV2RevisionUiBridge.Initialize(); } catch { }
                 try { KnowledgeV2GovernanceUiBridge.Initialize(); } catch { }
+                try { KnowledgeV2OperatorUiBridge.Initialize(); } catch { }
             }
             return new object();
         }
