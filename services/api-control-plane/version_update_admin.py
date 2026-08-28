@@ -106,7 +106,7 @@ def _fetch_server_github(force: bool = False) -> Dict[str, Any]:
                     "committed_at": str(author.get("date") or ""),
                     "html_url": str(payload.get("html_url") or ""),
                     "branch": "master",
-                    "transport": "https-proxy" if bot_update_progress.GITHUB_PROXY else "https-direct",
+                    "transport": "https-proxy" if bot_update_progress.github_proxy() else "https-direct",
                     "attempt": attempt,
                 }
                 _SERVER_CACHE = dict(item)
@@ -176,7 +176,7 @@ def _client_release(request: Request, refresh: bool = False) -> Dict[str, Any]:
         "push": bot_update_push.get_push_status(),
         "network": {
             "transport": "https-range-resume",
-            "proxy_enabled": bool(bot_update_progress.GITHUB_PROXY),
+            "proxy_enabled": bool(bot_update_progress.github_proxy()),
             "max_attempts": bot_update_progress.DOWNLOAD_MAX_ATTEMPTS,
             "connect_timeout_seconds": bot_update_progress.DOWNLOAD_CONNECT_TIMEOUT_SECONDS,
             "read_timeout_seconds": bot_update_progress.DOWNLOAD_READ_TIMEOUT_SECONDS,
