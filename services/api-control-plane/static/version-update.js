@@ -64,7 +64,7 @@ function renderVersionUpdate(data){
       <div style="margin-top:12px">${vuProgress(clientProgress)}</div>
       <p><strong>${pkg.ready?"安装包已就绪":pkgPhase==="failed"?"安装包准备失败":pkgPhase==="retrying"?"GitHub 网络异常，自动续传重试":pkgPhase==="verifying"?"正在校验安装包":pkgPhase==="resuming"?"正在从断点恢复":"服务端正在准备安装包"}</strong> · ${esc(downloadText)}${pkg.error?` · ${esc(pkg.error)}`:""}</p>
       <p class="hint">速度：${esc(speed)}　预计剩余：${esc(vuEta(pkg.eta_seconds))}　${esc(retryText)}${esc(retryWait)}${pkg.last_error&&!pkg.error?`　最近网络错误：${esc(pkg.last_error)}`:""}</p>
-      <p class="hint">网络中断时保留 <code>.partial</code>，下一次使用 HTTP Range 从已下载位置继续；默认最多自动重试 ${Number(pkg.max_attempts||clientNet.max_attempts||8)} 次并指数退避。完整下载后才执行 SHA-256/大小校验并通过 SSE 推送，客户端不会直连 GitHub。</p>
+      <p class="hint">网络中断时保留 <code>.partial</code>，下一次使用 HTTP Range 从已下载位置继续；默认最多自动重试 ${Number(pkg.max_attempts||clientNet.max_attempts||8)} 次并指数退避。完整下载后才执行 SHA-256/大小校验并通过 SSE 推送；客户端安装包不会直连 GitHub。</p>
       <p class="hint">如服务器到 GitHub HTTPS 长期不稳定，可在控制面 <code>.env</code> 设置 <code>BOT_UPDATE_GITHUB_PROXY=socks5h://host.docker.internal:1080</code>（或 HTTP 代理）后重启控制面；页面会显示“HTTPS 代理已启用”。</p>
       <div class="actions"><button class="primary" onclick="startClientReleaseUpdate()">同步并缓存 GitHub 最新正式版</button></div>
     </div>`;
