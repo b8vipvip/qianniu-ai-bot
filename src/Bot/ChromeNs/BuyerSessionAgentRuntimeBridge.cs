@@ -18,7 +18,8 @@ namespace Bot.ChromeNs
     /// </summary>
     internal static class BuyerSessionAgentRuntimeBridge
     {
-        private static readonly BuyerSessionAgent Agent = new BuyerSessionAgent();
+        private static readonly Lazy<BuyerSessionAgent> AgentHolder =
+            new Lazy<BuyerSessionAgent>(() => new BuyerSessionAgent());
         private static readonly ConcurrentDictionary<QN, byte> Attached = new ConcurrentDictionary<QN, byte>();
         private static readonly FieldInfo CoordinatorField = typeof(QN).GetField(
             "_buyerMessageBurstCoordinator",
@@ -26,11 +27,16 @@ namespace Bot.ChromeNs
         private static Timer _timer;
         private static int _started;
 
+        private static BuyerSessionAgent Agent
+        {
+            get { return AgentHolder.Value; }
+        }
+
         public static void EnsureStarted()
         {
             if (Interlocked.Exchange(ref _started, 1) != 0) return;
             _timer = new Timer(_ => AttachExisting(), null, 300, 700);
-            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线。 ");
+            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线。");
         }
 
         private static void AttachExisting()
@@ -198,14 +204,22 @@ namespace Bot.ChromeNs
         private static string GetMessageText(QNChatMessage message)
         {
             if (message == null) return string.Empty;
-            var text = (message.content ?? string.Empty).Trim();
-            if (text.Length == 0) text = (message.summary ?? string.Empty).Trim();
-            if (text.Length == 0 && message.originalData != null)
+            try
             {
-                text = (message.originalData.url ?? string.Empty).Trim();
-                if (text.Length == 0) text = (message.originalData.fileId ?? string.Empty).Trim();
+                if (message.originalData != null)
+                {
+                    var text = message.originalData.text ?? string.Empty;
+                    if (message.originalData.header != null)
+                    {
+                        text += message.originalData.header.summary ?? string.Empty;
+                    }
+                    if (!string.IsNullOrWhiteSpace(text)) return text.Trim();
+                }
             }
-            return text;
+            catch
+            {
+            }
+            return (message.summary ?? string.Empty).Trim();
         }
 
         private static string NormalizeReplyText(string value)
