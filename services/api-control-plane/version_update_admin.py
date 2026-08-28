@@ -12,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 import bot_update_cache
+import bot_update_progress
 import bot_update_push
 
 
@@ -27,6 +28,7 @@ SERVER_UPDATE_STATUS = SERVER_UPDATE_DIR / "status.json"
 SERVER_UPDATE_AGENT = SERVER_UPDATE_DIR / "agent.json"
 SERVER_GITHUB_CACHE_SECONDS = max(15, min(600, int(os.getenv("SERVER_UPDATE_GITHUB_CACHE_SECONDS", "60"))))
 SERVER_UPDATE_AGENT_STALE_SECONDS = max(5, min(120, int(os.getenv("SERVER_UPDATE_AGENT_STALE_SECONDS", "15"))))
+SERVER_GITHUB_SYNC_ATTEMPTS = max(1, min(8, int(os.getenv("SERVER_UPDATE_GITHUB_SYNC_ATTEMPTS", "4"))))
 
 _SERVER_CACHE_LOCK = threading.RLock()
 _SERVER_CACHE: Optional[Dict[str, Any]] = None
@@ -53,7 +55,7 @@ def _headers() -> Dict[str, str]:
     return {
         "Accept": "application/vnd.github+json",
         "X-GitHub-Api-Version": "2022-11-28",
-        "User-Agent": "QianniuAiBot-VersionConsole/1.0",
+        "User-Agent": "QianniuAiBot-VersionConsole/1.1",
     }
 
 
@@ -78,31 +80,49 @@ def _fetch_server_github(force: bool = False) -> Dict[str, Any]:
     with _SERVER_CACHE_LOCK:
         if not force and _SERVER_CACHE is not None and now - _SERVER_CACHE_AT <= SERVER_GITHUB_CACHE_SECONDS:
             return dict(_SERVER_CACHE)
-        response = curl_requests.get(
-            GITHUB_MASTER_API,
-            headers=_headers(),
-            timeout=12,
-            allow_redirects=True,
-            impersonate="chrome",
-        )
-        if response.status_code < 200 or response.status_code >= 300:
-            raise RuntimeError(f"GitHub master 返回 HTTP {response.status_code}")
-        payload = response.json()
-        if not isinstance(payload, dict) or not payload.get("sha"):
-            raise RuntimeError("GitHub master 返回格式无效")
-        commit = payload.get("commit") if isinstance(payload.get("commit"), dict) else {}
-        author = commit.get("author") if isinstance(commit.get("author"), dict) else {}
-        item = {
-            "sha": str(payload.get("sha") or ""),
-            "short_sha": str(payload.get("sha") or "")[:12],
-            "message": str(commit.get("message") or "").split("\n", 1)[0],
-            "committed_at": str(author.get("date") or ""),
-            "html_url": str(payload.get("html_url") or ""),
-            "branch": "master",
-        }
-        _SERVER_CACHE = dict(item)
-        _SERVER_CACHE_AT = now
-        return item
+        last_error: Optional[Exception] = None
+        for attempt in range(1, SERVER_GITHUB_SYNC_ATTEMPTS + 1):
+            response = None
+            try:
+                response = curl_requests.get(
+                    GITHUB_MASTER_API,
+                    headers=_headers(),
+                    timeout=(bot_update_progress.DOWNLOAD_CONNECT_TIMEOUT_SECONDS, 60),
+                    allow_redirects=True,
+                    impersonate="chrome",
+                    **bot_update_progress._request_proxy_kwargs(),
+                )
+                if response.status_code < 200 or response.status_code >= 300:
+                    raise RuntimeError(f"GitHub master 返回 HTTP {response.status_code}")
+                payload = response.json()
+                if not isinstance(payload, dict) or not payload.get("sha"):
+                    raise RuntimeError("GitHub master 返回格式无效")
+                commit = payload.get("commit") if isinstance(payload.get("commit"), dict) else {}
+                author = commit.get("author") if isinstance(commit.get("author"), dict) else {}
+                item = {
+                    "sha": str(payload.get("sha") or ""),
+                    "short_sha": str(payload.get("sha") or "")[:12],
+                    "message": str(commit.get("message") or "").split("\n", 1)[0],
+                    "committed_at": str(author.get("date") or ""),
+                    "html_url": str(payload.get("html_url") or ""),
+                    "branch": "master",
+                    "transport": "https-proxy" if bot_update_progress.GITHUB_PROXY else "https-direct",
+                    "attempt": attempt,
+                }
+                _SERVER_CACHE = dict(item)
+                _SERVER_CACHE_AT = now
+                return item
+            except Exception as exc:
+                last_error = exc
+                if attempt < SERVER_GITHUB_SYNC_ATTEMPTS:
+                    time.sleep(min(8, bot_update_progress._retry_delay(attempt)))
+            finally:
+                if response is not None:
+                    try:
+                        response.close()
+                    except Exception:
+                        pass
+        raise RuntimeError(f"GitHub master 连续同步失败 {SERVER_GITHUB_SYNC_ATTEMPTS} 次：{last_error}")
 
 
 def _agent_status() -> Dict[str, Any]:
@@ -113,6 +133,7 @@ def _agent_status() -> Dict[str, Any]:
         age = 999999.0
     item["online"] = bool(item and age <= SERVER_UPDATE_AGENT_STALE_SECONDS)
     item["age_seconds"] = int(age) if age < 999999 else None
+    item.setdefault("git_transport", "ssh-443")
     return item
 
 
@@ -153,6 +174,13 @@ def _client_release(request: Request, refresh: bool = False) -> Dict[str, Any]:
         "mirror_url": public.get("mirror_url") or "",
         "package": package,
         "push": bot_update_push.get_push_status(),
+        "network": {
+            "transport": "https-range-resume",
+            "proxy_enabled": bool(bot_update_progress.GITHUB_PROXY),
+            "max_attempts": bot_update_progress.DOWNLOAD_MAX_ATTEMPTS,
+            "connect_timeout_seconds": bot_update_progress.DOWNLOAD_CONNECT_TIMEOUT_SECONDS,
+            "read_timeout_seconds": bot_update_progress.DOWNLOAD_READ_TIMEOUT_SECONDS,
+        },
     }
 
 
@@ -181,6 +209,10 @@ def _snapshot(request: Request, refresh: bool = False) -> Dict[str, Any]:
             "update_available": update_available,
             "sync_error": server_error,
             "update": server_status,
+            "network": {
+                "git_transport": str(server_status.get("agent", {}).get("git_transport") or "ssh-443"),
+                "git_fetch_attempts": int(server_status.get("agent", {}).get("git_fetch_attempts") or 5),
+            },
         },
         "client": {**client, "sync_error": client_error},
         "synced_at_unix": time.time(),
