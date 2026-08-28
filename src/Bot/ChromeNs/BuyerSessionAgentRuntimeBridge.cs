@@ -56,7 +56,18 @@ namespace Bot.ChromeNs
                     };
                     qn.EvShopRobotReceriveNewMessage += (sender, e) =>
                     {
-                        if (e != null) ObservePayload(qn, e.Message, "background");
+                        if (e == null || e.Seller == null || e.Buyer == null) return;
+                        var now = DateTime.Now;
+                        Agent.RecordEvent(
+                            e.Seller.Nick,
+                            e.Buyer.Nick,
+                            BuyerSessionEventKind.BuyerSystem,
+                            string.Empty,
+                            0,
+                            now,
+                            now,
+                            "background:new_message_signal",
+                            false);
                     };
                     Log.Info("BuyerSessionAgent已挂载客服实例原始消息流: seller="
                         + (qn.Seller == null ? string.Empty : qn.Seller.Nick));
