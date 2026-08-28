@@ -131,8 +131,8 @@ while true; do
   write_agent
   if [[ -f "$REQUEST_FILE" ]]; then
     process_request
-    # Reload the agent implementation from the just-updated repository.
-    exec "$REPO_DIR/scripts/api-control-plane-update-agent.sh"
+    # GitHub contents writes do not preserve executable mode, so always reload through bash.
+    exec /bin/bash "$REPO_DIR/scripts/api-control-plane-update-agent.sh"
   fi
   sleep "$POLL_SECONDS"
 done
