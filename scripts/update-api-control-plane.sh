@@ -9,6 +9,17 @@ BACKUP_ROOT="${BACKUP_ROOT:-/opt/qianniu-ai-bot-backups}"
 CONTAINER_NAME="${CONTAINER_NAME:-qianniu-api-control-plane}"
 VERIFY_URL="${VERIFY_URL:-}"
 
+# GitHub source-network tuning. Git repository traffic uses GitHub's official SSH-over-443
+# endpoint by default, avoiding networks where outbound TCP/22 is unstable or filtered.
+GITHUB_SSH_HOST="${GITHUB_SSH_HOST:-ssh.github.com}"
+GITHUB_SSH_PORT="${GITHUB_SSH_PORT:-443}"
+GITHUB_SSH_CONNECT_TIMEOUT="${GITHUB_SSH_CONNECT_TIMEOUT:-15}"
+GITHUB_SSH_SERVER_ALIVE_INTERVAL="${GITHUB_SSH_SERVER_ALIVE_INTERVAL:-15}"
+GITHUB_SSH_SERVER_ALIVE_COUNT_MAX="${GITHUB_SSH_SERVER_ALIVE_COUNT_MAX:-4}"
+GIT_FETCH_RETRIES="${GIT_FETCH_RETRIES:-5}"
+GIT_FETCH_TIMEOUT_SECONDS="${GIT_FETCH_TIMEOUT_SECONDS:-240}"
+GIT_FETCH_RETRY_BASE_SECONDS="${GIT_FETCH_RETRY_BASE_SECONDS:-3}"
+
 # Build/network tuning. These defaults are intentionally suitable for Tencent Cloud VPCs,
 # while every value remains overridable from the shell for other environments.
 BASE_IMAGE="${CONTROL_PLANE_BASE_IMAGE:-python:3.11-slim}"
@@ -68,7 +79,7 @@ is_positive_integer() {
 
 validate_tuning() {
   local name value
-  for name in BUILD_RETRIES BUILD_RETRY_DELAY_SECONDS BUILD_TIMEOUT_SECONDS BASE_IMAGE_PULL_RETRIES BASE_IMAGE_PULL_TIMEOUT_SECONDS CONTROL_PLANE_BUILD_PIP_TIMEOUT CONTROL_PLANE_BUILD_PIP_RETRIES; do
+  for name in BUILD_RETRIES BUILD_RETRY_DELAY_SECONDS BUILD_TIMEOUT_SECONDS BASE_IMAGE_PULL_RETRIES BASE_IMAGE_PULL_TIMEOUT_SECONDS CONTROL_PLANE_BUILD_PIP_TIMEOUT CONTROL_PLANE_BUILD_PIP_RETRIES GITHUB_SSH_CONNECT_TIMEOUT GITHUB_SSH_SERVER_ALIVE_INTERVAL GITHUB_SSH_SERVER_ALIVE_COUNT_MAX GIT_FETCH_RETRIES GIT_FETCH_TIMEOUT_SECONDS GIT_FETCH_RETRY_BASE_SECONDS; do
     value="${!name}"
     is_positive_integer "$value" || die "$name 必须是正整数，当前值: $value"
   done
@@ -111,6 +122,62 @@ probe_url() {
   fi
   warn "网络预检较慢或不可达: $label -> $url；构建仍会继续，并由内部重试保护。"
   return 1
+}
+
+github_ssh_command() {
+  printf 'ssh -o HostName=%q -p %q -o ConnectTimeout=%q -o ConnectionAttempts=3 -o ServerAliveInterval=%q -o ServerAliveCountMax=%q -o TCPKeepAlive=yes -o StrictHostKeyChecking=accept-new' \
+    "$GITHUB_SSH_HOST" "$GITHUB_SSH_PORT" "$GITHUB_SSH_CONNECT_TIMEOUT" "$GITHUB_SSH_SERVER_ALIVE_INTERVAL" "$GITHUB_SSH_SERVER_ALIVE_COUNT_MAX"
+}
+
+github_git() {
+  local command
+  command="$(github_ssh_command)"
+  GIT_SSH_COMMAND="$command" git "$@"
+}
+
+github_clone_with_retry() {
+  local attempt rc delay command
+  command="$(github_ssh_command)"
+  for attempt in $(seq 1 "$GIT_FETCH_RETRIES"); do
+    log "通过 GitHub SSH ${GITHUB_SSH_HOST}:${GITHUB_SSH_PORT} 克隆源码，第 ${attempt}/${GIT_FETCH_RETRIES} 次"
+    set +e
+    timeout --foreground "${GIT_FETCH_TIMEOUT_SECONDS}s" env GIT_SSH_COMMAND="$command" git clone --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then return 0; fi
+    rm -rf "$REPO_DIR"
+    if [[ "$attempt" -lt "$GIT_FETCH_RETRIES" ]]; then
+      delay=$(( GIT_FETCH_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) ))
+      [[ "$delay" -gt 60 ]] && delay=60
+      warn "GitHub SSH 克隆失败，${delay}s 后自动重试；已启用 SSH 443/keepalive。"
+      sleep "$delay"
+    fi
+  done
+  die "GitHub SSH 克隆连续失败 ${GIT_FETCH_RETRIES} 次，请检查服务器到 ssh.github.com:443 的网络或 SSH Key。"
+}
+
+github_fetch_with_retry() {
+  local attempt rc delay command
+  command="$(github_ssh_command)"
+  for attempt in $(seq 1 "$GIT_FETCH_RETRIES"); do
+    log "GitHub 源码同步: SSH ${GITHUB_SSH_HOST}:${GITHUB_SSH_PORT}，第 ${attempt}/${GIT_FETCH_RETRIES} 次"
+    set +e
+    timeout --foreground "${GIT_FETCH_TIMEOUT_SECONDS}s" env GIT_SSH_COMMAND="$command" \
+      git -C "$REPO_DIR" fetch --prune origin "$BRANCH"
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+      log "GitHub 源码同步成功（SSH ${GITHUB_SSH_PORT}）"
+      return 0
+    fi
+    if [[ "$attempt" -lt "$GIT_FETCH_RETRIES" ]]; then
+      delay=$(( GIT_FETCH_RETRY_BASE_SECONDS * (2 ** (attempt - 1)) ))
+      [[ "$delay" -gt 60 ]] && delay=60
+      warn "GitHub fetch 第 ${attempt}/${GIT_FETCH_RETRIES} 次失败，${delay}s 后重试；旧服务保持运行。"
+      sleep "$delay"
+    fi
+  done
+  die "GitHub fetch 连续失败 ${GIT_FETCH_RETRIES} 次；旧服务未停止。"
 }
 
 prepare_base_image() {
@@ -162,6 +229,7 @@ print_build_failure_hint() {
 
 build_new_image() {
   log "构建网络配置:"
+  printf '  GitHub source: SSH %s:%s, retries=%s\n' "$GITHUB_SSH_HOST" "$GITHUB_SSH_PORT" "$GIT_FETCH_RETRIES"
   printf '  Base image: %s\n' "$BASE_IMAGE"
   printf '  PyPI: %s\n' "$CONTROL_PLANE_BUILD_PIP_INDEX_URL"
   printf '  APT: %s\n' "$CONTROL_PLANE_BUILD_APT_MIRROR"
@@ -250,6 +318,7 @@ rollback() {
 }
 
 need git
+need ssh
 need docker
 need curl
 need tar
@@ -259,9 +328,9 @@ validate_tuning
 docker compose version >/dev/null 2>&1 || die "未检测到 Docker Compose v2（docker compose）"
 
 if [[ ! -d "$REPO_DIR/.git" ]]; then
-  log "未发现 Git 仓库，使用服务器现有 GitHub SSH 配置克隆到 $REPO_DIR"
+  log "未发现 Git 仓库，使用服务器现有 GitHub SSH Key 克隆到 $REPO_DIR"
   mkdir -p "$(dirname "$REPO_DIR")"
-  git clone --branch "$BRANCH" "$REPO_URL" "$REPO_DIR"
+  github_clone_with_retry
 fi
 
 [[ -d "$REPO_DIR/.git" ]] || die "$REPO_DIR 不是有效 Git 仓库"
@@ -281,8 +350,8 @@ elif [[ -f "$LEGACY_DIR/.env" || -d "$LEGACY_DIR/data" ]]; then
   OLD_SOURCE_DIR="$LEGACY_DIR"
 fi
 
-log "拉取 GitHub 最新 $BRANCH 分支"
-git -C "$REPO_DIR" fetch --prune origin "$BRANCH"
+log "拉取 GitHub 最新 $BRANCH 分支（Git SSH over 443 + 自动重试）"
+github_fetch_with_retry
 if git -C "$REPO_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
   git -C "$REPO_DIR" checkout "$BRANCH"
 else
@@ -419,6 +488,7 @@ cat /tmp/qianniu-control-plane-public-health.json
 
 log "更新成功"
 printf 'Git commit: %s\n' "$NEW_COMMIT"
+printf 'Git transport: SSH %s:%s, retries=%s\n' "$GITHUB_SSH_HOST" "$GITHUB_SSH_PORT" "$GIT_FETCH_RETRIES"
 printf 'Service dir: %s\n' "$SERVICE_DIR"
 printf 'Backup: %s\n' "$BACKUP_DIR"
 printf 'Build log: %s\n' "$BUILD_LOG"
