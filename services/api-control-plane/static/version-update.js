@@ -1,4 +1,4 @@
-const versionUpdateState={loading:false,last:null};
+const versionUpdateState={loading:false,last:null,proxy:null,proxyLoading:false,proxyLoadedAt:0};
 titles["version-update"]=["版本更新","同步 GitHub 版本、在线更新服务端，并缓存客户端正式版后推送更新通知。"];
 
 function vuBytes(value){
@@ -14,9 +14,81 @@ function vuEta(seconds){const n=Number(seconds);if(!Number.isFinite(n)||n<0)retu
 async function loadVersionUpdate(){
   if(versionUpdateState.loading)return;
   versionUpdateState.loading=true;
-  try{const data=await api("/api/admin/version-update/status");versionUpdateState.last=data;renderVersionUpdate(data)}
+  try{const data=await api("/api/admin/version-update/status");versionUpdateState.last=data;renderVersionUpdate(data);loadGithubProxySettings(false).catch(err=>console.warn(err))}
   catch(err){if($("versionUpdateStatus"))$("versionUpdateStatus").innerHTML=`<div class="empty">${esc(err.message)}</div>`}
   finally{versionUpdateState.loading=false}
+}
+
+async function loadGithubProxySettings(force=false){
+  if(versionUpdateState.proxyLoading)return versionUpdateState.proxy;
+  if(!force&&versionUpdateState.proxy&&Date.now()-versionUpdateState.proxyLoadedAt<5000)return versionUpdateState.proxy;
+  versionUpdateState.proxyLoading=true;
+  try{
+    const data=await api("/api/admin/version-update/proxy");
+    versionUpdateState.proxy=data;versionUpdateState.proxyLoadedAt=Date.now();renderGithubProxySettings(data);return data;
+  }catch(err){
+    if($("githubProxyState"))$("githubProxyState").innerHTML=badge("读取失败","bad");
+    if($("githubProxyDetail"))$("githubProxyDetail").textContent="读取 GitHub 下载代理配置失败："+err.message;
+    throw err;
+  }finally{versionUpdateState.proxyLoading=false}
+}
+
+function renderGithubProxySettings(data){
+  const stateBox=$("githubProxyState"),detail=$("githubProxyDetail"),enabled=$("githubProxyEnabled"),input=$("githubProxyVlessUrl");
+  if(!stateBox||!detail||!enabled||!input)return;
+  enabled.checked=Boolean(data.enabled);
+  input.placeholder=data.configured?"已安全保存节点；留空表示不修改":"vless://...";
+  if(data.enabled&&data.running)stateBox.innerHTML=badge("VLESS 已启用","good");
+  else if(data.enabled)stateBox.innerHTML=badge("VLESS 启动失败","bad");
+  else if(data.configured)stateBox.innerHTML=badge("已配置但停用","gray");
+  else stateBox.innerHTML=badge("未配置","gray");
+  const node=data.node||{},parts=[];
+  if(data.configured){
+    const nodeName=node.name?`节点：${esc(node.name)} · `:"";
+    parts.push(`${nodeName}${esc(node.server||"已保存")} : ${esc(node.port||"-")} · ${esc(node.security||"-")} · ${esc(node.transport||"-")}${node.flow?` · ${esc(node.flow)}`:""}`);
+  }else parts.push("尚未保存 VLESS 节点。");
+  parts.push("隔离范围：仅本控制面 GitHub HTTPS；本地 SOCKS 仅监听容器 127.0.0.1，不启用 TUN，不修改服务器系统代理或默认路由。");
+  const test=data.last_test||{};
+  if(test.tested_at)parts.push(test.ok?`最近测试成功：${esc(cnTime(test.tested_at))} · ${esc(test.latency_ms)}ms`:`最近测试失败：${esc(cnTime(test.tested_at))} · ${esc(test.error||"")}`);
+  if(data.last_error)parts.push(`当前错误：${esc(data.last_error)}`);
+  detail.innerHTML=parts.map(x=>`<div>${x}</div>`).join("");
+}
+
+async function saveGithubProxySettings(){
+  const button=$("saveGithubProxyBtn"),input=$("githubProxyVlessUrl"),enabled=$("githubProxyEnabled");
+  if(!input||!enabled)return;
+  try{
+    if(button)button.disabled=true;
+    const value=String(input.value||"").trim();
+    const data=await api("/api/admin/version-update/proxy",{method:"PUT",body:JSON.stringify({enabled:enabled.checked,vless_url:value})});
+    input.value="";versionUpdateState.proxy=data;versionUpdateState.proxyLoadedAt=Date.now();renderGithubProxySettings(data);
+    toast(data.enabled&&data.running?"VLESS GitHub 下载代理已保存并启用":"GitHub 下载代理配置已保存");
+    await loadVersionUpdate();
+  }catch(err){toast(err.message);await loadGithubProxySettings(true).catch(()=>{})}
+  finally{if(button)button.disabled=false}
+}
+
+async function testGithubProxySettings(){
+  const button=$("testGithubProxyBtn");
+  try{
+    if(button)button.disabled=true;toast("正在通过 VLESS 节点测试 GitHub…");
+    const data=await api("/api/admin/version-update/proxy/test",{method:"POST"});
+    versionUpdateState.proxy=data;versionUpdateState.proxyLoadedAt=Date.now();renderGithubProxySettings(data);
+    const test=data.last_test||{};toast(`VLESS 节点测试成功${test.latency_ms!=null?`，GitHub 延迟 ${test.latency_ms}ms`:""}`);
+  }catch(err){toast(err.message);await loadGithubProxySettings(true).catch(()=>{})}
+  finally{if(button)button.disabled=false}
+}
+
+async function clearGithubProxySettings(){
+  if(!confirm("确认清除已保存的 VLESS 节点？GitHub HTTPS 下载将恢复直连，服务器其他网络不会变化。"))return;
+  const button=$("clearGithubProxyBtn");
+  try{
+    if(button)button.disabled=true;
+    const data=await api("/api/admin/version-update/proxy",{method:"PUT",body:JSON.stringify({enabled:false,clear:true})});
+    const input=$("githubProxyVlessUrl");if(input)input.value="";
+    versionUpdateState.proxy=data;versionUpdateState.proxyLoadedAt=Date.now();renderGithubProxySettings(data);toast("VLESS 节点已清除，GitHub HTTPS 恢复直连");
+    await loadVersionUpdate();
+  }catch(err){toast(err.message)}finally{if(button)button.disabled=false}
 }
 
 function renderVersionUpdate(data){
@@ -39,7 +111,7 @@ function renderVersionUpdate(data){
       ${agentHint}
       <div style="margin-top:12px">${vuProgress(update.progress_percent)}</div>
       <p><strong>${esc(update.phase||"等待更新")}</strong> · ${esc(update.message||"")}</p>
-      <p class="hint">服务端源码默认通过 GitHub 官方 <code>ssh.github.com:443</code> 拉取，启用 SSH keepalive、连接超时和指数退避重试；GitHub 网络失败不会提前停止旧服务。</p>
+      <p class="hint">服务端源码仍由主机更新代理通过 GitHub 官方 <code>ssh.github.com:443</code> 拉取；上方 VLESS 配置只作用于控制面内部的 GitHub HTTPS / Release 下载，不改变主机 SSH 更新链路。</p>
       <div class="actions"><button class="primary" onclick="startServerVersionUpdate()" ${agent.online?"":"disabled"}>更新服务端到 GitHub 最新版</button></div>
     </div>`;
 
@@ -49,7 +121,7 @@ function renderVersionUpdate(data){
   const speed=Number(pkg.speed_bps||0)>0?`${vuBytes(pkg.speed_bps)}/s`:"--";
   const retryText=Number(pkg.max_attempts||clientNet.max_attempts||0)>0?`第 ${Number(pkg.attempt||0)}/${Number(pkg.max_attempts||clientNet.max_attempts)} 次`:"";
   const retryWait=pkgPhase==="retrying"&&Number(pkg.retry_in_seconds||0)>0?` · ${Number(pkg.retry_in_seconds)} 秒后续传`:"";
-  const proxyBadge=(pkg.proxy_enabled||clientNet.proxy_enabled)?badge("HTTPS 代理已启用","blue"):badge("HTTPS 直连","gray");
+  const proxyBadge=(pkg.proxy_enabled||clientNet.proxy_enabled)?badge("HTTPS VLESS 代理","blue"):badge("HTTPS 直连","gray");
   $("clientVersionCard").innerHTML=`
     <div class="provider-card">
       <div class="provider-top"><strong>Windows 客户端正式版</strong>${client.sync_error?badge("同步失败","bad"):badge(client.version||"未知","blue")}</div>
@@ -64,14 +136,14 @@ function renderVersionUpdate(data){
       <div style="margin-top:12px">${vuProgress(clientProgress)}</div>
       <p><strong>${pkg.ready?"安装包已就绪":pkgPhase==="failed"?"安装包准备失败":pkgPhase==="retrying"?"GitHub 网络异常，自动续传重试":pkgPhase==="verifying"?"正在校验安装包":pkgPhase==="resuming"?"正在从断点恢复":"服务端正在准备安装包"}</strong> · ${esc(downloadText)}${pkg.error?` · ${esc(pkg.error)}`:""}</p>
       <p class="hint">速度：${esc(speed)}　预计剩余：${esc(vuEta(pkg.eta_seconds))}　${esc(retryText)}${esc(retryWait)}${pkg.last_error&&!pkg.error?`　最近网络错误：${esc(pkg.last_error)}`:""}</p>
-      <p class="hint">网络中断时保留 <code>.partial</code>，下一次使用 HTTP Range 从已下载位置继续；默认最多自动重试 ${Number(pkg.max_attempts||clientNet.max_attempts||8)} 次并指数退避。完整下载后才执行 SHA-256/大小校验并通过 SSE 推送；客户端安装包不会直连 GitHub。</p>
-      <p class="hint">如服务器到 GitHub HTTPS 长期不稳定，可在控制面 <code>.env</code> 设置 <code>BOT_UPDATE_GITHUB_PROXY=socks5h://host.docker.internal:1080</code>（或 HTTP 代理）后重启控制面；页面会显示“HTTPS 代理已启用”。</p>
+      <p class="hint">网络中断、服务端重启或切换 VLESS 节点时保留 <code>.partial</code>，下一次使用 HTTP Range 从已下载位置继续；完整下载后才执行 SHA-256/大小校验并通过 SSE 推送，客户端安装包不会直连 GitHub。</p>
+      <p class="hint">如 GitHub 直连速度慢，请直接在页面上方“GitHub 下载代理”粘贴 <code>vless://</code> 节点并启用，无需修改服务器 <code>.env</code> 或系统网络。</p>
       <div class="actions"><button class="primary" onclick="startClientReleaseUpdate()">同步并缓存 GitHub 最新正式版</button></div>
     </div>`;
 }
 
 async function syncVersionUpdate(){
-  try{$("syncVersionBtn").disabled=true;toast("正在同步 GitHub 版本状态…");const data=await api("/api/admin/version-update/sync",{method:"POST"});versionUpdateState.last=data;renderVersionUpdate(data);toast("GitHub 版本状态已同步")}
+  try{$("syncVersionBtn").disabled=true;toast("正在同步 GitHub 版本状态…");const data=await api("/api/admin/version-update/sync",{method:"POST"});versionUpdateState.last=data;renderVersionUpdate(data);await loadGithubProxySettings(true);toast("GitHub 版本状态已同步")}
   catch(err){toast(err.message)}finally{$("syncVersionBtn").disabled=false}
 }
 async function startServerVersionUpdate(){

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -17,17 +18,52 @@ DOWNLOAD_RETRY_BASE_SECONDS = max(1, min(60, int(os.getenv("BOT_UPDATE_DOWNLOAD_
 DOWNLOAD_RETRY_MAX_SECONDS = max(DOWNLOAD_RETRY_BASE_SECONDS, min(300, int(os.getenv("BOT_UPDATE_DOWNLOAD_RETRY_MAX_SECONDS", "60"))))
 DOWNLOAD_CONNECT_TIMEOUT_SECONDS = max(3, min(120, int(os.getenv("BOT_UPDATE_DOWNLOAD_CONNECT_TIMEOUT_SECONDS", "15"))))
 DOWNLOAD_READ_TIMEOUT_SECONDS = max(30, min(3600, int(os.getenv("BOT_UPDATE_DOWNLOAD_READ_TIMEOUT_SECONDS", "300"))))
-GITHUB_PROXY = os.getenv("BOT_UPDATE_GITHUB_PROXY", "").strip()
+_DEFAULT_GITHUB_PROXY = os.getenv("BOT_UPDATE_GITHUB_PROXY", "").strip()
+_RUNTIME_PROXY_LOCK = threading.RLock()
+_RUNTIME_GITHUB_PROXY: Optional[str] = None
+_PROXY_REVISION = 0
+
+
+def github_proxy() -> str:
+    with _RUNTIME_PROXY_LOCK:
+        return _DEFAULT_GITHUB_PROXY if _RUNTIME_GITHUB_PROXY is None else _RUNTIME_GITHUB_PROXY
+
+
+def set_github_proxy(value: Optional[str]) -> int:
+    """Override only this module's GitHub HTTPS requests.
+
+    None restores the legacy environment fallback; an empty string explicitly selects direct HTTPS.
+    No process-wide HTTP(S)_PROXY variables or host routes are modified.
+    """
+    global _RUNTIME_GITHUB_PROXY, _PROXY_REVISION
+    normalized = None if value is None else str(value).strip()
+    with _RUNTIME_PROXY_LOCK:
+        old_effective = _DEFAULT_GITHUB_PROXY if _RUNTIME_GITHUB_PROXY is None else _RUNTIME_GITHUB_PROXY
+        new_effective = _DEFAULT_GITHUB_PROXY if normalized is None else normalized
+        _RUNTIME_GITHUB_PROXY = normalized
+        if old_effective != new_effective:
+            _PROXY_REVISION += 1
+        return _PROXY_REVISION
+
+
+def proxy_revision() -> int:
+    with _RUNTIME_PROXY_LOCK:
+        return _PROXY_REVISION
+
+
+def _proxy_enabled() -> bool:
+    return bool(github_proxy())
 
 
 def _request_proxy_kwargs() -> Dict[str, Any]:
-    if not GITHUB_PROXY:
+    proxy = github_proxy()
+    if not proxy:
         return {}
-    return {"proxies": {"http": GITHUB_PROXY, "https": GITHUB_PROXY}}
+    return {"proxies": {"http": proxy, "https": proxy}}
 
 
 def _network_source() -> str:
-    return "github-https-proxy" if GITHUB_PROXY else "github-https-direct"
+    return "github-https-proxy" if github_proxy() else "github-https-direct"
 
 
 def _update_job(tag: str, **changes: Any) -> None:
@@ -120,7 +156,7 @@ def _progress_download(download_url: str, destination: Path, expected_sha256: st
                         attempt=attempt,
                         max_attempts=DOWNLOAD_MAX_ATTEMPTS,
                         source=_network_source(),
-                        proxy_enabled=bool(GITHUB_PROXY),
+                        proxy_enabled=_proxy_enabled(),
                         resumable=True,
                         downloading=False,
                         ready=True,
@@ -133,11 +169,12 @@ def _progress_download(download_url: str, destination: Path, expected_sha256: st
 
             headers = {
                 "Accept": "application/octet-stream",
-                "User-Agent": "QianniuAiBot-UpdateMirror/1.2",
+                "User-Agent": "QianniuAiBot-UpdateMirror/1.3",
             }
             if existing > 0:
                 headers["Range"] = f"bytes={existing}-"
 
+            request_revision = proxy_revision()
             _update_job(
                 tag,
                 phase="resuming" if existing > 0 else "connecting",
@@ -150,7 +187,7 @@ def _progress_download(download_url: str, destination: Path, expected_sha256: st
                 max_attempts=DOWNLOAD_MAX_ATTEMPTS,
                 retry_in_seconds=0,
                 source=_network_source(),
-                proxy_enabled=bool(GITHUB_PROXY),
+                proxy_enabled=_proxy_enabled(),
                 resumable=True,
                 downloading=True,
                 ready=False,
@@ -204,6 +241,8 @@ def _progress_download(download_url: str, destination: Path, expected_sha256: st
 
             with partial.open(mode) as output:
                 for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if proxy_revision() != request_revision:
+                        raise RuntimeError("GitHub 下载代理配置已变更，正在从断点切换网络")
                     if not chunk:
                         continue
                     output.write(chunk)
@@ -270,7 +309,7 @@ def _progress_download(download_url: str, destination: Path, expected_sha256: st
                 max_attempts=DOWNLOAD_MAX_ATTEMPTS,
                 retry_in_seconds=0,
                 source=_network_source(),
-                proxy_enabled=bool(GITHUB_PROXY),
+                proxy_enabled=_proxy_enabled(),
                 resumable=True,
                 downloading=False,
                 ready=True,
@@ -296,7 +335,7 @@ def _progress_download(download_url: str, destination: Path, expected_sha256: st
                 max_attempts=DOWNLOAD_MAX_ATTEMPTS,
                 retry_in_seconds=delay,
                 source=_network_source(),
-                proxy_enabled=bool(GITHUB_PROXY),
+                proxy_enabled=_proxy_enabled(),
                 resumable=True,
                 downloading=True,
                 ready=False,
@@ -324,7 +363,7 @@ def _progress_download(download_url: str, destination: Path, expected_sha256: st
         max_attempts=DOWNLOAD_MAX_ATTEMPTS,
         retry_in_seconds=0,
         source=_network_source(),
-        proxy_enabled=bool(GITHUB_PROXY),
+        proxy_enabled=_proxy_enabled(),
         resumable=True,
         downloading=False,
         ready=False,
@@ -350,7 +389,7 @@ def _status_with_progress(metadata: Dict[str, Any]) -> Dict[str, Any]:
                 "speed_bps": 0,
                 "eta_seconds": 0,
                 "source": _network_source(),
-                "proxy_enabled": bool(GITHUB_PROXY),
+                "proxy_enabled": _proxy_enabled(),
                 "resumable": True,
             }
         )
@@ -387,7 +426,7 @@ def _status_with_progress(metadata: Dict[str, Any]) -> Dict[str, Any]:
     state.setdefault("max_attempts", DOWNLOAD_MAX_ATTEMPTS)
     state.setdefault("retry_in_seconds", 0)
     state.setdefault("source", _network_source())
-    state.setdefault("proxy_enabled", bool(GITHUB_PROXY))
+    state.setdefault("proxy_enabled", _proxy_enabled())
     state.setdefault("resumable", True)
     return state
 
