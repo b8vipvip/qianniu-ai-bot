@@ -6,6 +6,8 @@ SERVICE_NAME="qianniu-api-update-agent.service"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
 AGENT_SCRIPT="$REPO_DIR/scripts/api-control-plane-update-agent.sh"
 DATA_DIR="${DATA_DIR:-$REPO_DIR/services/api-control-plane/data}"
+APP_UID="${CONTROL_PLANE_APP_UID:-10001}"
+APP_GID="${CONTROL_PLANE_APP_GID:-10001}"
 
 if [[ "$(id -u)" -ne 0 ]]; then
   echo "请使用 sudo/root 执行此安装脚本。" >&2
@@ -18,7 +20,7 @@ command -v docker >/dev/null 2>&1 || { echo "未检测到 docker" >&2; exit 1; }
 [[ -f "$AGENT_SCRIPT" ]] || { echo "缺少 $AGENT_SCRIPT" >&2; exit 1; }
 [[ -f "$REPO_DIR/scripts/update-api-control-plane.sh" ]] || { echo "缺少 update-api-control-plane.sh" >&2; exit 1; }
 
-mkdir -p "$DATA_DIR/server-update"
+install -d -m 0770 -o "$APP_UID" -g "$APP_GID" "$DATA_DIR/server-update"
 cat > "$UNIT_PATH" <<EOF
 [Unit]
 Description=Qianniu API Control Plane Web Update Agent
