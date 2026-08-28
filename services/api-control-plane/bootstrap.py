@@ -19,6 +19,7 @@ import chat2api_runtime_guard
 import client_data_backup
 import console_cache_guard
 import deep_test_guard
+import github_vless_proxy
 import message_processing_traces
 import recharge_status_query
 import runtime_embedding_guard
@@ -47,6 +48,7 @@ control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(recharge_status_query.router)
 bot_update_progress.install()
+github_vless_proxy.install(control_plane)
 control_plane.app.include_router(bot_update_cache.router)
 control_plane.app.include_router(bot_update_push.router)
 bot_web_console.install(control_plane)
@@ -54,9 +56,6 @@ bot_client_shop_binding.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
 version_update_admin.install(control_plane)
-# Register Bot-only Q&A routes before the legacy all-chat routes. Starlette
-# resolves the first matching route, while knowledge-management endpoints from
-# the legacy module remain available below.
 bot_web_bot_qa.install(control_plane)
 bot_web_conversation_knowledge.install(control_plane)
 client_data_backup.install(control_plane)
@@ -77,6 +76,7 @@ def initialize_control_plane_extensions() -> None:
     client_data_backup.init_db()
     store_rule_sync.init_db()
     message_processing_traces.init_db()
+    github_vless_proxy.init_github_vless_proxy()
     bot_update_cache.init_bot_update_cache()
     bot_update_prefetch.init_bot_update_prefetch()
     wecom_settings.apply_to_bridge(wecom_bridge)
@@ -86,12 +86,8 @@ def initialize_control_plane_extensions() -> None:
 def shutdown_control_plane_extensions() -> None:
     bot_update_prefetch.stop_bot_update_prefetch()
     bot_update_cache.stop_bot_update_cache()
+    github_vless_proxy.stop_github_vless_proxy()
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        control_plane.app,
-        host="0.0.0.0",
-        port=int(os.getenv("PORT", "8080")),
-        reload=False,
-    )
+    uvicorn.run(control_plane.app, host="0.0.0.0", port=int(os.getenv("PORT", "8080")))
