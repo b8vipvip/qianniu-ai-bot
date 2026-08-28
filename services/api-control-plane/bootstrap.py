@@ -8,6 +8,7 @@ import app as control_plane
 import bot_client_shop_binding
 import bot_update_cache
 import bot_update_prefetch
+import bot_update_progress
 import bot_update_push
 import bot_web_admin
 import bot_web_bot_enabled
@@ -25,6 +26,7 @@ import runtime_shop_ai_proxy
 import runtime_streaming_guard
 import scheduled_deep_test_retry
 import store_rule_sync
+import version_update_admin
 import wecom_bridge
 import wecom_policy_migration
 import wecom_settings
@@ -42,12 +44,14 @@ install_on_bridge(wecom_bridge)
 control_plane.app.include_router(wecom_bridge.router)
 control_plane.app.include_router(wecom_settings.router)
 control_plane.app.include_router(recharge_status_query.router)
+bot_update_progress.install()
 control_plane.app.include_router(bot_update_cache.router)
 control_plane.app.include_router(bot_update_push.router)
 bot_web_console.install(control_plane)
 bot_client_shop_binding.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
+version_update_admin.install(control_plane)
 # Register Bot-only Q&A routes before the legacy all-chat routes. Starlette
 # resolves the first matching route, while knowledge-management endpoints from
 # the legacy module remain available below.
