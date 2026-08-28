@@ -276,16 +276,16 @@ namespace Bot.Knowledge
             {
                 var result = await service.ImportAsync(_seller, _data, timeout, _cts.Token,
                     () => _cancelSource,
-                    message => Dispatcher.Invoke(() => _status.Text = message));
+                    progressText => Dispatcher.Invoke(() => _status.Text = progressText));
                 _status.Text = "智能导入完成，结果已写入 Knowledge Center V2。";
-                var message = string.Format(
+                var resultMessage = string.Format(
                     "新版知识库智能导入成功\n\n本次分析：\n文字：{0:N0} 字\n图片：{1} 张\n跳过视频：{2} 个\n\nAI生成问答：{3} 条\n成功写入V2：{4} 条\n重复跳过：{5} 条",
                     result.TextChars, result.ImageCount, result.VideoSkipped, result.AiGenerated,
                     result.Added, result.DuplicateSkipped);
                 if (result.UnsupportedImageSkipped > 0)
-                    message += "\n\n有 " + result.UnsupportedImageSkipped + " 张图片因当前 AI 接口不支持图片理解而未参与分析。";
-                message += "\n\n本次操作已经写入“AI优化记录”。";
-                MessageBox.Show(message, "智能导入完成", MessageBoxButton.OK, MessageBoxImage.Information);
+                    resultMessage += "\n\n有 " + result.UnsupportedImageSkipped + " 张图片因当前 AI 接口不支持图片理解而未参与分析。";
+                resultMessage += "\n\n本次操作已经写入“AI优化记录”。";
+                MessageBox.Show(resultMessage, "智能导入完成", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (SmartImportException ex)
             {
