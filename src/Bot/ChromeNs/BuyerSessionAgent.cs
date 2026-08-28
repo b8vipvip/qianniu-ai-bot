@@ -22,6 +22,51 @@ namespace Bot.ChromeNs
         Failed = 10
     }
 
+    public enum BuyerSessionEventKind
+    {
+        Unknown = 0,
+        BuyerText = 1,
+        BuyerImage = 2,
+        BuyerProductCard = 3,
+        BuyerOrder = 4,
+        BuyerSystem = 5,
+        BuyerWithdrawal = 6,
+        BuyerMedia = 7,
+        BuyerActionAccepted = 8,
+        SellerHumanReply = 20,
+        SellerBotEcho = 21,
+        SellerWithdrawal = 22,
+        OrderCreated = 30,
+        OrderPaid = 31,
+        OrderClosed = 32,
+        OrderRefund = 33,
+        SendStarted = 40,
+        SendConfirmed = 41,
+        SendFailed = 42
+    }
+
+    public sealed class BuyerSessionEventSnapshot
+    {
+        public long Sequence { get; set; }
+        public BuyerSessionEventKind Kind { get; set; }
+        public string MessageKey { get; set; }
+        public long SortValue { get; set; }
+        public DateTime SourceTimestamp { get; set; }
+        public DateTime ObservedAt { get; set; }
+        public long Generation { get; set; }
+        public bool StaleAgainstLatestBuyer { get; set; }
+        public string Reason { get; set; }
+    }
+
+    public sealed class BuyerSessionEventResult
+    {
+        public bool Accepted { get; set; }
+        public bool Duplicate { get; set; }
+        public bool StaleAgainstLatestBuyer { get; set; }
+        public bool CancelledCurrentGeneration { get; set; }
+        public long Generation { get; set; }
+    }
+
     public sealed class BuyerSessionAgentSnapshot
     {
         public string SellerNick { get; set; }
@@ -33,6 +78,11 @@ namespace Bot.ChromeNs
         public DateTime LastObservedAt { get; set; }
         public DateTime StateChangedAt { get; set; }
         public string Reason { get; set; }
+        public BuyerSessionEventKind LastEventKind { get; set; }
+        public DateTime LastEventAt { get; set; }
+        public long LastBuyerEventSortValue { get; set; }
+        public DateTime LastBuyerEventAt { get; set; }
+        public IList<BuyerSessionEventSnapshot> RecentEvents { get; set; }
     }
 
     public sealed class BuyerSessionAgentObservation
@@ -44,15 +94,22 @@ namespace Bot.ChromeNs
     }
 
     /// <summary>
-    /// Per seller/buyer generation state machine. A newer accepted buyer message always
-    /// supersedes the previous generation so an old draft cannot cross the send boundary.
-    /// This is deliberately independent from UI state and only tracks message lifecycle.
+    /// Shared per seller/buyer ordered state machine. All BuyerSessionAgent instances use the same
+    /// session table so foreground CDP events, background order events and burst generation cannot
+    /// drift into independent timelines. Raw events are retained as a bounded ledger while only an
+    /// accepted actionable buyer message advances Generation.
     /// </summary>
     public sealed class BuyerSessionAgent
     {
         private const int MaxRememberedMessageKeys = 64;
-        private readonly ConcurrentDictionary<string, SessionState> _sessions =
+        private const int MaxRememberedEvents = 64;
+        private static readonly ConcurrentDictionary<string, SessionState> Sessions =
             new ConcurrentDictionary<string, SessionState>(StringComparer.Ordinal);
+
+        static BuyerSessionAgent()
+        {
+            try { BuyerSessionAgentRuntimeBridge.EnsureStarted(); } catch { }
+        }
 
         public BuyerSessionAgentObservation ObserveBuyerMessage(
             string sellerNick,
@@ -62,13 +119,7 @@ namespace Bot.ChromeNs
             DateTime observedAt)
         {
             var key = BuildKey(sellerNick, buyerNick);
-            var state = _sessions.GetOrAdd(key, _ => new SessionState
-            {
-                SellerNick = Normalize(sellerNick),
-                BuyerNick = Normalize(buyerNick),
-                State = BuyerSessionAgentState.Idle,
-                StateChangedAt = DateTime.Now
-            });
+            var state = GetOrCreateState(key, sellerNick, buyerNick);
 
             CancellationTokenSource previous = null;
             long generation;
@@ -79,9 +130,11 @@ namespace Bot.ChromeNs
                 state.BuyerNick = Normalize(buyerNick);
                 state.LastObservedAt = observedAt == default(DateTime) ? DateTime.Now : observedAt;
                 state.LastSortValue = Math.Max(state.LastSortValue, sortValue);
+                state.LastBuyerEventSortValue = Math.Max(state.LastBuyerEventSortValue, sortValue);
+                if (state.LastBuyerEventAt < state.LastObservedAt) state.LastBuyerEventAt = state.LastObservedAt;
 
                 messageKey = Normalize(messageKey);
-                if (!string.IsNullOrWhiteSpace(messageKey) && state.RecentMessageKeys.Contains(messageKey))
+                if (!string.IsNullOrWhiteSpace(messageKey) && state.RecentMessageKeySet.Contains(messageKey))
                 {
                     return new BuyerSessionAgentObservation
                     {
@@ -94,24 +147,27 @@ namespace Bot.ChromeNs
                     };
                 }
 
-                if (!string.IsNullOrWhiteSpace(messageKey))
-                {
-                    state.RecentMessageKeys.Enqueue(messageKey);
-                    state.RecentMessageKeySet.Add(messageKey);
-                    while (state.RecentMessageKeys.Count > MaxRememberedMessageKeys)
-                    {
-                        var removed = state.RecentMessageKeys.Dequeue();
-                        state.RecentMessageKeySet.Remove(removed);
-                    }
-                }
-
+                RememberMessageKeyLocked(state, messageKey);
                 previous = state.GenerationCancellation;
-                superseded = state.Generation > 0 && state.State != BuyerSessionAgentState.Completed;
+                superseded = state.Generation > 0
+                    && state.State != BuyerSessionAgentState.Completed
+                    && state.State != BuyerSessionAgentState.Cancelled
+                    && state.State != BuyerSessionAgentState.Failed;
                 state.Generation++;
                 generation = state.Generation;
                 state.GenerationCancellation = new CancellationTokenSource();
                 state.LastMessageKey = messageKey;
                 SetStateLocked(state, BuyerSessionAgentState.Observed, "buyer_message");
+                AppendEventLocked(
+                    state,
+                    BuyerSessionEventKind.BuyerActionAccepted,
+                    messageKey,
+                    sortValue,
+                    state.LastObservedAt,
+                    state.LastObservedAt,
+                    generation,
+                    false,
+                    "actionable_buyer_message");
             }
 
             if (previous != null)
@@ -135,10 +191,95 @@ namespace Bot.ChromeNs
             };
         }
 
+        public BuyerSessionEventResult RecordEvent(
+            string sellerNick,
+            string buyerNick,
+            BuyerSessionEventKind kind,
+            string messageKey,
+            long sortValue,
+            DateTime sourceTimestamp,
+            DateTime observedAt,
+            string reason,
+            bool cancelCurrentGeneration)
+        {
+            var key = BuildKey(sellerNick, buyerNick);
+            var state = GetOrCreateState(key, sellerNick, buyerNick);
+            CancellationTokenSource cancel = null;
+            var result = new BuyerSessionEventResult();
+            observedAt = observedAt == default(DateTime) ? DateTime.Now : observedAt;
+            sourceTimestamp = sourceTimestamp == default(DateTime) ? observedAt : sourceTimestamp;
+            messageKey = Normalize(messageKey);
+
+            lock (state.SyncRoot)
+            {
+                state.SellerNick = Normalize(sellerNick);
+                state.BuyerNick = Normalize(buyerNick);
+                state.LastObservedAt = observedAt;
+
+                var dedupeKey = BuildEventDedupeKey(kind, messageKey, sortValue, sourceTimestamp);
+                if (!string.IsNullOrWhiteSpace(dedupeKey) && state.RecentEventKeySet.Contains(dedupeKey))
+                {
+                    result.Duplicate = true;
+                    result.Generation = state.Generation;
+                    return result;
+                }
+                RememberEventKeyLocked(state, dedupeKey);
+
+                var isBuyer = IsBuyerEvent(kind);
+                if (isBuyer)
+                {
+                    state.LastBuyerEventSortValue = Math.Max(state.LastBuyerEventSortValue, sortValue);
+                    if (state.LastBuyerEventAt < sourceTimestamp) state.LastBuyerEventAt = sourceTimestamp;
+                }
+
+                var stale = !isBuyer && IsOlderThanLatestBuyerLocked(state, sortValue, sourceTimestamp);
+                result.StaleAgainstLatestBuyer = stale;
+                result.Generation = state.Generation;
+                result.Accepted = true;
+
+                AppendEventLocked(
+                    state,
+                    kind,
+                    messageKey,
+                    sortValue,
+                    sourceTimestamp,
+                    observedAt,
+                    state.Generation,
+                    stale,
+                    reason);
+
+                if (cancelCurrentGeneration
+                    && !stale
+                    && state.Generation > 0
+                    && state.State != BuyerSessionAgentState.Completed
+                    && state.State != BuyerSessionAgentState.Cancelled
+                    && state.State != BuyerSessionAgentState.Failed)
+                {
+                    cancel = state.GenerationCancellation;
+                    SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
+                    result.CancelledCurrentGeneration = true;
+                }
+            }
+
+            if (cancel != null)
+            {
+                try { cancel.Cancel(); } catch { }
+            }
+
+            Log.Info("BuyerSessionAgent event: seller=" + Normalize(sellerNick)
+                + ", buyer=" + Normalize(buyerNick)
+                + ", kind=" + kind
+                + ", generation=" + result.Generation
+                + ", stale=" + result.StaleAgainstLatestBuyer
+                + ", cancelled=" + result.CancelledCurrentGeneration
+                + ", reason=" + Normalize(reason));
+            return result;
+        }
+
         public bool IsCurrent(string sellerNick, string buyerNick, long generation)
         {
             SessionState state;
-            if (!_sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
             lock (state.SyncRoot)
             {
                 return state.Generation == generation
@@ -160,7 +301,7 @@ namespace Bot.ChromeNs
             string reason)
         {
             SessionState state;
-            if (!_sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
             BuyerSessionAgentState previous;
             lock (state.SyncRoot)
             {
@@ -180,7 +321,7 @@ namespace Bot.ChromeNs
         public void Cancel(string sellerNick, string buyerNick, long generation, string reason)
         {
             SessionState state;
-            if (!_sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return;
             CancellationTokenSource cts = null;
             lock (state.SyncRoot)
             {
@@ -197,7 +338,7 @@ namespace Bot.ChromeNs
         public BuyerSessionAgentSnapshot GetSnapshot(string sellerNick, string buyerNick)
         {
             SessionState state;
-            if (!_sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return null;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return null;
             lock (state.SyncRoot)
             {
                 return new BuyerSessionAgentSnapshot
@@ -210,7 +351,12 @@ namespace Bot.ChromeNs
                     LastSortValue = state.LastSortValue,
                     LastObservedAt = state.LastObservedAt,
                     StateChangedAt = state.StateChangedAt,
-                    Reason = state.Reason
+                    Reason = state.Reason,
+                    LastEventKind = state.LastEventKind,
+                    LastEventAt = state.LastEventAt,
+                    LastBuyerEventSortValue = state.LastBuyerEventSortValue,
+                    LastBuyerEventAt = state.LastBuyerEventAt,
+                    RecentEvents = state.RecentEvents.Select(CloneEvent).ToList()
                 };
             }
         }
@@ -218,7 +364,7 @@ namespace Bot.ChromeNs
         public void Prune(TimeSpan maxIdle)
         {
             var cutoff = DateTime.Now - maxIdle;
-            foreach (var pair in _sessions.ToArray())
+            foreach (var pair in Sessions.ToArray())
             {
                 var remove = false;
                 lock (pair.Value.SyncRoot)
@@ -230,17 +376,28 @@ namespace Bot.ChromeNs
                             || pair.Value.State == BuyerSessionAgentState.Failed);
                 }
                 SessionState removed;
-                if (remove && _sessions.TryRemove(pair.Key, out removed))
+                if (remove && Sessions.TryRemove(pair.Key, out removed))
                 {
                     try { if (removed.GenerationCancellation != null) removed.GenerationCancellation.Dispose(); } catch { }
                 }
             }
         }
 
+        private static SessionState GetOrCreateState(string key, string sellerNick, string buyerNick)
+        {
+            return Sessions.GetOrAdd(key, _ => new SessionState
+            {
+                SellerNick = Normalize(sellerNick),
+                BuyerNick = Normalize(buyerNick),
+                State = BuyerSessionAgentState.Idle,
+                StateChangedAt = DateTime.Now
+            });
+        }
+
         private CancellationToken GetCancellationToken(string sessionKey, long generation)
         {
             SessionState state;
-            if (!_sessions.TryGetValue(sessionKey, out state)) return CancellationToken.None;
+            if (!Sessions.TryGetValue(sessionKey, out state)) return CancellationToken.None;
             lock (state.SyncRoot)
             {
                 if (state.Generation != generation || state.GenerationCancellation == null)
@@ -249,6 +406,109 @@ namespace Bot.ChromeNs
                 }
                 return state.GenerationCancellation.Token;
             }
+        }
+
+        private static bool IsOlderThanLatestBuyerLocked(SessionState state, long sortValue, DateTime sourceTimestamp)
+        {
+            var newestSort = Math.Max(state.LastSortValue, state.LastBuyerEventSortValue);
+            if (sortValue > 0 && newestSort > 0 && sortValue < newestSort) return true;
+            if (sourceTimestamp != default(DateTime)
+                && state.LastBuyerEventAt != default(DateTime)
+                && sourceTimestamp < state.LastBuyerEventAt.AddMilliseconds(-250)) return true;
+            return false;
+        }
+
+        private static bool IsBuyerEvent(BuyerSessionEventKind kind)
+        {
+            return kind == BuyerSessionEventKind.BuyerText
+                || kind == BuyerSessionEventKind.BuyerImage
+                || kind == BuyerSessionEventKind.BuyerProductCard
+                || kind == BuyerSessionEventKind.BuyerOrder
+                || kind == BuyerSessionEventKind.BuyerSystem
+                || kind == BuyerSessionEventKind.BuyerWithdrawal
+                || kind == BuyerSessionEventKind.BuyerMedia
+                || kind == BuyerSessionEventKind.BuyerActionAccepted;
+        }
+
+        private static void AppendEventLocked(
+            SessionState state,
+            BuyerSessionEventKind kind,
+            string messageKey,
+            long sortValue,
+            DateTime sourceTimestamp,
+            DateTime observedAt,
+            long generation,
+            bool stale,
+            string reason)
+        {
+            state.EventSequence++;
+            state.LastEventKind = kind;
+            state.LastEventAt = observedAt;
+            state.RecentEvents.Enqueue(new BuyerSessionEventSnapshot
+            {
+                Sequence = state.EventSequence,
+                Kind = kind,
+                MessageKey = messageKey,
+                SortValue = sortValue,
+                SourceTimestamp = sourceTimestamp,
+                ObservedAt = observedAt,
+                Generation = generation,
+                StaleAgainstLatestBuyer = stale,
+                Reason = Normalize(reason)
+            });
+            while (state.RecentEvents.Count > MaxRememberedEvents) state.RecentEvents.Dequeue();
+        }
+
+        private static BuyerSessionEventSnapshot CloneEvent(BuyerSessionEventSnapshot value)
+        {
+            return new BuyerSessionEventSnapshot
+            {
+                Sequence = value.Sequence,
+                Kind = value.Kind,
+                MessageKey = value.MessageKey,
+                SortValue = value.SortValue,
+                SourceTimestamp = value.SourceTimestamp,
+                ObservedAt = value.ObservedAt,
+                Generation = value.Generation,
+                StaleAgainstLatestBuyer = value.StaleAgainstLatestBuyer,
+                Reason = value.Reason
+            };
+        }
+
+        private static void RememberMessageKeyLocked(SessionState state, string messageKey)
+        {
+            if (string.IsNullOrWhiteSpace(messageKey)) return;
+            state.RecentMessageKeys.Enqueue(messageKey);
+            state.RecentMessageKeySet.Add(messageKey);
+            while (state.RecentMessageKeys.Count > MaxRememberedMessageKeys)
+            {
+                var removed = state.RecentMessageKeys.Dequeue();
+                state.RecentMessageKeySet.Remove(removed);
+            }
+        }
+
+        private static void RememberEventKeyLocked(SessionState state, string eventKey)
+        {
+            if (string.IsNullOrWhiteSpace(eventKey)) return;
+            state.RecentEventKeys.Enqueue(eventKey);
+            state.RecentEventKeySet.Add(eventKey);
+            while (state.RecentEventKeys.Count > MaxRememberedEvents * 2)
+            {
+                var removed = state.RecentEventKeys.Dequeue();
+                state.RecentEventKeySet.Remove(removed);
+            }
+        }
+
+        private static string BuildEventDedupeKey(
+            BuyerSessionEventKind kind,
+            string messageKey,
+            long sortValue,
+            DateTime sourceTimestamp)
+        {
+            if (!string.IsNullOrWhiteSpace(messageKey)) return ((int)kind) + ":" + messageKey;
+            if (sortValue > 0) return ((int)kind) + ":sort:" + sortValue;
+            if (sourceTimestamp != default(DateTime)) return ((int)kind) + ":time:" + sourceTimestamp.Ticks;
+            return string.Empty;
         }
 
         private static bool CanTransition(BuyerSessionAgentState current, BuyerSessionAgentState next)
@@ -290,8 +550,16 @@ namespace Bot.ChromeNs
             public DateTime StateChangedAt;
             public string Reason;
             public CancellationTokenSource GenerationCancellation;
+            public long EventSequence;
+            public BuyerSessionEventKind LastEventKind;
+            public DateTime LastEventAt;
+            public long LastBuyerEventSortValue;
+            public DateTime LastBuyerEventAt;
             public readonly Queue<string> RecentMessageKeys = new Queue<string>();
             public readonly HashSet<string> RecentMessageKeySet = new HashSet<string>(StringComparer.Ordinal);
+            public readonly Queue<string> RecentEventKeys = new Queue<string>();
+            public readonly HashSet<string> RecentEventKeySet = new HashSet<string>(StringComparer.Ordinal);
+            public readonly Queue<BuyerSessionEventSnapshot> RecentEvents = new Queue<BuyerSessionEventSnapshot>();
         }
     }
 }
