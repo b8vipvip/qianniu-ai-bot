@@ -78,6 +78,9 @@
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2QualityUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2RevisionUi.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeCenterV2GovernanceUi.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2NaturalLanguageService.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2OperatorUiBridge.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Knowledge\KnowledgeV2LegacyDeltaImportService.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2RuntimeBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2LearningBridge.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)ChromeNs\KnowledgeEngineV2FeedbackBridge.cs" />
