@@ -35,22 +35,24 @@ def test_quality_center_has_ranges_reports_and_privacy_notice():
     assert "复制质量报告" in ui
     assert "打开数据目录" in ui
     assert "不保存买家名称、聊天内容、答案正文或订单信息" in ui
-    # WPF TextBlock does not support Padding; card spacing must use Margin.
     card = ui.split("private static TextBlock Card", 1)[1].split("private static void AddCard", 1)[0]
     assert "Padding =" not in card
     assert "Margin =" in card
 
 
-def test_response_progress_records_route_answer_latency_and_cancellation():
+def test_response_progress_records_route_answer_latency_without_false_manual_cancellation():
     code = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     assert "ReplyQualityMetricsService.RecordRoute" in code
     assert "ReplyQualityMetricsService.RecordAnswerReady" in code
-    assert "ReplyQualityMetricsService.RecordCancellation(true)" in code
-    assert "ReplyQualityMetricsService.RecordCancellation(false)" in code
     assert "ResolveQualityRoute" in code
     assert 'return "DIRECT_KNOWLEDGE"' in code
     assert 'return "CONTEXTUAL_KNOWLEDGE"' in code
     assert 'return "VISION"' in code
+    manual_start = code.index("public static void MarkManualIntervention")
+    manual_end = code.index("public static void ObserveNewBuyerTurn", manual_start)
+    assert "RecordCancellation" not in code[manual_start:manual_end]
+    assert "Bot继续" in code[manual_start:manual_end]
+    assert "MessageProcessingTraceService.RecordCancelled" in code
 
 
 def test_real_send_metrics_use_seller_echo_or_watchdog_timeout():
