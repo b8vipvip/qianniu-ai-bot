@@ -4,7 +4,9 @@ using Bot.ShopScope;
 using BotLib;
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Bot.ChromeNs
 {
@@ -13,6 +15,8 @@ namespace Bot.ChromeNs
         private sealed class Entry
         {
             public readonly object Sync = new object();
+            public string ConversationKey = string.Empty;
+            public string TurnKey = string.Empty;
             public CtlConversation Control;
             public string Question = string.Empty;
             public string Answer = string.Empty;
@@ -28,10 +32,16 @@ namespace Bot.ChromeNs
             public DateTime ExpiresAt;
         }
 
+        // Entries are keyed by seller+buyer+turn timestamp rather than only seller+buyer. This is
+        // required because ordinary later buyer messages no longer cancel an already-dispatched Bot
+        // generation; Q1 and Q2 can therefore legitimately be in-flight at the same time.
         private static readonly ConcurrentDictionary<string, Entry> Entries =
             new ConcurrentDictionary<string, Entry>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, string> CurrentTurns =
+            new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DeliveryUiEntry> DeliveryUi =
             new ConcurrentDictionary<string, DeliveryUiEntry>(StringComparer.Ordinal);
+        private static readonly AsyncLocal<string> OperationTurnKey = new AsyncLocal<string>();
 
         private static string Key(string seller, string buyer)
         {
@@ -45,6 +55,11 @@ namespace Bot.ChromeNs
             if (current != null) return current.ShopKey;
             try { return ShopContextLocator.ResolveRuntimeBySellerNick(seller).ShopKey; }
             catch { return "legacy-" + (seller ?? string.Empty).Trim().ToLowerInvariant(); }
+        }
+
+        private static string TurnKey(string seller, string buyer, DateTime detectedAt)
+        {
+            return Key(seller, buyer) + "#turn:" + detectedAt.Ticks;
         }
 
         private static string DeliveryKey(string seller, string buyer, string answer)
@@ -72,84 +87,73 @@ namespace Bot.ChromeNs
             question = (question ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return null;
 
+            var observedAt = NormalizeDetectedAt(detectedAt);
             ObserveNewBuyerTurn(seller, buyer);
-            SendDeliveryWatchdog.OnBuyerMessageObserved(seller, buyer, detectedAt);
+            SendDeliveryWatchdog.OnBuyerMessageObserved(seller, buyer, observedAt);
+            CleanupEntries();
             CleanupDeliveryUi();
             if (ShouldDeferUnsupportedMediaCard(question)) return null;
 
-            var key = Key(seller, buyer);
-            while (true)
+            var conversationKey = Key(seller, buyer);
+            var turnKey = TurnKey(seller, buyer, observedAt);
+            var entry = Entries.GetOrAdd(turnKey, _ => new Entry
             {
-                var entry = Entries.GetOrAdd(key, _ => new Entry());
-                lock (entry.Sync)
+                ConversationKey = conversationKey,
+                TurnKey = turnKey,
+                DetectedAt = observedAt
+            });
+
+            var firstObservation = false;
+            lock (entry.Sync)
+            {
+                firstObservation = string.IsNullOrWhiteSpace(entry.Question);
+                if (entry.DetectedAt == DateTime.MinValue) entry.DetectedAt = observedAt;
+                entry.Question = MergeQuestion(entry.Question, question);
+                var sellerDesk = Desk.FindExistingBySellerNick(seller);
+                if (entry.Control == null && sellerDesk != null)
                 {
-                    Entry current;
-                    if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) continue;
-
-                    var firstObservation = entry.DetectedAt == DateTime.MinValue;
-                    var observedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
-                    var newerTurnDuringGeneration = entry.AnswerStartedAt != DateTime.MinValue
-                        && entry.DetectedAt != DateTime.MinValue
-                        && observedAt > entry.DetectedAt.AddMilliseconds(5)
-                        && !string.Equals(entry.Question, question, StringComparison.Ordinal);
-                    if (entry.AnswerReadyAt != DateTime.MinValue || newerTurnDuringGeneration)
+                    try
                     {
-                        if (entry.Control != null)
-                        {
-                            entry.Control.SetStatus(
-                                entry.AnswerReadyAt == DateTime.MinValue
-                                    ? "买家补充了新消息，上一条Bot任务继续独立处理，发送前会再次检查相关性"
-                                    : (IsMandatoryOrderAnswer(seller, buyer, entry.Answer)
-                                        ? "买家已补充新消息，下单固定预设仍保持优先发送"
-                                        : "买家已补充新消息，上一条答案保留并在发送前检查是否仍相关"),
-                                false);
-                        }
-                        var replacement = new Entry();
-                        if (!Entries.TryUpdate(key, replacement, entry)) continue;
-                        continue;
+                        entry.Control = sellerDesk.AddConversation(
+                            seller, buyer, entry.Question,
+                            "正在识别并等待买家本轮消息结束...", false, "处理中");
                     }
-
-                    if (entry.DetectedAt == DateTime.MinValue || detectedAt < entry.DetectedAt)
-                        entry.DetectedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
-                    entry.Question = MergeQuestion(entry.Question, question);
-                    var sellerDesk = Desk.FindExistingBySellerNick(seller);
-                    if (entry.Control == null && sellerDesk != null)
+                    catch (Exception ex)
                     {
-                        try
-                        {
-                            entry.Control = sellerDesk.AddConversation(
-                                seller, buyer, entry.Question,
-                                "正在识别并等待买家本轮消息结束...", false, "处理中");
-                        }
-                        catch (Exception ex)
-                        {
-                            Log.ErrorWithMaxCount("创建本店回复进度卡片失败，已忽略UI异常继续处理消息：" + ex.Message, 10);
-                            entry.Control = null;
-                        }
+                        Log.ErrorWithMaxCount("创建本店回复进度卡片失败，已忽略UI异常继续处理消息：" + ex.Message, 10);
+                        entry.Control = null;
                     }
-                    if (entry.Control != null)
-                    {
-                        entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
+                }
+                if (entry.Control != null)
+                {
+                    entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
+                    if (entry.AnswerStartedAt == DateTime.MinValue)
                         entry.Control.SetProcessing("已识别，等待合并本轮消息...");
-                    }
-                    if (firstObservation)
-                        MessageProcessingTraceService.RecordQuestion(seller, buyer, entry.Question);
-                    return entry.Control;
                 }
             }
+
+            PromoteCurrentTurn(conversationKey, entry, seller, buyer);
+            if (firstObservation)
+                MessageProcessingTraceService.RecordQuestion(seller, buyer, entry.Question);
+            return entry.Control;
         }
 
         public static CtlConversation BeginAnswer(
             string seller, string buyer, string combinedQuestion, DateTime detectedAt)
         {
-            var control = SetExactQuestion(seller, buyer, combinedQuestion, detectedAt);
-            var startedAt = MarkAnswerStarted(seller, buyer, DateTime.Now);
+            var detected = NormalizeDetectedAt(detectedAt);
+            var control = ObserveQuestion(seller, buyer, combinedQuestion, detected);
+            var turnKey = TurnKey(seller, buyer, detected);
+            ConsolidatePendingBurstEntries(seller, buyer, combinedQuestion, detected, turnKey);
+            OperationTurnKey.Value = turnKey;
+            control = SetExactQuestionByTurn(turnKey, combinedQuestion, detected) ?? control;
+            var startedAt = MarkAnswerStarted(turnKey, DateTime.Now);
             if (control != null) control.SetProcessing("正在获取答案...");
-            var queueMs = Math.Max(0, (long)(startedAt - detectedAt).TotalMilliseconds);
+            var queueMs = Math.Max(0, (long)(startedAt - detected).TotalMilliseconds);
             MessageProcessingTraceService.RecordGenerationStarted(
                 seller, buyer, combinedQuestion, queueMs);
             Log.Info("本店回复进度进入答案生成: seller=" + seller + ", buyer=" + buyer
-                + ", queueMs=" + queueMs);
+                + ", turn=" + turnKey + ", queueMs=" + queueMs);
             return control;
         }
 
@@ -164,21 +168,24 @@ namespace Bot.ChromeNs
         {
             if (answerReadyAt == DateTime.MinValue) answerReadyAt = DateTime.Now;
             var detected = detectedAt == DateTime.MinValue ? answerReadyAt : detectedAt;
-            var control = SetExactQuestion(seller, buyer, question, detected);
+            var turnKey = ResolveOperationOrDetectedTurnKey(seller, buyer, detected);
+            if (!Entries.ContainsKey(turnKey))
+            {
+                ObserveQuestion(seller, buyer, question, detected);
+                turnKey = TurnKey(seller, buyer, detected);
+            }
+            OperationTurnKey.Value = turnKey;
+            var control = SetExactQuestionByTurn(turnKey, question, detected);
             var answerStartedAt = detected;
-            var key = Key(seller, buyer);
             Entry entry;
-            if (Entries.TryGetValue(key, out entry) && entry != null)
+            if (Entries.TryGetValue(turnKey, out entry) && entry != null)
             {
                 lock (entry.Sync)
                 {
-                    Entry current;
-                    if (Entries.TryGetValue(key, out current) && ReferenceEquals(current, entry))
-                    {
-                        entry.AnswerReadyAt = answerReadyAt;
-                        entry.Answer = answer ?? string.Empty;
-                        answerStartedAt = entry.AnswerStartedAt == DateTime.MinValue ? detected : entry.AnswerStartedAt;
-                    }
+                    entry.AnswerReadyAt = answerReadyAt;
+                    entry.Answer = answer ?? string.Empty;
+                    answerStartedAt = entry.AnswerStartedAt == DateTime.MinValue ? detected : entry.AnswerStartedAt;
+                    control = entry.Control ?? control;
                 }
             }
             if (control != null)
@@ -196,6 +203,7 @@ namespace Bot.ChromeNs
             MessageProcessingTraceService.RecordAnswerReady(
                 seller, buyer, question, answer, source, responseMs);
             Log.Info("本店回复进度答案就绪: seller=" + seller + ", buyer=" + buyer
+                + ", turn=" + turnKey
                 + ", responseMs=" + responseMs
                 + ", source=" + (source ?? string.Empty));
 
@@ -241,25 +249,26 @@ namespace Bot.ChromeNs
         }
 
         /// <summary>
-        /// A human seller reply is no longer a takeover/cancellation signal. The Bot continues its
-        /// already-started reply task and the human answer is retained as high-value evidence for
-        /// Bot-vs-human comparison learning. Wrong-buyer/session/delivery safety remains unchanged.
+        /// A human seller reply is observation/learning evidence only. Every active turn keeps its
+        /// own card and Bot generation; no turn is removed or cancelled here.
         /// </summary>
         public static void MarkManualIntervention(string seller, string buyer, string sellerReply)
         {
             MessageProcessingTraceService.RecordManualObservation(seller, buyer, sellerReply);
-            Entry entry;
-            if (Entries.TryGetValue(Key(seller, buyer), out entry) && entry != null)
+            var conversationKey = Key(seller, buyer);
+            foreach (var entry in Entries.Values
+                .Where(x => x != null
+                    && string.Equals(x.ConversationKey, conversationKey, StringComparison.Ordinal)
+                    && x.DetectedAt >= DateTime.Now.AddMinutes(-30))
+                .ToList())
             {
                 lock (entry.Sync)
                 {
-                    if (entry.Control != null)
-                    {
-                        if (entry.AnswerReadyAt == DateTime.MinValue)
-                            entry.Control.SetProcessing("已观察到人工客服回复；Bot继续获取答案，稍后自动对比学习");
-                        else
-                            entry.Control.SetStatus("已观察到人工客服回复；Bot仍按原任务发送，并自动对比人工答案学习", false);
-                    }
+                    if (entry.Control == null) continue;
+                    if (entry.AnswerReadyAt == DateTime.MinValue)
+                        entry.Control.SetProcessing("已观察到人工客服回复；Bot继续获取答案，稍后自动对比学习");
+                    else
+                        entry.Control.SetStatus("已观察到人工客服回复；Bot仍按原任务发送，并自动对比人工答案学习", false);
                 }
             }
             Log.Info("已观察到人工客服回复但不取消Bot任务: seller=" + seller + ", buyer=" + buyer
@@ -280,8 +289,9 @@ namespace Bot.ChromeNs
         public static void Fail(string seller, string buyer, string detail)
         {
             MessageProcessingTraceService.RecordFailure(seller, buyer, detail);
+            var turnKey = ResolveTerminalTurnKey(seller, buyer);
             Entry entry;
-            if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
+            if (!TryRemoveTurn(turnKey, out entry) || entry == null) return;
             lock (entry.Sync)
             {
                 if (entry.Control != null)
@@ -295,8 +305,9 @@ namespace Bot.ChromeNs
         public static void Cancel(string seller, string buyer, string detail)
         {
             MessageProcessingTraceService.RecordCancelled(seller, buyer, detail);
+            var turnKey = ResolveTerminalTurnKey(seller, buyer);
             Entry entry;
-            if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
+            if (!TryRemoveTurn(turnKey, out entry) || entry == null) return;
             lock (entry.Sync)
             {
                 if (entry.Control != null)
@@ -306,16 +317,218 @@ namespace Bot.ChromeNs
 
         public static void Complete(string seller, string buyer)
         {
-            var key = Key(seller, buyer);
+            var turnKey = ResolveTerminalTurnKey(seller, buyer);
             Entry entry;
-            if (!Entries.TryGetValue(key, out entry) || entry == null) return;
+            if (!Entries.TryGetValue(turnKey, out entry) || entry == null) return;
             lock (entry.Sync)
             {
-                Entry current;
-                if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) return;
                 if (entry.AnswerReadyAt == DateTime.MinValue) return;
+            }
+            Entry ignored;
+            TryRemoveTurn(turnKey, out ignored);
+        }
+
+        private static void PromoteCurrentTurn(string conversationKey, Entry entry, string seller, string buyer)
+        {
+            if (entry == null) return;
+            while (true)
+            {
+                string previousKey;
+                if (!CurrentTurns.TryGetValue(conversationKey, out previousKey))
+                {
+                    if (CurrentTurns.TryAdd(conversationKey, entry.TurnKey)) return;
+                    continue;
+                }
+                if (string.Equals(previousKey, entry.TurnKey, StringComparison.Ordinal)) return;
+
+                Entry previous;
+                if (!Entries.TryGetValue(previousKey, out previous) || previous == null)
+                {
+                    if (CurrentTurns.TryUpdate(conversationKey, entry.TurnKey, previousKey)) return;
+                    continue;
+                }
+                if (previous.DetectedAt > entry.DetectedAt) return;
+                if (!CurrentTurns.TryUpdate(conversationKey, entry.TurnKey, previousKey)) continue;
+
+                lock (previous.Sync)
+                {
+                    if (previous.Control != null)
+                    {
+                        previous.Control.SetStatus(
+                            previous.AnswerReadyAt == DateTime.MinValue
+                                ? "买家补充了新消息，上一条Bot任务继续独立处理，发送前会再次检查相关性"
+                                : (IsMandatoryOrderAnswer(seller, buyer, previous.Answer)
+                                    ? "买家已补充新消息，下单固定预设仍保持优先发送"
+                                    : "买家已补充新消息，上一条答案保留并在发送前检查是否仍相关"),
+                            false);
+                    }
+                }
+                return;
+            }
+        }
+
+        private static void ConsolidatePendingBurstEntries(
+            string seller,
+            string buyer,
+            string combinedQuestion,
+            DateTime detectedAt,
+            string selectedTurnKey)
+        {
+            var conversationKey = Key(seller, buyer);
+            var removedCurrent = false;
+            foreach (var pair in Entries.ToArray())
+            {
+                var entry = pair.Value;
+                if (entry == null
+                    || string.Equals(pair.Key, selectedTurnKey, StringComparison.Ordinal)
+                    || !string.Equals(entry.ConversationKey, conversationKey, StringComparison.Ordinal)
+                    || entry.DetectedAt <= detectedAt
+                    || entry.DetectedAt > detectedAt.AddSeconds(6)
+                    || entry.AnswerStartedAt != DateTime.MinValue
+                    || !QuestionIncluded(combinedQuestion, entry.Question))
+                {
+                    continue;
+                }
+
+                Entry removed;
+                if (!Entries.TryRemove(pair.Key, out removed) || removed == null) continue;
+                lock (removed.Sync)
+                {
+                    if (removed.Control != null)
+                        removed.Control.SetStatus("该条消息已合并到同一轮连续消息中，由合并后的Bot任务统一处理", true);
+                }
+                string currentKey;
+                if (CurrentTurns.TryGetValue(conversationKey, out currentKey)
+                    && string.Equals(currentKey, pair.Key, StringComparison.Ordinal))
+                {
+                    removedCurrent = true;
+                }
+            }
+
+            string existingCurrent;
+            if (removedCurrent
+                || !CurrentTurns.TryGetValue(conversationKey, out existingCurrent)
+                || !Entries.ContainsKey(existingCurrent))
+            {
+                CurrentTurns[conversationKey] = selectedTurnKey;
+            }
+        }
+
+        private static bool QuestionIncluded(string combinedQuestion, string candidate)
+        {
+            var combined = NormalizeQuestionForMerge(combinedQuestion);
+            var part = NormalizeQuestionForMerge(candidate);
+            return part.Length > 0 && combined.Contains(part);
+        }
+
+        private static string NormalizeQuestionForMerge(string value)
+        {
+            return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty);
+        }
+
+        private static DateTime MarkAnswerStarted(string turnKey, DateTime startedAt)
+        {
+            Entry entry;
+            if (!Entries.TryGetValue(turnKey, out entry) || entry == null) return startedAt;
+            lock (entry.Sync)
+            {
+                if (entry.AnswerStartedAt == DateTime.MinValue)
+                    entry.AnswerStartedAt = startedAt == DateTime.MinValue ? DateTime.Now : startedAt;
+                return entry.AnswerStartedAt;
+            }
+        }
+
+        private static CtlConversation SetExactQuestionByTurn(
+            string turnKey, string question, DateTime detectedAt)
+        {
+            Entry entry;
+            if (!Entries.TryGetValue(turnKey, out entry) || entry == null) return null;
+            lock (entry.Sync)
+            {
+                entry.Question = (question ?? string.Empty).Trim();
+                if (entry.DetectedAt == DateTime.MinValue) entry.DetectedAt = NormalizeDetectedAt(detectedAt);
+                if (entry.Control != null)
+                {
+                    entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
+                    return entry.Control;
+                }
+            }
+            return null;
+        }
+
+        private static string ResolveOperationOrDetectedTurnKey(string seller, string buyer, DateTime detectedAt)
+        {
+            var conversationKey = Key(seller, buyer);
+            var operationKey = OperationTurnKey.Value;
+            Entry operationEntry;
+            if (!string.IsNullOrWhiteSpace(operationKey)
+                && Entries.TryGetValue(operationKey, out operationEntry)
+                && operationEntry != null
+                && string.Equals(operationEntry.ConversationKey, conversationKey, StringComparison.Ordinal))
+            {
+                return operationKey;
+            }
+            return TurnKey(seller, buyer, NormalizeDetectedAt(detectedAt));
+        }
+
+        private static string ResolveTerminalTurnKey(string seller, string buyer)
+        {
+            var conversationKey = Key(seller, buyer);
+            var operationKey = OperationTurnKey.Value;
+            Entry operationEntry;
+            if (!string.IsNullOrWhiteSpace(operationKey)
+                && Entries.TryGetValue(operationKey, out operationEntry)
+                && operationEntry != null
+                && string.Equals(operationEntry.ConversationKey, conversationKey, StringComparison.Ordinal))
+            {
+                return operationKey;
+            }
+            string currentKey;
+            return CurrentTurns.TryGetValue(conversationKey, out currentKey)
+                ? currentKey
+                : string.Empty;
+        }
+
+        private static bool TryRemoveTurn(string turnKey, out Entry entry)
+        {
+            entry = null;
+            if (string.IsNullOrWhiteSpace(turnKey) || !Entries.TryRemove(turnKey, out entry)) return false;
+            var conversationKey = entry == null ? string.Empty : entry.ConversationKey;
+            if (!string.IsNullOrWhiteSpace(conversationKey))
+            {
+                string currentKey;
+                if (CurrentTurns.TryGetValue(conversationKey, out currentKey)
+                    && string.Equals(currentKey, turnKey, StringComparison.Ordinal))
+                {
+                    var replacement = Entries.Values
+                        .Where(x => x != null && string.Equals(x.ConversationKey, conversationKey, StringComparison.Ordinal))
+                        .OrderByDescending(x => x.DetectedAt)
+                        .FirstOrDefault();
+                    if (replacement == null)
+                    {
+                        string ignored;
+                        CurrentTurns.TryRemove(conversationKey, out ignored);
+                    }
+                    else
+                    {
+                        CurrentTurns[conversationKey] = replacement.TurnKey;
+                    }
+                }
+            }
+            if (string.Equals(OperationTurnKey.Value, turnKey, StringComparison.Ordinal))
+                OperationTurnKey.Value = null;
+            return true;
+        }
+
+        private static void CleanupEntries()
+        {
+            var cutoff = DateTime.Now.AddMinutes(-30);
+            foreach (var pair in Entries.ToArray())
+            {
+                var entry = pair.Value;
+                if (entry != null && entry.DetectedAt >= cutoff) continue;
                 Entry ignored;
-                Entries.TryRemove(key, out ignored);
+                TryRemoveTurn(pair.Key, out ignored);
             }
         }
 
@@ -330,42 +543,9 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static DateTime MarkAnswerStarted(string seller, string buyer, DateTime startedAt)
+        private static DateTime NormalizeDetectedAt(DateTime value)
         {
-            var key = Key(seller, buyer);
-            Entry entry;
-            if (!Entries.TryGetValue(key, out entry) || entry == null) return startedAt;
-            lock (entry.Sync)
-            {
-                Entry current;
-                if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) return startedAt;
-                if (entry.AnswerStartedAt == DateTime.MinValue)
-                    entry.AnswerStartedAt = startedAt == DateTime.MinValue ? DateTime.Now : startedAt;
-                return entry.AnswerStartedAt;
-            }
-        }
-
-        private static CtlConversation SetExactQuestion(
-            string seller, string buyer, string question, DateTime detectedAt)
-        {
-            var control = ObserveQuestion(seller, buyer, question, detectedAt);
-            var key = Key(seller, buyer);
-            Entry entry;
-            if (!Entries.TryGetValue(key, out entry) || entry == null) return control;
-            lock (entry.Sync)
-            {
-                Entry current;
-                if (!Entries.TryGetValue(key, out current) || !ReferenceEquals(current, entry)) return control;
-                entry.Question = (question ?? string.Empty).Trim();
-                if (entry.DetectedAt == DateTime.MinValue || detectedAt < entry.DetectedAt)
-                    entry.DetectedAt = detectedAt == DateTime.MinValue ? DateTime.Now : detectedAt;
-                if (entry.Control != null)
-                {
-                    entry.Control.SetQuestion(entry.Question, entry.DetectedAt);
-                    control = entry.Control;
-                }
-            }
-            return control;
+            return value == DateTime.MinValue ? DateTime.Now : value;
         }
 
         private static bool ShouldDeferUnsupportedMediaCard(string question)
