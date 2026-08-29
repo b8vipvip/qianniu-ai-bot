@@ -4,7 +4,6 @@ using Newtonsoft.Json;
 using System;
 using System.Collections.Concurrent;
 using System.Linq;
-using System.Reflection;
 using System.Threading;
 
 namespace Bot.ChromeNs
@@ -13,17 +12,14 @@ namespace Bot.ChromeNs
     /// Feeds raw QN/CDP events into the shared BuyerSessionAgent before the independent reply/order
     /// pipelines process them. This gives one ordered seller+buyer timeline for text, image, product,
     /// order, withdrawal, system and seller reply events without replacing the existing stable send
-    /// pipeline. Human replies only cancel a generation when their source time is not older than the
-    /// latest buyer event, preventing delayed old manual events from killing a new buyer question.
+    /// pipeline. Human seller replies are observational learning evidence and never cancel Bot work;
+    /// explicit hard invalidation remains reserved for withdrawal/session/send safety paths.
     /// </summary>
     internal static class BuyerSessionAgentRuntimeBridge
     {
         private static readonly Lazy<BuyerSessionAgent> AgentHolder =
             new Lazy<BuyerSessionAgent>(() => new BuyerSessionAgent());
         private static readonly ConcurrentDictionary<QN, byte> Attached = new ConcurrentDictionary<QN, byte>();
-        private static readonly FieldInfo CoordinatorField = typeof(QN).GetField(
-            "_buyerMessageBurstCoordinator",
-            BindingFlags.Instance | BindingFlags.NonPublic);
         private static Timer _timer;
         private static int _started;
 
@@ -36,7 +32,7 @@ namespace Bot.ChromeNs
         {
             if (Interlocked.Exchange(ref _started, 1) != 0) return;
             _timer = new Timer(_ => AttachExisting(), null, 300, 700);
-            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线。");
+            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线；人工回复仅记录用于学习。" );
         }
 
         private static void AttachExisting()
@@ -138,17 +134,13 @@ namespace Bot.ChromeNs
                     sourceTime,
                     now,
                     source + (botEcho ? ":bot_echo" : ":human_reply"),
-                    !botEcho);
+                    false);
 
-                if (!botEcho && result.CancelledCurrentGeneration)
+                if (!botEcho)
                 {
-                    CancelCoordinator(qn, seller, buyer,
-                        "人工客服消息已进入统一BuyerSessionAgent，取消同一买家的当前自动回复generation");
-                }
-                else if (!botEcho && result.StaleAgainstLatestBuyer)
-                {
-                    Log.Info("BuyerSessionAgent忽略迟到人工事件的取消动作: seller=" + seller
-                        + ", buyer=" + buyer + ", sort=" + sort);
+                    Log.Info("BuyerSessionAgent记录人工客服回复作为学习证据，未取消Bot generation: seller="
+                        + seller + ", buyer=" + buyer + ", stale=" + result.StaleAgainstLatestBuyer
+                        + ", sort=" + sort);
                 }
                 return;
             }
@@ -197,19 +189,6 @@ namespace Bot.ChromeNs
                         || expected.Contains(actual));
             }
             catch { return false; }
-        }
-
-        private static void CancelCoordinator(QN qn, string seller, string buyer, string reason)
-        {
-            try
-            {
-                var coordinator = CoordinatorField == null ? null : CoordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
-                if (coordinator != null) coordinator.CancelBuyer(seller, buyer, reason);
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("BuyerSessionAgent取消旧generation失败: " + ex.Message, 10);
-            }
         }
 
         private static string GetMessageText(QNChatMessage message)
