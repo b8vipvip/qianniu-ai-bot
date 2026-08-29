@@ -163,7 +163,7 @@ namespace Bot.ChromeNs
                 }
 
                 RememberMessageKeyLocked(state, messageKey);
-                CancellationTokenSource coalescingCts;
+                CancellationTokenSource coalescingCts = null;
                 reusedCoalescingGeneration = state.Generation > 0
                     && (state.State == BuyerSessionAgentState.Observed
                         || state.State == BuyerSessionAgentState.Coalescing)
