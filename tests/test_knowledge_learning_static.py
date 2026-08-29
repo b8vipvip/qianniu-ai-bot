@@ -21,12 +21,13 @@ def test_local_first_and_source_labels():
     assert '"AI生成"' in source
 
 
-def test_manual_reply_guard_and_learning_are_shop_scoped():
+def test_manual_reply_comparison_learning_is_shop_scoped_and_nonblocking():
     rpa = text("src/Bot/ChromeNs/QNRpa.cs")
     service = text("src/Bot/ChromeNs/KnowledgeLearningService.cs")
     assert "TryBlockForManualReply" in rpa
-    assert "客服已人工回复" in service
-    assert "人工回复" in service
+    assert "检测到本店客服人工回复但不取消Bot发送" in service
+    assert "QueueManualAnswerComparison" in service
+    assert "CompareManualAnswerAsync" in service
     assert "AllowNextManualSend" in service
     assert "ScopeKey()" in service
     assert "ShopSettingsScope.Enter(shop)" in service
@@ -40,6 +41,8 @@ def test_learning_dedup_sensitive_redaction_and_per_shop_save_lock():
     assert "ShopContextLocator.ResolveRuntimeBySellerNick" in source
     assert "[手机号]" in source
     assert "[API_KEY]" in source
+    assert "confidence < 0.90" in source
+    assert "ContainsUnsafeManualLearning" in source
 
 
 def test_knowledge_manager_refreshes_after_learning():
