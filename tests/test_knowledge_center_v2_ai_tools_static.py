@@ -7,22 +7,27 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_v2_navigation_exposes_smart_import_and_ai_history():
+def test_v2_navigation_exposes_smart_import_history_and_ai_history():
     ui = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
     assert 'Nav("智能导入", () => new KnowledgeV2SmartImportPage' in ui
+    assert 'Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage' in ui
     assert 'Nav("AI优化记录", () => new KnowledgeV2AiOptimizationHistoryPage' in ui
 
 
-def test_v2_smart_import_writes_v2_repository_not_legacy_import_service():
+def test_v2_smart_import_writes_native_v2_repository_not_legacy_faq_conversion():
     service = read("src/Bot/Knowledge/KnowledgeV2SmartImportService.cs")
     assert "KnowledgeAiService.SplitTextBatches" in service
-    assert "KnowledgeAiService.ParseAiKnowledgeResult" in service
     assert "KnowledgeAiService.ContentHash" in service
-    assert "KnowledgeEngineV2Semantics.FromLegacy" in service
     assert "KnowledgeEngineV2Repository.Save(seller, record)" in service
     assert 'record.SourceType = "ai_smart_import"' in service
+    assert "KnowledgeEngineV2Semantics.NormalizeType" in service
+    assert "KnowledgeEngineV2Semantics.NormalizeIntent" in service
+    assert "KnowledgeEngineV2Semantics.NormalizePredicate" in service
+    assert "KnowledgeAiService.ParseAiKnowledgeResult" not in service
+    assert "KnowledgeEngineV2Semantics.FromLegacy" not in service
     assert "BotFeatureStore.SaveKnowledgeBase" not in service
     assert ".ImportAsync(_data" not in service
+    assert "禁止输出旧版 faqs/category/question/keywords" in service
 
 
 def test_v2_smart_import_preserves_timeout_retry_vision_fallback_and_partial_progress():
@@ -32,7 +37,7 @@ def test_v2_smart_import_preserves_timeout_retry_vision_fallback_and_partial_pro
         "正在自动重试一次",
         "IsVisionUnsupported",
         "UnsupportedImageSkipped",
-        "已写入新版知识库",
+        "已写入 Knowledge V2",
         "DuplicateSkipped",
     ]:
         assert term in service
@@ -43,6 +48,7 @@ def test_v2_smart_import_creates_shop_scoped_ai_audit_record():
     assert "KnowledgeEngineV2GovernanceAuditService.TryAppendAction" in service
     assert '"ai_smart_import"' in service
     assert '"knowledge_import"' in service
+    assert '"schema=knowledge_v2' in service
     assert 'AppendAudit(seller, result, "success"' in service
     assert 'AppendAudit(seller, result, "failed"' in service
 
