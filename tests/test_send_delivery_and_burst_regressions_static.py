@@ -59,16 +59,21 @@ def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
     assert "return false;" in learning[learning.index("public static bool TryBlockForManualReply"):]
 
 
-def test_progress_card_rotates_without_cancelling_previous_generation():
+def test_progress_cards_are_isolated_per_turn_without_cancelling_previous_generation():
     source = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
-    assert "newerTurnDuringGeneration" in source
-    assert "entry.AnswerStartedAt != DateTime.MinValue" in source
+    assert "ConcurrentDictionary<string, string> CurrentTurns" in source
+    assert "AsyncLocal<string> OperationTurnKey" in source
+    assert "#turn:" in source
+    assert "PromoteCurrentTurn" in source
+    assert "ConsolidatePendingBurstEntries" in source
     assert "上一条Bot任务继续独立处理，发送前会再次检查相关性" in source
-    assert "Entries.TryUpdate(key, replacement, entry)" in source
+    assert "该条消息已合并到同一轮连续消息中" in source
+    assert "ResolveTerminalTurnKey" in source
     assert "ScopeKey(seller)" in source
-    rotate_start = source.index("var newerTurnDuringGeneration")
-    rotate_end = source.index("if (entry.DetectedAt == DateTime.MinValue", rotate_start)
-    assert "RecordCancellation(true)" not in source[rotate_start:rotate_end]
+    manual_start = source.index("public static void MarkManualIntervention")
+    manual_end = source.index("public static void ObserveNewBuyerTurn", manual_start)
+    assert "TryRemoveTurn" not in source[manual_start:manual_end]
+    assert "RecordCancellation" not in source
 
 
 def test_text_ai_pipeline_has_one_total_budget_and_terminal_trace_paths():
@@ -99,6 +104,7 @@ def test_manual_answer_comparison_only_upgrades_safe_high_confidence_knowledge()
 
 def test_buyer_session_agent_keeps_parallel_generations_alive_until_explicit_invalidation():
     source = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     observe_start = source.index("public BuyerSessionAgentObservation ObserveBuyerMessage")
     record_start = source.index("public BuyerSessionEventResult RecordEvent", observe_start)
     observe = source[observe_start:record_start]
@@ -106,8 +112,13 @@ def test_buyer_session_agent_keeps_parallel_generations_alive_until_explicit_inv
     assert "previous.Cancel()" not in observe
     assert "SupersededPreviousGeneration = false" in observe
     assert 'superseded=False' in observe
+    assert "independentGeneration=True" in observe
     assert "state.ActiveGenerations.TryGetValue(generation" in source
     assert "kind != BuyerSessionEventKind.SellerHumanReply" in source
+    assert "public void CancelAll" in source
+    assert "CompleteMergedAwayGenerations" in burst
+    assert "coalesced_into_generation_" in burst
+    assert "_sessionAgent.CancelAll(seller, buyer, reason)" in burst
 
 
 def test_answer_context_menu_has_copy_action():
