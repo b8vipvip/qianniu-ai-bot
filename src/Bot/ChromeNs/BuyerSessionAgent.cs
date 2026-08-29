@@ -91,6 +91,8 @@ namespace Bot.ChromeNs
         public long Generation { get; set; }
         public CancellationToken CancellationToken { get; set; }
         public bool SupersededPreviousGeneration { get; set; }
+        public bool Duplicate { get; set; }
+        public bool ReusedCoalescingGeneration { get; set; }
     }
 
     /// <summary>
@@ -99,11 +101,12 @@ namespace Bot.ChromeNs
     /// drift into independent timelines. Raw events are retained as a bounded ledger while only an
     /// accepted actionable buyer message advances Generation.
     ///
-    /// A generation is an independent dispatched reply lease. A later ordinary buyer message does
+    /// A dispatched generation is an independent reply lease. A later ordinary buyer message does
     /// not invalidate an earlier dispatched generation: both may finish and the relevance gate makes
-    /// the final send/no-send decision from the complete conversation. Only explicit hard invalidation
-    /// cancels an active generation. This prevents duplicate ingress/background recovery from turning
-    /// harmless follow-up messages into false supersede cancellations.
+    /// the final send/no-send decision from the complete conversation. Messages that arrive while the
+    /// current turn is still Observed/Coalescing reuse that generation and form one burst. The same
+    /// messageKey is rejected across every ingress path. Only explicit hard invalidation cancels an
+    /// active generation.
     /// </summary>
     public sealed class BuyerSessionAgent
     {
@@ -129,6 +132,7 @@ namespace Bot.ChromeNs
 
             long generation;
             bool hadParallelGeneration;
+            bool reusedCoalescingGeneration;
             CancellationToken token;
             lock (state.SyncRoot)
             {
@@ -152,30 +156,60 @@ namespace Bot.ChromeNs
                         SessionKey = key,
                         Generation = state.Generation,
                         CancellationToken = token,
-                        SupersededPreviousGeneration = false
+                        SupersededPreviousGeneration = false,
+                        Duplicate = true,
+                        ReusedCoalescingGeneration = false
                     };
                 }
 
                 RememberMessageKeyLocked(state, messageKey);
-                hadParallelGeneration = state.ActiveGenerations.Count > 0;
-                state.Generation++;
-                generation = state.Generation;
-                var cts = new CancellationTokenSource();
-                state.GenerationCancellation = cts;
-                state.ActiveGenerations[generation] = cts;
-                token = cts.Token;
-                state.LastMessageKey = messageKey;
-                SetStateLocked(state, BuyerSessionAgentState.Observed, "buyer_message");
-                AppendEventLocked(
-                    state,
-                    BuyerSessionEventKind.BuyerActionAccepted,
-                    messageKey,
-                    sortValue,
-                    state.LastObservedAt,
-                    state.LastObservedAt,
-                    generation,
-                    false,
-                    "actionable_buyer_message");
+                CancellationTokenSource coalescingCts;
+                reusedCoalescingGeneration = state.Generation > 0
+                    && (state.State == BuyerSessionAgentState.Observed
+                        || state.State == BuyerSessionAgentState.Coalescing)
+                    && state.ActiveGenerations.TryGetValue(state.Generation, out coalescingCts)
+                    && coalescingCts != null
+                    && !coalescingCts.IsCancellationRequested;
+
+                if (reusedCoalescingGeneration)
+                {
+                    generation = state.Generation;
+                    token = coalescingCts.Token;
+                    hadParallelGeneration = state.ActiveGenerations.Count > 1;
+                    state.LastMessageKey = messageKey;
+                    AppendEventLocked(
+                        state,
+                        BuyerSessionEventKind.BuyerActionAccepted,
+                        messageKey,
+                        sortValue,
+                        state.LastObservedAt,
+                        state.LastObservedAt,
+                        generation,
+                        false,
+                        "actionable_buyer_message_coalesced");
+                }
+                else
+                {
+                    hadParallelGeneration = state.ActiveGenerations.Count > 0;
+                    state.Generation++;
+                    generation = state.Generation;
+                    var cts = new CancellationTokenSource();
+                    state.GenerationCancellation = cts;
+                    state.ActiveGenerations[generation] = cts;
+                    token = cts.Token;
+                    state.LastMessageKey = messageKey;
+                    SetStateLocked(state, BuyerSessionAgentState.Observed, "buyer_message");
+                    AppendEventLocked(
+                        state,
+                        BuyerSessionEventKind.BuyerActionAccepted,
+                        messageKey,
+                        sortValue,
+                        state.LastObservedAt,
+                        state.LastObservedAt,
+                        generation,
+                        false,
+                        "actionable_buyer_message");
+                }
             }
 
             Log.Info("BuyerSessionAgent observed: seller=" + Normalize(sellerNick)
@@ -183,6 +217,7 @@ namespace Bot.ChromeNs
                 + ", generation=" + generation
                 + ", sort=" + sortValue
                 + ", superseded=False"
+                + ", coalescedExisting=" + reusedCoalescingGeneration
                 + ", parallelPrevious=" + hadParallelGeneration);
 
             return new BuyerSessionAgentObservation
@@ -190,7 +225,9 @@ namespace Bot.ChromeNs
                 SessionKey = key,
                 Generation = generation,
                 CancellationToken = token,
-                SupersededPreviousGeneration = false
+                SupersededPreviousGeneration = false,
+                Duplicate = false,
+                ReusedCoalescingGeneration = reusedCoalescingGeneration
             };
         }
 
