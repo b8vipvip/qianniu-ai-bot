@@ -39,18 +39,23 @@ def test_local_ocr_worker_is_multilingual_onnx_and_bundled():
     assert "package\\Bin\\local-ocr\\LocalOcrWorker.exe" in workflow
 
 
-def test_buyer_session_agent_invalidates_old_generations():
+def test_buyer_session_agent_keeps_dispatched_generations_and_coalesces_same_turn():
     props = read("src/Directory.Build.props")
     agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
 
     assert "BuyerSessionAgent.cs" in props
     assert "state.Generation++" in agent
-    assert "previous.Cancel()" in agent
+    assert "previous.Cancel()" not in agent
+    assert "ActiveGenerations" in agent
+    assert "ReusedCoalescingGeneration" in agent
+    assert "actionable_buyer_message_coalesced" in agent
+    assert "Duplicate = true" in agent
     assert "Sending = 6" in agent
     assert "Waiting = 7" in agent
     assert "Completed = 8" in agent
     assert "_sessionAgent.ObserveBuyerMessage" in burst
+    assert "if (observation.Duplicate)" in burst
     assert "SessionGeneration" in burst
     assert "_sessionAgent.IsCurrent" in burst
     assert "MarkReady(\"send_barrier_stable\")" in burst
