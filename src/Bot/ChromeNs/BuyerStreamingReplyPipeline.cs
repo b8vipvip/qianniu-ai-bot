@@ -19,7 +19,7 @@ namespace Bot.ChromeNs
 {
     internal static class BuyerStreamingReplyPipeline
     {
-        private const int TotalAiBudgetSeconds = 50;
+        internal const int TotalAiBudgetSeconds = 50;
         private static readonly ConcurrentDictionary<int, bool> PatchedCoordinators =
             new ConcurrentDictionary<int, bool>();
         private static Timer _patchTimer;
