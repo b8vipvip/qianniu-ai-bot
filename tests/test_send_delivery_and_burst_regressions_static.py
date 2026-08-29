@@ -41,24 +41,73 @@ def test_inflight_burst_is_detached_before_ai_handler_and_new_message_can_start_
     assert "return state.HardCancelVersion == capturedHardCancelVersion;" in source
 
 
-def test_manual_seller_reply_invalidates_old_ai_generation():
+def test_human_seller_reply_is_observed_without_invalidating_bot_generation():
     monitor = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
-    partial = read("src/Bot/ChromeNs/QN.RuntimeSafety.cs")
-    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    assert "CancelActiveBuyerGeneration" in monitor
-    assert "_buyerMessageBurstCoordinator.CancelBuyer" in partial
-    assert "state.Version++;" in coordinator
-    assert "state.HardCancelVersion++;" in coordinator
-    assert "检测到客服回复" in monitor
+    agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+
+    assert "ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);" in monitor
+    assert "qn.CancelActiveBuyerGeneration" not in monitor
+    assert "kind != BuyerSessionEventKind.SellerHumanReply" in agent
+    assert "人工客服回复但不取消Bot任务" in progress
+    manual_start = progress.index("public static void MarkManualIntervention")
+    manual_end = progress.index("public static void ObserveNewBuyerTurn", manual_start)
+    assert "SendDeliveryWatchdog.CancelConversation" not in progress[manual_start:manual_end]
+    assert "Entries.TryRemove" not in progress[manual_start:manual_end]
+    assert "QueueManualAnswerComparison" in learning
+    assert "return false;" in learning[learning.index("public static bool TryBlockForManualReply"):]
 
 
-def test_progress_card_rotates_when_new_buyer_turn_arrives_during_ai_generation():
+def test_progress_card_rotates_without_cancelling_previous_generation():
     source = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     assert "newerTurnDuringGeneration" in source
     assert "entry.AnswerStartedAt != DateTime.MinValue" in source
-    assert "已被买家新消息替代，旧答案不会发送" in source
+    assert "上一条Bot任务继续独立处理，发送前会再次检查相关性" in source
     assert "Entries.TryUpdate(key, replacement, entry)" in source
     assert "ScopeKey(seller)" in source
+    rotate_start = source.index("var newerTurnDuringGeneration")
+    rotate_end = source.index("if (entry.DetectedAt == DateTime.MinValue", rotate_start)
+    assert "RecordCancellation(true)" not in source[rotate_start:rotate_end]
+
+
+def test_text_ai_pipeline_has_one_total_budget_and_terminal_trace_paths():
+    source = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    trace = read("src/Bot/ChromeNs/MessageProcessingTraceService.cs")
+    assert "internal const int TotalAiBudgetSeconds = 50;" in source
+    assert "generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds));" in source
+    assert "ResponseProgressTracker.Fail" in source
+    assert "ResponseProgressTracker.Cancel" in source
+    assert "RecordKnowledgeDecision" in source
+    assert "RecordAiFallbackStarted" in source
+    assert "knowledge_decision" in trace
+    assert "ai_fallback_started" in trace
+    assert "processing_cancelled" in trace
+
+
+def test_manual_answer_comparison_only_upgrades_safe_high_confidence_knowledge():
+    source = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    assert "CompareManualAnswerAsync" in source
+    assert "KnowledgeEngineV2Semantics.TextSimilarity" in source
+    assert "similarity >= 0.92" in source
+    assert "confidence < 0.90" in source
+    assert "ContainsUnsafeManualLearning" in source
+    assert '"人工对照学习"' in source
+    assert "should_learn" in source
+    assert "人工答案优先级高于Bot，但不能因为措辞不同就修改知识" in source
+
+
+def test_buyer_session_agent_keeps_parallel_generations_alive_until_explicit_invalidation():
+    source = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
+    observe_start = source.index("public BuyerSessionAgentObservation ObserveBuyerMessage")
+    record_start = source.index("public BuyerSessionEventResult RecordEvent", observe_start)
+    observe = source[observe_start:record_start]
+    assert "ActiveGenerations" in observe
+    assert "previous.Cancel()" not in observe
+    assert "SupersededPreviousGeneration = false" in observe
+    assert 'superseded=False' in observe
+    assert "state.ActiveGenerations.TryGetValue(generation" in source
+    assert "kind != BuyerSessionEventKind.SellerHumanReply" in source
 
 
 def test_answer_context_menu_has_copy_action():
