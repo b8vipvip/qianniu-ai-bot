@@ -31,11 +31,8 @@ namespace Bot.Knowledge
         public static void Initialize()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
-            EventManager.RegisterClassHandler(
-                typeof(KnowledgeCenterWindow),
-                FrameworkElement.LoadedEvent,
-                new RoutedEventHandler(OnLoaded),
-                true);
+            EventManager.RegisterClassHandler(typeof(KnowledgeCenterWindow), FrameworkElement.LoadedEvent,
+                new RoutedEventHandler(OnLoaded), true);
         }
 
         private static void OnLoaded(object sender, RoutedEventArgs e)
@@ -122,6 +119,7 @@ namespace Bot.Knowledge
                 Nav("测试台", () => new KnowledgeV2DebuggerPage(_owner, _seller)),
                 Nav("导入导出", () => new KnowledgeV2ImportExportPage(_owner, _seller)),
                 Nav("智能导入", () => new KnowledgeV2SmartImportPage(_owner, _seller)),
+                Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller)),
                 Nav("AI优化记录", () => new KnowledgeV2AiOptimizationHistoryPage(_owner, _seller)),
                 Nav("设置", () => new KnowledgeV2SettingsPage(_owner, _seller))
             };
@@ -153,12 +151,7 @@ namespace Bot.Knowledge
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var titlePanel = new StackPanel { Margin = new Thickness(12, 8, 20, 8) };
-            titlePanel.Children.Add(new TextBlock
-            {
-                Text = "Knowledge Center V2",
-                FontSize = 22,
-                FontWeight = FontWeights.SemiBold
-            });
+            titlePanel.Children.Add(new TextBlock { Text = "Knowledge Center V2", FontSize = 22, FontWeight = FontWeights.SemiBold });
             _status = new TextBlock
             {
                 Text = "结构化知识 + 本地倒排索引 + Working Memory补全",
