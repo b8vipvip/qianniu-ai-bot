@@ -48,7 +48,13 @@ def test_real_flow_test_never_falls_back_to_another_seller():
 def test_progress_tracker_does_not_delete_newer_buyer_message_state():
     source = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
     assert "AnswerReadyAt" in source
-    assert "Entries.TryUpdate(key, replacement, entry)" in source
-    assert "if (entry.AnswerReadyAt == DateTime.MinValue) return;" in source
+    assert "ConcurrentDictionary<string, string> CurrentTurns" in source
+    assert "AsyncLocal<string> OperationTurnKey" in source
+    assert "TurnKey(string seller, string buyer, DateTime detectedAt)" in source
+    assert "ResolveTerminalTurnKey" in source
+    assert "PromoteCurrentTurn" in source
+    assert "ConsolidatePendingBurstEntries" in source
     assert "ShouldDeferUnsupportedMediaCard" in source
-    assert "SetExactQuestion" in source
+    # Terminal operations remove the AsyncLocal-bound turn, not whichever newer turn is current.
+    assert "var turnKey = ResolveTerminalTurnKey(seller, buyer);" in source
+    assert "TryRemoveTurn(turnKey" in source
