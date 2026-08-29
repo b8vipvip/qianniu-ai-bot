@@ -19,15 +19,21 @@ def test_manual_new_knowledge_is_one_sentence_ai_generated():
     assert "KnowledgeEngineV2Repository.Save(seller, record)" in ui
 
 
-def test_v1_history_chat_organizer_is_exposed_in_v2_and_synced_incrementally():
-    ui = read("src/Bot/Knowledge/KnowledgeV2OperatorUiBridge.cs")
+def test_history_chat_organizer_is_a_native_v2_left_navigation_page():
+    shell = read("src/Bot/Knowledge/KnowledgeCenterV2Ui.cs")
+    operator = read("src/Bot/Knowledge/KnowledgeV2OperatorUiBridge.cs")
+    page = read("src/Bot/Knowledge/ChatHistoryScanWindow.cs")
     delta = read("src/Bot/Knowledge/KnowledgeV2LegacyDeltaImportService.cs")
-    assert "历史聊天整理" in ui
-    assert "new ChatHistoryScanWindow" in ui
-    assert "ImportMissingHistoryKnowledge" in ui
+    assert 'Nav("历史聊天整理", () => new KnowledgeV2ChatHistoryPage(_owner, _seller))' in shell
+    assert "new ChatHistoryScanWindow" not in operator
+    assert "InjectHistoryButton" not in operator
+    assert "KnowledgeV2ChatHistoryPage" in page
+    assert "PromoteHistoryImport(_seller, scan.ImportResult)" in page
     assert '"历史聊天扫描"' in delta
+    assert 'record.SourceType = "chat_history_import"' in delta
     assert "KnowledgeEngineV2Repository.LoadAll" in delta
     assert "KnowledgeEngineV2Repository.Save" in delta
+    assert "RemoveCurrentScanLegacyEntries" in delta
     assert "ResetFromLegacy" not in delta
     assert "ReplaceAll" not in delta
 
