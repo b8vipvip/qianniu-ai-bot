@@ -14,21 +14,20 @@ using System.Windows.Threading;
 namespace Bot.Knowledge
 {
     /// <summary>
-    /// Operator-facing Knowledge V2 additions: one-sentence AI entry creation and the restored
-    /// V1 history-chat organizer. Manual structured editing remains available for existing rows,
-    /// but new rows are created through AI so operators no longer have to fill every V2 field.
+    /// Operator-facing Knowledge V2 additions for one-sentence AI entry creation.
+    /// History-chat organization is now a first-class page in the V2 left navigation rather than
+    /// a dynamically injected header button. Manual structured editing remains available for
+    /// existing rows, while new rows can be generated through AI.
     /// </summary>
     internal static class KnowledgeV2OperatorUiBridge
     {
         private static readonly ConditionalWeakTable<KnowledgeV2RecordsPage, object> Pages = new ConditionalWeakTable<KnowledgeV2RecordsPage, object>();
-        private static readonly ConditionalWeakTable<KnowledgeCenterWindow, object> Windows = new ConditionalWeakTable<KnowledgeCenterWindow, object>();
         private static int _initialized;
 
         public static void Initialize()
         {
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
             EventManager.RegisterClassHandler(typeof(KnowledgeV2RecordsPage), FrameworkElement.LoadedEvent, new RoutedEventHandler(OnRecordsPageLoaded), true);
-            EventManager.RegisterClassHandler(typeof(KnowledgeCenterWindow), FrameworkElement.LoadedEvent, new RoutedEventHandler(OnKnowledgeWindowLoaded), true);
             KnowledgeV2SettingsOperationAudit.Initialize();
         }
 
@@ -115,57 +114,16 @@ namespace Bot.Knowledge
             return field == null ? KnowledgeV2RecordsPageMode.All : (KnowledgeV2RecordsPageMode)field.GetValue(page);
         }
 
-        private static void OnKnowledgeWindowLoaded(object sender, RoutedEventArgs e)
-        {
-            var window = sender as KnowledgeCenterWindow; if (window == null) return;
-            object marker; if (Windows.TryGetValue(window, out marker)) return;
-            try { Windows.Add(window, new object()); } catch { return; }
-            window.Dispatcher.BeginInvoke(new Action(() => InjectHistoryButton(window)));
-        }
-
-        private static void InjectHistoryButton(KnowledgeCenterWindow window)
-        {
-            var toolbar = FindHeaderToolbar(window.Content as DependencyObject); if (toolbar == null) return;
-            if (toolbar.Children.OfType<Button>().Any(x => string.Equals(Convert.ToString(x.Content), "历史聊天整理", StringComparison.Ordinal))) return;
-            var button = new Button { Content = "历史聊天整理", Width = 108, Height = 30, Margin = new Thickness(0, 0, 8, 0), ToolTip = "恢复知识中心V1的历史聊天自动读取与AI整理功能；新生成知识会同步进入Knowledge Center V2。" };
-            button.Click += delegate
-            {
-                var seller = KnowledgeCenterV2Context.ResolveSeller(window);
-                var scan = new ChatHistoryScanWindow { Owner = window };
-                scan.ShowDialog();
-                try
-                {
-                    var added = KnowledgeV2LegacyDeltaImportService.ImportMissingHistoryKnowledge(seller);
-                    if (added > 0) MessageBox.Show(window, "历史聊天整理新增的 " + added + " 条知识已同步到 Knowledge Center V2。", "历史聊天整理", MessageBoxButton.OK, MessageBoxImage.Information);
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(window, "历史聊天已扫描，但同步到 V2 时失败：" + ex.Message, "历史聊天整理", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
-            };
-            var helpIndex = toolbar.Children.OfType<Button>().Select((x, i) => new { Button = x, Index = i }).FirstOrDefault(x => string.Equals(Convert.ToString(x.Button.Content), "使用帮助", StringComparison.Ordinal));
-            toolbar.Children.Insert(helpIndex == null ? toolbar.Children.Count : helpIndex.Index, button);
-        }
-
         private static WrapPanel FindToolbar(DependencyObject root)
         {
             if (root == null) return null;
             var wrap = root as WrapPanel;
             if (wrap != null && wrap.Children.OfType<Button>().Any(x => string.Equals(Convert.ToString(x.Content), "新增知识", StringComparison.Ordinal))) return wrap;
-            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) { var found = FindToolbar(VisualTreeHelper.GetChild(root, i)); if (found != null) return found; }
-            return null;
-        }
-
-        private static WrapPanel FindHeaderToolbar(DependencyObject root)
-        {
-            if (root == null) return null;
-            var wrap = root as WrapPanel;
-            if (wrap != null)
+            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
             {
-                var labels = wrap.Children.OfType<Button>().Select(x => Convert.ToString(x.Content)).ToList();
-                if (labels.Contains("刷新") && labels.Contains("测试台") && labels.Contains("导入导出")) return wrap;
+                var found = FindToolbar(VisualTreeHelper.GetChild(root, i));
+                if (found != null) return found;
             }
-            for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++) { var found = FindHeaderToolbar(VisualTreeHelper.GetChild(root, i)); if (found != null) return found; }
             return null;
         }
 
