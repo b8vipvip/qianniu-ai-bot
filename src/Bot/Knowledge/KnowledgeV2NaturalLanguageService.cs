@@ -4,7 +4,6 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -173,6 +172,7 @@ namespace Bot.Knowledge
                     strategy = "direct-json";
                     return true;
                 }
+                error = new InvalidOperationException("JSON 对象未包含知识字段");
             }
             catch (Exception ex) { error = ex; }
 
@@ -188,6 +188,7 @@ namespace Bot.Knowledge
                         strategy = "markdown-fence";
                         return true;
                     }
+                    error = new InvalidOperationException("JSON 对象未包含知识字段");
                 }
                 catch (Exception ex) { error = ex; }
             }
@@ -196,11 +197,19 @@ namespace Bot.Knowledge
             Exception extractError;
             if (TryExtractBalancedObject(unfenced, out extracted, out extractError))
             {
-                obj = UnwrapToken(extracted) ?? extracted;
-                strategy = "balanced-object";
-                return true;
+                var accepted = UnwrapToken(extracted);
+                if (accepted != null)
+                {
+                    obj = accepted;
+                    strategy = "balanced-object";
+                    return true;
+                }
+                error = new InvalidOperationException("JSON 对象未包含知识字段");
             }
-            if (extractError != null) error = extractError;
+            else if (extractError != null)
+            {
+                error = extractError;
+            }
             if (error == null) error = new InvalidOperationException("未找到 JSON 对象");
             return false;
         }
@@ -216,24 +225,33 @@ namespace Bot.Knowledge
                 {
                     var nested = obj[key];
                     var nestedObject = nested as JObject;
-                    if (nestedObject != null) return nestedObject;
+                    if (nestedObject != null && LooksLikeKnowledgeObject(nestedObject)) return nestedObject;
                     var nestedArray = nested as JArray;
-                    if (nestedArray != null && nestedArray.Count == 1 && nestedArray[0] is JObject)
-                        return (JObject)nestedArray[0];
+                    if (nestedArray != null && nestedArray.Count == 1)
+                    {
+                        var singleNested = nestedArray[0] as JObject;
+                        if (singleNested != null && LooksLikeKnowledgeObject(singleNested)) return singleNested;
+                    }
                 }
-                return obj;
+                return null;
             }
 
             var array = token as JArray;
-            if (array != null && array.Count == 1 && array[0] is JObject)
-                return (JObject)array[0];
+            if (array != null && array.Count == 1)
+            {
+                var single = array[0] as JObject;
+                if (single != null && LooksLikeKnowledgeObject(single)) return single;
+            }
 
             var value = token as JValue;
             if (value != null && value.Type == JTokenType.String)
             {
                 var text = Convert.ToString(value.Value);
                 if (!string.IsNullOrWhiteSpace(text) && text.TrimStart().StartsWith("{", StringComparison.Ordinal))
-                    return UnwrapToken(JToken.Parse(text));
+                {
+                    try { return UnwrapToken(JToken.Parse(text)); }
+                    catch { return null; }
+                }
             }
             return null;
         }
