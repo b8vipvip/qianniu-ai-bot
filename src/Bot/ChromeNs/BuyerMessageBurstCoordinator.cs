@@ -337,22 +337,15 @@ namespace Bot.ChromeNs
         {
             if (!_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
             {
-                var snapshot = _sessionAgent.GetSnapshot(item.SellerNick, item.BuyerNick);
-                if (snapshot == null
-                    || snapshot.State == BuyerSessionAgentState.Completed
-                    || snapshot.State == BuyerSessionAgentState.Cancelled
-                    || snapshot.State == BuyerSessionAgentState.Failed)
-                {
-                    Log.Info("固定规则返回时会话代次已结束，本条旧代次不再进入合并: seller=" + item.SellerNick
-                        + ", buyer=" + item.BuyerNick + ", generation=" + item.SessionGeneration);
-                    return;
-                }
-                item.SessionGeneration = snapshot.Generation;
+                Log.Info("固定规则返回时本条独立generation已结束，不再进入合并: seller=" + item.SellerNick
+                    + ", buyer=" + item.BuyerNick + ", generation=" + item.SessionGeneration);
+                return;
             }
 
             var key = Key(item.SellerNick, item.BuyerNick);
             var state = _states.GetOrAdd(key, _ => new BurstState());
             var startWorker = false;
+            List<long> trimmedGenerations = null;
             lock (state.Sync)
             {
                 if (!string.IsNullOrWhiteSpace(item.MessageKey)
@@ -376,7 +369,16 @@ namespace Bot.ChromeNs
                 }
                 if (state.Items.Count == 0) state.StartedAt = DateTime.Now;
                 state.Items.Add(item);
-                if (state.Items.Count > 12) state.Items.RemoveRange(0, state.Items.Count - 12);
+                if (state.Items.Count > 12)
+                {
+                    var removeCount = state.Items.Count - 12;
+                    trimmedGenerations = state.Items.Take(removeCount)
+                        .Where(x => x != null && x.SessionGeneration > 0)
+                        .Select(x => x.SessionGeneration)
+                        .Distinct()
+                        .ToList();
+                    state.Items.RemoveRange(0, removeCount);
+                }
                 state.Version++;
                 state.LatestSessionGeneration = item.SessionGeneration;
 
@@ -391,6 +393,16 @@ namespace Bot.ChromeNs
                 }
             }
 
+            foreach (var generation in trimmedGenerations ?? new List<long>())
+            {
+                _sessionAgent.TryTransition(
+                    item.SellerNick,
+                    item.BuyerNick,
+                    generation,
+                    BuyerSessionAgentState.Completed,
+                    "coalescing_buffer_trimmed");
+            }
+
             if (startWorker) Task.Run(() => RunAsync(key, state));
         }
 
@@ -398,27 +410,28 @@ namespace Bot.ChromeNs
         {
             var key = Key(seller, buyer);
             BurstState state;
-            if (!_states.TryGetValue(key, out state) || state == null) return;
-
-            long generation;
-            lock (state.Sync)
+            if (_states.TryGetValue(key, out state) && state != null)
             {
-                generation = state.LatestSessionGeneration;
-                state.Version++;
-                state.HardCancelVersion++;
-                state.Items.Clear();
-                state.StartedAt = DateTime.MinValue;
-                try { state.DelayCancellation.Cancel(); } catch { }
-                state.DelayCancellation.Dispose();
-                state.DelayCancellation = new CancellationTokenSource();
-                state.WorkerRunning = false;
-                DisposeActivity(state);
+                lock (state.Sync)
+                {
+                    state.Version++;
+                    state.HardCancelVersion++;
+                    state.Items.Clear();
+                    state.StartedAt = DateTime.MinValue;
+                    try { state.DelayCancellation.Cancel(); } catch { }
+                    state.DelayCancellation.Dispose();
+                    state.DelayCancellation = new CancellationTokenSource();
+                    state.WorkerRunning = false;
+                    DisposeActivity(state);
+                }
+                BurstState ignored;
+                _states.TryRemove(key, out ignored);
             }
 
-            if (generation > 0) _sessionAgent.Cancel(seller, buyer, generation, reason);
-            BurstState ignored;
-            _states.TryRemove(key, out ignored);
-            Log.Info("买家自动回复任务已因显式硬失效取消: seller=" + seller
+            // A hard invalidation is conversation-wide for this seller+buyer. With parallel reply
+            // generations, cancelling only LatestSessionGeneration would strand older CTS entries.
+            _sessionAgent.CancelAll(seller, buyer, reason);
+            Log.Info("买家自动回复任务已因显式硬失效全部取消: seller=" + seller
                 + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
         }
 
@@ -472,9 +485,10 @@ namespace Bot.ChromeNs
                         capturedVersion);
                 }
 
+                CompleteMergedAwayGenerations(burst);
                 if (!_sessionAgent.IsCurrent(burst.SellerNick, burst.BuyerNick, burst.SessionGeneration))
                 {
-                    Log.Info("聚合完成时会话代次已过期，跳过旧回复: seller=" + burst.SellerNick
+                    Log.Info("聚合完成时最终generation已失效，跳过本轮回复: seller=" + burst.SellerNick
                         + ", buyer=" + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                     continue;
                 }
@@ -516,6 +530,23 @@ namespace Bot.ChromeNs
                 }
                 _sessionAgent.Prune(TimeSpan.FromMinutes(30));
                 return;
+            }
+        }
+
+        private void CompleteMergedAwayGenerations(BuyerMessageBurst burst)
+        {
+            if (burst == null || burst.Items == null || burst.Items.Count < 2) return;
+            foreach (var generation in burst.Items
+                .Where(x => x != null && x.SessionGeneration > 0 && x.SessionGeneration != burst.SessionGeneration)
+                .Select(x => x.SessionGeneration)
+                .Distinct())
+            {
+                _sessionAgent.TryTransition(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    generation,
+                    BuyerSessionAgentState.Completed,
+                    "coalesced_into_generation_" + burst.SessionGeneration);
             }
         }
 
