@@ -276,6 +276,12 @@ namespace Bot.ChromeNs
                 item.MessageKey,
                 item.SortValue,
                 item.ReceivedAt);
+            if (observation.Duplicate)
+            {
+                Log.Info("BuyerSessionAgent已跨入口去重，本条消息不再进入规则/合并/AI链路: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick + ", key=" + (item.MessageKey ?? string.Empty));
+                return;
+            }
             item.SessionGeneration = observation.Generation;
             _sessionAgent.TryTransition(
                 item.SellerNick,
@@ -412,7 +418,7 @@ namespace Bot.ChromeNs
             if (generation > 0) _sessionAgent.Cancel(seller, buyer, generation, reason);
             BurstState ignored;
             _states.TryRemove(key, out ignored);
-            Log.Info("买家自动回复任务已因人工介入失效: seller=" + seller
+            Log.Info("买家自动回复任务已因显式硬失效取消: seller=" + seller
                 + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
         }
 
