@@ -40,7 +40,7 @@ def test_order_auto_reply_is_classified_before_first_inquiry_and_vision_pipeline
     assert "ProcessOrderPlacedReplyAsync(orderPlan)" in source[order_index:safety_index]
 
 
-def test_stale_manual_reply_cannot_cancel_a_newer_buyer_turn():
+def test_stale_manual_reply_is_detected_before_nonblocking_learning_observation():
     source = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
 
     assert "LatestBuyerSourceSort" in source
@@ -48,8 +48,9 @@ def test_stale_manual_reply_cannot_cancel_a_newer_buyer_turn():
     assert "IsSellerReplyOlderThanLatestBuyerTurn(seller, buyer, message)" in source
     assert "return buyerSort > sellerSort;" in source
     guard_index = source.index("if (IsSellerReplyOlderThanLatestBuyerTurn")
-    cancel_index = source.index("qn.CancelActiveBuyerGeneration", guard_index)
-    assert guard_index < cancel_index
+    observe_index = source.index("ResponseProgressTracker.MarkManualIntervention", guard_index)
+    assert guard_index < observe_index
+    assert "CancelActiveBuyerGeneration" not in source
 
 
 def test_system_tips_do_not_advance_manual_takeover_buyer_ordering():
