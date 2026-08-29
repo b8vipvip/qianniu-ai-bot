@@ -29,15 +29,16 @@ def test_rpa_registers_pending_delivery_before_real_send_action():
     assert pending < real_send
 
 
-def test_manual_intervention_still_requires_bot_delivery_checks_to_fail_first():
+def test_human_observation_still_requires_bot_delivery_checks_to_fail_first():
     monitor = text("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
 
     confirm = monitor.index("TryConfirmBotDelivery(seller, buyer, texts)")
     marker = monitor.index("texts.FirstOrDefault(IsExplicitBotAuthoredReply)", confirm)
-    cancel = monitor.index("CancelActiveBuyerGeneration", marker)
-    manual = monitor.index("ResponseProgressTracker.MarkManualIntervention", cancel)
+    manual = monitor.index("ResponseProgressTracker.MarkManualIntervention", marker)
 
-    assert confirm < marker < cancel < manual
+    assert confirm < marker < manual
+    assert "CancelActiveBuyerGeneration" not in monitor
+    assert "Bot任务继续" in monitor
 
 
 def test_first_inquiry_and_segmented_order_replies_share_the_reliable_send_path():

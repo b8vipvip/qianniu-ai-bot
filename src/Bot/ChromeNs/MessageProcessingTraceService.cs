@@ -79,6 +79,39 @@ namespace Bot.ChromeNs
             Record(seller, buyer, "answer_generation_started", "processing", "开始获取答案", question, queueMs, false, false);
         }
 
+        public static void RecordKnowledgeDecision(
+            string seller,
+            string buyer,
+            string summary,
+            string detail,
+            long durationMs)
+        {
+            Record(
+                seller,
+                buyer,
+                "knowledge_decision",
+                "processing",
+                string.IsNullOrWhiteSpace(summary) ? "知识路由已完成" : summary,
+                detail,
+                durationMs,
+                false,
+                false);
+        }
+
+        public static void RecordAiFallbackStarted(string seller, string buyer, string detail)
+        {
+            Record(
+                seller,
+                buyer,
+                "ai_fallback_started",
+                "processing",
+                "知识未直答，已进入AI兜底",
+                detail,
+                0,
+                false,
+                false);
+        }
+
         public static void RecordAnswerReady(
             string seller,
             string buyer,
@@ -121,14 +154,54 @@ namespace Bot.ChromeNs
                 true);
         }
 
-        public static void RecordManualIntervention(string seller, string buyer, string detail)
+        public static void RecordManualObservation(string seller, string buyer, string detail)
         {
             Record(
                 seller,
                 buyer,
-                "manual_intervention",
+                "manual_reply_observed",
+                "processing",
+                "观察到人工客服回复，Bot继续处理",
+                detail,
+                0,
+                false,
+                false);
+        }
+
+        // Compatibility name retained for existing callers. Human replies are observations and
+        // learning evidence now; they are not terminal cancellation events.
+        public static void RecordManualIntervention(string seller, string buyer, string detail)
+        {
+            RecordManualObservation(seller, buyer, detail);
+        }
+
+        public static void RecordLearningComparison(
+            string seller,
+            string buyer,
+            string status,
+            string detail,
+            bool terminalForComparison)
+        {
+            Record(
+                seller,
+                buyer,
+                "knowledge_learning_compare",
+                string.IsNullOrWhiteSpace(status) ? "processing" : status,
+                "Bot答案与人工答案对比学习",
+                detail,
+                0,
+                false,
+                false);
+        }
+
+        public static void RecordCancelled(string seller, string buyer, string detail)
+        {
+            Record(
+                seller,
+                buyer,
+                "processing_cancelled",
                 "cancelled",
-                "检测到人工客服介入",
+                "回复任务已显式取消",
                 detail,
                 0,
                 false,

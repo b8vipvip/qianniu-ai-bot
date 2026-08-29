@@ -47,8 +47,21 @@ def test_response_progress_records_key_chain_stages():
         'MessageProcessingTraceService.RecordGenerationStarted',
         'MessageProcessingTraceService.RecordAnswerReady',
         'MessageProcessingTraceService.RecordDelivery',
-        'MessageProcessingTraceService.RecordManualIntervention',
+        'MessageProcessingTraceService.RecordManualObservation',
+        'MessageProcessingTraceService.RecordCancelled',
         'MessageProcessingTraceService.RecordFailure',
+    ):
+        assert marker in text
+
+
+def test_trace_service_exposes_knowledge_fallback_and_learning_comparison_stages():
+    text = read("src/Bot/ChromeNs/MessageProcessingTraceService.cs")
+    for marker in (
+        'knowledge_decision',
+        'ai_fallback_started',
+        'manual_reply_observed',
+        'knowledge_learning_compare',
+        'processing_cancelled',
     ):
         assert marker in text
 

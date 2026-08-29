@@ -19,6 +19,7 @@ namespace Bot.ChromeNs
 {
     internal static class BuyerStreamingReplyPipeline
     {
+        internal const int TotalAiBudgetSeconds = 50;
         private static readonly ConcurrentDictionary<int, bool> PatchedCoordinators =
             new ConcurrentDictionary<int, bool>();
         private static Timer _patchTimer;
@@ -29,7 +30,7 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _initialized, 1) != 0) return;
             PatchExisting();
             _patchTimer = new Timer(_ => PatchExisting(), null, 100, 300);
-            Log.Info("买家文本回复流式管线已启动：回复模式支持AI优先/本地优先；本地优先只在高置信知识命中时免AI直答，新消息可并发处理；已派发AI仅在人工接管/显式失效时取消。" );
+            Log.Info("买家文本回复流式管线已启动：回复模式支持AI优先/本地优先；本地优先只在高置信知识命中时免AI直答，新消息可并发处理；普通后续消息和人工回复不取消已派发AI，只有显式硬失效才取消。" );
         }
 
         private static void PatchExisting()
@@ -108,6 +109,7 @@ namespace Bot.ChromeNs
                 detectedAt);
             var aiStartedAt = DateTime.Now;
             var generationCts = new CancellationTokenSource();
+            generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds));
             var monitorCts = new CancellationTokenSource();
             var monitor = MonitorLeaseAsync(lease, generationCts, monitorCts.Token);
 
@@ -131,17 +133,29 @@ namespace Bot.ChromeNs
             }
             catch (OperationCanceledException)
             {
-                if (conversationCtl != null)
+                if (lease.IsCurrent)
                 {
-                    conversationCtl.SetProcessing(lease.IsCurrent
-                        ? "AI请求已取消"
-                        : "当前任务已被人工接管或显式取消");
-                    conversationCtl.SetStatus(lease.IsCurrent
-                        ? "AI请求已取消"
-                        : "当前任务已失效，答案不会发送", false);
+                    var timeout = "错误：AI接口在" + TotalAiBudgetSeconds + "秒总超时预算内未返回有效答案。";
+                    if (conversationCtl != null)
+                    {
+                        conversationCtl.SetProcessing("AI总超时预算已耗尽");
+                        conversationCtl.SetStatus(timeout, false);
+                    }
+                    ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, timeout);
+                    Log.Info("文本AI流总预算超时: buyer=" + burst.BuyerNick
+                        + ", budgetSeconds=" + TotalAiBudgetSeconds);
                 }
-                Log.Info("文本AI流已取消: buyer=" + burst.BuyerNick
-                    + ", superseded=" + (!lease.IsCurrent));
+                else
+                {
+                    const string cancelled = "当前回复任务已被显式失效，答案不会发送";
+                    if (conversationCtl != null)
+                    {
+                        conversationCtl.SetProcessing(cancelled);
+                        conversationCtl.SetStatus(cancelled, false);
+                    }
+                    ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelled);
+                    Log.Info("文本AI流已取消: buyer=" + burst.BuyerNick + ", hardInvalidated=True");
+                }
                 return;
             }
             catch (Exception ex)
@@ -152,17 +166,20 @@ namespace Bot.ChromeNs
             finally
             {
                 monitorCts.Cancel();
+                try { await monitor.ConfigureAwait(false); } catch { }
                 monitorCts.Dispose();
                 generationCts.Dispose();
             }
 
             if (!lease.IsCurrent)
             {
+                const string stale = "当前回复任务已被显式失效，AI结果已丢弃";
                 if (conversationCtl != null)
                 {
-                    conversationCtl.SetProcessing("当前任务已失效，AI结果已丢弃");
-                    conversationCtl.SetStatus("已转入买家最新一轮消息，旧答案不会发送", false);
+                    conversationCtl.SetProcessing(stale);
+                    conversationCtl.SetStatus(stale, false);
                 }
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, stale);
                 return;
             }
 
@@ -184,10 +201,9 @@ namespace Bot.ChromeNs
 
             if (!await lease.ConfirmStableAsync(180))
             {
-                if (conversationCtl != null)
-                {
-                    conversationCtl.SetStatus("发送前任务已失效，答案已取消", false);
-                }
+                const string unstable = "发送前任务发生显式失效，答案已取消";
+                if (conversationCtl != null) conversationCtl.SetStatus(unstable, false);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, unstable);
                 return;
             }
 
@@ -195,7 +211,9 @@ namespace Bot.ChromeNs
             if (!ParallelReplyRelevanceGate.ShouldSend(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
             {
-                if (conversationCtl != null) conversationCtl.SetStatus("并发旧答案已抑制：" + relevanceReason, false);
+                var suppressed = "并发旧答案已抑制：" + relevanceReason;
+                if (conversationCtl != null) conversationCtl.SetStatus(suppressed, false);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed);
                 Log.Info("并发旧答案已抑制: buyer=" + burst.BuyerNick + ", reason=" + relevanceReason);
                 return;
             }
@@ -235,10 +253,9 @@ namespace Bot.ChromeNs
 
             if (!lease.IsCurrent)
             {
-                if (conversationCtl != null)
-                {
-                    conversationCtl.SetSendResult(false, "未发送：任务已因人工接管或显式取消而失效");
-                }
+                const string invalidBeforeSend = "未发送：任务已因显式硬失效而取消";
+                if (conversationCtl != null) conversationCtl.SetSendResult(false, invalidBeforeSend);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidBeforeSend);
                 return;
             }
 
@@ -402,12 +419,13 @@ namespace Bot.ChromeNs
                     return "错误：该预设回复已被客服撤回，未再次发送。";
                 }
                 KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, presetReply, "本地");
+                MessageProcessingTraceService.RecordKnowledgeDecision(
+                    seller, buyer, "命中本地预设回复", "来源=商品链接/预设回复", 0);
                 return presetReply;
             }
 
             if (string.IsNullOrWhiteSpace(question)) return "错误：买家消息为空，未调用AI。";
 
-            // 人工确认和转人工规则拥有最高优先级，不能被本地FAQ提前截断。
             var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
             if (manualDecision.Matched)
             {
@@ -420,9 +438,13 @@ namespace Bot.ChromeNs
                 {
                     var fixedReply = BotFeatureStore.ApplyOutputPolicy(manualDecision.ReplyText);
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fixedReply, "转人工回复");
+                    MessageProcessingTraceService.RecordKnowledgeDecision(
+                        seller, buyer, "命中固定自动回复规则", manualDecision.Reason, 0);
                     return fixedReply;
                 }
 
+                MessageProcessingTraceService.RecordAiFallbackStarted(
+                    seller, buyer, "命中规则但配置为AI生成；reason=" + manualDecision.Reason);
                 var handoffMessages = new JArray
                 {
                     Message("system", "你是电商店铺的下班转人工助手。当前人工客服已下班。只能礼貌告知人工客服不在线、工作时间，以及问题已记录或建议买家在上班时间联系；不得回答退款、投诉、赔偿、隐私、订单核验等具体高风险结论。回复一句到两句，禁止编造。" + ReplyTranscriptSanitizer.PromptGuard),
@@ -440,7 +462,9 @@ namespace Bot.ChromeNs
                 return BotFeatureStore.ApplyOutputPolicy(manualDecision.ReplyText);
             }
 
+            var routeStarted = Stopwatch.StartNew();
             var plan = SmartReplyRouterService.BuildPlan(seller, buyer, question);
+            routeStarted.Stop();
             var best = plan.BestCandidate;
             var replyMode = ReplyModeService.GetMode(seller);
             if (replyMode == BotReplyMode.LocalFirst
@@ -450,12 +474,32 @@ namespace Bot.ChromeNs
             {
                 var directAnswer = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
                 KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, directAnswer, "智能路由-本地直答");
+                MessageProcessingTraceService.RecordKnowledgeDecision(
+                    seller,
+                    buyer,
+                    "知识库高置信直答",
+                    "knowledgeId=" + best.Entry.Id
+                        + "；score=" + best.FinalScore.ToString("0.00")
+                        + "；reason=" + plan.Reason,
+                    routeStarted.ElapsedMilliseconds);
                 Log.Info("本地优先高置信知识直答: buyer=" + buyer
                     + ", knowledgeId=" + best.Entry.Id
                     + ", score=" + best.FinalScore.ToString("0.00")
                     + ", contextDependency=" + plan.ContextDependencyScore.ToString("0.00"));
                 return directAnswer;
             }
+
+            MessageProcessingTraceService.RecordKnowledgeDecision(
+                seller,
+                buyer,
+                plan.Route == SmartReplyRouteKind.ContextualKnowledge
+                    ? "知识库作为上下文，不直接回答"
+                    : "知识库未满足直接回答条件",
+                "route=" + plan.Route
+                    + "；candidates=" + (plan.Candidates == null ? 0 : plan.Candidates.Count)
+                    + "；contextDependency=" + plan.ContextDependencyScore.ToString("0.00")
+                    + "；reason=" + plan.Reason,
+                routeStarted.ElapsedMilliseconds);
 
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             if (endpoints == null || endpoints.Count < 1)
@@ -466,10 +510,20 @@ namespace Bot.ChromeNs
                 {
                     var fallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
                     KnowledgeLearningService.RegisterAnswerSource(seller, buyer, question, fallback, "智能路由-离线知识兜底");
+                    MessageProcessingTraceService.RecordKnowledgeDecision(
+                        seller, buyer, "AI不可用，使用安全离线知识兜底", "knowledgeId=" + best.Entry.Id, 0);
                     return fallback;
                 }
                 return "错误：没有可用的AI接口；当前问题需要结合上下文，已阻止直接套用可能不合适的本地固定答案。";
             }
+
+            MessageProcessingTraceService.RecordAiFallbackStarted(
+                seller,
+                buyer,
+                "replyMode=" + ReplyModeService.GetDisplayName(replyMode)
+                    + "；route=" + plan.Route
+                    + "；reason=" + plan.Reason
+                    + "；总预算=" + BuyerStreamingReplyPipeline.TotalAiBudgetSeconds + "秒");
 
             var primary = endpoints.First();
             var configuredPrompt = string.IsNullOrWhiteSpace(primary.SystemPrompt)
@@ -572,7 +626,7 @@ namespace Bot.ChromeNs
                 errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
             }
 
-            // 某些中转站不支持 stream=true，最后使用现有结构化非流式调用兜底；该调用仍接收取消令牌。
+            token.ThrowIfCancellationRequested();
             try
             {
                 var fallback = await Task.Run(

@@ -40,7 +40,7 @@ namespace Bot.ChromeNs
             BuyerIdentityAliasUiBridge.Start();
             OrderNotificationTraceBridge.Start();
             _timer = new Timer(_ => Refresh(), null, 0, 500);
-            Log.Info("千牛发送、当前买家与人工介入安全监控已启动。");
+            Log.Info("千牛发送、当前买家与人工回复观察安全监控已启动：人工回复只作为学习证据，不取消Bot任务。" );
         }
 
         private static void Refresh()
@@ -118,9 +118,6 @@ namespace Bot.ChromeNs
             var firstNick = ReadConversationNick(first);
             if (firstNick.Length == 0)
             {
-                // 在接待窗口没有选中任何买家、千牛正在切页，或用户停留在非会话区域时，
-                // GetCurrentConversationID 返回空是合法状态，不等于 CDP/注入失效。旧逻辑把
-                // 这个状态累计成故障，最终会被自动恢复逻辑误判为“千牛参数未获取”。
                 RecordNoActiveChat(qn, seller, "接待窗口在线，但当前没有选中的买家会话");
                 return;
             }
@@ -132,8 +129,6 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // 千牛切换会话时内部对象会短暂经过空值或旧值。连续读取两次一致后才修正，
-            // 避免一次瞬态结果改变 Bot 当前买家；真正发送仍会执行独立的严格会话确认。
             await Task.Delay(220);
             var second = await qn.GetCurrentConversationID();
             var secondNick = ReadConversationNick(second);
@@ -275,9 +270,6 @@ namespace Bot.ChromeNs
             var normalized = value.TrimEnd('N', 'n');
             if (!string.IsNullOrWhiteSpace(value) && Version.TryParse(normalized, out parsed)) return;
 
-            // QN.SendTextAsync 的历史分支使用字符串比较。空版本会被错误判断成旧版，
-            // 继而调用 intelligentservice.SendSmartTipMsg（只是智能提示，不是真实聊天发送）并直接返回成功。
-            // 未识别版本必须走当前可靠 RPA 发送链路，不能再制造“已发送”的假阳性。
             qn.QnVersion = "999.999.999N";
             if (VersionGuardLogged.TryAdd(qn, 0))
             {
@@ -325,10 +317,6 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    // 千牛同一条卖家消息可能在 originalData.text 与 summary 中返回不同文本：
-                    // 原始正文有时会去掉末尾 [AI]，而聊天摘要仍保留完整署名。旧逻辑只读取
-                    // originalData.text，因而把上一轮 Bot 的迟到回显误判成人工客服回复。
-                    // 必须检查所有可见文本字段，任一字段带明确 Bot 署名都不能取消当前答案。
                     var botAuthoredText = texts.FirstOrDefault(IsExplicitBotAuthoredReply);
                     if (!string.IsNullOrWhiteSpace(botAuthoredText))
                     {
@@ -337,7 +325,7 @@ namespace Bot.ChromeNs
                             buyer,
                             botAuthoredText,
                             "通过卖家消息多字段中的[AI]署名确认这是Bot回显");
-                        Log.Info("卖家消息多字段命中Bot署名，未判定人工介入: seller=" + seller
+                        Log.Info("卖家消息多字段命中Bot署名，未判定人工回复: seller=" + seller
                             + ", buyer=" + buyer
                             + ", variants=" + texts.Length
                             + ", reply=" + Short(botAuthoredText, 120));
@@ -346,18 +334,23 @@ namespace Bot.ChromeNs
 
                     if (IsSellerReplyOlderThanLatestBuyerTurn(seller, buyer, message))
                     {
-                        Log.Info("延迟到达的客服旧回复早于买家最新一轮消息，未取消当前自动回复: seller="
+                        Log.Info("延迟到达的客服旧回复早于买家最新一轮消息，仅作为历史学习证据: seller="
                             + seller + ", buyer=" + buyer + ", reply=" + Short(text, 120));
                         continue;
                     }
 
-                    qn.CancelActiveBuyerGeneration(seller, buyer, "检测到客服回复：" + Short(text, 120));
+                    // Product decision: a human reply no longer takes ownership away from the Bot.
+                    // Keep the Bot generation/send path alive and record the human answer so the
+                    // learning pipeline can compare both answers and decide whether knowledge needs
+                    // reinforcement, correction or no change.
                     ResponseProgressTracker.MarkManualIntervention(seller, buyer, text);
+                    Log.Info("人工客服回复已记录为对比学习证据，Bot任务继续: seller=" + seller
+                        + ", buyer=" + buyer + ", reply=" + Short(text, 120));
                 }
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("分析卖家消息以判断人工介入失败：" + ex.Message, 10);
+                Log.ErrorWithMaxCount("分析卖家消息以判断人工回复来源失败：" + ex.Message, 10);
             }
         }
 

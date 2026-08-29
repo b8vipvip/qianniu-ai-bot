@@ -18,7 +18,8 @@ def test_runtime_monitor_actively_polls_and_stably_repairs_current_buyer():
     assert '"runtimeConversationProbe"' in source
     assert "BuyerIdentityAliasService.AreEquivalent" in source
     assert "当前买家由主动探测修正" in source
-    assert "真正发送仍会执行独立的严格会话确认" in source
+    assert "SetActiveConversationByNick" in source
+    assert "人工回复只作为学习证据，不取消Bot任务" in source
 
 
 def test_runtime_monitor_emits_periodic_liveness_heartbeat_and_failure_details():

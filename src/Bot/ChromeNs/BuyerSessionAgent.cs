@@ -91,13 +91,18 @@ namespace Bot.ChromeNs
         public long Generation { get; set; }
         public CancellationToken CancellationToken { get; set; }
         public bool SupersededPreviousGeneration { get; set; }
+        public bool Duplicate { get; set; }
+        // Compatibility field retained for callers compiled against the intermediate model.
+        // Generations are no longer shared during coalescing; the burst coordinator performs merging.
+        public bool ReusedCoalescingGeneration { get; set; }
     }
 
     /// <summary>
-    /// Shared per seller/buyer ordered state machine. All BuyerSessionAgent instances use the same
-    /// session table so foreground CDP events, background order events and burst generation cannot
-    /// drift into independent timelines. Raw events are retained as a bounded ledger while only an
-    /// accepted actionable buyer message advances Generation.
+    /// Shared per seller/buyer ordered state machine. Every accepted unique buyer message owns an
+    /// independent generation. A later ordinary buyer message never cancels an already dispatched
+    /// generation. Consecutive messages may still be merged by BuyerMessageBurstCoordinator, which
+    /// explicitly completes the merged-away generations after the burst is formed. Human seller
+    /// replies are observational learning evidence only. Only explicit hard invalidation cancels work.
     /// </summary>
     public sealed class BuyerSessionAgent
     {
@@ -121,9 +126,9 @@ namespace Bot.ChromeNs
             var key = BuildKey(sellerNick, buyerNick);
             var state = GetOrCreateState(key, sellerNick, buyerNick);
 
-            CancellationTokenSource previous = null;
             long generation;
-            bool superseded;
+            bool hadParallelGeneration;
+            CancellationToken token;
             lock (state.SyncRoot)
             {
                 state.SellerNick = Normalize(sellerNick);
@@ -136,26 +141,30 @@ namespace Bot.ChromeNs
                 messageKey = Normalize(messageKey);
                 if (!string.IsNullOrWhiteSpace(messageKey) && state.RecentMessageKeySet.Contains(messageKey))
                 {
+                    CancellationTokenSource duplicateCts;
+                    token = state.ActiveGenerations.TryGetValue(state.Generation, out duplicateCts)
+                        && duplicateCts != null
+                        ? duplicateCts.Token
+                        : CancellationToken.None;
                     return new BuyerSessionAgentObservation
                     {
                         SessionKey = key,
                         Generation = state.Generation,
-                        CancellationToken = state.GenerationCancellation == null
-                            ? CancellationToken.None
-                            : state.GenerationCancellation.Token,
-                        SupersededPreviousGeneration = false
+                        CancellationToken = token,
+                        SupersededPreviousGeneration = false,
+                        Duplicate = true,
+                        ReusedCoalescingGeneration = false
                     };
                 }
 
                 RememberMessageKeyLocked(state, messageKey);
-                previous = state.GenerationCancellation;
-                superseded = state.Generation > 0
-                    && state.State != BuyerSessionAgentState.Completed
-                    && state.State != BuyerSessionAgentState.Cancelled
-                    && state.State != BuyerSessionAgentState.Failed;
+                hadParallelGeneration = state.ActiveGenerations.Count > 0;
                 state.Generation++;
                 generation = state.Generation;
-                state.GenerationCancellation = new CancellationTokenSource();
+                var cts = new CancellationTokenSource();
+                state.GenerationCancellation = cts;
+                state.ActiveGenerations[generation] = cts;
+                token = cts.Token;
                 state.LastMessageKey = messageKey;
                 SetStateLocked(state, BuyerSessionAgentState.Observed, "buyer_message");
                 AppendEventLocked(
@@ -170,24 +179,22 @@ namespace Bot.ChromeNs
                     "actionable_buyer_message");
             }
 
-            if (previous != null)
-            {
-                try { previous.Cancel(); } catch { }
-                try { previous.Dispose(); } catch { }
-            }
-
             Log.Info("BuyerSessionAgent observed: seller=" + Normalize(sellerNick)
                 + ", buyer=" + Normalize(buyerNick)
                 + ", generation=" + generation
                 + ", sort=" + sortValue
-                + ", superseded=" + superseded);
+                + ", superseded=False"
+                + ", independentGeneration=True"
+                + ", parallelPrevious=" + hadParallelGeneration);
 
             return new BuyerSessionAgentObservation
             {
                 SessionKey = key,
                 Generation = generation,
-                CancellationToken = GetCancellationToken(key, generation),
-                SupersededPreviousGeneration = superseded
+                CancellationToken = token,
+                SupersededPreviousGeneration = false,
+                Duplicate = false,
+                ReusedCoalescingGeneration = false
             };
         }
 
@@ -248,14 +255,20 @@ namespace Bot.ChromeNs
                     stale,
                     reason);
 
+                // Human seller replies are observations only. Non-human callers may still request
+                // cancellation of the latest generation, while conversation-wide hard invalidation
+                // uses CancelAll from the coordinator.
                 if (cancelCurrentGeneration
+                    && kind != BuyerSessionEventKind.SellerHumanReply
                     && !stale
                     && state.Generation > 0
                     && state.State != BuyerSessionAgentState.Completed
                     && state.State != BuyerSessionAgentState.Cancelled
                     && state.State != BuyerSessionAgentState.Failed)
                 {
-                    cancel = state.GenerationCancellation;
+                    if (state.ActiveGenerations.TryGetValue(state.Generation, out cancel))
+                        state.ActiveGenerations.Remove(state.Generation);
+                    if (state.GenerationCancellation == cancel) state.GenerationCancellation = null;
                     SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
                     result.CancelledCurrentGeneration = true;
                 }
@@ -264,6 +277,7 @@ namespace Bot.ChromeNs
             if (cancel != null)
             {
                 try { cancel.Cancel(); } catch { }
+                try { cancel.Dispose(); } catch { }
             }
 
             Log.Info("BuyerSessionAgent event: seller=" + Normalize(sellerNick)
@@ -282,9 +296,10 @@ namespace Bot.ChromeNs
             if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
             lock (state.SyncRoot)
             {
-                return state.Generation == generation
-                    && state.State != BuyerSessionAgentState.Cancelled
-                    && state.State != BuyerSessionAgentState.Failed;
+                CancellationTokenSource cts;
+                return state.ActiveGenerations.TryGetValue(generation, out cts)
+                    && cts != null
+                    && !cts.IsCancellationRequested;
             }
         }
 
@@ -303,17 +318,46 @@ namespace Bot.ChromeNs
             SessionState state;
             if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
             BuyerSessionAgentState previous;
+            CancellationTokenSource completedCts = null;
+            var updateLatestState = false;
             lock (state.SyncRoot)
             {
-                if (state.Generation != generation) return false;
+                CancellationTokenSource active;
+                if (!state.ActiveGenerations.TryGetValue(generation, out active)
+                    || active == null
+                    || active.IsCancellationRequested)
+                {
+                    return false;
+                }
+
                 previous = state.State;
-                if (!CanTransition(previous, next)) return false;
-                SetStateLocked(state, next, reason);
+                updateLatestState = state.Generation == generation;
+                if (updateLatestState)
+                {
+                    if (!CanTransition(previous, next)) return false;
+                    SetStateLocked(state, next, reason);
+                }
+
+                if (next == BuyerSessionAgentState.Completed
+                    || next == BuyerSessionAgentState.Cancelled
+                    || next == BuyerSessionAgentState.Failed)
+                {
+                    if (state.ActiveGenerations.TryGetValue(generation, out completedCts))
+                        state.ActiveGenerations.Remove(generation);
+                    if (state.GenerationCancellation == completedCts) state.GenerationCancellation = null;
+                }
             }
+
+            if (completedCts != null)
+            {
+                try { completedCts.Dispose(); } catch { }
+            }
+
             Log.Info("BuyerSessionAgent transition: seller=" + Normalize(sellerNick)
                 + ", buyer=" + Normalize(buyerNick)
                 + ", generation=" + generation
                 + ", state=" + previous + "->" + next
+                + ", latest=" + updateLatestState
                 + ", reason=" + Normalize(reason));
             return true;
         }
@@ -325,14 +369,45 @@ namespace Bot.ChromeNs
             CancellationTokenSource cts = null;
             lock (state.SyncRoot)
             {
-                if (state.Generation != generation) return;
-                cts = state.GenerationCancellation;
-                SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
+                if (!state.ActiveGenerations.TryGetValue(generation, out cts)) return;
+                state.ActiveGenerations.Remove(generation);
+                if (state.GenerationCancellation == cts) state.GenerationCancellation = null;
+                if (state.Generation == generation)
+                    SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
             }
             if (cts != null)
             {
                 try { cts.Cancel(); } catch { }
+                try { cts.Dispose(); } catch { }
             }
+        }
+
+        public void CancelAll(string sellerNick, string buyerNick, string reason)
+        {
+            SessionState state;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return;
+            List<CancellationTokenSource> cancellations;
+            lock (state.SyncRoot)
+            {
+                cancellations = state.ActiveGenerations.Values
+                    .Where(x => x != null)
+                    .Distinct()
+                    .ToList();
+                state.ActiveGenerations.Clear();
+                state.GenerationCancellation = null;
+                if (state.Generation > 0)
+                    SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
+            }
+
+            foreach (var cts in cancellations)
+            {
+                try { cts.Cancel(); } catch { }
+                try { cts.Dispose(); } catch { }
+            }
+            Log.Info("BuyerSessionAgent hard-cancelled all generations: seller=" + Normalize(sellerNick)
+                + ", buyer=" + Normalize(buyerNick)
+                + ", count=" + cancellations.Count
+                + ", reason=" + Normalize(reason));
         }
 
         public BuyerSessionAgentSnapshot GetSnapshot(string sellerNick, string buyerNick)
@@ -371,6 +446,7 @@ namespace Bot.ChromeNs
                 {
                     remove = pair.Value.LastObservedAt != default(DateTime)
                         && pair.Value.LastObservedAt < cutoff
+                        && pair.Value.ActiveGenerations.Count == 0
                         && (pair.Value.State == BuyerSessionAgentState.Completed
                             || pair.Value.State == BuyerSessionAgentState.Cancelled
                             || pair.Value.State == BuyerSessionAgentState.Failed);
@@ -378,7 +454,15 @@ namespace Bot.ChromeNs
                 SessionState removed;
                 if (remove && Sessions.TryRemove(pair.Key, out removed))
                 {
-                    try { if (removed.GenerationCancellation != null) removed.GenerationCancellation.Dispose(); } catch { }
+                    lock (removed.SyncRoot)
+                    {
+                        foreach (var cts in removed.ActiveGenerations.Values)
+                        {
+                            try { if (cts != null) cts.Dispose(); } catch { }
+                        }
+                        removed.ActiveGenerations.Clear();
+                        removed.GenerationCancellation = null;
+                    }
                 }
             }
         }
@@ -400,11 +484,10 @@ namespace Bot.ChromeNs
             if (!Sessions.TryGetValue(sessionKey, out state)) return CancellationToken.None;
             lock (state.SyncRoot)
             {
-                if (state.Generation != generation || state.GenerationCancellation == null)
-                {
-                    return CancellationToken.None;
-                }
-                return state.GenerationCancellation.Token;
+                CancellationTokenSource cts;
+                return state.ActiveGenerations.TryGetValue(generation, out cts) && cts != null
+                    ? cts.Token
+                    : CancellationToken.None;
             }
         }
 
@@ -550,6 +633,8 @@ namespace Bot.ChromeNs
             public DateTime StateChangedAt;
             public string Reason;
             public CancellationTokenSource GenerationCancellation;
+            public readonly Dictionary<long, CancellationTokenSource> ActiveGenerations =
+                new Dictionary<long, CancellationTokenSource>();
             public long EventSequence;
             public BuyerSessionEventKind LastEventKind;
             public DateTime LastEventAt;
