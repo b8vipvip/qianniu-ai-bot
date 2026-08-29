@@ -32,8 +32,6 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, Entry>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DeliveryUiEntry> DeliveryUi =
             new ConcurrentDictionary<string, DeliveryUiEntry>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, DateTime> ManualInterventions =
-            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
         private static string Key(string seller, string buyer)
         {
@@ -96,13 +94,16 @@ namespace Bot.ChromeNs
                         && !string.Equals(entry.Question, question, StringComparison.Ordinal);
                     if (entry.AnswerReadyAt != DateTime.MinValue || newerTurnDuringGeneration)
                     {
-                        if (entry.AnswerReadyAt == DateTime.MinValue && entry.Control != null)
-                            entry.Control.SetStatus("已被买家新消息替代，旧答案不会发送", false);
-                        else if (entry.AnswerReadyAt != DateTime.MinValue && entry.Control != null)
-                            entry.Control.SetStatus(IsMandatoryOrderAnswer(seller, buyer, entry.Answer)
-                                ? "买家已补充新消息，下单固定预设仍保持优先发送"
-                                : "买家已补充新消息，旧答案禁止再次发送", false);
-                        if (newerTurnDuringGeneration) ReplyQualityMetricsService.RecordCancellation(true);
+                        if (entry.Control != null)
+                        {
+                            entry.Control.SetStatus(
+                                entry.AnswerReadyAt == DateTime.MinValue
+                                    ? "买家补充了新消息，上一条Bot任务继续独立处理，发送前会再次检查相关性"
+                                    : (IsMandatoryOrderAnswer(seller, buyer, entry.Answer)
+                                        ? "买家已补充新消息，下单固定预设仍保持优先发送"
+                                        : "买家已补充新消息，上一条答案保留并在发送前检查是否仍相关"),
+                                false);
+                        }
                         var replacement = new Entry();
                         if (!Entries.TryUpdate(key, replacement, entry)) continue;
                         continue;
@@ -239,41 +240,40 @@ namespace Bot.ChromeNs
             MessageProcessingTraceService.RecordDelivery(seller, buyer, false, detail);
         }
 
+        /// <summary>
+        /// A human seller reply is no longer a takeover/cancellation signal. The Bot continues its
+        /// already-started reply task and the human answer is retained as high-value evidence for
+        /// Bot-vs-human comparison learning. Wrong-buyer/session/delivery safety remains unchanged.
+        /// </summary>
         public static void MarkManualIntervention(string seller, string buyer, string sellerReply)
         {
-            ManualInterventions[Key(seller, buyer)] = DateTime.Now;
-            SendDeliveryWatchdog.CancelConversation(seller, buyer, "检测到客服人工回复");
-            MessageProcessingTraceService.RecordManualIntervention(seller, buyer, sellerReply);
+            MessageProcessingTraceService.RecordManualObservation(seller, buyer, sellerReply);
             Entry entry;
-            if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
-            lock (entry.Sync)
+            if (Entries.TryGetValue(Key(seller, buyer), out entry) && entry != null)
             {
-                if (entry.AnswerReadyAt == DateTime.MinValue && entry.Control != null)
-                    entry.Control.SetStatus("检测到客服已人工回复，停止等待旧AI答案", true);
-                else if (entry.Control != null)
-                    entry.Control.SetStatus("检测到客服已人工回复，旧答案不再自动发送", true);
+                lock (entry.Sync)
+                {
+                    if (entry.Control != null)
+                    {
+                        if (entry.AnswerReadyAt == DateTime.MinValue)
+                            entry.Control.SetProcessing("已观察到人工客服回复；Bot继续获取答案，稍后自动对比学习");
+                        else
+                            entry.Control.SetStatus("已观察到人工客服回复；Bot仍按原任务发送，并自动对比人工答案学习", false);
+                    }
+                }
             }
-            ReplyQualityMetricsService.RecordCancellation(false);
-            Log.Info("本店回复进度因人工客服介入结束: seller=" + seller + ", buyer=" + buyer
+            Log.Info("已观察到人工客服回复但不取消Bot任务: seller=" + seller + ", buyer=" + buyer
                 + ", reply=" + (sellerReply ?? string.Empty));
         }
 
         public static void ObserveNewBuyerTurn(string seller, string buyer)
         {
-            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return;
-            DateTime ignored;
-            ManualInterventions.TryRemove(Key(seller, buyer), out ignored);
+            // Human replies no longer create a conversation-wide intervention latch.
         }
 
         public static bool HasActiveManualIntervention(string seller, string buyer)
         {
-            if (string.IsNullOrWhiteSpace(seller) || string.IsNullOrWhiteSpace(buyer)) return false;
-            var key = Key(seller, buyer);
-            DateTime observedAt;
-            if (!ManualInterventions.TryGetValue(key, out observedAt)) return false;
-            if (observedAt >= DateTime.Now.AddMinutes(-30)) return true;
-            DateTime ignored;
-            ManualInterventions.TryRemove(key, out ignored);
+            // Compatibility API: callers must not block Bot sending merely because a human replied.
             return false;
         }
 
@@ -289,6 +289,18 @@ namespace Bot.ChromeNs
                     entry.Control.SetAnswer(detail ?? string.Empty, "系统", DateTime.Now);
                     entry.Control.SetSkipped(detail);
                 }
+            }
+        }
+
+        public static void Cancel(string seller, string buyer, string detail)
+        {
+            MessageProcessingTraceService.RecordCancelled(seller, buyer, detail);
+            Entry entry;
+            if (!Entries.TryRemove(Key(seller, buyer), out entry) || entry == null) return;
+            lock (entry.Sync)
+            {
+                if (entry.Control != null)
+                    entry.Control.SetStatus(string.IsNullOrWhiteSpace(detail) ? "回复任务已取消" : detail, false);
             }
         }
 
