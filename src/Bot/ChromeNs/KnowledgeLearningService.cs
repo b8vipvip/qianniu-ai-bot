@@ -44,6 +44,8 @@ namespace Bot.ChromeNs
             new ConcurrentDictionary<string, BlockStamp>();
         private static readonly ConcurrentDictionary<string, DateTime> ManualBypass =
             new ConcurrentDictionary<string, DateTime>();
+        private static readonly ConcurrentDictionary<string, DateTime> ManualComparisons =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
         public static event EventHandler KnowledgeBaseChanged;
 
@@ -166,6 +168,11 @@ namespace Bot.ChromeNs
             ManualBypass[SendKey(seller, buyer, answer)] = DateTime.Now.AddSeconds(15);
         }
 
+        /// <summary>
+        /// Historical name kept for binary/source compatibility. A human reply no longer blocks
+        /// the Bot send. Instead it is captured as high-value evidence and compared asynchronously
+        /// with the Bot candidate. Only reusable, high-confidence corrections may upgrade knowledge.
+        /// </summary>
         public static bool TryBlockForManualReply(
             QN qn,
             string buyer,
@@ -199,16 +206,15 @@ namespace Bot.ChromeNs
                 if (string.IsNullOrWhiteSpace(echoText) || Normalize(echoText) == Normalize(candidateAnswer)) return false;
 
                 manualAnswer = echoText.Trim();
-                Blocks[sendKey] = new BlockStamp
-                {
-                    Reason = "已取消：客服已人工回复，本次 Bot 答案未发送",
-                    ManualAnswer = manualAnswer,
-                    ExpiresAt = DateTime.Now.AddMinutes(5)
-                };
                 RegisterAnswerSource(seller, buyer, question, manualAnswer, "人工回复");
-                QueueLearn(question, manualAnswer, "人工回复", seller, buyer);
-                Log.Info("自动发送已取消：检测到本店客服人工回复。seller=" + seller + ", buyer=" + buyer);
-                return true;
+                QueueManualAnswerComparison(question, candidateAnswer, manualAnswer, seller, buyer);
+                MessageProcessingTraceService.RecordManualObservation(
+                    seller,
+                    buyer,
+                    "人工答案=" + Short(manualAnswer, 500) + "；Bot任务继续发送并进入对比学习");
+                Log.Info("检测到本店客服人工回复但不取消Bot发送，已进入答案对比学习: seller="
+                    + seller + ", buyer=" + buyer);
+                return false;
             }
             catch (Exception ex)
             {
@@ -231,6 +237,198 @@ namespace Bot.ChromeNs
             reason = stamp.Reason;
             manualAnswer = stamp.ManualAnswer;
             return true;
+        }
+
+        private static void QueueManualAnswerComparison(
+            string question,
+            string botAnswer,
+            string manualAnswer,
+            string seller,
+            string buyer)
+        {
+            question = (question ?? string.Empty).Trim();
+            botAnswer = StripBotMarker(botAnswer);
+            manualAnswer = StripBotMarker(manualAnswer);
+            if (!CanLearn(question, manualAnswer) || string.IsNullOrWhiteSpace(botAnswer)) return;
+
+            var comparisonKey = SendKey(seller, buyer, question + "|" + botAnswer + "|" + manualAnswer);
+            DateTime existing;
+            if (ManualComparisons.TryGetValue(comparisonKey, out existing)
+                && existing >= DateTime.Now.AddMinutes(-10)) return;
+            ManualComparisons[comparisonKey] = DateTime.Now;
+
+            Task.Run(async () =>
+            {
+                IDisposable scope = null;
+                try
+                {
+                    var shop = ResolveShop(seller);
+                    if (shop != null) scope = ShopSettingsScope.Enter(shop);
+                    await CompareManualAnswerAsync(question, botAnswer, manualAnswer, seller, buyer);
+                }
+                catch (Exception ex)
+                {
+                    MessageProcessingTraceService.RecordLearningComparison(
+                        seller, buyer, "failed", "人工答案对比学习失败：" + Short(ex.Message, 500), true);
+                    Log.Info("人工答案对比学习失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message);
+                }
+                finally
+                {
+                    if (scope != null) scope.Dispose();
+                }
+            });
+        }
+
+        private static async Task CompareManualAnswerAsync(
+            string question,
+            string botAnswer,
+            string manualAnswer,
+            string seller,
+            string buyer)
+        {
+            MessageProcessingTraceService.RecordLearningComparison(
+                seller,
+                buyer,
+                "processing",
+                "正在比较Bot答案与人工答案；Bot=" + Short(botAnswer, 350)
+                    + "；人工=" + Short(manualAnswer, 350),
+                false);
+
+            double similarity = 0;
+            try { similarity = KnowledgeEngineV2Semantics.TextSimilarity(botAnswer, manualAnswer); }
+            catch { similarity = Normalize(botAnswer) == Normalize(manualAnswer) ? 1 : 0; }
+            if (similarity >= 0.92)
+            {
+                MessageProcessingTraceService.RecordLearningComparison(
+                    seller,
+                    buyer,
+                    "ready",
+                    "Bot答案与人工答案高度一致(similarity=" + similarity.ToString("0.00") + ")，无需修改知识。",
+                    true);
+                return;
+            }
+
+            if (ContainsUnsafeManualLearning(question + " " + manualAnswer))
+            {
+                MessageProcessingTraceService.RecordLearningComparison(
+                    seller,
+                    buyer,
+                    "skipped",
+                    "人工答案包含一次性/高风险/敏感信息，仅保留会话证据，不自动升级知识。",
+                    true);
+                return;
+            }
+
+            var messages = new JArray
+            {
+                new JObject
+                {
+                    ["role"] = "system",
+                    ["content"] =
+                        "你是电商客服知识纠错审查器。比较Bot候选答案和真人客服实际答案，判断是否存在可跨买家复用的稳定知识修正。只输出JSON："
+                        + "{\"should_learn\":true|false,\"action\":\"add|update|skip\",\"question\":\"通用化问题\",\"answer\":\"最终可复用答案\",\"category\":\"分类\",\"keywords\":[\"关键词\"],\"confidence\":0.0,\"reason\":\"原因\"}。"
+                        + "人工答案优先级高于Bot，但不能因为措辞不同就修改知识。只有人工答案明确纠正了事实、补充了稳定必要步骤、或Bot遗漏了可复用关键条件时才should_learn=true。"
+                        + "寒暄、临时价格/库存、单个订单进度、个人承诺、退款赔偿投诉、账号安全、验证码、手机号、订单号等必须skip。不得编造人工答案中不存在的事实。confidence低于0.90必须skip。"
+                },
+                new JObject
+                {
+                    ["role"] = "user",
+                    ["content"] = "买家问题：" + RedactSensitive(question)
+                        + "\nBot候选答案：" + RedactSensitive(botAnswer)
+                        + "\n人工实际答案：" + RedactSensitive(manualAnswer)
+                }
+            };
+
+            var result = await Task.Run(() => MyOpenAI.CallStructuredChat(
+                messages, 700, 0.03, 25, CancellationToken.None));
+            if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Answer))
+            {
+                MessageProcessingTraceService.RecordLearningComparison(
+                    seller,
+                    buyer,
+                    "skipped",
+                    "AI对比未得到可靠结构化结果，本次不修改知识。",
+                    true);
+                return;
+            }
+
+            var parsed = ParseObject(result.Answer);
+            bool shouldLearn;
+            if (!bool.TryParse(Convert.ToString(parsed["should_learn"]), out shouldLearn)) shouldLearn = false;
+            var action = Convert.ToString(parsed["action"]).Trim().ToLowerInvariant();
+            double confidence;
+            if (!double.TryParse(Convert.ToString(parsed["confidence"]), out confidence)) confidence = 0;
+            var learnedQuestion = RedactSensitive(Convert.ToString(parsed["question"])).Trim();
+            var learnedAnswer = RedactSensitive(Convert.ToString(parsed["answer"])).Trim();
+            var category = Convert.ToString(parsed["category"]).Trim();
+            var keywordsToken = parsed["keywords"];
+            var keywords = keywordsToken is JArray
+                ? string.Join(",", ((JArray)keywordsToken).Select(x => x.ToString().Trim()).Where(x => x.Length > 0))
+                : Convert.ToString(keywordsToken).Trim();
+            var reason = Convert.ToString(parsed["reason"]).Trim();
+
+            if (!shouldLearn
+                || (action != "add" && action != "update")
+                || confidence < 0.90
+                || !CanLearn(learnedQuestion, learnedAnswer)
+                || ContainsUnsafeManualLearning(learnedQuestion + " " + learnedAnswer))
+            {
+                MessageProcessingTraceService.RecordLearningComparison(
+                    seller,
+                    buyer,
+                    "skipped",
+                    "对比结论：无需升级知识。confidence=" + confidence.ToString("0.00")
+                        + "；reason=" + Short(reason, 500),
+                    true);
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(category)) category = "人工对照学习";
+            var saved = SaveLearned(
+                learnedQuestion,
+                learnedAnswer,
+                category,
+                keywords,
+                "人工对照学习");
+            MessageProcessingTraceService.RecordLearningComparison(
+                seller,
+                buyer,
+                saved != null && saved.Success ? "ready" : "failed",
+                "对比结论：" + (saved == null ? "知识写入结果为空" : saved.Message)
+                    + "；confidence=" + confidence.ToString("0.00")
+                    + "；reason=" + Short(reason, 500),
+                true);
+            Log.Info("人工答案对比学习完成: seller=" + seller + ", buyer=" + buyer
+                + ", confidence=" + confidence.ToString("0.00")
+                + ", result=" + (saved == null ? "null" : saved.Message));
+        }
+
+        private static bool ContainsUnsafeManualLearning(string value)
+        {
+            value = value ?? string.Empty;
+            var terms = new[]
+            {
+                "退款", "退货", "赔偿", "投诉", "差评", "举报", "仲裁", "身份证", "银行卡",
+                "验证码", "密码", "订单隐私", "订单号", "手机号", "账号安全", "封号", "解封",
+                "法律", "报警", "仅此一次", "今天价格", "临时价格", "当前库存", "库存还有"
+            };
+            if (terms.Any(x => value.IndexOf(x, StringComparison.OrdinalIgnoreCase) >= 0)) return true;
+            if (Regex.IsMatch(value, @"(?<!\d)1\d{10}(?!\d)")) return true;
+            if (Regex.IsMatch(value, @"(?<!\d)\d{12,}(?!\d)")) return true;
+            return false;
+        }
+
+        private static string StripBotMarker(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            value = Regex.Replace(value, @"\s*[\[【［]AI[\]】］]\s*$", string.Empty, RegexOptions.IgnoreCase);
+            return value.Trim();
+        }
+
+        private static string Short(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            return value.Length <= max ? value : value.Substring(0, max) + "...";
         }
 
         public static void QueueLearn(
@@ -468,6 +666,11 @@ namespace Bot.ChromeNs
             {
                 DateTime ignored;
                 ManualBypass.TryRemove(key, out ignored);
+            }
+            foreach (var key in ManualComparisons.Where(x => x.Value < now.AddHours(-2)).Select(x => x.Key).ToList())
+            {
+                DateTime ignored;
+                ManualComparisons.TryRemove(key, out ignored);
             }
         }
 
