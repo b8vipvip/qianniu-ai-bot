@@ -39,7 +39,7 @@ def test_local_ocr_worker_is_multilingual_onnx_and_bundled():
     assert "package\\Bin\\local-ocr\\LocalOcrWorker.exe" in workflow
 
 
-def test_buyer_session_agent_keeps_dispatched_generations_and_coalesces_same_turn():
+def test_buyer_session_agent_keeps_independent_generations_and_retires_merged_ones():
     props = read("src/Directory.Build.props")
     agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
@@ -48,15 +48,20 @@ def test_buyer_session_agent_keeps_dispatched_generations_and_coalesces_same_tur
     assert "state.Generation++" in agent
     assert "previous.Cancel()" not in agent
     assert "ActiveGenerations" in agent
-    assert "ReusedCoalescingGeneration" in agent
-    assert "actionable_buyer_message_coalesced" in agent
+    assert "independentGeneration=True" in agent
+    assert "ReusedCoalescingGeneration = false" in agent
     assert "Duplicate = true" in agent
+    assert "public void CancelAll" in agent
     assert "Sending = 6" in agent
     assert "Waiting = 7" in agent
     assert "Completed = 8" in agent
     assert "_sessionAgent.ObserveBuyerMessage" in burst
     assert "if (observation.Duplicate)" in burst
     assert "SessionGeneration" in burst
+    assert "CompleteMergedAwayGenerations" in burst
+    assert "coalesced_into_generation_" in burst
+    assert "_sessionAgent.CancelAll(seller, buyer, reason)" in burst
+    assert "coalescing_buffer_trimmed" in burst
     assert "_sessionAgent.IsCurrent" in burst
     assert "MarkReady(\"send_barrier_stable\")" in burst
     assert "MarkCompleted(\"reply_pipeline_completed\")" in burst
