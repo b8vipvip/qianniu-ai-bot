@@ -58,9 +58,12 @@ def test_knowledge_v2_settings_audits_every_visible_operator_control_and_result(
     page = read("src/Bot/Knowledge/KnowledgeCenterV2OperationsPages.cs")
     audit = read("src/Bot/Knowledge/KnowledgeV2OperatorUiBridge.cs")
 
-    assert 'Content = "启用Knowledge Engine V2"' in page
+    assert 'Content = "启用 Knowledge Engine V2"' in page
     assert 'Content = "保存设置"' in page
-    assert 'Content = "索引预热"' in page
+    assert 'Content = "立即预热索引"' in page
+    assert 'Text = "运行模式"' in page
+    assert "本地直答匹配阈值" in page
+    assert "最低知识可信度" in page
     assert "_mode" in page
     assert "_threshold" in page
     assert "_confidence" in page
