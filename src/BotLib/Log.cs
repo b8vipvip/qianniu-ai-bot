@@ -11,6 +11,11 @@ namespace BotLib
         private static LogWriter _writer;
         private static ConcurrentDictionary<string, int> _errorWithMaxCountDict = new ConcurrentDictionary<string, int>();
         private const string ImsdkVerboseTraceEnvironmentKey = "QNBOT_IMSDK_VERBOSE_TRACE";
+        private static readonly object DiagnosticNoiseSync = new object();
+        private static readonly TimeSpan InjectionStatusRepeatWindow = TimeSpan.FromSeconds(30);
+        private static string _lastInjectionStatusSummary = string.Empty;
+        private static DateTime _lastInjectionStatusLoggedUtc = DateTime.MinValue;
+        private static int _suppressedInjectionStatusCount;
 
         private static LogWriter Writer
         {
@@ -137,14 +142,18 @@ namespace BotLib
         }
 
         /// <summary>
-        /// IMSDK discovery is useful during explicit protocol research but its raw payload can
-        /// include complete function source, buyer targetId/ccode and very high frequency calls.
-        /// Production logs keep only slow/error summaries. Full payload is opt-in through
-        /// QNBOT_IMSDK_VERBOSE_TRACE=1.
+        /// Production diagnostics must not persist buyer/seller identities or high-volume protocol
+        /// payloads by default. IMSDK raw discovery remains an explicit opt-in. Periodic Qianniu
+        /// injection status is converted to a state-only summary and identical states are coalesced.
         /// </summary>
         internal static string NormalizeProductionDiagnostic(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return text;
+
+            if (text.IndexOf("千牛注入状态:", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return NormalizeInjectionStatus(text);
+            }
 
             var verbose = IsImsdkVerboseTraceEnabled();
             if (text.IndexOf("收到千牛WebSocket事件: type=imsdkInvokeTrace", StringComparison.OrdinalIgnoreCase) >= 0
@@ -199,6 +208,66 @@ namespace BotLib
                 // Malformed protocol discovery data is intentionally not written raw in production.
                 return null;
             }
+        }
+
+        private static string NormalizeInjectionStatus(string text)
+        {
+            var json = ExtractJsonObject(text);
+            string summary;
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                summary = "千牛注入状态摘要: parse=false, payloadLength=0";
+            }
+            else
+            {
+                try
+                {
+                    var payload = JObject.Parse(json);
+                    var sellerPresent = !string.IsNullOrWhiteSpace((payload["loginNick"] ?? string.Empty).ToString());
+                    var buyerPresent = !string.IsNullOrWhiteSpace((payload["conversationNick"] ?? string.Empty).ToString());
+                    summary = "千牛注入状态摘要: hasLoginID=" + ReadBooleanStatus(payload, "hasLoginID")
+                        + ", hasImsdk=" + ReadBooleanStatus(payload, "hasImsdk")
+                        + ", hasQN=" + ReadBooleanStatus(payload, "hasQN")
+                        + ", hasVs=" + ReadBooleanStatus(payload, "hasVs")
+                        + ", sellerPresent=" + sellerPresent
+                        + ", buyerPresent=" + buyerPresent
+                        + ", payloadLength=" + json.Length;
+                }
+                catch
+                {
+                    // Never fall back to the raw status payload when parsing fails: it can contain
+                    // seller/buyer nicknames. A parse marker is enough for production diagnostics.
+                    summary = "千牛注入状态摘要: parse=false, payloadLength=" + json.Length;
+                }
+            }
+
+            lock (DiagnosticNoiseSync)
+            {
+                var now = DateTime.UtcNow;
+                if (string.Equals(summary, _lastInjectionStatusSummary, StringComparison.Ordinal)
+                    && now - _lastInjectionStatusLoggedUtc < InjectionStatusRepeatWindow)
+                {
+                    _suppressedInjectionStatusCount++;
+                    return null;
+                }
+
+                var suppressed = _suppressedInjectionStatusCount;
+                _suppressedInjectionStatusCount = 0;
+                _lastInjectionStatusSummary = summary;
+                _lastInjectionStatusLoggedUtc = now;
+                if (suppressed > 0) summary += ", repeatsSuppressed=" + suppressed;
+                return summary;
+            }
+        }
+
+        private static string ReadBooleanStatus(JObject payload, string name)
+        {
+            var token = payload == null ? null : payload[name];
+            if (token == null || token.Type == JTokenType.Null) return "unknown";
+            bool value;
+            return bool.TryParse(token.ToString(), out value)
+                ? (value ? "true" : "false")
+                : "unknown";
         }
 
         private static bool IsImsdkVerboseTraceEnabled()
