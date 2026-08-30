@@ -192,6 +192,26 @@ namespace Bot.ChromeNs
                 answer = sanitizedAnswer;
             }
 
+            if (string.IsNullOrWhiteSpace(answer)
+                || answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                var failure = string.IsNullOrWhiteSpace(answer)
+                    ? "错误：AI未返回有效答案。"
+                    : answer;
+                if (conversationCtl != null)
+                {
+                    conversationCtl.SetProcessing("AI未生成可用答案");
+                    conversationCtl.SetStatus(failure, false);
+                }
+                ResponseProgressTracker.Fail(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    failure);
+                Log.Info("流式文本AI失败，保持失败态且不进入答案就绪/完成: buyer="
+                    + burst.BuyerNick + ", reason=" + CompactPreview(failure, 180));
+                return;
+            }
+
             var deduplication = ReplyDeduplicationService.EnsureDistinct(
                 burst.SellerNick,
                 burst.BuyerNick,
@@ -240,13 +260,6 @@ namespace Bot.ChromeNs
             if (!autoSend)
             {
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
-            {
-                if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：AI错误");
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
             }
