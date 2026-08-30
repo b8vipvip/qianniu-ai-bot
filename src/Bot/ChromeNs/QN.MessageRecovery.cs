@@ -285,8 +285,9 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            // 只有紧贴本次后台通知的买家消息允许绕过全局入站去重。两分钟前的历史消息仍走
-            // 正常去重路径，避免为了修复漏答而把已经处理过的旧问题重新回复一次。
+            // 只有紧贴本次后台通知的买家消息允许绕过 transport 级入站去重。这里绝不能提前
+            // MarkBuyerMessageObserved：后台信号/历史候选本身不是新的业务 turn。真正的 observed
+            // 标记必须等具体消息的稳定 messageKey 通过 _handledBuyerMessageDeduplicator 后再写入。
             var bypassThreshold = scheduledAt.AddSeconds(-8).Ticks;
             var recoveredBuyerMessages = recovered
                 .Where(m => IsBuyerMessage(m)
@@ -301,9 +302,9 @@ namespace Bot.ChromeNs
             var bypassBuyerDedup = false;
             if (recoveredBuyerMessages.Count > 0)
             {
-                // 与正常 receiveNewMsg 使用同一把入站锁完成最后一次判定。这样如果详细事件刚好在
-                // 补抓历史期间到达，它会先设置 observed 标记，补偿路径立即退出；反之则由补偿
-                // 路径声明本轮买家消息，避免“重复CDP页先占去重key，但权威处理未发生”把消息永久吃掉。
+                // 与正常 receiveNewMsg 使用同一把入站锁完成最后一次竞态判定。这里只声明“由补偿
+                // 路径尝试处理”的资格，不改变 freshness/generation。若详细事件已经先被权威链
+                // 接受则退出；否则每条具体消息仍必须通过业务去重账本后才能 Mark observed。
                 await _incomingMessageGate.WaitAsync().ConfigureAwait(false);
                 try
                 {
@@ -315,7 +316,6 @@ namespace Bot.ChromeNs
                             + seller + ", buyer=" + buyer);
                         return true;
                     }
-                    MarkBuyerMessageObserved(seller, buyer);
                     bypassBuyerDedup = true;
                 }
                 finally
@@ -400,6 +400,9 @@ namespace Bot.ChromeNs
                     + ", buyer=" + buyerNick + ", key=" + messageKey);
                 return Task.CompletedTask;
             }
+
+            // 只有稳定业务 identity 被首次接受后，才允许更新 freshness。这样同一真实消息通过
+            // receiveNewMsg / duplicate CDP forwarding / history recovery 多入口到达也只推进一次。
             MarkBuyerMessageObserved(sellerNick, buyerNick);
 
             OrderPlacedReplyPlan orderPlan;
