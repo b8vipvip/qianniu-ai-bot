@@ -64,4 +64,9 @@ def test_buyer_session_agent_keeps_independent_generations_and_retires_merged_on
     assert "coalescing_buffer_trimmed" in burst
     assert "_sessionAgent.IsCurrent" in burst
     assert "MarkReady(\"send_barrier_stable\")" in burst
-    assert "MarkCompleted(\"reply_pipeline_completed\")" in burst
+
+    # Completion is now conditional: if a replyable pipeline returns while still Generating,
+    # timeout/error must become Failed instead of being overwritten as Completed.
+    assert "returnedWithoutReady && burst.HasReplyableItem" in burst
+    assert "MarkFailed(\"reply_pipeline_returned_without_ready\")" in burst
+    assert '"reply_pipeline_completed"' in burst
