@@ -212,6 +212,12 @@ namespace Bot.ChromeNs
             if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
             {
                 QueueWarm(burst.SellerNick);
+                MessageProcessingTraceService.RecordKnowledgeDecision(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    "Knowledge V2索引尚未就绪",
+                    "snapshot=cold；本轮不阻塞消息，进入兼容回复链路",
+                    0);
                 Log.Info("Knowledge Engine V2索引尚未就绪，本轮不阻塞买家消息，直接继续兼容回复链路: buyer="
                     + burst.BuyerNick);
                 await inner(lease);
@@ -225,6 +231,12 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                MessageProcessingTraceService.RecordKnowledgeDecision(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    "Knowledge V2检索异常",
+                    "fallback=compatibility；error=" + ex.Message,
+                    0);
                 Log.ErrorWithMaxCount("Knowledge Engine V2检索失败，回退兼容链路: buyer="
                     + burst.BuyerNick + ", error=" + ex.Message, 20);
                 await inner(lease);
@@ -233,6 +245,13 @@ namespace Bot.ChromeNs
 
             if (decision == null || !decision.CanDirectReply || string.IsNullOrWhiteSpace(decision.Answer))
             {
+                MessageProcessingTraceService.RecordKnowledgeDecision(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    "Knowledge V2未直答",
+                    "candidates=" + (decision == null ? 0 : decision.CandidateCount)
+                        + "；reason=" + (decision == null ? "无决策" : decision.Reason),
+                    decision == null ? 0 : decision.TotalMs);
                 Log.Info("Knowledge Engine V2未直答: buyer=" + burst.BuyerNick
                     + ", totalMs=" + (decision == null ? 0 : decision.TotalMs)
                     + ", candidates=" + (decision == null ? 0 : decision.CandidateCount)
@@ -240,6 +259,16 @@ namespace Bot.ChromeNs
                 await inner(lease);
                 return;
             }
+
+            var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
+            MessageProcessingTraceService.RecordKnowledgeDecision(
+                burst.SellerNick,
+                burst.BuyerNick,
+                "Knowledge V2本地直答命中",
+                "candidates=" + decision.CandidateCount
+                    + "；score=" + (best == null ? "-" : best.Score.ToString("0.00"))
+                    + "；predicate=" + (decision.Query == null ? string.Empty : decision.Query.Predicate),
+                decision.TotalMs);
 
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var ctl = ResponseProgressTracker.BeginAnswer(
@@ -260,7 +289,6 @@ namespace Bot.ChromeNs
             var autoSend = Params.Robot.GetIsAutoReply();
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
 
-            var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
             Log.Info("Knowledge Engine V2本地答案已就绪: buyer=" + burst.BuyerNick
                 + ", score=" + (best == null ? "-" : best.Score.ToString("0.00"))
                 + ", predicate=" + (decision.Query == null ? "" : decision.Query.Predicate)
@@ -273,13 +301,17 @@ namespace Bot.ChromeNs
             if (!autoSend)
             {
                 if (ctl != null) ctl.SetStatus("仅生成答案（Knowledge Engine V2本地命中）", true);
+                MessageProcessingTraceService.RecordGeneratedOnly(
+                    burst.SellerNick, burst.BuyerNick, "source=本地知识V2");
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
             }
 
             if (!lease.IsCurrent || !await lease.ConfirmStableAsync(80))
             {
-                if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");
+                var reason = "未发送：当前V2任务已被更高优先级/更新任务替代";
+                if (ctl != null) ctl.SetSendResult(false, reason);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, reason);
                 return;
             }
 
@@ -287,7 +319,9 @@ namespace Bot.ChromeNs
             if (!ParallelReplyRelevanceGate.ShouldSend(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
             {
-                if (ctl != null) ctl.SetSendResult(false, "未发送：" + relevanceReason);
+                var reason = "未发送：" + relevanceReason;
+                if (ctl != null) ctl.SetSendResult(false, reason);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, reason);
                 Log.Info("Knowledge Engine V2发送前被并发相关性门控抑制: buyer="
                     + burst.BuyerNick + ", reason=" + relevanceReason);
                 return;
@@ -322,6 +356,13 @@ namespace Bot.ChromeNs
                     sendOk
                         ? "已发送（Knowledge Engine V2本地直答，无AI调用）"
                         : "发送失败：" + failureReason);
+            }
+            if (!sendOk)
+            {
+                MessageProcessingTraceService.RecordFailure(
+                    burst.SellerNick,
+                    burst.BuyerNick,
+                    "Knowledge V2答案发送失败：" + failureReason);
             }
             Log.Info("Knowledge Engine V2本地直答完成: buyer=" + burst.BuyerNick
                 + ", success=" + sendOk
