@@ -853,10 +853,145 @@ namespace Bot.ChromeNs
         private static JObject ParseObject(string text)
         {
             text = (text ?? string.Empty).Trim();
-            var start = text.IndexOf('{');
-            var end = text.LastIndexOf('}');
-            if (start < 0 || end <= start) throw new Exception("AI复盘结果中未找到JSON对象");
-            return JObject.Parse(text.Substring(start, end - start + 1));
+            if (text.Length == 0)
+                throw new Exception("AI复盘结果为空，无法解析结构化JSON");
+
+            JObject result;
+            if (TryParseLearningObject(text, 0, out result)) return result;
+
+            foreach (Match fence in Regex.Matches(
+                text,
+                @"```(?:json)?\s*(?<body>[\s\S]*?)```",
+                RegexOptions.IgnoreCase))
+            {
+                if (TryParseLearningObject(fence.Groups["body"].Value, 0, out result)) return result;
+            }
+
+            foreach (var candidate in ExtractBalancedJsonObjects(text))
+            {
+                if (TryParseLearningObject(candidate, 0, out result)) return result;
+            }
+
+            throw new Exception("AI复盘结果无法恢复有效JSON对象（已尝试纯JSON、Markdown代码块、字符串包裹和括号平衡恢复）");
+        }
+
+        private static bool TryParseLearningObject(string candidate, int depth, out JObject result)
+        {
+            result = null;
+            candidate = (candidate ?? string.Empty).Trim();
+            if (candidate.Length == 0 || depth > 5) return false;
+
+            try
+            {
+                var token = JToken.Parse(candidate);
+                return TrySelectLearningObject(token, depth, out result);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TrySelectLearningObject(JToken token, int depth, out JObject result)
+        {
+            result = null;
+            if (token == null || depth > 5) return false;
+
+            var obj = token as JObject;
+            if (obj != null)
+            {
+                if (obj["summary"] != null || obj["suggestions"] != null || obj["reply_style_profile"] != null)
+                {
+                    result = obj;
+                    return true;
+                }
+
+                foreach (var property in obj.Properties())
+                {
+                    if (TrySelectLearningObject(property.Value, depth + 1, out result)) return true;
+                }
+                return false;
+            }
+
+            var array = token as JArray;
+            if (array != null)
+            {
+                foreach (var child in array)
+                {
+                    if (TrySelectLearningObject(child, depth + 1, out result)) return true;
+                }
+                return false;
+            }
+
+            if (token.Type != JTokenType.String) return false;
+            var nestedText = Convert.ToString(((JValue)token).Value);
+            if (string.IsNullOrWhiteSpace(nestedText)) return false;
+
+            if (TryParseLearningObject(nestedText, depth + 1, out result)) return true;
+            foreach (Match fence in Regex.Matches(
+                nestedText,
+                @"```(?:json)?\s*(?<body>[\s\S]*?)```",
+                RegexOptions.IgnoreCase))
+            {
+                if (TryParseLearningObject(fence.Groups["body"].Value, depth + 1, out result)) return true;
+            }
+            foreach (var candidate in ExtractBalancedJsonObjects(nestedText))
+            {
+                if (TryParseLearningObject(candidate, depth + 1, out result)) return true;
+            }
+            return false;
+        }
+
+        private static List<string> ExtractBalancedJsonObjects(string text)
+        {
+            var result = new List<string>();
+            text = text ?? string.Empty;
+            var start = -1;
+            var depth = 0;
+            var inString = false;
+            var escaped = false;
+
+            for (var i = 0; i < text.Length; i++)
+            {
+                var ch = text[i];
+                if (inString)
+                {
+                    if (escaped)
+                    {
+                        escaped = false;
+                        continue;
+                    }
+                    if (ch == '\\')
+                    {
+                        escaped = true;
+                        continue;
+                    }
+                    if (ch == '"') inString = false;
+                    continue;
+                }
+
+                if (ch == '"')
+                {
+                    inString = true;
+                    continue;
+                }
+                if (ch == '{')
+                {
+                    if (depth == 0) start = i;
+                    depth++;
+                    continue;
+                }
+                if (ch != '}' || depth <= 0) continue;
+
+                depth--;
+                if (depth == 0 && start >= 0)
+                {
+                    result.Add(text.Substring(start, i - start + 1));
+                    start = -1;
+                    if (result.Count >= 12) break;
+                }
+            }
+            return result;
         }
 
         private static string Redact(string value)
