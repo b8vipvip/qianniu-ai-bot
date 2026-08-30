@@ -159,8 +159,16 @@ namespace Bot.ChromeNs
 
                 TimeSpan start;
                 TimeSpan end;
-                if (!TryParseClock(cfg.WorkStartTime, out start)) start = new TimeSpan(9, 0, 0);
-                if (!TryParseClock(cfg.WorkEndTime, out end)) end = new TimeSpan(18, 0, 0);
+                if (!TryParseClock(cfg.WorkStartTime, out start)
+                    || !TryParseClock(cfg.WorkEndTime, out end))
+                {
+                    Log.ErrorWithMaxCount(
+                        "人工客服工作时间配置无效，首条咨询不按下班状态抑制，避免伪造09:00-18:00。 workStart="
+                        + (cfg.WorkStartTime ?? string.Empty)
+                        + ", workEnd=" + (cfg.WorkEndTime ?? string.Empty),
+                        20);
+                    return false;
+                }
                 return !IsInsideWorkHours(DateTime.Now.TimeOfDay, start, end);
             });
             if (!offHours) return false;
