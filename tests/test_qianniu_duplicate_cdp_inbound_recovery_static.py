@@ -67,3 +67,40 @@ def test_duplicate_cdp_bridge_never_replaces_outbound_cdp_ownership():
     assert "TryClaimSellerSession" in server
     assert "重复千牛CDP会话已完成识别但不接管卖家运行通道" in server
     assert "qn.CDP = cdp;" in server
+
+
+def test_duplicate_cdp_bridge_deduplicates_exact_cross_page_replays_with_bounded_state():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+
+    assert "InboundFingerprintWindow = TimeSpan.FromSeconds(3)" in bridge
+    assert "InboundFingerprintRetention = TimeSpan.FromSeconds(30)" in bridge
+    assert "SessionSellerRetention = TimeSpan.FromHours(2)" in bridge
+    assert "ConcurrentDictionary<string, DateTime> RecentInboundFingerprints" in bridge
+    assert "TryAcceptInboundFingerprint(seller, e.Type, response, now)" in bridge
+    assert "BuildInboundFingerprint(seller, type, response)" in bridge
+    assert "StableHash64(raw)" in bridge
+    assert "RecentInboundFingerprints.TryUpdate(fingerprint, now, seenAt)" in bridge
+    assert "MaybeCleanupTransientState(now)" in bridge
+    assert "RecentInboundFingerprints.TryRemove(pair.Key, out ignored)" in bridge
+
+    # The bridge fingerprints the complete event payload, not just human-visible text, so two
+    # legitimate same-text messages with different ids/timestamps are not collapsed together.
+    fingerprint = bridge[bridge.index("private static string BuildInboundFingerprint"):bridge.index("private static ulong StableHash64")]
+    assert '+ (response ?? string.Empty)' in fingerprint
+
+
+def test_duplicate_cdp_bridge_redacts_identifiers_and_rate_limits_duplicate_logs():
+    bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
+
+    assert "private static string PrivacyToken" in bridge
+    assert 'PrivacyToken("seller", seller)' in bridge
+    assert 'PrivacyToken("session", sessionId)' in bridge
+    assert "Interlocked.Increment(ref _suppressedDuplicateCount)" in bridge
+    assert "count > 3 && count % 100 != 0" in bridge
+    assert "suppressedTotal=" in bridge
+    assert "sellerRef=" in bridge
+    assert "sessionRef=" in bridge
+
+    duplicate_log = bridge[bridge.index("private static void MaybeLogSuppressedDuplicate"):bridge.index("private static void MaybeCleanupTransientState")]
+    assert ' + seller' not in duplicate_log
+    assert ' + sessionId' not in duplicate_log
