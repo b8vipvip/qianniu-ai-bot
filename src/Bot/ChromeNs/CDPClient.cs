@@ -136,6 +136,62 @@ namespace Bot.ChromeNs
             return false;
         }
 
+        internal static void ReleaseClosedSession(string sessionId, string reason, CDPClient knownClient)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            if (sessionId.Length == 0) return;
+
+            var client = knownClient;
+            WeakReference weak;
+            if (SessionClients.TryRemove(sessionId, out weak) && client == null && weak != null)
+            {
+                client = weak.Target as CDPClient;
+            }
+
+            lock (PreferredSellerSessionSync)
+            {
+                foreach (var pair in PreferredSellerSessions
+                    .Where(x => string.Equals(x.Value, sessionId, StringComparison.Ordinal))
+                    .ToList())
+                {
+                    string ignored;
+                    PreferredSellerSessions.TryRemove(pair.Key, out ignored);
+                    Log.Info("已释放关闭WebSocket对应的CDP活动会话偏好: seller=" + pair.Key
+                        + ", session=" + sessionId);
+                }
+            }
+
+            if (client != null)
+            {
+                client.MarkSessionClosed(sessionId, reason);
+            }
+        }
+
+        private void MarkSessionClosed(string sessionId, string reason)
+        {
+            var first = Interlocked.Exchange(ref _sessionInvalidated, 1) == 0;
+            CancelPendingWaiters();
+            var socket = _webSocketSession;
+            if (socket != null && string.Equals(socket.SessionID, sessionId, StringComparison.Ordinal))
+            {
+                _webSocketSession = null;
+            }
+            if (first)
+            {
+                Log.Info("CDP客户端已随WebSocket关闭立即失效并清理等待请求: session=" + sessionId
+                    + ", reason=" + (reason ?? string.Empty));
+            }
+        }
+
+        private void CancelPendingWaiters()
+        {
+            TaskCompletionSource<string> waiter;
+            while (_requestWaiters.TryDequeue(out waiter))
+            {
+                if (waiter != null) waiter.TrySetCanceled();
+            }
+        }
+
         private static void PreferRuntimeSession(string sellerNick, string sessionId, string buyerNick, string reason)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
@@ -379,34 +435,34 @@ namespace Bot.ChromeNs
         {
             if (Interlocked.Exchange(ref _sessionInvalidated, 1) != 0) return;
 
-            var sellerNick = (Nick ?? string.Empty).Trim();
-            if (sellerNick.Length > 0)
+            var sessionId = SessionId;
+            WeakReference ignoredClient;
+            if (!string.IsNullOrWhiteSpace(sessionId))
             {
+                SessionClients.TryRemove(sessionId, out ignoredClient);
                 lock (PreferredSellerSessionSync)
                 {
-                    string current;
-                    if (PreferredSellerSessions.TryGetValue(sellerNick, out current)
-                        && string.Equals(current, SessionId, StringComparison.Ordinal))
+                    foreach (var pair in PreferredSellerSessions
+                        .Where(x => string.Equals(x.Value, sessionId, StringComparison.Ordinal))
+                        .ToList())
                     {
                         string ignored;
-                        PreferredSellerSessions.TryRemove(sellerNick, out ignored);
+                        PreferredSellerSessions.TryRemove(pair.Key, out ignored);
                         Log.Info("活动CDP会话失效，已撤销会话偏好并回退权威通道: seller="
-                            + sellerNick + ", session=" + SessionId);
+                            + pair.Key + ", session=" + sessionId);
                     }
                 }
             }
 
-            TaskCompletionSource<string> waiter;
-            while (_requestWaiters.TryDequeue(out waiter))
-            {
-                if (waiter != null) waiter.TrySetCanceled();
-            }
+            CancelPendingWaiters();
 
-            Log.Error("CDP会话已失效并请求WebSocket重连: session=" + SessionId + ", reason=" + (reason ?? string.Empty));
+            Log.Error("CDP会话已失效并请求WebSocket重连: session=" + sessionId + ", reason=" + (reason ?? string.Empty));
             BotConnectionDiagnostics.RecordCdpStatus(false, "CDP会话已失效，等待注入重连", Nick, string.Empty);
             try
             {
-                if (_webSocketSession != null) _webSocketSession.Close();
+                var socket = _webSocketSession;
+                _webSocketSession = null;
+                if (socket != null) socket.Close();
             }
             catch (Exception ex)
             {

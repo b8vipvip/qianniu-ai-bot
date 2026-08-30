@@ -175,7 +175,14 @@ namespace Bot.ChromeNs
 
         public async Task<bool> ConfirmStableAsync(int milliseconds)
         {
-            await Task.Delay(Math.Max(0, milliseconds));
+            try
+            {
+                await Task.Delay(Math.Max(0, milliseconds), CancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return false;
+            }
             if (!IsCurrent) return false;
             MarkReady("send_barrier_stable");
             return true;
@@ -243,7 +250,10 @@ namespace Bot.ChromeNs
             public long LatestSessionGeneration;
         }
 
+        private const int PreMergeRuleGateWaitMilliseconds = 2500;
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
+        private readonly ConcurrentDictionary<string, SemaphoreSlim> _preMergeRuleGates =
+            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
         private readonly Func<BuyerMessageBurstLease, Task> _handler;
@@ -291,14 +301,40 @@ namespace Bot.ChromeNs
                 "pre_merge_rules");
 
             var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
+            var preMergeGate = _preMergeRuleGates.GetOrAdd(
+                Key(item.SellerNick, item.BuyerNick),
+                _ => new SemaphoreSlim(1, 1));
             Task.Run(async () =>
             {
                 var continueToMerge = true;
+                var gateAcquired = false;
                 try
                 {
-                    continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(
-                        item,
-                        allowLocalShortReply);
+                    gateAcquired = await preMergeGate.WaitAsync(
+                        PreMergeRuleGateWaitMilliseconds,
+                        observation.CancellationToken);
+                    if (gateAcquired)
+                    {
+                        continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(
+                            item,
+                            allowLocalShortReply);
+                    }
+                    else
+                    {
+                        Log.ErrorWithMaxCount(
+                            "消息合并前固定规则串行门等待超时，已跳过前置规则并继续普通合并链路: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", generation=" + item.SessionGeneration
+                            + ", waitMs=" + PreMergeRuleGateWaitMilliseconds,
+                            50);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    Log.Info("消息合并前固定规则已因generation失效取消等待: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", generation=" + item.SessionGeneration);
+                    return;
                 }
                 catch (Exception ex)
                 {
@@ -307,6 +343,20 @@ namespace Bot.ChromeNs
                         + ", buyer=" + item.BuyerNick + ", error=" + Safe(ex.Message, 220),
                         20);
                 }
+                finally
+                {
+                    if (gateAcquired)
+                    {
+                        try { preMergeGate.Release(); } catch { }
+                    }
+                }
+
+                if (observation.CancellationToken.IsCancellationRequested
+                    || !_sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                {
+                    return;
+                }
+
                 if (continueToMerge)
                 {
                     EnqueueForMerge(item);
@@ -428,8 +478,6 @@ namespace Bot.ChromeNs
                 _states.TryRemove(key, out ignored);
             }
 
-            // A hard invalidation is conversation-wide for this seller+buyer. With parallel reply
-            // generations, cancelling only LatestSessionGeneration would strand older CTS entries.
             _sessionAgent.CancelAll(seller, buyer, reason);
             Log.Info("买家自动回复任务已因显式硬失效全部取消: seller=" + seller
                 + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
@@ -511,6 +559,10 @@ namespace Bot.ChromeNs
                     await DispatchScopedAsync(burst, lease);
                     if (lease.IsCurrent) lease.MarkCompleted("reply_pipeline_completed");
                 }
+                catch (OperationCanceledException)
+                {
+                    if (lease.IsCurrent) lease.MarkFailed("reply_pipeline_cancelled");
+                }
                 catch (Exception ex)
                 {
                     lease.MarkFailed("reply_pipeline_exception");
@@ -567,9 +619,10 @@ namespace Bot.ChromeNs
 
             if (shop == null)
             {
-                await LegacyAiConfigurationGate.WaitAsync();
+                await LegacyAiConfigurationGate.WaitAsync(lease.CancellationToken);
                 try
                 {
+                    if (!lease.IsCurrent) return;
                     await _handler(lease);
                 }
                 finally
@@ -581,6 +634,7 @@ namespace Bot.ChromeNs
 
             using (ShopSettingsScope.Enter(shop))
             {
+                if (!lease.IsCurrent) return;
                 await _handler(lease);
             }
         }

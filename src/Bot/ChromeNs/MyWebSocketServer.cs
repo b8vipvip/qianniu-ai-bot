@@ -355,6 +355,7 @@ namespace Bot.ChromeNs
                     bool b;
                     string statusBinding;
                     _clients.TryRemove(session.SessionID, out removed);
+                    CDPClient.ReleaseClosedSession(session.SessionID, Convert.ToString(value), removed);
                     _initialized.TryRemove(session.SessionID, out b);
                     _initializing.TryRemove(session.SessionID, out b);
                     _lastStatusBindings.TryRemove(session.SessionID, out statusBinding);

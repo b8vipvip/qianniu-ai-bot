@@ -68,7 +68,23 @@ def test_conflict_is_scoped_to_same_fact_key():
     semantics = read("src/Bot/Knowledge/KnowledgeEngineV2.Semantics.cs")
     assert 'KnowledgeEngineV2Semantics.FactKey(best.Record)' in index
     assert 'KnowledgeEngineV2Semantics.FactKey(second.Record)' in index
-    assert 'Compact(record.Subject) + "|" + NormalizePredicate(record.Predicate)' in semantics
+
+    # Conflict identity must distinguish otherwise similar facts that apply to
+    # different intents/products/entities/conditions. Subject+predicate alone
+    # caused unrelated product knowledge to suppress valid local answers.
+    assert 'var subject = Compact(record.Subject);' in semantics
+    assert 'var predicate = NormalizePredicate(record.Predicate);' in semantics
+    assert 'var intent = NormalizeIntent(record.Intent);' in semantics
+    assert 'var products = Signature(record.ProductIds' in semantics
+    assert 'var entities = Signature(' in semantics
+    assert 'var conditions = Signature(record.Conditions' in semantics
+    assert 'var required = Signature(record.RequiredContext' in semantics
+    assert 'var exclusions = Signature(record.Exclusions' in semantics
+    assert '+ "|p=" + products' in semantics
+    assert '+ "|e=" + entities' in semantics
+    assert '+ "|c=" + conditions' in semantics
+    assert '+ "|r=" + required' in semantics
+    assert '+ "|x=" + exclusions' in semantics
 
 
 def test_working_memory_only_supplements_context_dependent_messages():

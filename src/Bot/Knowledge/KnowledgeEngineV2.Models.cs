@@ -70,6 +70,8 @@ namespace Bot.Knowledge
 
     internal sealed class KnowledgeV2Record
     {
+        private double _confidence;
+
         public string Id { get; set; }
         public string Type { get; set; }
         public string Title { get; set; }
@@ -88,7 +90,11 @@ namespace Bot.Knowledge
         public string SourceType { get; set; }
         public string SourceId { get; set; }
         public double Authority { get; set; }
-        public double Confidence { get; set; }
+        public double Confidence
+        {
+            get { return KnowledgeV2ConfidencePolicy.Resolve(this, _confidence); }
+            set { _confidence = value; }
+        }
         public int UseCount { get; set; }
         public int AcceptedCount { get; set; }
         public int CorrectionCount { get; set; }
@@ -117,6 +123,61 @@ namespace Bot.Knowledge
         public string UpdatedAtText
         {
             get { return UpdatedAt == DateTime.MinValue ? "-" : UpdatedAt.ToString("yyyy-MM-dd HH:mm"); }
+        }
+    }
+
+    internal static class KnowledgeV2ConfidencePolicy
+    {
+        // Historical V2 migration assigned every profile-less record exactly
+        // 0.80 * 0.55 + 0.75 * 0.45 = 0.7775. Treat only that exact legacy
+        // sentinel (and missing confidence) as uncalibrated; preserve deliberate
+        // operator/feedback confidence values unchanged.
+        private const double LegacyUniformSentinel = 0.7775;
+
+        public static double Resolve(KnowledgeV2Record record, double stored)
+        {
+            if (stored > 0 && Math.Abs(stored - LegacyUniformSentinel) > 0.000001)
+                return Clamp(stored);
+            return Estimate(record);
+        }
+
+        public static double Estimate(KnowledgeV2Record record)
+        {
+            if (record == null) return 0.72;
+            var source = (record.SourceType ?? string.Empty).Trim().ToLowerInvariant();
+            double value;
+            if (source.Contains("人工") || source.Contains("manual")) value = 0.92;
+            else if (source.Contains("fixed") || source.Contains("固定")) value = 0.90;
+            else if (source.Contains("导入") || source.Contains("import")) value = 0.84;
+            else if (source.Contains("学习") || source.Contains("candidate")) value = 0.74;
+            else if (source.Contains("legacy") || source.Length == 0) value = 0.76;
+            else value = 0.80;
+
+            var title = (record.Title ?? string.Empty).Trim();
+            var answer = (record.Answer ?? string.Empty).Trim();
+            if (title.Length >= 4 && title.Length <= 80) value += 0.012;
+            if (answer.Length >= 20 && answer.Length <= 600) value += 0.018;
+            else if (answer.Length > 600) value += 0.008;
+            if (!string.Equals(record.Intent, "general", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(record.Intent)) value += 0.022;
+            if (!string.Equals(record.Predicate, "general", StringComparison.OrdinalIgnoreCase)
+                && !string.IsNullOrWhiteSpace(record.Predicate)) value += 0.032;
+            if (!string.IsNullOrWhiteSpace(record.Subject)) value += 0.012;
+            if (record.Entities != null && record.Entities.Count > 0) value += 0.018;
+            if (record.Aliases != null && record.Aliases.Count >= 2) value += 0.012;
+            if (record.ProductIds != null && record.ProductIds.Count > 0) value += 0.025;
+            if (record.Conditions != null && record.Conditions.Count > 0) value += 0.008;
+            if (record.RequiredContext != null && record.RequiredContext.Count > 0) value += 0.008;
+
+            value += Math.Min(0.05, Math.Max(0, record.AcceptedCount) * 0.008);
+            value -= Math.Min(0.12, Math.Max(0, record.CorrectionCount) * 0.025);
+            value -= Math.Min(0.08, Math.Max(0, record.WithdrawCount) * 0.020);
+            return Math.Max(0.55, Math.Min(0.97, value));
+        }
+
+        private static double Clamp(double value)
+        {
+            return Math.Max(0, Math.Min(1, value));
         }
     }
 

@@ -231,10 +231,135 @@ namespace Bot.Knowledge
             return HighRisk.IsMatch(text ?? string.Empty);
         }
 
+        public static bool IsApplicable(KnowledgeV2Record record, KnowledgeV2Query query, out string reason)
+        {
+            reason = string.Empty;
+            if (record == null || query == null)
+            {
+                reason = "知识或查询为空";
+                return false;
+            }
+
+            var exclusions = NormalizeScopeTerms(record.Exclusions);
+            var excluded = exclusions.FirstOrDefault(x => ScopeTermMatches(x, query));
+            if (!string.IsNullOrWhiteSpace(excluded))
+            {
+                reason = "命中排除条件：" + excluded;
+                return false;
+            }
+
+            var required = NormalizeScopeTerms(record.RequiredContext);
+            var missing = required.FirstOrDefault(x => !ScopeTermMatches(x, query));
+            if (!string.IsNullOrWhiteSpace(missing))
+            {
+                reason = "缺少必需上下文：" + missing;
+                return false;
+            }
+
+            var conditions = NormalizeScopeTerms(record.Conditions);
+            if (conditions.Count > 0 && !conditions.Any(x => ScopeTermMatches(x, query)))
+            {
+                reason = "当前消息不满足适用条件";
+                return false;
+            }
+
+            return true;
+        }
+
         public static string FactKey(KnowledgeV2Record record)
         {
             if (record == null) return string.Empty;
-            return Compact(record.Subject) + "|" + NormalizePredicate(record.Predicate);
+            var subject = Compact(record.Subject);
+            if (subject.Length == 0) subject = Compact(record.Title);
+            var predicate = NormalizePredicate(record.Predicate);
+            var intent = NormalizeIntent(record.Intent);
+            var products = Signature(record.ProductIds, 8, true);
+            var entities = Signature(
+                (record.Entities ?? new List<string>())
+                    .Where(x => !string.IsNullOrWhiteSpace(x)
+                        && !x.StartsWith("product:", StringComparison.OrdinalIgnoreCase)),
+                6,
+                false);
+            var conditions = Signature(record.Conditions, 8, false);
+            var required = Signature(record.RequiredContext, 8, false);
+            var exclusions = Signature(record.Exclusions, 8, false);
+            return subject + "|" + predicate + "|" + intent
+                + "|p=" + products
+                + "|e=" + entities
+                + "|c=" + conditions
+                + "|r=" + required
+                + "|x=" + exclusions;
+        }
+
+        private static List<string> NormalizeScopeTerms(IEnumerable<string> terms)
+        {
+            return (terms ?? Enumerable.Empty<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(20)
+                .ToList();
+        }
+
+        private static bool ScopeTermMatches(string term, KnowledgeV2Query query)
+        {
+            term = (term ?? string.Empty).Trim();
+            if (term.Length == 0 || query == null) return false;
+
+            var lower = term.ToLowerInvariant();
+            if (lower.StartsWith("intent:") || lower.StartsWith("intent="))
+                return string.Equals(NormalizeIntent(term.Substring(7)), NormalizeIntent(query.Intent), StringComparison.OrdinalIgnoreCase);
+            if (lower.StartsWith("predicate:") || lower.StartsWith("predicate="))
+            {
+                var split = term.IndexOfAny(new[] { ':', '=' });
+                return split >= 0 && string.Equals(
+                    NormalizePredicate(term.Substring(split + 1)),
+                    NormalizePredicate(query.Predicate),
+                    StringComparison.OrdinalIgnoreCase);
+            }
+            if (lower.StartsWith("subject:") || lower.StartsWith("subject="))
+            {
+                var split = term.IndexOfAny(new[] { ':', '=' });
+                return split >= 0 && TextSimilarity(term.Substring(split + 1), query.Subject) >= 0.86;
+            }
+            if (lower.StartsWith("entity:") || lower.StartsWith("entity="))
+            {
+                var split = term.IndexOfAny(new[] { ':', '=' });
+                var expected = split >= 0 ? Compact(term.Substring(split + 1)) : string.Empty;
+                return expected.Length > 0 && (query.Entities ?? new List<string>())
+                    .Select(Compact)
+                    .Any(x => x == expected || x.Contains(expected) || expected.Contains(x));
+            }
+            if (lower.StartsWith("product:") || lower.StartsWith("product="))
+            {
+                var split = term.IndexOfAny(new[] { ':', '=' });
+                var expected = split >= 0 ? Compact(term.Substring(split + 1)) : string.Empty;
+                return expected.Length > 0 && (query.Entities ?? new List<string>())
+                    .Where(x => x.StartsWith("product:", StringComparison.OrdinalIgnoreCase))
+                    .Select(x => Compact(x.Substring("product:".Length)))
+                    .Any(x => x == expected);
+            }
+
+            var compact = Compact(term);
+            if (compact.Length == 0) return false;
+            var evidence = Compact((query.Original ?? string.Empty)
+                + " " + (query.Subject ?? string.Empty)
+                + " " + (query.Intent ?? string.Empty)
+                + " " + (query.Predicate ?? string.Empty)
+                + " " + string.Join(" ", query.Entities ?? new List<string>()));
+            if (evidence.Contains(compact)) return true;
+            return compact.Length >= 4 && TextSimilarity(term, query.Original) >= 0.86;
+        }
+
+        private static string Signature(IEnumerable<string> values, int max, bool preserveDigits)
+        {
+            return string.Join(",", (values ?? Enumerable.Empty<string>())
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => preserveDigits ? (x ?? string.Empty).Trim().ToLowerInvariant() : Compact(x))
+                .Where(x => x.Length > 0)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(x => x, StringComparer.Ordinal)
+                .Take(max));
         }
 
         private static string ResolveType(string category, string intent, string predicate, string answer, string sourceType)
