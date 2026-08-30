@@ -47,14 +47,20 @@ namespace Bot.ChromeNs
             var isImage = string.Equals(safetyDecision.MessageLabel, "[图片]", StringComparison.Ordinal);
             if (isImage)
             {
+                // Local OCR + Knowledge V2 is a real image-understanding route and must be considered
+                // before deciding that the shop has no image capability. VisionRequestService executes
+                // this local route before selecting any external provider, so pre-routing must not skip
+                // the image merely because no billable vision endpoint is configured.
+                var localUsable = CanUseLocalOcrKnowledge(seller);
                 var selectedEndpoints = ResolveShopVisionEndpoints(message, endpoints);
-                var usable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
+                var externalUsable = (selectedEndpoints ?? new AiEndpointConfig[0]).Any(
                     e => e != null
                         && e.Enabled
                         && e.SupportsVision
                         && !string.IsNullOrWhiteSpace(e.VisionModel)
                         && !string.IsNullOrWhiteSpace(e.ApiKey)
                         && !string.IsNullOrWhiteSpace(e.BaseUrl));
+                var usable = localUsable || externalUsable;
 
                 // BuyerMessageBurstCoordinator runs DeterministicAutoReplyService before merge.
                 // Images are intentionally marked replyable here only when a first greeting was
@@ -65,7 +71,7 @@ namespace Bot.ChromeNs
                     safetyDecision.ShouldCallAi = true;
                     safetyDecision.Note = usable
                         ? "首条咨询固定回复先发送，随后继续图片视觉理解。"
-                        : "首条咨询固定回复先发送；当前无可用视觉模型，后续视觉任务将安全失败而不发送伪答案。";
+                        : "首条咨询固定回复先发送；当前既无可用本地OCR知识直答，也无外部视觉模型，后续视觉任务将安全失败而不发送伪答案。";
                     return new VisionMessageDecision
                     {
                         Kind = VisionDecisionKind.Vision,
@@ -75,13 +81,15 @@ namespace Bot.ChromeNs
                 }
 
                 if (!usable)
-                    return Skip("[图片]", "已跳过：本店未配置可用的视觉模型，未向买家发送消息。");
+                    return Skip("[图片]", "已跳过：本店既无可用本地OCR知识直答，也未配置可用视觉模型，未向买家发送消息。");
 
                 return new VisionMessageDecision
                 {
                     Kind = VisionDecisionKind.Vision,
                     QuestionLabel = "[图片]",
-                    Note = string.Empty
+                    Note = localUsable && !externalUsable
+                        ? "使用本地OCR+Knowledge V2图片理解；无需外部视觉模型。"
+                        : string.Empty
                 };
             }
 
@@ -108,6 +116,30 @@ namespace Bot.ChromeNs
             if (!string.Equals(safetyDecision.MessageLabel, "[图片]", StringComparison.Ordinal))
                 return Skip(safetyDecision.MessageLabel, safetyDecision.Note);
             return Skip("[图片]", safetyDecision.Note);
+        }
+
+        private static bool CanUseLocalOcrKnowledge(string sellerNick)
+        {
+            sellerNick = (sellerNick ?? string.Empty).Trim();
+            if (sellerNick.Length == 0) return false;
+            try
+            {
+                var shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick);
+                if (shop == null) return false;
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    return ReplyModeService.IsLocalFirst(sellerNick)
+                        && KnowledgeEngineV2Service.IsEnabled(sellerNick)
+                        && KnowledgeEngineV2Service.IsSnapshotReady(sellerNick);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount(
+                    "图片本地OCR能力探测失败，继续检查外部视觉模型：" + Safe(ex.Message, 220),
+                    20);
+                return false;
+            }
         }
 
         private static IEnumerable<AiEndpointConfig> ResolveShopVisionEndpoints(
