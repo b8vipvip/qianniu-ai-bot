@@ -49,13 +49,18 @@ namespace Bot.ChromeNs
             string token;
             if (!TryReadConnection(shop, out serverUrl, out token)) return "未配置本店统一API令牌";
 
+            var rawReason = decision == null
+                ? "测试企业微信应用消息双向链路"
+                : (decision.Reason ?? string.Empty);
             var payload = new JObject
             {
                 ["shop_key"] = shop.ShopKey,
                 ["seller"] = seller ?? string.Empty,
                 ["buyer"] = buyer ?? string.Empty,
-                ["question"] = question ?? string.Empty,
-                ["reason"] = decision == null ? "测试企业微信应用消息双向链路" : (decision.Reason ?? string.Empty),
+                ["question"] = SafePayload(question, 6000),
+                // Control-plane schema limits reason to 500 characters. Keep margin for future
+                // server-side normalization and never ship an oversized AI/upstream error blob.
+                ["reason"] = SafePayload(rawReason, 480),
                 ["is_off_hours"] = decision != null && decision.IsOffHours,
                 ["test"] = test
             };
@@ -230,7 +235,7 @@ namespace Bot.ChromeNs
                 ["shop_key"] = shop.ShopKey,
                 ["claim_token"] = claimToken,
                 ["success"] = success,
-                ["error"] = error ?? string.Empty
+                ["error"] = SafePayload(error, 480)
             };
             var result = await SendJsonAsync(
                 shop,
@@ -290,6 +295,14 @@ namespace Bot.ChromeNs
             string error;
             if (!connection.TryGetToken(out token, out error)) return false;
             return !string.IsNullOrWhiteSpace(serverUrl) && !string.IsNullOrWhiteSpace(token);
+        }
+
+        private static string SafePayload(string value, int max)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            while (value.Contains("  ")) value = value.Replace("  ", " ");
+            if (max < 1) return string.Empty;
+            return value.Length <= max ? value : value.Substring(0, max);
         }
 
         private static string Safe(string value)
