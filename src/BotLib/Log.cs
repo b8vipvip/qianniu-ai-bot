@@ -18,7 +18,7 @@ namespace BotLib
             @"(?<label>sellerNick|buyerNick|loginNick|conversationNick|ignoredSession|fromSession|toSession|seller|buyer|session|客服|买家)\s*(?:=|:|：)\s*(?<value>[^,，\s｜|;；\r\n]+)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static readonly Regex RuntimeIdentityJsonFieldRegex = new Regex(
-            @"(?<prefix>[\"'](?<label>sellerNick|buyerNick|loginNick|conversationNick|ignoredSession|fromSession|toSession|seller|buyer|session)[\"']\s*:\s*[\"'])(?<value>[^\"'\r\n]*)(?<suffix>[\"'])",
+            @"(?<prefix>[""'](?<label>sellerNick|buyerNick|loginNick|conversationNick|ignoredSession|fromSession|toSession|seller|buyer|session)[""']\s*:\s*[""'])(?<value>[^""'\r\n]*)(?<suffix>[""'])",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static string _lastInjectionStatusSummary = string.Empty;
         private static DateTime _lastInjectionStatusLoggedUtc = DateTime.MinValue;
