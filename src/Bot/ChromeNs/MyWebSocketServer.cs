@@ -49,6 +49,26 @@ namespace Bot.ChromeNs
             return token == null ? string.Empty : token.ToString().Trim();
         }
 
+        internal static string DiagnosticRef(string kind, string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length == 0) return (kind ?? "id") + "#none";
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = offset;
+            unchecked
+            {
+                foreach (var ch in value)
+                {
+                    hash ^= (byte)(ch & 0xff);
+                    hash *= prime;
+                    hash ^= (byte)(ch >> 8);
+                    hash *= prime;
+                }
+            }
+            return (kind ?? "id") + "#" + hash.ToString("x16").Substring(0, 10);
+        }
+
         private bool TryClaimSellerSession(string sellerNick, string sessionId)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
@@ -82,7 +102,8 @@ namespace Bot.ChromeNs
 
                 _sellerSessions[sellerNick] = sessionId;
                 _sessionSellers[sessionId] = sellerNick;
-                Log.Info("已选定卖家权威千牛CDP会话: seller=" + sellerNick + ", session=" + sessionId);
+                Log.Info("已选定卖家权威千牛CDP会话: sellerRef=" + DiagnosticRef("seller", sellerNick)
+                    + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 return true;
             }
         }
@@ -113,8 +134,8 @@ namespace Bot.ChromeNs
                 {
                     string removed;
                     _sellerSessions.TryRemove(sellerNick, out removed);
-                    Log.Info("卖家权威千牛CDP会话已释放，等待在线页面自动接管: seller="
-                        + sellerNick + ", session=" + sessionId);
+                    Log.Info("卖家权威千牛CDP会话已释放，等待在线页面自动接管: sellerRef="
+                        + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 }
             }
         }
@@ -174,8 +195,8 @@ namespace Bot.ChromeNs
                 if (!TryClaimSellerSession(sellerNick, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.Info("已忽略同一卖家的重复千牛CDP状态会话，避免重启后反复切换发送通道: seller="
-                        + sellerNick + ", session=" + session.SessionID);
+                    Log.Info("已忽略同一卖家的重复千牛CDP状态会话，避免重启后反复切换发送通道: sellerRef="
+                        + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
                     return;
                 }
 
@@ -199,13 +220,13 @@ namespace Bot.ChromeNs
             try
             {
                 var cdp = GetOrCreateClient(session);
-                Log.Info("开始初始化千牛CDP, reason=" + reason + ", session=" + session.SessionID);
+                Log.Info("开始初始化千牛CDP, reason=" + reason + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
                 var user = await cdp.GetCurrentUser();
                 var ver = await cdp.GetVersion();
                 if (user == null || user.Result == null || string.IsNullOrEmpty(user.Result.Nick))
                 {
                     BotConnectionDiagnostics.RecordCdpStatus(false, "未获取登录用户", string.Empty, string.Empty);
-                    Log.Error("千牛CDP初始化跳过：未获取到登录用户, session=" + session.SessionID);
+                    Log.Error("千牛CDP初始化跳过：未获取到登录用户, sessionRef=" + DiagnosticRef("session", session.SessionID));
                     return;
                 }
 
@@ -213,8 +234,8 @@ namespace Bot.ChromeNs
                 if (!TryClaimSellerSession(sellerNick, session.SessionID))
                 {
                     _initialized[session.SessionID] = true;
-                    Log.Info("重复千牛CDP会话已完成识别但不接管卖家运行通道: seller="
-                        + sellerNick + ", session=" + session.SessionID);
+                    Log.Info("重复千牛CDP会话已完成识别但不接管卖家运行通道: sellerRef="
+                        + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
                     return;
                 }
 
@@ -240,7 +261,9 @@ namespace Bot.ChromeNs
 
                 BotConnectionDiagnostics.RecordCdpStatus(true, "已获取", qn.Seller.Nick, buyerNick);
                 WndNotifyIcon.Inst.AddSellerMenuItem(qn.Seller.Nick);
-                Log.Info("千牛CDP初始化成功, seller=" + qn.Seller.Nick + ", buyer=" + buyerNick + ", version=" + qn.QnVersion + ", session=" + session.SessionID);
+                Log.Info("千牛CDP初始化成功, sellerRef=" + DiagnosticRef("seller", qn.Seller.Nick)
+                    + ", buyerRef=" + DiagnosticRef("buyer", buyerNick)
+                    + ", version=" + qn.QnVersion + ", sessionRef=" + DiagnosticRef("session", session.SessionID));
             }
             catch (Exception ex)
             {
@@ -265,7 +288,7 @@ namespace Bot.ChromeNs
                     {
                         _connectedSessions[session.SessionID] = true;
                         BotConnectionDiagnostics.RecordWebSocketConnect(session.SessionID);
-                        Log.Info("千牛注入脚本已连接 Bot WebSocket: " + session.SessionID);
+                        Log.Info("千牛注入脚本已连接 Bot WebSocket: sessionRef=" + DiagnosticRef("session", session.SessionID));
                         GetOrCreateClient(session);
                     }
                     catch (Exception ex)
@@ -302,8 +325,9 @@ namespace Bot.ChromeNs
                                         || TryClaimSellerSession(loginNick, session.SessionID);
                                     if (!authoritative)
                                     {
-                                        Log.Info("检测到卖家重复千牛WebSocket页面，保留已稳定的权威CDP会话: seller="
-                                            + loginNick + ", ignoredSession=" + session.SessionID);
+                                        Log.Info("检测到卖家重复千牛WebSocket页面，保留已稳定的权威CDP会话: sellerRef="
+                                            + DiagnosticRef("seller", loginNick)
+                                            + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
                                     }
                                     else if (!_initialized.ContainsKey(session.SessionID))
                                     {
@@ -350,7 +374,8 @@ namespace Bot.ChromeNs
                     _connectedSessions.TryRemove(session.SessionID, out _);
                     ReleaseSellerSession(session.SessionID);
                     BotConnectionDiagnostics.RecordWebSocketClose(session.SessionID);
-                    Log.Info("千牛注入脚本 WebSocket 已断开: " + session.SessionID + ", reason=" + value);
+                    Log.Info("千牛注入脚本 WebSocket 已断开: sessionRef=" + DiagnosticRef("session", session.SessionID)
+                        + ", reason=" + value);
                     CDPClient removed;
                     bool b;
                     string statusBinding;
@@ -592,12 +617,30 @@ namespace Bot.ChromeNs
 
     public static class QianniuRecoveryManager
     {
+        private const string DestructiveRecoveryEnvironmentKey = "QNBOT_ALLOW_DESTRUCTIVE_QIANNIU_RECOVERY";
         private static readonly object SyncObj = new object();
         private static bool recovering;
         private static DateTime lastRecoverTime = DateTime.MinValue;
 
+        private static bool IsDestructiveRecoveryExplicitlyEnabled()
+        {
+            var value = (Environment.GetEnvironmentVariable(DestructiveRecoveryEnvironmentKey) ?? string.Empty).Trim();
+            return value == "1"
+                || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+                || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+        }
+
         public static void RequestRecover(string reason)
         {
+            if (!IsDestructiveRecoveryExplicitlyEnabled())
+            {
+                Log.ErrorWithMaxCount(
+                    "千牛连接异常已进入非破坏性降级：已阻止旧版自动杀进程/重启千牛恢复，保留当前登录态。 reason="
+                    + (reason ?? string.Empty),
+                    20);
+                return;
+            }
+
             lock (SyncObj)
             {
                 if (recovering) return;
@@ -638,7 +681,7 @@ namespace Bot.ChromeNs
             {
             }
 
-            Log.Error("触发千牛自动恢复：" + reason);
+            Log.Error("触发显式授权的千牛破坏性自动恢复：" + reason);
             KillQianniuProcesses();
             await Task.Delay(3000);
 
@@ -656,7 +699,7 @@ namespace Bot.ChromeNs
                     WorkingDirectory = Path.GetDirectoryName(exe),
                     UseShellExecute = true
                 });
-                Log.Info("已启动千牛：" + exe);
+                Log.Info("已启动千牛恢复进程");
             }
             catch (Exception ex)
             {
@@ -725,13 +768,13 @@ namespace Bot.ChromeNs
 
                     if (QN.CurQN != null && QN.CurQN.Seller != null && !string.IsNullOrWhiteSpace(QN.CurQN.Seller.Nick))
                     {
-                        Log.Info("千牛自动恢复成功：客服=" + QN.CurQN.Seller.Nick);
+                        Log.Info("千牛自动恢复成功: sellerRef=" + MyWebSocketServer.DiagnosticRef("seller", QN.CurQN.Seller.Nick));
                         if (!string.IsNullOrWhiteSpace(lastBuyer))
                         {
                             try
                             {
                                 QN.CurQN.OpenChat(lastBuyer);
-                                Log.Info("已尝试恢复打开最近买家会话：" + lastBuyer);
+                                Log.Info("已尝试恢复打开最近买家会话: buyerRef=" + MyWebSocketServer.DiagnosticRef("buyer", lastBuyer));
                             }
                             catch (Exception ex)
                             {
