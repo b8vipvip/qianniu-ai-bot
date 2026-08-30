@@ -237,6 +237,7 @@ namespace Bot.ChromeNs
         {
             var end = DateTime.Now.AddMilliseconds(timeoutMs);
             var cdpAvailable = true;
+            var draftClearedObserved = false;
             while (DateTime.Now < end)
             {
                 try
@@ -244,7 +245,7 @@ namespace Bot.ChromeNs
                     if (_qn != null && _qn.HasRecentSellerEcho(buyer, text, sendStart))
                     {
                         BotConnectionDiagnostics.RecordSendAttempt(true, method + "，卖家消息已回显");
-                        Log.Info(method + "发送确认成功：已收到卖家消息回显。buyer=" + buyer + ", text=" + text);
+                        Log.Info(method + "发送确认成功：已收到卖家消息回显。buyer=" + buyer);
                         return true;
                     }
                 }
@@ -259,11 +260,15 @@ namespace Bot.ChromeNs
                     var probe = await ProbeInputboxEmptyAsync(method + "发送确认", Math.Min(1000, remaining)).ConfigureAwait(false);
                     if (probe.Completed)
                     {
-                        if (probe.IsEmpty)
+                        if (probe.IsEmpty && !draftClearedObserved)
                         {
-                            BotConnectionDiagnostics.RecordSendAttempt(true, method + "，输入框已清空");
-                            Log.Info(method + "发送确认成功：输入框已清空。text=" + text);
-                            return true;
+                            // Composer clearance proves only that Qianniu accepted/consumed the UI
+                            // action. It is not delivery evidence. Extend the observation window once
+                            // so a delayed seller echo can arrive without triggering a duplicate retry.
+                            draftClearedObserved = true;
+                            var extendedEnd = DateTime.Now.AddMilliseconds(4500);
+                            if (extendedEnd > end) end = extendedEnd;
+                            Log.Info(method + "发送动作已触发：输入框已清空，继续等待同买家同文本卖家回显。buyer=" + buyer);
                         }
                     }
                     else
@@ -275,8 +280,12 @@ namespace Bot.ChromeNs
                 await Task.Delay(150).ConfigureAwait(false);
             }
 
-            SetSendFailure("发送确认", method + "后未确认送达；cdpAvailable=" + cdpAvailable);
-            Log.Info(method + "发送未确认，buyer=" + buyer + ", text=" + text);
+            SetSendFailure(
+                "发送确认",
+                method + "后未检测到卖家消息回显；draftClearedObserved=" + draftClearedObserved
+                    + "；cdpAvailable=" + cdpAvailable);
+            Log.Info(method + "发送未获真实回显确认，buyer=" + buyer
+                + ", draftClearedObserved=" + draftClearedObserved);
             return false;
         }
 
@@ -293,9 +302,6 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                // Coordinate clicks are only safe when the verified seller window is actually on
-                // top. Bring that exact seller window forward immediately before clicking; unlike
-                // Enter this does not depend on whichever application previously owned keyboard focus.
                 sellerDesk.BringTop();
                 Thread.Sleep(120);
 
@@ -306,9 +312,6 @@ namespace Bot.ChromeNs
                 }
                 if (rect.Width <= 0 || rect.Height <= 0) return false;
 
-                // Qianniu's blue control is a split button: the right edge opens the Enter/Ctrl+Enter
-                // menu. Never click its center/right edge. Reserve the right-most arrow zone and aim
-                // at the middle of the left "发送" main-action area.
                 var arrowGuard = Math.Max(18, Math.Min(30, rect.Width / 3));
                 var mainWidth = rect.Width - arrowGuard;
                 if (mainWidth < 16)
@@ -335,7 +338,6 @@ namespace Bot.ChromeNs
             }
         }
 
-
         private bool TryInvokeCachedSendButtonNow()
         {
             if (_sendMessageButton == null || uia3Automation == null) return false;
@@ -354,10 +356,6 @@ namespace Bot.ChromeNs
                 var x = splitRect.Left + Math.Max(8, Math.Min(mainWidth / 2, mainWidth - 8));
                 var y = splitRect.Top + splitRect.Height / 2;
 
-                // Resolve UIA at the exact same verified left/main-action point. We may invoke
-                // only a distinct child that is geometrically confined to the left send area.
-                // Invoking the whole Qt split-button parent is forbidden because its default
-                // action can open the Enter/Ctrl+Enter dropdown instead of sending the draft.
                 AutomationElement candidate = null;
                 try
                 {
@@ -378,8 +376,6 @@ namespace Bot.ChromeNs
                     catch { candidate = null; }
                 }
 
-                // Some Qt accessibility trees return a non-action text node from FromPoint.
-                // Scan descendants as a second discovery path, but keep the same geometry gate.
                 try
                 {
                     foreach (var child in _sendMessageButton.FindAllDescendants())
@@ -466,7 +462,6 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                // Never invoke the full split-button parent (or an almost-identical wrapper).
                 var almostWholeSplit = Math.Abs(rect.Left - splitRect.Left) <= 2
                     && Math.Abs(rect.Top - splitRect.Top) <= 2
                     && rect.Width >= splitRect.Width - 3
@@ -490,12 +485,6 @@ namespace Bot.ChromeNs
         {
             try
             {
-                // Keep the verified left side of Qianniu's split send button as the primary
-                // action. Some Windows integrity/session combinations reject FlaUI's physical
-                // coordinate injection with Win32 access denied even though UIA read/write works.
-                // In that specific pre-action failure only, revalidate the owned draft and use a
-                // single left-main-area UIA child fallback. Never invoke the whole split button.
-                // was accepted but delivery confirmation is merely late/ambiguous.
                 if ((_sendMessageButton == null || _sendMessageButtonRect.IsEmpty)
                     && !await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
@@ -513,7 +502,7 @@ namespace Bot.ChromeNs
                 }
 
                 Log.Info("UIA定位完成，开始点击发送主按钮左侧区域: seller=" + SellerNick
-                    + ", buyer=" + buyer + ", text=" + text);
+                    + ", buyer=" + buyer);
                 var clicked = await RunUiActionAsync(
                     () => TryClickCachedSendButtonNow(),
                     "发送主按钮坐标点击",
@@ -533,9 +522,6 @@ namespace Bot.ChromeNs
                 Log.Info("发送主按钮坐标输入被系统拒绝，准备定位左侧主发送UIA子控件；禁止Invoke整块分裂按钮: seller="
                     + SellerNick + ", buyer=" + buyer);
 
-                // Fail closed if the draft changed/disappeared while the coordinate action failed.
-                // It may mean the click actually reached Qianniu before the input API reported an
-                // exception. In that case only observe delivery; never perform a second send action.
                 if (!await HasExpectedDraftFastAsync(text, 900).ConfigureAwait(false))
                 {
                     Log.Info("坐标点击异常后目标草稿已不存在或无法确认，禁止UIA二次动作: buyer=" + buyer);
@@ -709,9 +695,6 @@ namespace Bot.ChromeNs
 
         public async Task<bool> SendTextAsync(string buyer, string text)
         {
-            // Drop the caller's WPF SynchronizationContext before any CDP/UIA operation. Text
-            // sending itself never presses Enter. UIA locates the verified seller-window split
-            // button and the actual action clicks only its left "发送" region.
             await Task.Delay(180).ConfigureAwait(false);
             string manualQuestion;
             string manualAnswer;
@@ -885,9 +868,6 @@ namespace Bot.ChromeNs
 
                 if (!before.IsEmpty)
                 {
-                    // A failed send attempt leaves the exact Bot draft in the composer. The old
-                    // retry path called insertText2Inputbox again, which appends the same answer and
-                    // produced the duplicated seller echo seen in the field log. Reuse, never append.
                     if (HasOwnedRecentDraft(text))
                     {
                         Log.Info("检测到本次Bot草稿仍在输入框，重试直接复用且不再次追加: buyer=" + buyer);
@@ -914,7 +894,7 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                Log.Info("准备通过CDP写入输入框: buyer=" + buyer + ", text=" + text);
+                Log.Info("准备通过CDP写入输入框: buyer=" + buyer);
                 if (!await RunCdpActionAsync(() => _qn.InsertText2Inputbox(buyer, text), "CDP写入输入框", CdpActionTimeoutMs).ConfigureAwait(false))
                     return false;
 
@@ -925,7 +905,7 @@ namespace Bot.ChromeNs
                 var after = await ProbeInputboxEmptyAsync("写入后输入框检查", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
                 if (after.Completed && !after.IsEmpty)
                 {
-                    Log.Info("CDP写入输入框已由IMSDK确认，进入UIA定位发送主按钮动作: buyer=" + buyer + ", text=" + text);
+                    Log.Info("CDP写入输入框已由IMSDK确认，进入UIA定位发送主按钮动作: buyer=" + buyer);
                     return true;
                 }
 
@@ -933,7 +913,7 @@ namespace Bot.ChromeNs
                 var uiVerified = await RunUiActionAsync(() => HasExpectedDraft(text), "UIA写入确认", UiActionTimeoutMs).ConfigureAwait(false);
                 if (uiVerified)
                 {
-                    Log.Info("CDP写入由UIA严格确认: buyer=" + buyer + ", text=" + text);
+                    Log.Info("CDP写入由UIA严格确认: buyer=" + buyer);
                     return true;
                 }
 
@@ -955,7 +935,7 @@ namespace Bot.ChromeNs
             var attemptStartedAt = GetOrCreateAttemptStartedAt(buyer, text);
             try
             {
-                Log.Info("自动发送开始: buyer=" + buyer + ", text=" + text + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
+                Log.Info("自动发送开始: buyer=" + buyer + ", current=" + (_qn.Buyer == null ? "" : _qn.Buyer.Nick));
 
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "写入前答案时效检查")) return false;
 
@@ -1031,8 +1011,6 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                // Refresh once immediately before the action so the cached split-button rectangle
-                // belongs to the current seller/window. There is no Enter or UIA Invoke send path.
                 if (!await RefreshChatControlsAsync(true).ConfigureAwait(false))
                 {
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
@@ -1044,7 +1022,7 @@ namespace Bot.ChromeNs
                 sendResult = await TrySendTextNativeFirstAsync(buyer, text, sendStart).ConfigureAwait(false);
                 if (!sendResult && string.IsNullOrWhiteSpace(LastSendFailureReason))
                 {
-                    SetSendFailure("发送确认", "发送主按钮坐标点击后未确认消息送达");
+                    SetSendFailure("发送确认", "发送主按钮动作后未确认消息真实回显");
                 }
                 if (sendResult)
                 {
@@ -1052,7 +1030,7 @@ namespace Bot.ChromeNs
                 }
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer
                     + ", method=CDP页面按钮+HWND安全消息+UIA安全回退, failure="
-                    + (sendResult ? string.Empty : GetSendFailureReason()) + ", text=" + text);
+                    + (sendResult ? string.Empty : GetSendFailureReason()));
             }
             catch (Exception ex)
             {
