@@ -39,13 +39,31 @@ namespace Bot.ChromeNs
             public DateTime ReceivedAt;
         }
 
-        private static readonly ConcurrentDictionary<string, string> SessionSellers =
-            new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private sealed class SessionSellerBinding
+        {
+            public string Seller;
+            public DateTime LastSeenAt;
+        }
+
+        // The same Qianniu global event is commonly emitted by more than one injected recent.html
+        // page. Business-level message dedupe still exists downstream, but suppressing an exact
+        // cross-page replay here prevents duplicate state transitions, duplicate recovery work and
+        // noisy logs before the event reaches those deeper guards.
+        private static readonly TimeSpan InboundFingerprintWindow = TimeSpan.FromSeconds(3);
+        private static readonly TimeSpan InboundFingerprintRetention = TimeSpan.FromSeconds(30);
+        private static readonly TimeSpan SessionSellerRetention = TimeSpan.FromHours(2);
+
+        private static readonly ConcurrentDictionary<string, SessionSellerBinding> SessionSellers =
+            new ConcurrentDictionary<string, SessionSellerBinding>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> RecentInboundFingerprints =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static readonly ConcurrentQueue<PendingInboundEvent> Pending =
             new ConcurrentQueue<PendingInboundEvent>();
         private static Timer _retryTimer;
         private static int _initialized;
         private static int _draining;
+        private static int _cleanupTick;
+        private static long _suppressedDuplicateCount;
 
         public static object InitializeForApp()
         {
@@ -53,7 +71,7 @@ namespace Bot.ChromeNs
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 _retryTimer = new Timer(_ => DrainPending(), null, 250, 250);
-                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话。" );
+                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话。");
             }
             return new object();
         }
@@ -78,26 +96,35 @@ namespace Bot.ChromeNs
             var seller = ResolveSeller(sessionId, e.Type, response);
             if (seller.Length == 0)
             {
-                Log.Info("重复CDP入站消息暂无法确定seller，等待正常通道处理: session="
-                    + sessionId + ", type=" + e.Type);
+                Log.Info("重复CDP入站消息暂无法确定seller，等待正常通道处理: sessionRef="
+                    + PrivacyToken("session", sessionId) + ", type=" + e.Type);
                 return;
             }
 
-            SessionSellers[sessionId] = seller;
+            var now = DateTime.Now;
+            TouchSessionSeller(sessionId, seller, now);
+            if (!TryAcceptInboundFingerprint(seller, e.Type, response, now))
+            {
+                MaybeLogSuppressedDuplicate(seller, sessionId, e.Type);
+                MaybeCleanupTransientState(now);
+                return;
+            }
+            MaybeCleanupTransientState(now);
+
             var item = new PendingInboundEvent
             {
                 Seller = seller,
                 SourceSession = sessionId,
                 Type = e.Type,
                 Response = response,
-                ReceivedAt = DateTime.Now
+                ReceivedAt = now
             };
 
             if (!TryDeliverLive(item))
             {
                 Pending.Enqueue(item);
-                Log.Info("千牛入站消息已暂存等待权威CDP就绪: seller=" + seller
-                    + ", session=" + sessionId + ", type=" + e.Type);
+                Log.Info("千牛入站消息已暂存等待权威CDP就绪: sellerRef=" + PrivacyToken("seller", seller)
+                    + ", sessionRef=" + PrivacyToken("session", sessionId) + ", type=" + e.Type);
             }
         }
 
@@ -121,20 +148,34 @@ namespace Bot.ChromeNs
             {
                 var jo = JObject.Parse(response ?? "{}");
                 var seller = Convert.ToString(jo["loginNick"] ?? string.Empty).Trim();
-                if (seller.Length > 0) SessionSellers[sessionId] = seller;
+                if (seller.Length > 0) TouchSessionSeller(sessionId, seller, DateTime.Now);
             }
             catch
             {
             }
         }
 
+        private static void TouchSessionSeller(string sessionId, string seller, DateTime now)
+        {
+            sessionId = (sessionId ?? string.Empty).Trim();
+            seller = (seller ?? string.Empty).Trim();
+            if (sessionId.Length == 0 || seller.Length == 0) return;
+            SessionSellers[sessionId] = new SessionSellerBinding
+            {
+                Seller = seller,
+                LastSeenAt = now
+            };
+        }
+
         private static string ResolveSeller(string sessionId, string type, string response)
         {
-            string known;
+            SessionSellerBinding known;
             if (SessionSellers.TryGetValue(sessionId, out known)
-                && !string.IsNullOrWhiteSpace(known))
+                && known != null
+                && !string.IsNullOrWhiteSpace(known.Seller))
             {
-                return known.Trim();
+                TouchSessionSeller(sessionId, known.Seller, DateTime.Now);
+                return known.Seller.Trim();
             }
 
             if (string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal)
@@ -186,6 +227,98 @@ namespace Bot.ChromeNs
             return string.Empty;
         }
 
+        private static bool TryAcceptInboundFingerprint(
+            string seller,
+            string type,
+            string response,
+            DateTime now)
+        {
+            var fingerprint = BuildInboundFingerprint(seller, type, response);
+            while (true)
+            {
+                DateTime seenAt;
+                if (!RecentInboundFingerprints.TryGetValue(fingerprint, out seenAt))
+                {
+                    if (RecentInboundFingerprints.TryAdd(fingerprint, now)) return true;
+                    continue;
+                }
+
+                if (now - seenAt <= InboundFingerprintWindow) return false;
+                if (RecentInboundFingerprints.TryUpdate(fingerprint, now, seenAt)) return true;
+            }
+        }
+
+        private static string BuildInboundFingerprint(string seller, string type, string response)
+        {
+            // Hash the complete event rather than buyer text. Distinct messages with identical human
+            // text still carry different message ids/timestamps and therefore remain independent.
+            var raw = (seller ?? string.Empty) + "\u001f"
+                + (type ?? string.Empty) + "\u001f"
+                + (response ?? string.Empty);
+            return StableHash64(raw).ToString("x16");
+        }
+
+        private static ulong StableHash64(string value)
+        {
+            // Deterministic FNV-1a over UTF-16 bytes. This is an event fingerprint/privacy token,
+            // not a security primitive, and avoids retaining raw buyer/seller payloads in the cache.
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = offset;
+            unchecked
+            {
+                foreach (var ch in value ?? string.Empty)
+                {
+                    hash ^= (byte)(ch & 0xff);
+                    hash *= prime;
+                    hash ^= (byte)(ch >> 8);
+                    hash *= prime;
+                }
+            }
+            return hash;
+        }
+
+        private static string PrivacyToken(string kind, string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length == 0) return (kind ?? "id") + "#none";
+            var hash = StableHash64(value).ToString("x16");
+            return (kind ?? "id") + "#" + hash.Substring(0, 10);
+        }
+
+        private static void MaybeLogSuppressedDuplicate(string seller, string sessionId, string type)
+        {
+            var count = Interlocked.Increment(ref _suppressedDuplicateCount);
+            // Duplicate pages can emit the same event at very high frequency. Keep the first few
+            // diagnostics and periodic milestones without writing one log line per replay.
+            if (count > 3 && count % 100 != 0) return;
+            Log.Info("重复千牛CDP入站事件已短窗去重: sellerRef=" + PrivacyToken("seller", seller)
+                + ", sessionRef=" + PrivacyToken("session", sessionId)
+                + ", type=" + type + ", suppressedTotal=" + count);
+        }
+
+        private static void MaybeCleanupTransientState(DateTime now)
+        {
+            if ((Interlocked.Increment(ref _cleanupTick) & 127) != 0) return;
+
+            foreach (var pair in RecentInboundFingerprints)
+            {
+                if (now - pair.Value <= InboundFingerprintRetention) continue;
+                DateTime ignored;
+                RecentInboundFingerprints.TryRemove(pair.Key, out ignored);
+            }
+
+            foreach (var pair in SessionSellers)
+            {
+                var binding = pair.Value;
+                if (binding == null || now - binding.LastSeenAt > SessionSellerRetention)
+                {
+                    SessionSellerBinding ignored;
+                    SessionSellers.TryRemove(pair.Key, out ignored);
+                }
+            }
+        }
+
         private static bool TryDeliverLive(PendingInboundEvent item)
         {
             var qn = QN.FindExistingBySellerNick(item.Seller);
@@ -204,9 +337,9 @@ namespace Bot.ChromeNs
             {
                 target.DispatchInboundEvent(item.Type, item.Response);
             }
-            Log.Info("重复千牛CDP入站消息已转交权威会话: seller=" + item.Seller
-                + ", fromSession=" + item.SourceSession
-                + ", toSession=" + target.SessionId
+            Log.Info("重复千牛CDP入站消息已转交权威会话: sellerRef=" + PrivacyToken("seller", item.Seller)
+                + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
+                + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
                 + ", type=" + item.Type);
             return true;
         }
@@ -223,8 +356,10 @@ namespace Bot.ChromeNs
                     if (!Pending.TryDequeue(out item) || item == null) continue;
                     if (DateTime.Now - item.ReceivedAt > TimeSpan.FromSeconds(15))
                     {
-                        Log.Info("千牛入站暂存消息等待权威CDP超时，已放弃: seller=" + item.Seller
-                            + ", session=" + item.SourceSession + ", type=" + item.Type);
+                        Log.Info("千牛入站暂存消息等待权威CDP超时，已放弃: sellerRef="
+                            + PrivacyToken("seller", item.Seller)
+                            + ", sessionRef=" + PrivacyToken("session", item.SourceSession)
+                            + ", type=" + item.Type);
                         continue;
                     }
 
@@ -242,9 +377,10 @@ namespace Bot.ChromeNs
                     {
                         target.DispatchInboundEvent(item.Type, item.Response);
                     }
-                    Log.Info("已补发初始化期间暂存的千牛入站消息: seller=" + item.Seller
-                        + ", fromSession=" + item.SourceSession
-                        + ", toSession=" + target.SessionId
+                    Log.Info("已补发初始化期间暂存的千牛入站消息: sellerRef="
+                        + PrivacyToken("seller", item.Seller)
+                        + ", fromSessionRef=" + PrivacyToken("session", item.SourceSession)
+                        + ", toSessionRef=" + PrivacyToken("session", target.SessionId)
                         + ", type=" + item.Type);
                 }
             }
