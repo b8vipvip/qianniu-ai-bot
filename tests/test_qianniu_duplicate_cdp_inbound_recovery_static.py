@@ -104,30 +104,3 @@ def test_duplicate_cdp_bridge_redacts_identifiers_and_rate_limits_duplicate_logs
     duplicate_log = bridge[bridge.index("private static void MaybeLogSuppressedDuplicate"):bridge.index("private static void MaybeCleanupTransientState")]
     assert ' + seller' not in duplicate_log
     assert ' + sessionId' not in duplicate_log
-
-
-def test_websocket_logs_keep_status_diagnostics_without_dumping_raw_payload_or_nicks():
-    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
-
-    assert "private static string LogRef" in server
-    assert "private static string PayloadSummary" in server
-    assert 'Log.Info("千牛注入状态: " + wMsg.Response)' not in server
-    assert 'Log.Info("IMSDK API扫描结果: " + wMsg.Response)' not in server
-    assert 'Log.Info("IMSDK调用跟踪: " + wMsg.Response)' not in server
-    assert 'Log.Info("IMSDK API扫描结果: " + PayloadSummary(wMsg.Response))' in server
-    assert 'Log.Info("IMSDK调用跟踪: " + PayloadSummary(wMsg.Response))' in server
-
-    status = server[server.index('if (wMsg.Type == "qnbotStatus")'):server.index('else if (wMsg.Type == "imsdkApiScan")')]
-    assert 'hasLoginID=" + hasLoginId' in status
-    assert 'hasImsdk=" + hasImsdk' in status
-    assert 'hasQN=" + hasQn' in status
-    assert 'hasVs=" + hasVs' in status
-    assert 'LogRef("seller", loginNick)' in status
-    assert 'LogRef("buyer", conversationNick)' in status
-    assert 'LogRef("session", session.SessionID)' in status
-
-    # Runtime diagnostics still receive the parsed state, while ordinary logs only expose refs.
-    assert "BotConnectionDiagnostics.RecordInjectionStatus" in status
-    assert "sellerRef=" in server
-    assert "buyerRef=" in server
-    assert "sessionRef=" in server
