@@ -557,7 +557,26 @@ namespace Bot.ChromeNs
                 try
                 {
                     await DispatchScopedAsync(burst, lease);
-                    if (lease.IsCurrent) lease.MarkCompleted("reply_pipeline_completed");
+                    if (lease.IsCurrent)
+                    {
+                        var snapshot = _sessionAgent.GetSnapshot(burst.SellerNick, burst.BuyerNick);
+                        var returnedWithoutReady = snapshot != null
+                            && snapshot.Generation == burst.SessionGeneration
+                            && snapshot.State == BuyerSessionAgentState.Generating;
+                        if (returnedWithoutReady && burst.HasReplyableItem)
+                        {
+                            lease.MarkFailed("reply_pipeline_returned_without_ready");
+                            Log.Info("回复管线在答案就绪前返回，保持失败态而非误记Completed: seller="
+                                + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                                + ", generation=" + burst.SessionGeneration);
+                        }
+                        else
+                        {
+                            lease.MarkCompleted(returnedWithoutReady
+                                ? "non_replyable_media_skipped"
+                                : "reply_pipeline_completed");
+                        }
+                    }
                 }
                 catch (OperationCanceledException)
                 {

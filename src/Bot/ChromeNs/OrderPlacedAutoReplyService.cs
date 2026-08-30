@@ -2,10 +2,13 @@
 using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -39,8 +42,31 @@ namespace Bot.ChromeNs
 
     internal static class OrderPlacedAutoReplyService
     {
+        private sealed class OrderReplyActionRecord
+        {
+            public string Seller { get; set; }
+            public string Buyer { get; set; }
+            public string OrderId { get; set; }
+            public bool FollowUp { get; set; }
+            public DateTime Until { get; set; }
+            public bool Delivered { get; set; }
+        }
+
+        private sealed class OrderReplyActionState
+        {
+            public List<OrderReplyActionRecord> Records { get; set; }
+
+            public OrderReplyActionState()
+            {
+                Records = new List<OrderReplyActionRecord>();
+            }
+        }
+
         private static readonly ConcurrentDictionary<string, DateTime> Reservations =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly object ActionSync = new object();
+        private static readonly List<OrderReplyActionRecord> ActiveActions = new List<OrderReplyActionRecord>();
+        private static OrderReplyActionState _actionState;
 
         public static bool TryCreatePlan(
             QNChatMessage message,
@@ -71,6 +97,7 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            ObserveCanonicalOrderId(seller, buyer, snapshot.OrderId);
             OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
             Log.Info("订单事件通过严格证据校验: seller=" + seller
                 + ", buyer=" + buyer + ", orderId=" + snapshot.OrderId
@@ -102,7 +129,7 @@ namespace Bot.ChromeNs
             if (cfg == null || !cfg.EnableOrderPlacedReply) return true;
             if (snapshot.EventType != OrderEventType.Created && snapshot.EventType != OrderEventType.Paid) return true;
 
-            var key = Normalize(seller) + "#" + Normalize(buyer) + "#" + snapshot.OrderId;
+            var key = BuildReservationKey(seller, buyer, snapshot.OrderId, false);
             var now = DateTime.Now;
             DateTime until;
             if (Reservations.TryGetValue(key, out until) && until > now)
@@ -148,8 +175,9 @@ namespace Bot.ChromeNs
             if (!OrderGuidanceDeliveryGuard.CanCreateFollowUp(seller, buyer, messageText, out snapshot, out reason))
                 return false;
 
+            ObserveCanonicalOrderId(seller, buyer, snapshot.OrderId);
             var trigger = (messageText ?? string.Empty).Trim();
-            var key = Normalize(seller) + "#" + Normalize(buyer) + "#" + snapshot.OrderId + "#guidance-followup";
+            var key = BuildReservationKey(seller, buyer, snapshot.OrderId, true);
             DateTime until;
             if (Reservations.TryGetValue(key, out until) && until > DateTime.Now)
             {
@@ -276,6 +304,229 @@ namespace Bot.ChromeNs
             }
             var hours = plan.IsBuyerFollowUp ? 720 : (plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours)));
             Reservations[plan.ReservationKey] = DateTime.Now.AddHours(hours);
+        }
+
+        internal static bool TryBeginExecution(OrderPlacedReplyPlan plan, out string reason)
+        {
+            reason = string.Empty;
+            if (plan == null || string.IsNullOrWhiteSpace(plan.Seller)
+                || string.IsNullOrWhiteSpace(plan.Buyer) || string.IsNullOrWhiteSpace(plan.OrderId))
+            {
+                reason = "invalid_plan";
+                return false;
+            }
+
+            lock (ActionSync)
+            {
+                EnsureActionStateLoadedLocked();
+                var now = DateTime.Now;
+                ActiveActions.RemoveAll(x => x == null || x.Until <= now);
+                _actionState.Records.RemoveAll(x => x == null || x.Until <= now);
+
+                var canonical = FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId);
+                if (!string.IsNullOrWhiteSpace(canonical)
+                    && !string.Equals(canonical, plan.OrderId, StringComparison.Ordinal))
+                {
+                    Log.Info("订单号精度别名已归一化: orderId=" + plan.OrderId + ", canonicalOrderId=" + canonical);
+                    plan.OrderId = canonical;
+                    if (plan.Snapshot != null) plan.Snapshot.OrderId = canonical;
+                    plan.ReservationKey = BuildReservationKey(plan.Seller, plan.Buyer, canonical, plan.IsBuyerFollowUp);
+                }
+
+                if (IsSuspiciousRoundedOrderId(plan.OrderId)
+                    && string.IsNullOrWhiteSpace(FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId, true)))
+                {
+                    reason = "precision_risk_order_id";
+                    Log.ErrorWithMaxCount("订单自动回复已阻止：检测到疑似 JavaScript Number 精度损失的长订单号，等待精确字符串订单事件补偿。 orderId="
+                        + plan.OrderId, 50);
+                    return false;
+                }
+
+                if (ActiveActions.Any(x => SameAction(x, plan)))
+                {
+                    reason = "action_inflight";
+                    return false;
+                }
+                if (_actionState.Records.Any(x => x.Delivered && SameAction(x, plan)))
+                {
+                    reason = "action_already_delivered";
+                    return false;
+                }
+
+                ActiveActions.Add(new OrderReplyActionRecord
+                {
+                    Seller = Normalize(plan.Seller),
+                    Buyer = Normalize(plan.Buyer),
+                    OrderId = plan.OrderId.Trim(),
+                    FollowUp = plan.IsBuyerFollowUp,
+                    Until = now.AddMinutes(10),
+                    Delivered = false
+                });
+                SaveActionStateLocked();
+                return true;
+            }
+        }
+
+        internal static void FinishExecution(OrderPlacedReplyPlan plan, bool delivered, int sentSegments)
+        {
+            if (plan == null) return;
+            lock (ActionSync)
+            {
+                EnsureActionStateLoadedLocked();
+                ActiveActions.RemoveAll(x => x != null && SameAction(x, plan));
+                if (delivered || sentSegments > 0)
+                {
+                    var now = DateTime.Now;
+                    var hours = plan.IsBuyerFollowUp
+                        ? 720
+                        : (plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours)));
+                    var until = delivered ? now.AddHours(hours) : now.AddMinutes(10);
+                    var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                    if (existing == null)
+                    {
+                        existing = new OrderReplyActionRecord();
+                        _actionState.Records.Add(existing);
+                    }
+                    existing.Seller = Normalize(plan.Seller);
+                    existing.Buyer = Normalize(plan.Buyer);
+                    existing.OrderId = plan.OrderId.Trim();
+                    existing.FollowUp = plan.IsBuyerFollowUp;
+                    existing.Until = until;
+                    existing.Delivered = delivered || sentSegments > 0;
+                }
+                _actionState.Records.RemoveAll(x => x == null || x.Until <= DateTime.Now);
+                SaveActionStateLocked();
+            }
+        }
+
+        private static void ObserveCanonicalOrderId(string seller, string buyer, string orderId)
+        {
+            orderId = (orderId ?? string.Empty).Trim();
+            if (orderId.Length < 8 || IsSuspiciousRoundedOrderId(orderId)) return;
+            lock (ActionSync)
+            {
+                EnsureActionStateLoadedLocked();
+                var exists = _actionState.Records.Any(x => x != null
+                    && !x.FollowUp
+                    && Normalize(x.Seller) == Normalize(seller)
+                    && Normalize(x.Buyer) == Normalize(buyer)
+                    && string.Equals(x.OrderId, orderId, StringComparison.Ordinal));
+                if (!exists)
+                {
+                    _actionState.Records.Add(new OrderReplyActionRecord
+                    {
+                        Seller = Normalize(seller),
+                        Buyer = Normalize(buyer),
+                        OrderId = orderId,
+                        FollowUp = false,
+                        Until = DateTime.Now.AddHours(2),
+                        Delivered = false
+                    });
+                    SaveActionStateLocked();
+                }
+            }
+        }
+
+        private static string FindCanonicalOrderIdLocked(string seller, string buyer, string orderId, bool requireExactCandidate = false)
+        {
+            var normalizedSeller = Normalize(seller);
+            var normalizedBuyer = Normalize(buyer);
+            orderId = (orderId ?? string.Empty).Trim();
+            var candidates = ActiveActions.Concat(_actionState == null ? new List<OrderReplyActionRecord>() : _actionState.Records)
+                .Where(x => x != null
+                    && Normalize(x.Seller) == normalizedSeller
+                    && Normalize(x.Buyer) == normalizedBuyer
+                    && !string.IsNullOrWhiteSpace(x.OrderId))
+                .Select(x => x.OrderId.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            var exact = candidates.FirstOrDefault(x => string.Equals(x, orderId, StringComparison.Ordinal));
+            if (!string.IsNullOrWhiteSpace(exact) && !requireExactCandidate) return exact;
+            return candidates.FirstOrDefault(x => !IsSuspiciousRoundedOrderId(x) && ArePrecisionAliases(x, orderId)) ?? string.Empty;
+        }
+
+        private static bool SameAction(OrderReplyActionRecord record, OrderPlacedReplyPlan plan)
+        {
+            if (record == null || plan == null) return false;
+            return record.FollowUp == plan.IsBuyerFollowUp
+                && Normalize(record.Seller) == Normalize(plan.Seller)
+                && Normalize(record.Buyer) == Normalize(plan.Buyer)
+                && (string.Equals((record.OrderId ?? string.Empty).Trim(), (plan.OrderId ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    || ArePrecisionAliases(record.OrderId, plan.OrderId));
+        }
+
+        internal static bool ArePrecisionAliases(string left, string right)
+        {
+            left = (left ?? string.Empty).Trim();
+            right = (right ?? string.Empty).Trim();
+            if (left.Length < 16 || right.Length != left.Length) return false;
+            if (!Regex.IsMatch(left, @"^\d+$") || !Regex.IsMatch(right, @"^\d+$")) return false;
+            if (!IsSuspiciousRoundedOrderId(left) && !IsSuspiciousRoundedOrderId(right)) return false;
+            ulong a;
+            ulong b;
+            if (!ulong.TryParse(left, out a) || !ulong.TryParse(right, out b)) return false;
+            var delta = a >= b ? a - b : b - a;
+            return delta > 0 && delta <= 4096UL;
+        }
+
+        internal static bool IsSuspiciousRoundedOrderId(string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            return value.Length >= 16
+                && Regex.IsMatch(value, @"^\d+$")
+                && Regex.IsMatch(value, @"0{3,}$");
+        }
+
+        private static string BuildReservationKey(string seller, string buyer, string orderId, bool followUp)
+        {
+            return Normalize(seller) + "#" + Normalize(buyer) + "#" + (orderId ?? string.Empty).Trim()
+                + (followUp ? "#guidance-followup" : string.Empty);
+        }
+
+        private static void EnsureActionStateLoadedLocked()
+        {
+            if (_actionState != null) return;
+            try
+            {
+                var path = GetActionStatePath();
+                _actionState = File.Exists(path)
+                    ? JsonConvert.DeserializeObject<OrderReplyActionState>(File.ReadAllText(path, Encoding.UTF8))
+                    : new OrderReplyActionState();
+            }
+            catch
+            {
+                _actionState = new OrderReplyActionState();
+            }
+            if (_actionState == null) _actionState = new OrderReplyActionState();
+            if (_actionState.Records == null) _actionState.Records = new List<OrderReplyActionRecord>();
+        }
+
+        private static void SaveActionStateLocked()
+        {
+            try
+            {
+                if (_actionState == null) return;
+                var path = GetActionStatePath();
+                var directory = Path.GetDirectoryName(path);
+                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
+                var temp = path + ".tmp";
+                File.WriteAllText(temp, JsonConvert.SerializeObject(_actionState, Formatting.Indented), new UTF8Encoding(false));
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(temp, path);
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("保存订单自动回复动作幂等状态失败：" + Short(ex.Message, 220), 10);
+            }
+        }
+
+        private static string GetActionStatePath()
+        {
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "QianniuAiBot",
+                "data",
+                "order-reply-action-state.json");
         }
 
         private static async Task<OrderPlacedReplyResolution> CallReplyApiAsync(OrderPlacedReplyPlan plan)
@@ -436,88 +687,119 @@ namespace Bot.ChromeNs
 
         private async Task ProcessOrderPlacedReplyAsync(OrderPlacedReplyPlan plan)
         {
+            string actionReason;
+            if (!OrderPlacedAutoReplyService.TryBeginExecution(plan, out actionReason))
+            {
+                if (plan != null)
+                {
+                    OrderPlacedAutoReplyService.Complete(
+                        plan,
+                        !string.Equals(actionReason, "precision_risk_order_id", StringComparison.Ordinal));
+                    Log.Info("下单自动回复动作级幂等已阻止重复执行: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", reason=" + actionReason);
+                }
+                return;
+            }
+
             using (BotActivityCoordinator.Begin("下单自动回复", plan == null ? string.Empty : plan.Seller, plan == null ? string.Empty : plan.Buyer))
             {
-                var resolution = await OrderPlacedAutoReplyService.ResolveAsync(plan);
-                if (!resolution.Success || string.IsNullOrWhiteSpace(resolution.Reply))
+                try
                 {
-                    OrderPlacedAutoReplyService.Complete(plan, false);
-                    OrderAttentionUiService.SetReplyResult(plan == null ? null : plan.Snapshot, false);
-                    var note = "下单自动回复未发送：" + (string.IsNullOrWhiteSpace(resolution.Error) ? "未生成回复" : resolution.Error);
-                    AddSkippedConversation(plan.Seller, plan.Buyer, BuildPlanQuestion(plan), note);
-                    Log.Info(note + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
-                    return;
-                }
-
-                var preserveTemplateLayout = !string.IsNullOrWhiteSpace(resolution.Source)
-                    && (resolution.Source.IndexOf("固定预设", StringComparison.Ordinal) >= 0
-                        || resolution.Source.IndexOf("接口失败兜底", StringComparison.Ordinal) >= 0);
-                var rawReply = resolution.Reply ?? string.Empty;
-                var answer = preserveTemplateLayout
-                    ? (Regex.IsMatch(rawReply, @"(?:\[AI\]|【AI】|［AI］)\s*$", RegexOptions.IgnoreCase) ? rawReply : rawReply + " [AI]")
-                    : BotOutboundMessageFormatter.EnsureAiMarker(BotFeatureStore.ApplyOutputPolicy(rawReply));
-
-                var autoSend = Params.Robot.GetIsAutoReply();
-                KnowledgeLearningService.RegisterAnswerSource(
-                    plan.Seller, plan.Buyer, BuildPlanQuestion(plan),
-                    BotOutboundMessageFormatter.StripAiMarker(answer), resolution.Source);
-                var ctl = Desk.Inst == null ? null : Desk.Inst.AddConversation(
-                    plan.Seller, plan.Buyer, BuildPlanQuestion(plan), answer, autoSend, resolution.Source);
-
-                if (!autoSend)
-                {
-                    OrderPlacedAutoReplyService.Complete(plan, false);
-                    if (ctl != null) ctl.SetSendResult(false, "未发送：自动回复开关已关闭");
-                    return;
-                }
-
-                var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();
-                if (delaySeconds > 0)
-                {
-                    Log.Info("下单自动回复等待延时发送: seller=" + plan.Seller
-                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                        + ", delaySeconds=" + delaySeconds + ", manualReplyDoesNotSuppress=true");
-                    await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
-                    if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                    var resolution = await OrderPlacedAutoReplyService.ResolveAsync(plan);
+                    if (!resolution.Success || string.IsNullOrWhiteSpace(resolution.Reply))
                     {
                         OrderPlacedAutoReplyService.Complete(plan, false);
-                        if (ctl != null) ctl.SetSendResult(false, "未发送：延时期间 Bot 或自动回复开关已关闭");
+                        OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                        OrderAttentionUiService.SetReplyResult(plan == null ? null : plan.Snapshot, false);
+                        var note = "下单自动回复未发送：" + (string.IsNullOrWhiteSpace(resolution.Error) ? "未生成回复" : resolution.Error);
+                        AddSkippedConversation(plan.Seller, plan.Buyer, BuildPlanQuestion(plan), note);
+                        Log.Info(note + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
                         return;
                     }
-                }
 
-                // Do NOT inspect manual intervention or seller echoes here. EventHub/Reservations
-                // already provide order/event dedupe. A human reply is not evidence that this
-                // configured order business rule was executed by the Bot.
-                OrderPresetSendResult presetSendResult = null;
-                bool sendOk;
-                if (preserveTemplateLayout)
-                {
-                    presetSendResult = await SendOrderPresetAnswerAsync(plan, answer);
-                    sendOk = presetSendResult.Success;
-                }
-                else
-                {
-                    sendOk = await SendMandatoryOrderTextAsync(plan, answer);
-                }
+                    var preserveTemplateLayout = !string.IsNullOrWhiteSpace(resolution.Source)
+                        && (resolution.Source.IndexOf("固定预设", StringComparison.Ordinal) >= 0
+                            || resolution.Source.IndexOf("接口失败兜底", StringComparison.Ordinal) >= 0);
+                    var rawReply = resolution.Reply ?? string.Empty;
+                    var answer = preserveTemplateLayout
+                        ? (Regex.IsMatch(rawReply, @"(?:\[AI\]|【AI】|［AI］)\s*$", RegexOptions.IgnoreCase) ? rawReply : rawReply + " [AI]")
+                        : BotOutboundMessageFormatter.EnsureAiMarker(BotFeatureStore.ApplyOutputPolicy(rawReply));
 
-                OrderPlacedAutoReplyService.Complete(plan, sendOk);
-                OrderAttentionUiService.SetReplyResult(plan.Snapshot, sendOk);
-                if (sendOk)
-                {
-                    OrderGuidanceDeliveryGuard.MarkDelivered(plan, plan.IsBuyerFollowUp ? "Bot强制补发" : "Bot强制订单规则发送");
-                    ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
+                    var autoSend = Params.Robot.GetIsAutoReply();
+                    KnowledgeLearningService.RegisterAnswerSource(
+                        plan.Seller, plan.Buyer, BuildPlanQuestion(plan),
+                        BotOutboundMessageFormatter.StripAiMarker(answer), resolution.Source);
+                    var ctl = Desk.Inst == null ? null : Desk.Inst.AddConversation(
+                        plan.Seller, plan.Buyer, BuildPlanQuestion(plan), answer, autoSend, resolution.Source);
+
+                    if (!autoSend)
+                    {
+                        OrderPlacedAutoReplyService.Complete(plan, false);
+                        OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                        if (ctl != null) ctl.SetSendResult(false, "未发送：自动回复开关已关闭");
+                        return;
+                    }
+
+                    var delaySeconds = OrderPlacedReplyDelaySettings.GetSeconds();
+                    if (delaySeconds > 0)
+                    {
+                        Log.Info("下单自动回复等待延时发送: seller=" + plan.Seller
+                            + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                            + ", delaySeconds=" + delaySeconds + ", manualReplyDoesNotSuppress=true");
+                        await Task.Delay(TimeSpan.FromSeconds(delaySeconds));
+                        if (!Params.Robot.CanUseRobotReal || !Params.Robot.GetIsAutoReply())
+                        {
+                            OrderPlacedAutoReplyService.Complete(plan, false);
+                            OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                            if (ctl != null) ctl.SetSendResult(false, "未发送：延时期间 Bot 或自动回复开关已关闭");
+                            return;
+                        }
+                    }
+
+                    // EventHub is lifecycle-event dedupe; the action ledger above is the source of truth
+                    // for the business side effect. Created -> Paid may update the same order snapshot,
+                    // but can never execute the configured initial order reply twice.
+                    OrderPresetSendResult presetSendResult = null;
+                    bool sendOk;
+                    if (preserveTemplateLayout)
+                    {
+                        presetSendResult = await SendOrderPresetAnswerAsync(plan, answer);
+                        sendOk = presetSendResult.Success;
+                    }
+                    else
+                    {
+                        sendOk = await SendMandatoryOrderTextAsync(plan, answer);
+                    }
+
+                    OrderPlacedAutoReplyService.Complete(plan, sendOk);
+                    OrderAttentionUiService.SetReplyResult(plan.Snapshot, sendOk);
+                    if (sendOk)
+                    {
+                        OrderGuidanceDeliveryGuard.MarkDelivered(plan, plan.IsBuyerFollowUp ? "Bot强制补发" : "Bot强制订单规则发送");
+                        ReplyDeduplicationService.RememberDelivered(plan.Seller, plan.Buyer, answer);
+                    }
+                    OrderPlacedAutoReplyService.FinishExecution(
+                        plan,
+                        sendOk,
+                        presetSendResult == null ? (sendOk ? 1 : 0) : presetSendResult.SentSegments);
+                    if (ctl != null)
+                    {
+                        var successDetail = plan.IsBuyerFollowUp
+                            ? "已发送（买家明确续问，订单规则强制补发一次）"
+                            : "已发送（订单自动回复规则强制执行，订单号 " + plan.OrderId + "）";
+                        ctl.SetSendResult(sendOk, sendOk ? successDetail : "发送失败：" + rpa.GetSendFailureReason());
+                    }
+                    Log.Info("下单自动回复规则执行完成: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", delivered=" + sendOk + ", manualReplyIgnored=true");
                 }
-                if (ctl != null)
+                catch
                 {
-                    var successDetail = plan.IsBuyerFollowUp
-                        ? "已发送（买家明确续问，订单规则强制补发一次）"
-                        : "已发送（订单自动回复规则强制执行，订单号 " + plan.OrderId + "）";
-                    ctl.SetSendResult(sendOk, sendOk ? successDetail : "发送失败：" + rpa.GetSendFailureReason());
+                    OrderPlacedAutoReplyService.Complete(plan, false);
+                    OrderPlacedAutoReplyService.FinishExecution(plan, false, 0);
+                    throw;
                 }
-                Log.Info("下单自动回复规则执行完成: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                    + ", delivered=" + sendOk + ", manualReplyIgnored=true");
             }
         }
 

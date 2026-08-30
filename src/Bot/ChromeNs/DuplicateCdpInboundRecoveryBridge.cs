@@ -133,13 +133,12 @@ namespace Bot.ChromeNs
             // onChatDlgActive may be synthesized by periodic page polling and therefore must never
             // drive current-buyer state across duplicate pages. onConversationChange is different:
             // it is emitted from the Qianniu conversation-change event and contains the changed
-            // Conversation object itself. We may forward that state notification to QN, but still
-            // never replace outbound CDP ownership, call OpenChat, or mutate the real Qianniu UI.
-            // This preserves the original onChatDlgActive/onConversationChange safety boundary while
-            // allowing the precise conversation-change event to repair a stale Bot-side buyer.
+            // Conversation object itself. messageCenterNotify is a business notification and does
+            // not mutate the visible conversation, so it is safe and important to recover as well.
             return string.Equals(type, "receiveNewMsg", StringComparison.Ordinal)
                 || string.Equals(type, "onShopRobotReceriveNewMsgs", StringComparison.Ordinal)
-                || string.Equals(type, "onConversationChange", StringComparison.Ordinal);
+                || string.Equals(type, "onConversationChange", StringComparison.Ordinal)
+                || string.Equals(type, "messageCenterNotify", StringComparison.Ordinal);
         }
 
         private static void ObserveStatusSeller(string sessionId, string response)
