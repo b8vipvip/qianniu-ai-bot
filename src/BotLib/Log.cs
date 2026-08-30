@@ -15,7 +15,10 @@ namespace BotLib
         private static readonly object DiagnosticNoiseSync = new object();
         private static readonly TimeSpan InjectionStatusRepeatWindow = TimeSpan.FromSeconds(30);
         private static readonly Regex RuntimeIdentityFieldRegex = new Regex(
-            @"(?<label>sellerNick|buyerNick|loginNick|conversationNick|ignoredSession|fromSession|toSession|seller|buyer|session|客服|买家)\s*=\s*(?<value>[^,\s｜|;\r\n]+)",
+            @"(?<label>sellerNick|buyerNick|loginNick|conversationNick|ignoredSession|fromSession|toSession|seller|buyer|session|客服|买家)\s*(?:=|:|：)\s*(?<value>[^,，\s｜|;；\r\n]+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex RuntimeIdentityJsonFieldRegex = new Regex(
+            @"(?<prefix>[\"'](?<label>sellerNick|buyerNick|loginNick|conversationNick|ignoredSession|fromSession|toSession|seller|buyer|session)[\"']\s*:\s*[\"'])(?<value>[^\"'\r\n]*)(?<suffix>[\"'])",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static string _lastInjectionStatusSummary = string.Empty;
         private static DateTime _lastInjectionStatusLoggedUtc = DateTime.MinValue;
@@ -152,8 +155,8 @@ namespace BotLib
         /// Production diagnostics must not persist buyer/seller identities or high-volume protocol
         /// payloads by default. IMSDK raw discovery remains an explicit opt-in. Periodic Qianniu
         /// injection status is converted to a state-only summary and identical states are coalesced.
-        /// All common seller/buyer/session key=value fields are then replaced by stable references
-        /// at the central logging boundary so individual call sites cannot accidentally leak them.
+        /// Common seller/buyer/session key=value, key:value, Chinese-colon and JSON string fields are
+        /// replaced by stable references at the central logging boundary.
         /// </summary>
         internal static string NormalizeProductionDiagnostic(string text)
         {
@@ -282,6 +285,15 @@ namespace BotLib
         private static string RedactRuntimeIdentityFields(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return text;
+            text = RuntimeIdentityJsonFieldRegex.Replace(text, match =>
+            {
+                var label = match.Groups["label"].Value;
+                var value = match.Groups["value"].Value;
+                if (string.IsNullOrWhiteSpace(value)) return match.Value;
+                return match.Groups["prefix"].Value
+                    + StableIdentityRef(IdentityKindForLabel(label), value)
+                    + match.Groups["suffix"].Value;
+            });
             return RuntimeIdentityFieldRegex.Replace(text, match =>
             {
                 var label = match.Groups["label"].Value;
