@@ -3,6 +3,7 @@ using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Text.RegularExpressions;
 
 namespace BotLib
 {
@@ -13,6 +14,9 @@ namespace BotLib
         private const string ImsdkVerboseTraceEnvironmentKey = "QNBOT_IMSDK_VERBOSE_TRACE";
         private static readonly object DiagnosticNoiseSync = new object();
         private static readonly TimeSpan InjectionStatusRepeatWindow = TimeSpan.FromSeconds(30);
+        private static readonly Regex RuntimeIdentityFieldRegex = new Regex(
+            @"(?<label>sellerNick|buyerNick|loginNick|conversationNick|ignoredSession|fromSession|toSession|seller|buyer|session|客服|买家)\s*=\s*(?<value>[^,\s｜|;\r\n]+)",
+            RegexOptions.IgnoreCase | RegexOptions.Compiled);
         private static string _lastInjectionStatusSummary = string.Empty;
         private static DateTime _lastInjectionStatusLoggedUtc = DateTime.MinValue;
         private static int _suppressedInjectionStatusCount;
@@ -31,6 +35,7 @@ namespace BotLib
 
         public static void WriteEnvironmentString(string tip)
         {
+            tip = RedactRuntimeIdentityFields(tip);
             Writer.WriteEnvironmentString(tip);
             ScopedLogRouter.TryWrite("Environment", tip);
         }
@@ -51,6 +56,7 @@ namespace BotLib
 
         public static void Assert(string msg)
         {
+            msg = RedactRuntimeIdentityFields(msg);
             Writer.Assert(msg);
             ScopedLogRouter.TryWrite("Assert", msg);
         }
@@ -73,14 +79,14 @@ namespace BotLib
         public static void Error(string msg, object o, [System.Runtime.CompilerServices.CallerMemberName] string caller = "", [System.Runtime.CompilerServices.CallerFilePath] string path = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
         {
             msg = msg + Environment.NewLine + "data=" + JsonConvert.SerializeObject(o);
-            var text = GetDesc(msg, caller, path, line);
+            var text = RedactRuntimeIdentityFields(GetDesc(msg, caller, path, line));
             Writer.Error(text);
             ScopedLogRouter.TryWrite("ERROR", text);
         }
 
         public static void Error(string msg, [System.Runtime.CompilerServices.CallerMemberName] string caller = "", [System.Runtime.CompilerServices.CallerFilePath] string path = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
         {
-            var text = GetDesc(msg, caller, path, line);
+            var text = RedactRuntimeIdentityFields(GetDesc(msg, caller, path, line));
             Writer.Error(text);
             ScopedLogRouter.TryWrite("ERROR", text);
         }
@@ -90,7 +96,7 @@ namespace BotLib
             string key = caller + line + path;
             if (IsLogCountLessThanMaxCount(key, maxCount + 1))
             {
-                var text = GetDesc(msg, caller, path, line);
+                var text = RedactRuntimeIdentityFields(GetDesc(msg, caller, path, line));
                 Writer.Error(text);
                 ScopedLogRouter.TryWrite("ERROR", text);
             }
@@ -128,7 +134,7 @@ namespace BotLib
 
         public static void Exception(Exception e, [System.Runtime.CompilerServices.CallerMemberName] string caller = "", [System.Runtime.CompilerServices.CallerFilePath] string path = "", [System.Runtime.CompilerServices.CallerLineNumber] int line = 0)
         {
-            var text = GetDesc(e, caller, path, line);
+            var text = RedactRuntimeIdentityFields(GetDesc(e, caller, path, line));
             Writer.Exception(text);
             ScopedLogRouter.TryWrite("Exception", text);
         }
@@ -137,6 +143,7 @@ namespace BotLib
         {
             text = NormalizeProductionDiagnostic(text);
             if (string.IsNullOrWhiteSpace(text)) return;
+            text = RedactRuntimeIdentityFields(text);
             Writer.Info(text);
             ScopedLogRouter.TryWrite("Info", text);
         }
@@ -145,6 +152,8 @@ namespace BotLib
         /// Production diagnostics must not persist buyer/seller identities or high-volume protocol
         /// payloads by default. IMSDK raw discovery remains an explicit opt-in. Periodic Qianniu
         /// injection status is converted to a state-only summary and identical states are coalesced.
+        /// All common seller/buyer/session key=value fields are then replaced by stable references
+        /// at the central logging boundary so individual call sites cannot accidentally leak them.
         /// </summary>
         internal static string NormalizeProductionDiagnostic(string text)
         {
@@ -270,6 +279,48 @@ namespace BotLib
                 : "unknown";
         }
 
+        private static string RedactRuntimeIdentityFields(string text)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return text;
+            return RuntimeIdentityFieldRegex.Replace(text, match =>
+            {
+                var label = match.Groups["label"].Value;
+                var value = match.Groups["value"].Value;
+                if (string.IsNullOrWhiteSpace(value)) return match.Value;
+                return label + "Ref=" + StableIdentityRef(IdentityKindForLabel(label), value);
+            });
+        }
+
+        private static string IdentityKindForLabel(string label)
+        {
+            label = (label ?? string.Empty).Trim();
+            if (label.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0) return "session";
+            if (label.IndexOf("buyer", StringComparison.OrdinalIgnoreCase) >= 0
+                || label.IndexOf("conversation", StringComparison.OrdinalIgnoreCase) >= 0
+                || string.Equals(label, "买家", StringComparison.Ordinal)) return "buyer";
+            return "seller";
+        }
+
+        private static string StableIdentityRef(string kind, string value)
+        {
+            value = (value ?? string.Empty).Trim();
+            if (value.Length == 0) return (kind ?? "id") + "#none";
+            const ulong offset = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            var hash = offset;
+            unchecked
+            {
+                foreach (var ch in value)
+                {
+                    hash ^= (byte)(ch & 0xff);
+                    hash *= prime;
+                    hash ^= (byte)(ch >> 8);
+                    hash *= prime;
+                }
+            }
+            return (kind ?? "id") + "#" + hash.ToString("x16").Substring(0, 10);
+        }
+
         private static bool IsImsdkVerboseTraceEnabled()
         {
             var value = (Environment.GetEnvironmentVariable(ImsdkVerboseTraceEnvironmentKey) ?? string.Empty).Trim();
@@ -293,6 +344,7 @@ namespace BotLib
 
         public static void Debug(string text)
         {
+            text = RedactRuntimeIdentityFields(text);
             Writer.Debug(text);
             ScopedLogRouter.TryWrite("Debug", text);
         }
@@ -304,7 +356,7 @@ namespace BotLib
 
         public static void TimeElapse(string title, DateTime t0)
         {
-            var text = title + ",ms=" + (DateTime.Now - t0).TotalMilliseconds;
+            var text = RedactRuntimeIdentityFields(title + ",ms=" + (DateTime.Now - t0).TotalMilliseconds);
             Writer.Info(text);
             ScopedLogRouter.TryWrite("Info", text);
         }
@@ -313,7 +365,7 @@ namespace BotLib
         {
             try
             {
-                string msg = string.Format(format, args);
+                string msg = RedactRuntimeIdentityFields(string.Format(format, args));
                 Writer.WriteLine(msg);
                 ScopedLogRouter.TryWrite("Line", msg);
             }
