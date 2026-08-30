@@ -79,3 +79,35 @@ def test_imsdk_production_logging_is_sanitized_and_verbose_trace_is_opt_in():
     server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
     assert 'wMsg.Type == "imsdkApiScan"' in server
     assert 'wMsg.Type == "imsdkInvokeTrace"' in server
+
+
+def test_qnbot_status_logging_redacts_identity_and_coalesces_repeated_state():
+    log = read("src/BotLib/Log.cs")
+    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+
+    # The server still supplies the full status object to the centralized diagnostic normalizer;
+    # the logging layer is therefore the privacy boundary and must never return that raw JSON.
+    assert 'Log.Info("千牛注入状态: " + wMsg.Response)' in server
+    assert 'text.IndexOf("千牛注入状态:"' in log
+    assert "return NormalizeInjectionStatus(text);" in log
+    assert "InjectionStatusRepeatWindow = TimeSpan.FromSeconds(30)" in log
+
+    status = log[log.index("private static string NormalizeInjectionStatus"):log.index("private static string ReadBooleanStatus")]
+    assert 'JObject.Parse(json)' in status
+    assert 'payload["loginNick"]' in status
+    assert 'payload["conversationNick"]' in status
+    assert 'sellerPresent=' in status
+    assert 'buyerPresent=' in status
+    assert 'payloadLength=' in status
+    assert 'repeatsSuppressed=' in status
+    assert "_suppressedInjectionStatusCount++" in status
+    assert "return null;" in status
+    assert 'summary += json' not in status
+    assert 'summary += text' not in status
+    assert 'return text' not in status
+
+    # Keep the operational state needed for support without logging nick values.
+    assert 'ReadBooleanStatus(payload, "hasLoginID")' in status
+    assert 'ReadBooleanStatus(payload, "hasImsdk")' in status
+    assert 'ReadBooleanStatus(payload, "hasQN")' in status
+    assert 'ReadBooleanStatus(payload, "hasVs")' in status
