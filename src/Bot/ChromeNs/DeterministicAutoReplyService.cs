@@ -91,7 +91,16 @@ namespace Bot.ChromeNs
                         return await HandleScopedBeforeMergeAsync(item, key, allowLocalShortReply);
                     }
                 }
-                return await HandleScopedBeforeMergeAsync(item, key, allowLocalShortReply);
+
+                // Deterministic business rules are shop-scoped configuration. Running them without
+                // a resolved ShopKey can silently read legacy/global defaults (historically 09:00-18:00)
+                // and send a fabricated off-hours answer. Fail open to the ordinary message pipeline
+                // instead of guessing another shop's configuration.
+                Log.ErrorWithMaxCount(
+                    "固定规则前置缺少店铺作用域，已停止固定规则发送并继续普通消息链路: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick,
+                    20);
+                return true;
             }
             catch (Exception ex)
             {
@@ -328,8 +337,16 @@ namespace Bot.ChromeNs
 
             TimeSpan start;
             TimeSpan end;
-            if (!TryParseClock(cfg.WorkStartTime, out start)) start = new TimeSpan(9, 0, 0);
-            if (!TryParseClock(cfg.WorkEndTime, out end)) end = new TimeSpan(18, 0, 0);
+            if (!TryParseClock(cfg.WorkStartTime, out start)
+                || !TryParseClock(cfg.WorkEndTime, out end))
+            {
+                Log.ErrorWithMaxCount(
+                    "下班自动回复工作时间配置无效，已停止固定回复以避免伪造09:00-18:00。 workStart="
+                    + (cfg.WorkStartTime ?? string.Empty)
+                    + ", workEnd=" + (cfg.WorkEndTime ?? string.Empty),
+                    20);
+                return false;
+            }
             if (IsInsideWorkHours(DateTime.Now.TimeOfDay, start, end)) return false;
 
             var template = string.IsNullOrWhiteSpace(cfg.OffHoursFixedText)
