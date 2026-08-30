@@ -41,10 +41,14 @@ def test_central_log_boundary_redacts_common_runtime_identity_fields():
 def test_all_normal_runtime_log_levels_pass_through_identity_redaction():
     log = read("src/BotLib/Log.cs")
 
-    error_object = log[log.index("public static void Error(string msg, object o"):log.index("public static void Error(string msg,")]
+    error_object_start = log.index("public static void Error(string msg, object o")
+    error_plain_start = log.index(
+        "public static void Error(string msg, [System.Runtime.CompilerServices.CallerMemberName]",
+        error_object_start + 1,
+    )
+    error_object = log[error_object_start:error_plain_start]
     assert "RedactRuntimeIdentityFields(GetDesc" in error_object
 
-    error_plain_start = log.index("public static void Error(string msg,", log.index("public static void Error(string msg, object o") + 1)
     error_plain = log[error_plain_start:log.index("public static void ErrorWithMaxCount", error_plain_start)]
     assert "RedactRuntimeIdentityFields(GetDesc" in error_plain
 
@@ -74,7 +78,7 @@ def test_existing_raw_source_fields_are_protected_without_changing_runtime_ids()
     # Existing business code may still build diagnostic strings with raw values. The central Log
     # boundary owns persistence redaction, so business keys and in-memory seller/buyer IDs remain
     # untouched for routing, dedupe and local UI behavior.
-    assert 'seller="' in burst or 'seller=" +' in burst or 'seller=' in burst
+    assert "seller=" in burst
     assert "Seller = seller" in server
     assert "Buyer = buyer" in server
     assert "RuntimeIdentityFieldRegex.Replace" in log
