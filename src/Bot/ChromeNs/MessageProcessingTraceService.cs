@@ -10,6 +10,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -43,6 +44,9 @@ namespace Bot.ChromeNs
         private sealed class ActiveTrace
         {
             public string TraceId;
+            public string ShopKey;
+            public string Seller;
+            public string Buyer;
             public DateTime LastAt;
         }
 
@@ -105,7 +109,7 @@ namespace Bot.ChromeNs
                 buyer,
                 "ai_fallback_started",
                 "processing",
-                "知识未直答，已进入AI兜底",
+                "已进入AI生成/兜底",
                 detail,
                 0,
                 false,
@@ -122,8 +126,8 @@ namespace Bot.ChromeNs
         {
             var failed = string.IsNullOrWhiteSpace(answer)
                 || answer.StartsWith("错误：", StringComparison.Ordinal);
-            var detail = "来源=" + Safe(source, 120)
-                + (string.IsNullOrWhiteSpace(answer) ? string.Empty : "；答案=" + Safe(answer, 1200));
+            var detail = "来源=" + SafeDetail(source, 120)
+                + (string.IsNullOrWhiteSpace(answer) ? string.Empty : "；答案=" + SafeDetail(answer, 1200));
             Record(
                 seller,
                 buyer,
@@ -134,6 +138,20 @@ namespace Bot.ChromeNs
                 responseMs,
                 false,
                 failed);
+        }
+
+        public static void RecordGeneratedOnly(string seller, string buyer, string detail)
+        {
+            Record(
+                seller,
+                buyer,
+                "generation_only_complete",
+                "success",
+                "答案已生成，当前未启用自动发送",
+                detail,
+                0,
+                false,
+                true);
         }
 
         public static void RecordDelivery(
@@ -147,7 +165,7 @@ namespace Bot.ChromeNs
                 buyer,
                 success ? "delivery_confirmed" : "delivery_failed",
                 success ? "success" : "failed",
-                success ? "买家回复已确认发送" : "买家回复发送失败",
+                success ? "卖家回显已确认真实发送" : "买家回复发送失败",
                 detail,
                 0,
                 false,
@@ -255,18 +273,21 @@ namespace Bot.ChromeNs
             {
                 context = Active.AddOrUpdate(
                     key,
-                    _ => new ActiveTrace { TraceId = Guid.NewGuid().ToString("N"), LastAt = now },
+                    _ => NewActiveTrace(shop.ShopKey, seller, buyer, now),
                     (_, existing) =>
                     {
                         if (existing == null || now - existing.LastAt > TimeSpan.FromSeconds(5))
-                            return new ActiveTrace { TraceId = Guid.NewGuid().ToString("N"), LastAt = now };
+                            return NewActiveTrace(shop.ShopKey, seller, buyer, now);
+                        existing.ShopKey = shop.ShopKey;
+                        existing.Seller = seller;
+                        existing.Buyer = buyer;
                         existing.LastAt = now;
                         return existing;
                     });
             }
             else if (!Active.TryGetValue(key, out context) || context == null)
             {
-                context = new ActiveTrace { TraceId = Guid.NewGuid().ToString("N"), LastAt = now };
+                context = NewActiveTrace(shop.ShopKey, seller, buyer, now);
                 Active[key] = context;
             }
             else
@@ -285,22 +306,30 @@ namespace Bot.ChromeNs
                 Stage = Safe(stage, 80),
                 Status = Safe(status, 40),
                 Summary = Safe(summary, 300),
-                Detail = Safe(detail, 1800),
+                Detail = SafeDetail(detail, 1800),
                 DurationMs = Math.Max(0, durationMs),
                 OccurredAt = now
             });
 
-            while (state.Pending.Count > 2500)
-            {
-                TraceItem ignored;
-                if (!state.Pending.TryDequeue(out ignored)) break;
-            }
+            TrimPending(state);
 
             if (terminal)
             {
                 ActiveTrace ignored;
                 Active.TryRemove(key, out ignored);
             }
+        }
+
+        private static ActiveTrace NewActiveTrace(string shopKey, string seller, string buyer, DateTime now)
+        {
+            return new ActiveTrace
+            {
+                TraceId = Guid.NewGuid().ToString("N"),
+                ShopKey = shopKey ?? string.Empty,
+                Seller = seller ?? string.Empty,
+                Buyer = buyer ?? string.Empty,
+                LastAt = now
+            };
         }
 
         private static void FlushDue()
@@ -316,11 +345,46 @@ namespace Bot.ChromeNs
         private static void CleanupActive()
         {
             var threshold = DateTime.Now.AddMinutes(-10);
-            foreach (var pair in Active)
+            foreach (var pair in Active.ToArray())
             {
                 if (pair.Value != null && pair.Value.LastAt >= threshold) continue;
-                ActiveTrace ignored;
-                Active.TryRemove(pair.Key, out ignored);
+                ActiveTrace expired;
+                if (!Active.TryRemove(pair.Key, out expired) || expired == null) continue;
+
+                ShopTraceState state;
+                if (string.IsNullOrWhiteSpace(expired.ShopKey)
+                    || !States.TryGetValue(expired.ShopKey, out state)
+                    || state == null)
+                {
+                    continue;
+                }
+
+                state.Pending.Enqueue(new TraceItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    TraceId = expired.TraceId,
+                    Seller = expired.Seller,
+                    Buyer = expired.Buyer,
+                    Stage = "trace_timeout",
+                    Status = "failed",
+                    Summary = "处理链路超过10分钟未产生终态",
+                    Detail = "watchdog=trace_timeout；请结合Knowledge/AI/发送阶段日志定位最后停留位置",
+                    DurationMs = Math.Max(0, (long)(DateTime.Now - expired.LastAt).TotalMilliseconds),
+                    OccurredAt = DateTime.Now
+                });
+                TrimPending(state);
+                Log.ErrorWithMaxCount("消息处理链路追踪自动补终态：超过10分钟无后续事件，seller="
+                    + expired.Seller + ", buyer=" + expired.Buyer, 20);
+            }
+        }
+
+        private static void TrimPending(ShopTraceState state)
+        {
+            if (state == null) return;
+            while (state.Pending.Count > 2500)
+            {
+                TraceItem ignored;
+                if (!state.Pending.TryDequeue(out ignored)) break;
             }
         }
 
@@ -341,7 +405,7 @@ namespace Bot.ChromeNs
                 {
                     Log.ErrorWithMaxCount(
                         "上传消息处理链路追踪失败：事件已保留并将在下一轮重试，pending="
-                        + state.Pending.Count + "，error=" + Safe(ex.Message, 300),
+                        + state.Pending.Count + "，error=" + SafeDetail(ex.Message, 300),
                         10);
                 }
                 finally { Interlocked.Exchange(ref state.Syncing, 0); }
@@ -394,7 +458,7 @@ namespace Bot.ChromeNs
                     {
                         var body = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)
-                            throw new InvalidOperationException("HTTP " + (int)response.StatusCode + " " + Safe(body, 500));
+                            throw new InvalidOperationException("HTTP " + (int)response.StatusCode + " " + SafeDetail(body, 500));
                     }
                 }
             }
@@ -428,11 +492,21 @@ namespace Bot.ChromeNs
             };
         }
 
+        private static string SafeDetail(string value, int max)
+        {
+            value = Safe(value, max <= 0 ? 0 : Math.Max(max * 2, max));
+            value = Regex.Replace(value, @"(?<!\d)1\d{10}(?!\d)", "[手机号]");
+            value = Regex.Replace(value, @"(?<!\d)\d{15,24}(?!\d)", "[长编号]");
+            value = Regex.Replace(value, @"(?i)sk-[a-z0-9_-]{12,}", "[API_KEY]");
+            value = Regex.Replace(value, @"(?i)bearer\s+[a-z0-9._~+/=-]{12,}", "Bearer [TOKEN]");
+            return max > 0 && value.Length > max ? value.Substring(0, max) + "..." : value;
+        }
+
         private static string Safe(string value, int max)
         {
             value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
             while (value.Contains("  ")) value = value.Replace("  ", " ");
-            return value.Length <= max ? value : value.Substring(0, max) + "...";
+            return max > 0 && value.Length > max ? value.Substring(0, max) + "..." : value;
         }
     }
 }
