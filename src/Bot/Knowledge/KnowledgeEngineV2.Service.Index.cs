@@ -95,6 +95,11 @@ namespace Bot.Knowledge
         private static KnowledgeV2Match Score(string seller, KnowledgeV2Record record, KnowledgeV2Query query)
         {
             if (record == null || query == null) return null;
+            string applicabilityReason;
+            if (!KnowledgeEngineV2Semantics.IsApplicable(record, query, out applicabilityReason))
+            {
+                return null;
+            }
             var alias = (record.Aliases ?? new List<string>()).Concat(new[] { record.Title })
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Select(x => KnowledgeEngineV2Semantics.TextSimilarity(query.Original, x))
@@ -176,7 +181,7 @@ namespace Bot.Knowledge
         {
             if (best == null) return "没有候选";
             if (decision.Mode == KnowledgeEngineV2Constants.ModeShadow) return "当前为Shadow模式，只记录V2结果，不发送";
-            if (decision.HasConflict) return "同一Subject/Predicate事实键存在答案冲突";
+            if (decision.HasConflict) return "同一适用范围事实键存在答案冲突";
             if (highRisk) return "高风险问题继续交给安全/AI链路";
             if (best.Record.Status == "candidate") return "学习候选尚未批准，不能直接发送";
             if (best.Score < threshold) return "结构化匹配分不足：" + best.Score.ToString("0.00") + " < " + threshold.ToString("0.00");
