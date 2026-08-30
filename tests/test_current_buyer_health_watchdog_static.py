@@ -40,7 +40,15 @@ def test_cdp_execute_requests_are_serialized_and_timeout_invalidates_session():
     assert "_executeGate.Release()" in source
     assert "CDP调用超时" in source
     assert "InvalidateSession(\"调用超时:" in source
-    assert "_webSocketSession.Close()" in source
+
+    # Invalidation must make the shared field unusable before closing the captured
+    # socket, and must release every other registration/waiter that could keep the
+    # stale WebView session alive. Do not regress to closing the field in place.
+    assert "var socket = _webSocketSession;" in source
+    assert "_webSocketSession = null;" in source
+    assert "if (socket != null) socket.Close();" in source
+    assert "SessionClients.TryRemove(sessionId" in source
+    assert "CancelPendingWaiters();" in source
     assert "CDP会话已失效并请求WebSocket重连" in source
 
 
