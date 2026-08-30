@@ -28,6 +28,7 @@ namespace Bot.ChromeNs
         private readonly ConcurrentDictionary<string, string> _lastStatusBindings = new ConcurrentDictionary<string, string>();
         private readonly ConcurrentDictionary<string, string> _sellerSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, string> _sessionSellers = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, string> _duplicateSellerSessions = new ConcurrentDictionary<string, string>(StringComparer.Ordinal);
         private readonly object _sellerSessionSync = new object();
 
         static MyWebSocketServer()
@@ -83,11 +84,15 @@ namespace Bot.ChromeNs
                     if (string.Equals(owner, sessionId, StringComparison.Ordinal))
                     {
                         _sessionSellers[sessionId] = sellerNick;
+                        string ignoredDuplicate;
+                        _duplicateSellerSessions.TryRemove(sessionId, out ignoredDuplicate);
+                        BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
                         return true;
                     }
 
                     if (!string.IsNullOrWhiteSpace(owner) && _connectedSessions.ContainsKey(owner))
                     {
+                        _duplicateSellerSessions[sessionId] = sellerNick;
                         return false;
                     }
 
@@ -102,6 +107,9 @@ namespace Bot.ChromeNs
 
                 _sellerSessions[sellerNick] = sessionId;
                 _sessionSellers[sessionId] = sellerNick;
+                string ignored;
+                _duplicateSellerSessions.TryRemove(sessionId, out ignored);
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
                 Log.Info("已选定卖家权威千牛CDP会话: sellerRef=" + DiagnosticRef("seller", sellerNick)
                     + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 return true;
@@ -124,9 +132,15 @@ namespace Bot.ChromeNs
             if (sessionId.Length == 0) return;
             lock (_sellerSessionSync)
             {
+                string ignoredDuplicate;
+                _duplicateSellerSessions.TryRemove(sessionId, out ignoredDuplicate);
                 string sellerNick;
                 if (!_sessionSellers.TryRemove(sessionId, out sellerNick)
-                    || string.IsNullOrWhiteSpace(sellerNick)) return;
+                    || string.IsNullOrWhiteSpace(sellerNick))
+                {
+                    BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
+                    return;
+                }
 
                 string owner;
                 if (_sellerSessions.TryGetValue(sellerNick, out owner)
@@ -137,6 +151,7 @@ namespace Bot.ChromeNs
                     Log.Info("卖家权威千牛CDP会话已释放，等待在线页面自动接管: sellerRef="
                         + DiagnosticRef("seller", sellerNick) + ", sessionRef=" + DiagnosticRef("session", sessionId));
                 }
+                BotConnectionDiagnostics.RecordAuthoritativeCdpSessionCount(_sellerSessions.Count);
             }
         }
 
@@ -289,7 +304,10 @@ namespace Bot.ChromeNs
                         _connectedSessions[session.SessionID] = true;
                         BotConnectionDiagnostics.RecordWebSocketConnect(session.SessionID);
                         Log.Info("千牛注入脚本已连接 Bot WebSocket: sessionRef=" + DiagnosticRef("session", session.SessionID));
-                        GetOrCreateClient(session);
+                        // Do not allocate a full CDPClient for every injected recent.html/iframe.
+                        // Raw duplicate sockets remain connected so DuplicateCdpInboundRecoveryBridge
+                        // can repair missed inbound events. A command client is created lazily only
+                        // for an authoritative session or a page that emits a real conversation change.
                     }
                     catch (Exception ex)
                     {
@@ -325,7 +343,10 @@ namespace Bot.ChromeNs
                                         || TryClaimSellerSession(loginNick, session.SessionID);
                                     if (!authoritative)
                                     {
-                                        Log.Info("检测到卖家重复千牛WebSocket页面，保留已稳定的权威CDP会话: sellerRef="
+                                        // This page is useful as a lightweight raw inbound source but must
+                                        // not start its own full CDP initialization/command pipeline.
+                                        _initialized[session.SessionID] = true;
+                                        Log.Info("检测到卖家重复千牛WebSocket页面，保留为轻量入站补偿通道: sellerRef="
                                             + DiagnosticRef("seller", loginNick)
                                             + ", ignoredSessionRef=" + DiagnosticRef("session", session.SessionID));
                                     }
@@ -339,6 +360,8 @@ namespace Bot.ChromeNs
                                     else if (ShouldRefreshStatusBinding(session.SessionID, loginNick, conversationNick)
                                         && (!string.IsNullOrWhiteSpace(loginNick) || !string.IsNullOrWhiteSpace(conversationNick)))
                                     {
+                                        // A previously quarantined page can promote itself after the old owner
+                                        // closes; TryBindStatusConversation lazily creates its CDPClient here.
                                         Task.Run(() => TryBindStatusConversation(session, loginNick, conversationNick));
                                     }
                                 }
@@ -356,9 +379,19 @@ namespace Bot.ChromeNs
                         {
                             Log.Info("IMSDK璋冪敤璺熻釜: " + wMsg.Response);
                         }
+                        else if (wMsg.Type == "onConversationChange")
+                        {
+                            // Precise activity evidence may need this physical WebView for future CDP
+                            // commands; create only the lightweight client, without seller initialization.
+                            GetOrCreateClient(session);
+                        }
                         else if (wMsg.Type == "receiveNewMsg" || wMsg.Type == "onShopRobotReceriveNewMsgs" || wMsg.Type == "onChatDlgActive")
                         {
-                            Task.Run(() => TryInitSession(session, "event:" + wMsg.Type));
+                            string duplicateSeller;
+                            if (!_duplicateSellerSessions.TryGetValue(session.SessionID, out duplicateSeller))
+                            {
+                                Task.Run(() => TryInitSession(session, "event:" + wMsg.Type));
+                            }
                         }
 
                         if (OnRecieveMessage != null)
@@ -379,11 +412,13 @@ namespace Bot.ChromeNs
                     CDPClient removed;
                     bool b;
                     string statusBinding;
+                    string duplicateSeller;
                     _clients.TryRemove(session.SessionID, out removed);
                     CDPClient.ReleaseClosedSession(session.SessionID, Convert.ToString(value), removed);
                     _initialized.TryRemove(session.SessionID, out b);
                     _initializing.TryRemove(session.SessionID, out b);
                     _lastStatusBindings.TryRemove(session.SessionID, out statusBinding);
+                    _duplicateSellerSessions.TryRemove(session.SessionID, out duplicateSeller);
                 };
                 var config = new ServerConfig()
                 {
@@ -407,6 +442,7 @@ namespace Bot.ChromeNs
     {
         public bool WebSocketServerStarted { get; set; }
         public int WebSocketSessionCount { get; set; }
+        public int AuthoritativeCdpSessionCount { get; set; }
         public string WebSocketStatus { get; set; }
         public string InjectionStatus { get; set; }
         public string QnParamStatus { get; set; }
@@ -425,8 +461,10 @@ namespace Bot.ChromeNs
     public static class BotConnectionDiagnostics
     {
         private static readonly object SyncObj = new object();
+        private static readonly HashSet<string> wsSessions = new HashSet<string>(StringComparer.Ordinal);
         private static bool wsStarted;
         private static int wsSessionCount;
+        private static int authoritativeCdpSessionCount;
         private static bool injectionConnected;
         private static bool hasImsdk;
         private static bool hasLoginId;
@@ -481,8 +519,9 @@ namespace Bot.ChromeNs
         {
             lock (SyncObj)
             {
-                wsSessionCount++;
-                injectionConnected = true;
+                if (!string.IsNullOrWhiteSpace(sessionId)) wsSessions.Add(sessionId.Trim());
+                wsSessionCount = wsSessions.Count;
+                injectionConnected = wsSessionCount > 0;
                 lastUpdate = DateTime.Now;
             }
         }
@@ -491,8 +530,18 @@ namespace Bot.ChromeNs
         {
             lock (SyncObj)
             {
-                if (wsSessionCount > 0) wsSessionCount--;
+                if (!string.IsNullOrWhiteSpace(sessionId)) wsSessions.Remove(sessionId.Trim());
+                wsSessionCount = wsSessions.Count;
                 injectionConnected = wsSessionCount > 0;
+                lastUpdate = DateTime.Now;
+            }
+        }
+
+        public static void RecordAuthoritativeCdpSessionCount(int count)
+        {
+            lock (SyncObj)
+            {
+                authoritativeCdpSessionCount = Math.Max(0, count);
                 lastUpdate = DateTime.Now;
             }
         }
@@ -572,7 +621,11 @@ namespace Bot.ChromeNs
         {
             lock (SyncObj)
             {
-                var ws = wsStarted ? (wsSessionCount > 0 ? "已连接" + wsSessionCount + "个" : "已监听") : (string.IsNullOrWhiteSpace(lastWsError) ? "未启动" : "异常：" + lastWsError);
+                var ws = wsStarted
+                    ? (wsSessionCount > 0
+                        ? "已连接｜业务CDP=" + authoritativeCdpSessionCount + "｜页面通道=" + wsSessionCount
+                        : "已监听")
+                    : (string.IsNullOrWhiteSpace(lastWsError) ? "未启动" : "异常：" + lastWsError);
                 var inject = injectionConnected ? "已连接" : "未连接";
                 if (injectionConnected)
                 {
@@ -597,6 +650,7 @@ namespace Bot.ChromeNs
                 {
                     WebSocketServerStarted = wsStarted,
                     WebSocketSessionCount = wsSessionCount,
+                    AuthoritativeCdpSessionCount = authoritativeCdpSessionCount,
                     WebSocketStatus = ws,
                     InjectionStatus = inject,
                     QnParamStatus = qnStatus,
