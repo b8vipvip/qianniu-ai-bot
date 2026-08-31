@@ -514,9 +514,10 @@ namespace Bot.ChromeNs
 
             var sellerNick = localUser.LoginID == null ? string.Empty : (localUser.LoginID.Nick ?? string.Empty).Trim();
             var buyerNick = localUser.Conversation == null ? string.Empty : (localUser.Conversation.Nick ?? string.Empty).Trim();
-            var physicalSourceSession = (ForwardedInboundSourceSession.Value ?? string.Empty).Trim();
-            if (physicalSourceSession.Length == 0) physicalSourceSession = SessionId;
-            PreferRuntimeSession(sellerNick, physicalSourceSession, buyerNick, "onConversationChange");
+                    // Forwarded duplicate pages are ingress-only. A duplicate page may report a
+                    // valid conversation event, but it must never become the runtime command session.
+                    // Promote only the authoritative handler that actually owns this QN instance.
+                    PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
 
             if (EvBuyerSwitched != null)
             {

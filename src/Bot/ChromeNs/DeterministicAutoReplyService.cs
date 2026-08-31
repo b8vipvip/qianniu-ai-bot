@@ -77,7 +77,18 @@ namespace Bot.ChromeNs
 
             var key = Key(item.SellerNick, item.BuyerNick);
             var gate = BuyerGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-            await gate.WaitAsync();
+            var gateAcquired = await gate.WaitAsync(1800).ConfigureAwait(false);
+            if (!gateAcquired)
+            {
+                // Never let a deterministic rule lock strand the buyer generation in Coalescing.
+                // The outer coordinator already serializes the same buyer; this inner guard is only
+                // a compatibility barrier and must fail open when an earlier send is unhealthy.
+                Log.ErrorWithMaxCount(
+                    "固定规则内部串行门等待超时，已放行普通消息合并/AI链路: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick + ", waitMs=1800",
+                    50);
+                return true;
+            }
             try
             {
                 ShopContext shop = null;
@@ -113,7 +124,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                gate.Release();
+                if (gateAcquired) gate.Release();
             }
         }
 

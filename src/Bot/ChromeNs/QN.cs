@@ -778,11 +778,11 @@ namespace Bot.ChromeNs
                     EvRecieveNewMessage(this, e);
                 }
 
-                Log.Info("收到千牛新消息事件: " + e.Message);
+                Log.Info("收到千牛新消息事件: payloadLength=" + ((e == null || e.Message == null) ? 0 : e.Message.Length));
                 var chatRes = JsonConvert.DeserializeObject<ChatResponse>(e.Message);
                 if (chatRes == null || chatRes.result == null)
                 {
-                    Log.Error("收到新消息但无法解析: " + e.Message);
+                    Log.Error("收到新消息但无法解析: payloadLength=" + ((e == null || e.Message == null) ? 0 : e.Message.Length));
                     return;
                 }
 

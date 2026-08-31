@@ -50,6 +50,7 @@ namespace Bot.ChromeNs
             public bool FollowUp { get; set; }
             public DateTime Until { get; set; }
             public bool Delivered { get; set; }
+            public bool DeliveryUncertain { get; set; }
         }
 
         private sealed class OrderReplyActionState
@@ -352,6 +353,13 @@ namespace Bot.ChromeNs
                     reason = "action_already_delivered";
                     return false;
                 }
+                if (_actionState.Records.Any(x => x.DeliveryUncertain && SameAction(x, plan)))
+                {
+                    // A send action was physically triggered but live echo and remote verification
+                    // were both unavailable. Never blind-resend on another Created/Paid ingress.
+                    reason = "action_delivery_uncertain";
+                    return false;
+                }
 
                 ActiveActions.Add(new OrderReplyActionRecord
                 {
@@ -365,6 +373,34 @@ namespace Bot.ChromeNs
                 SaveActionStateLocked();
                 return true;
             }
+        }
+
+        internal static void MarkDeliveryUncertain(OrderPlacedReplyPlan plan, string reason)
+        {
+            if (plan == null) return;
+            lock (ActionSync)
+            {
+                EnsureActionStateLoadedLocked();
+                var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                if (existing == null)
+                {
+                    existing = new OrderReplyActionRecord();
+                    _actionState.Records.Add(existing);
+                }
+                existing.Seller = Normalize(plan.Seller);
+                existing.Buyer = Normalize(plan.Buyer);
+                existing.OrderId = (plan.OrderId ?? string.Empty).Trim();
+                existing.FollowUp = plan.IsBuyerFollowUp;
+                existing.Until = DateTime.Now.AddMinutes(10);
+                existing.Delivered = false;
+                existing.DeliveryUncertain = true;
+                SaveActionStateLocked();
+            }
+            Log.ErrorWithMaxCount(
+                "订单发送状态不确定，10分钟内禁止自动重发以避免重复: seller=" + plan.Seller
+                + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                + ", reason=" + (reason ?? string.Empty),
+                20);
         }
 
         internal static void FinishExecution(OrderPlacedReplyPlan plan, bool delivered, int sentSegments)
@@ -393,6 +429,7 @@ namespace Bot.ChromeNs
                     existing.FollowUp = plan.IsBuyerFollowUp;
                     existing.Until = until;
                     existing.Delivered = delivered || sentSegments > 0;
+                    existing.DeliveryUncertain = false;
                 }
                 _actionState.Records.RemoveAll(x => x == null || x.Until <= DateTime.Now);
                 SaveActionStateLocked();
@@ -652,13 +689,40 @@ namespace Bot.ChromeNs
                 // The generic chat path intentionally yields to a human agent. Configured order
                 // business rules are different: once a Created/Paid event has reserved a plan,
                 // manual replies must never consume or cancel this configured message.
+                var sendStartedAt = DateTime.Now;
                 KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, text);
                 var sent = await SendTextWithRetryAsync(plan.Buyer, text, 0);
                 if (sent) return true;
-                Log.Info("强制订单规则发送失败，准备重试: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                    + ", attempt=" + (attempt + 1) + ", reason=" + rpa.GetSendFailureReason());
-                if (attempt == 0) await Task.Delay(180);
+
+                // Live seller echo can be lost when the authoritative CDP page reconnects. Before
+                // retrying a mandatory order message, query the verified buyer conversation history.
+                // This prevents a false-negative live echo from becoming a duplicate customer send.
+                var remote = await VerifySellerEchoInRemoteHistoryAsync(
+                    plan.Seller,
+                    plan.Buyer,
+                    text,
+                    sendStartedAt).ConfigureAwait(false);
+                if (remote == RemoteSellerEchoVerification.Delivered)
+                {
+                    Log.Info("订单发送已由远端历史二次确认，取消自动重试: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    return true;
+                }
+                if (remote == RemoteSellerEchoVerification.Unavailable)
+                {
+                    OrderPlacedAutoReplyService.MarkDeliveryUncertain(
+                        plan,
+                        "live_echo_missing_and_remote_history_unavailable");
+                    return false;
+                }
+
+                if (attempt == 0)
+                {
+                    Log.Info("强制订单规则发送失败且远端历史确认未送达，准备单次安全重试: seller="
+                        + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", attempt=1");
+                    await Task.Delay(180).ConfigureAwait(false);
+                }
             }
             return false;
         }

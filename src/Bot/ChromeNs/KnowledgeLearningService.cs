@@ -266,6 +266,10 @@ namespace Bot.ChromeNs
                     if (shop != null) scope = ShopSettingsScope.Enter(shop);
                     await CompareManualAnswerAsync(question, botAnswer, manualAnswer, seller, buyer);
                 }
+                catch (OperationCanceledException)
+                {
+                    Log.Info("人工答案对比学习任务已取消：后台请求或会话生命周期已结束，不作为Bot运行故障。");
+                }
                 catch (Exception ex)
                 {
                     MessageProcessingTraceService.RecordLearningComparison(
