@@ -52,3 +52,19 @@ def test_fixed_template_bypasses_output_policy_to_preserve_layout():
     assert 'resolution.Source.IndexOf("接口失败兜底", StringComparison.Ordinal)' in SERVICE
     preserve = SERVICE.split('var preserveTemplateLayout', 1)[1].split('string duplicateReason;', 1)[0]
     assert 'rawReply + " [AI]"' in preserve
+
+
+def test_order_status_placeholder_is_customer_facing_not_qianniu_internal_code():
+    assert '.Replace("{订单状态}", FormatTradeStatusForTemplate(snapshot))' in SERVICE
+    assert 'case "tradebuyerpay":' in SERVICE
+    assert 'case "waitbuyerpay":' in SERVICE
+    assert 'case "waitbuyerconfirmgoods":' in SERVICE
+    assert 'case "tradefinished":' in SERVICE
+    assert 'case "tradeclosed":' in SERVICE
+    assert 'return "已付款";' in SERVICE
+    assert 'return "待付款";' in SERVICE
+    assert 'return "已发货";' in SERVICE
+    assert 'return "交易完成";' in SERVICE
+    assert 'return "已关闭";' in SERVICE
+    render = SERVICE.split("private static string RenderTemplate", 1)[1].split("private static string FormatTradeStatusForTemplate", 1)[0]
+    assert 'snapshot.TradeStatus ?? string.Empty' not in render

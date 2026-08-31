@@ -653,7 +653,7 @@ namespace Bot.ChromeNs
                 .Replace("{数量}", snapshot == null || snapshot.Quantity <= 0 ? string.Empty : snapshot.Quantity.ToString())
                 .Replace("{金额}", snapshot == null || !snapshot.TotalAmount.HasValue ? string.Empty : snapshot.TotalAmount.Value.ToString("0.00"))
                 .Replace("{实付}", snapshot == null || !snapshot.PaidAmount.HasValue ? string.Empty : snapshot.PaidAmount.Value.ToString("0.00"))
-                .Replace("{订单状态}", snapshot == null ? string.Empty : snapshot.TradeStatus ?? string.Empty);
+                .Replace("{订单状态}", FormatTradeStatusForTemplate(snapshot));
             var allRequestedFieldsMissing = missing.Count > 0 && present.Count == 0;
             Log.Info("order_template_render source=" + source + " orderId=" + (plan == null ? string.Empty : plan.OrderId)
                 + " partial=" + (missing.Count > 0 && present.Count > 0).ToString().ToLowerInvariant()
@@ -664,6 +664,36 @@ namespace Bot.ChromeNs
                 + " rendered_length=" + rendered.Length);
             return allRequestedFieldsMissing ? string.Empty : rendered;
         }
+
+        private static string FormatTradeStatusForTemplate(OrderSnapshot snapshot)
+{
+    if (snapshot == null) return string.Empty;
+    var raw = (snapshot.TradeStatus ?? string.Empty).Trim();
+    var key = Regex.Replace(raw, @"[\s_-]", string.Empty).ToLowerInvariant();
+    switch (key)
+    {
+        case "tradebuyerpay":
+        case "waitsellersendgoods":
+            return "已付款";
+        case "waitbuyerpay":
+        case "tradenocreatepay":
+            return "待付款";
+        case "waitbuyerconfirmgoods":
+        case "sellerconsignedpart":
+            return "已发货";
+        case "tradefinished":
+        case "tradesuccess":
+            return "交易完成";
+        case "tradeclosed":
+        case "tradeclosedbytaobao":
+            return "已关闭";
+    }
+    if (snapshot.EventType == OrderEventType.Paid || snapshot.IsPaid == true) return "已付款";
+    if (snapshot.EventType == OrderEventType.RefundRequested) return "退款中";
+    if (snapshot.EventType == OrderEventType.Closed) return "已关闭";
+    if (snapshot.EventType == OrderEventType.Created) return "已下单";
+    return raw;
+}
 
         private static OrderPlacedReplyResolution Fail(string error) { return new OrderPlacedReplyResolution { Success = false, Error = Short(error, 500) }; }
         private static string Normalize(string value) { return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty); }
