@@ -26,6 +26,9 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check pytest
+
       - name: Apply guarded source patch
         run: python scripts/apply_runtime_stability_1077.py
 
