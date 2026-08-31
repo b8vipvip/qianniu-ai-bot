@@ -1,4 +1,4 @@
-﻿using Bot.ChromeNs;
+using Bot.ChromeNs;
 using DbEntity.Response;
 using DbEntity;
 using System;
@@ -76,11 +76,13 @@ namespace Bot.ChromeNs
         private DateTime _lastSellerEchoTime = DateTime.MinValue;
         private readonly SemaphoreSlim _incomingMessageGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
+        // Seller echoes may be repeated by several injected pages. Keep their transport-level
+        // dedupe separate from buyer business ownership so a malformed/non-business duplicate page
+        // can never consume a buyer key before the authoritative processing path claims it.
         private readonly IncomingMessageDeduplicator _incomingMessageDeduplicator = new IncomingMessageDeduplicator(2000);
-        // The transport deduplicator can be consumed by a duplicate CDP page before the authoritative
-        // QN instance reaches the reply queue. Background recovery therefore has a deliberate bypass.
-        // Keep a second ledger for messages that the authoritative business path actually handled so
-        // that bypass never replays a question which already started (or was stopped by) a human reply.
+        // This is the single side-effect claim for buyer messages. Duplicate CDP pages are forwarded
+        // into the authoritative QN instance, and only the path that reaches this ledger first may
+        // enqueue/order-route the buyer event. Background recovery consults the same ledger.
         private readonly IncomingMessageDeduplicator _handledBuyerMessageDeduplicator =
             new IncomingMessageDeduplicator(4000);
         private readonly DateTime _messageSafetyStartedAt = DateTime.Now;
@@ -434,13 +436,18 @@ namespace Bot.ChromeNs
             BuyerIdentityAliasService.ObserveMessage(_seller == null ? string.Empty : _seller.Nick, message);
             var messageText = GetMessageText(message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
-            if (!_incomingMessageDeduplicator.TryAccept(messageKey))
-            {
-                Log.Info("重复消息已跳过: key=" + messageKey);
-                return Task.CompletedTask;
-            }
+
+            // Classify before consuming any transport dedupe key. A duplicate/partially hydrated CDP
+            // page can emit a frame that is not yet a valid buyer business event; allowing that frame
+            // to reserve the key would make the later authoritative copy disappear. Seller echoes use
+            // the transport ledger, while valid buyer messages use the handled-business ledger below.
             if (IsSellerMessage(message))
             {
+                if (!_incomingMessageDeduplicator.TryAccept(messageKey))
+                {
+                    Log.Info("重复卖家回显已跳过: key=" + messageKey);
+                    return Task.CompletedTask;
+                }
                 ConversationContextStore.RefreshAndRecord(message, messageText);
                 RecordSellerEcho(message.toid.nick, messageText);
                 return Task.CompletedTask;
@@ -451,6 +458,8 @@ namespace Bot.ChromeNs
             var buyerNick = message.fromid.nick;
             var detectedAt = DateTime.Now;
 
+            // This is the authoritative business claim. It is intentionally the first dedupe write
+            // on the buyer path and is shared with background recovery.
             if (!_handledBuyerMessageDeduplicator.TryAccept(messageKey))
             {
                 Log.Info("已实际处理的买家消息不再重复入队: key=" + messageKey);
@@ -605,6 +614,23 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            // Defensive legacy path: never publish an error/empty model result as AnswerReady.
+            // BuyerStreamingReplyPipeline normally replaces this handler, but if that patch is ever
+            // unavailable the fallback must preserve the same terminal failure semantics.
+            if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))
+            {
+                var failure = string.IsNullOrWhiteSpace(answer) ? "错误：AI未返回有效答案。" : answer;
+                if (conversationCtl != null)
+                {
+                    conversationCtl.SetProcessing("AI未生成可用答案");
+                    conversationCtl.SetStatus(failure, false);
+                }
+                ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, failure);
+                Log.Info("旧文本回复路径AI失败，保持失败态且不进入答案就绪/完成: buyer="
+                    + burst.BuyerNick);
+                return;
+            }
+
             var answerReadyAt = DateTime.Now;
             var answerSource = KnowledgeLearningService.ResolveAnswerSource(
                 burst.SellerNick,
@@ -627,13 +653,6 @@ namespace Bot.ChromeNs
             if (!autoSend)
             {
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
-                ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误："))
-            {
-                if (conversationCtl != null) conversationCtl.SetSendResult(false, "未发送：AI错误");
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
             }

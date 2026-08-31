@@ -65,3 +65,56 @@ def test_order_action_identity_canonicalizes_buyer_aliases():
     assert 'NormalizeBuyer(record.Seller, record.Buyer) == NormalizeBuyer(plan.Seller, plan.Buyer)' in s
     assert 'Normalize(seller) + "#" + NormalizeBuyer(seller, buyer)' in s
 
+
+def test_buyer_business_dedupe_is_claimed_only_after_role_classification():
+    s = read("src/Bot/ChromeNs/QN.cs")
+    method = s[s.index("private Task ProcessIncomingMessageAsync"):s.index("private async Task ProcessBuyerBurstAsync")]
+    seller_pos = method.index("if (IsSellerMessage(message))")
+    buyer_pos = method.index("if (!IsBuyerMessage(message))")
+    handled_pos = method.index("_handledBuyerMessageDeduplicator.TryAccept(messageKey)")
+    transport_pos = method.index("_incomingMessageDeduplicator.TryAccept(messageKey)")
+    assert seller_pos < transport_pos < buyer_pos < handled_pos
+    assert method.count("_incomingMessageDeduplicator.TryAccept(messageKey)") == 1
+    assert "This is the authoritative business claim" in method
+
+
+def test_legacy_text_path_cannot_complete_an_ai_error():
+    s = read("src/Bot/ChromeNs/QN.cs")
+    method = s[s.index("private async Task ProcessTextBurstAsync"):s.index("private async Task ProcessBuyerBurstAsync") if False else s.index("private async Task ProcessVisionBurstAsync")]
+    failure_check = 'if (string.IsNullOrWhiteSpace(answer) || answer.StartsWith("错误：", StringComparison.Ordinal))'
+    assert failure_check in method
+    assert method.index(failure_check) < method.index("ResponseProgressTracker.SetAnswerReady(")
+    failure_block = method[method.index(failure_check):method.index("var answerReadyAt = DateTime.Now;")]
+    assert "ResponseProgressTracker.Fail" in failure_block
+    assert "ResponseProgressTracker.Complete" not in failure_block
+
+
+def test_streaming_timeout_is_terminal_failure_not_completed():
+    s = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    catch_start = s.index("catch (OperationCanceledException)")
+    catch_end = s.index("catch (Exception ex)", catch_start)
+    block = s[catch_start:catch_end]
+    assert "ResponseProgressTracker.Fail" in block
+    assert "return;" in block
+    assert "ResponseProgressTracker.Complete" not in block
+
+
+def test_wecom_reason_is_bounded_below_control_plane_limit():
+    s = read("src/Bot/ChromeNs/WeComAppBridgeClient.cs")
+    assert '["reason"] = SafePayload(rawReason, 480)' in s
+    assert "schema limits reason to 500" in s
+
+
+def test_central_log_redaction_covers_colons_and_json_identity_fields():
+    s = read("src/BotLib/Log.cs")
+    assert "(?:=|:|：)" in s
+    assert "RuntimeIdentityJsonFieldRegex" in s
+    for key in ("seller", "buyer", "session", "客服", "买家"):
+        assert key in s
+
+
+def test_websocket_diagnostics_distinguish_page_channels_from_business_cdp():
+    s = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
+    assert '"已连接｜业务CDP=" + authoritativeCdpSessionCount + "｜页面通道=" + wsSessionCount' in s
+    assert "RecordAuthoritativeCdpSessionCount" in s
+
