@@ -166,13 +166,13 @@ namespace Bot
 namespace Bot.ChromeNs
 {
     /// <summary>
-    /// Fallback consumer for newly accepted OrderEventHub events.
+    /// Fast consumer for newly accepted OrderEventHub events.
     ///
-    /// Normal receiveNewMsg/messageCenterNotify paths still keep priority. This consumer waits for
-    /// any existing order pipeline to finish, then reuses OrderGuidanceDeliveryGuard and the exact
-    /// same ProcessOrderPlacedReplyAsync safe-send path. If the normal path already delivered, the
-    /// guard suppresses this fallback. If only the order/attention UI was produced, this path sends
-    /// the configured fixed preset/HTTP reply once.
+    /// A confirmed order is already strong enough evidence to start a configured fixed preset. The
+    /// persisted action ledger in ProcessOrderPlacedReplyAsync is the side-effect source of truth, so
+    /// this consumer may race the raw receiveNewMsg/messageCenterNotify paths without creating a
+    /// duplicate send. Fixed presets therefore do not wait for trade-detail enrichment, UI auto-focus,
+    /// AI, message merge or the human-interaction auto-focus guard. HTTP mode keeps the enrichment path.
     /// </summary>
     internal static class OrderEventAutoReplyFallback
     {
@@ -188,8 +188,11 @@ namespace Bot.ChromeNs
         {
             if (Interlocked.Exchange(ref _initialized, 1) == 0)
             {
-                _timer = new Timer(_ => Tick(), null, 1200, 600);
-                Log.Info("订单事件Hub自动回复兜底已启动：已确认订单不会只停留在右侧待处理卡片。");
+                // OrderEventHub writes an atomic local state file synchronously. Poll it at a short
+                // interval so a newly confirmed Created/Paid event reaches the mandatory send path
+                // in hundreds of milliseconds instead of waiting behind enrichment retries.
+                _timer = new Timer(_ => Tick(), null, 100, 200);
+                Log.Info("订单事件Hub即时自动回复消费者已启动：固定预设不等待订单字段补全。");
             }
             return new object();
         }
@@ -215,7 +218,7 @@ namespace Bot.ChromeNs
                 catch (IOException)
                 {
                     // OrderEventHub writes atomically through a temp file. A read that races the
-                    // replace is harmless; the next 600ms tick will retry.
+                    // replace is harmless; the next 200ms tick will retry.
                     return;
                 }
 
@@ -254,7 +257,7 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("订单事件Hub自动回复兜底检查失败：" + ex.Message, 10);
+                Log.ErrorWithMaxCount("订单事件Hub即时自动回复检查失败：" + ex.Message, 10);
             }
             finally
             {
@@ -266,42 +269,22 @@ namespace Bot.ChromeNs
         {
             try
             {
-                // Give the normal raw-message order pipeline first ownership. In the healthy case it
-                // should enter “下单自动回复” almost immediately and this fallback will only verify
-                // that delivery has already happened.
-                await Task.Delay(1200);
-
+                // Do not wait for another order pipeline here. ProcessOrderPlacedReplyAsync owns a
+                // durable action ledger keyed by seller+buyer+order, so whichever legitimate path
+                // reaches the send boundary first wins and every later path becomes a no-op.
                 QN qn = null;
                 for (var attempt = 0; attempt < 20 && qn == null; attempt++)
                 {
                     qn = ResolveQn(snapshot.Seller);
-                    if (qn == null) await Task.Delay(500);
+                    if (qn == null) await Task.Delay(250);
                 }
                 if (qn == null)
                 {
                     DateTime ignored;
                     Scheduled.TryRemove(key, out ignored);
-                    Log.Info("[订单自动回复] Hub兜底暂未找到对应千牛实例，等待后续订单事件重试: seller="
+                    Log.Info("[订单自动回复] Hub即时消费者暂未找到对应千牛实例，等待后续订单事件重试: seller="
                         + snapshot.Seller + ", orderId=" + snapshot.OrderId);
                     return;
-                }
-
-                // Never race an already-running order reply/enrichment path. Once that path exits,
-                // OrderGuidanceDeliveryGuard will tell the fallback whether it already delivered.
-                for (var attempt = 0; attempt < 60; attempt++)
-                {
-                    var activity = BotActivityCoordinator.GetSnapshot(snapshot.Seller);
-                    if (!IsExistingOrderPipelineBusy(activity == null ? string.Empty : activity.BusyReason)) break;
-                    if (attempt == 59)
-                    {
-                        DateTime ignored;
-                        Scheduled.TryRemove(key, out ignored);
-                        Log.Info("[订单自动回复] Hub兜底等待现有订单发送链路超过30秒，未并发抢发: seller="
-                            + snapshot.Seller + ", orderId=" + snapshot.OrderId
-                            + ", busy=" + (activity == null ? string.Empty : activity.BusyReason));
-                        return;
-                    }
-                    await Task.Delay(500);
                 }
 
                 ShopContext shop;
@@ -313,7 +296,7 @@ namespace Bot.ChromeNs
                 {
                     DateTime ignored;
                     Scheduled.TryRemove(key, out ignored);
-                    Log.Info("[订单自动回复] Hub兜底无法解析店铺作用域，拒绝跨店猜测: seller="
+                    Log.Info("[订单自动回复] Hub即时消费者无法解析店铺作用域，拒绝跨店猜测: seller="
                         + snapshot.Seller + ", orderId=" + snapshot.OrderId + ", error=" + ex.Message);
                     return;
                 }
@@ -321,7 +304,7 @@ namespace Bot.ChromeNs
                 {
                     DateTime ignored;
                     Scheduled.TryRemove(key, out ignored);
-                    Log.Info("[订单自动回复] Hub兜底缺少店铺作用域，未发送: seller="
+                    Log.Info("[订单自动回复] Hub即时消费者缺少店铺作用域，未发送: seller="
                         + snapshot.Seller + ", orderId=" + snapshot.OrderId);
                     return;
                 }
@@ -335,7 +318,7 @@ namespace Bot.ChromeNs
             {
                 DateTime ignored;
                 Scheduled.TryRemove(key, out ignored);
-                Log.ErrorWithMaxCount("订单事件Hub自动回复兜底执行失败：" + ex.Message, 10);
+                Log.ErrorWithMaxCount("订单事件Hub即时自动回复执行失败：" + ex.Message, 10);
             }
         }
 
@@ -354,15 +337,6 @@ namespace Bot.ChromeNs
             {
                 return null;
             }
-        }
-
-        private static bool IsExistingOrderPipelineBusy(string busyReason)
-        {
-            busyReason = busyReason ?? string.Empty;
-            return busyReason.Contains("下单自动回复")
-                || busyReason.Contains("订单模板")
-                || busyReason.Contains("订单交易")
-                || busyReason.Contains("下单交易");
         }
 
         private static bool TryReadLocalDateTime(JToken token, out DateTime value)
@@ -485,22 +459,36 @@ namespace Bot.ChromeNs
                 TriggerTime = DateTime.MinValue
             };
 
+            var mode = string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyMode)
+                ? "固定预设答案"
+                : cfg.OrderPlacedReplyMode.Trim();
+            var fixedPreset = !string.Equals(mode, "调用HTTP接口", StringComparison.Ordinal);
+
             Log.Info("[订单自动回复] Hub兜底接管已确认订单: seller=" + plan.Seller
                 + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                 + ", event=" + snapshot.EventType
                 + ", source=" + snapshot.Source
                 + ", hubSeenAt=" + hubSeenAt.ToString("yyyy-MM-dd HH:mm:ss.fff")
-                + ", mode=" + (cfg.OrderPlacedReplyMode ?? string.Empty)
+                + ", mode=" + mode
                 + ", autoReply=" + Params.Robot.GetIsAutoReply());
 
-            // Keep the existing trade-detail enrichment behavior for templates that request SKU,
-            // quantity or payment fields. Static fixed presets pass through immediately.
-            if (OrderTemplateRequiredFieldsV2.TryOwnExistingPlan(this, plan, "OrderEventHub统一兜底"))
+            // Fixed presets are mandatory immediate business replies. Render whatever fields are
+            // already present in the accepted event and let RenderTemplate safely remove unavailable
+            // placeholders. Never wait for the 0/0.5/1/2/3/5/7s trade-detail enrichment sequence.
+            // HTTP mode retains V2 enrichment because the external contract may explicitly require
+            // those dynamic fields before the request is made.
+            if (!fixedPreset
+                && OrderTemplateRequiredFieldsV2.TryOwnExistingPlan(this, plan, "OrderEventHub统一兜底"))
             {
-                Log.Info("[订单自动回复] Hub兜底已交给订单模板字段补全V2: orderId=" + plan.OrderId);
+                Log.Info("[订单自动回复] Hub兜底HTTP模式已交给订单模板字段补全V2: orderId=" + plan.OrderId);
                 return;
             }
 
+            if (fixedPreset)
+            {
+                Log.Info("[订单自动回复] 固定预设进入即时发送路径，不等待交易字段补全: orderId="
+                    + plan.OrderId);
+            }
             await ProcessOrderPlacedReplyAsync(plan);
         }
 

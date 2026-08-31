@@ -13,11 +13,16 @@ def test_fallback_only_consumes_new_created_or_paid_events():
     code = read("src/Bot/ChromeNs/BotActivityCoordinator.cs")
     assert "seenAt < StartedAt.AddSeconds(-2)" in code; assert "snapshot.EventType != OrderEventType.Created" in code; assert "snapshot.EventType != OrderEventType.Paid" in code; assert "Scheduled.TryAdd(key, DateTime.Now)" in code; assert "CleanupScheduled()" in code
 
-def test_normal_order_pipeline_keeps_priority_and_fallback_does_not_race_it():
+def test_fixed_preset_fallback_is_immediate_while_http_keeps_enrichment():
     code = read("src/Bot/ChromeNs/BotActivityCoordinator.cs")
-    assert "await Task.Delay(1200)" in code; assert "BotActivityCoordinator.GetSnapshot(snapshot.Seller)" in code
-    for marker in ["下单自动回复", "订单模板", "订单交易", "下单交易"]: assert marker in code
-    assert "等待现有订单发送链路超过30秒，未并发抢发" in code
+    method = code[code.index("ProcessAcceptedOrderEventFallbackAsync"):]
+    assert 'var fixedPreset = !string.Equals(mode, "调用HTTP接口", StringComparison.Ordinal);' in method
+    assert "if (!fixedPreset" in method
+    assert 'OrderTemplateRequiredFieldsV2.TryOwnExistingPlan(this, plan, "OrderEventHub统一兜底")' in method
+    assert "固定预设进入即时发送路径，不等待交易字段补全" in method
+    assert "await ProcessOrderPlacedReplyAsync(plan);" in method
+    assert "await Task.Delay(1200)" not in method
+    assert "BotActivityCoordinator.GetSnapshot(snapshot.Seller)" not in method
 
 def test_fallback_resolves_exact_shop_scope_and_never_guesses_cross_shop():
     code = read("src/Bot/ChromeNs/BotActivityCoordinator.cs")
