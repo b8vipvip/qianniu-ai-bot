@@ -316,7 +316,9 @@ namespace Bot.ChromeNs
     internal static class AiManualReplyOptimizationService
     {
         private static readonly object DbSync = new object();
-        private static readonly ConcurrentDictionary<string, DateTime> Inflight = new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private const int ManualTurnReservationMinutes = 10;
+        private static readonly ConcurrentDictionary<string, DateTime> TurnReservations =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
         private static int _schemaReady;
         public const int RetentionDays = 180;
         public const int MaxRecords = 3000;
@@ -328,16 +330,34 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             humanAnswer = StripAi(Clean(humanAnswer, 2200));
             if (seller.Length == 0 || buyer.Length == 0 || humanAnswer.Length == 0) return;
-            var key = seller.ToLowerInvariant() + "#" + buyer.ToLowerInvariant() + "#" + Normalize(humanAnswer);
-            DateTime until;
-            if (Inflight.TryGetValue(key, out until) && until > DateTime.Now) return;
-            Inflight[key] = DateTime.Now.AddMinutes(10);
             Task.Run(async () =>
             {
                 try { await RunAsync(seller, buyer, humanAnswer, manualAt).ConfigureAwait(false); }
                 catch (Exception ex) { Log.ErrorWithMaxCount("人工接管AI即时优化失败: seller=" + seller + ", buyer=" + buyer + ", error=" + ex.Message, 20); }
-                finally { DateTime ignored; Inflight.TryRemove(key, out ignored); }
             });
+        }
+
+        private static string BuildManualTurnKey(string seller, string buyer, string question)
+        {
+            return (seller ?? string.Empty).Trim().ToLowerInvariant()
+                + "#" + (buyer ?? string.Empty).Trim().ToLowerInvariant()
+                + "#" + Normalize(question);
+        }
+
+        private static bool TryReserveManualTurn(string key, DateTime now)
+        {
+            foreach (var pair in TurnReservations.Where(x => x.Value <= now).Take(64).ToList())
+            {
+                DateTime ignored;
+                TurnReservations.TryRemove(pair.Key, out ignored);
+            }
+
+            var until = now.AddMinutes(ManualTurnReservationMinutes);
+            DateTime existing;
+            if (!TurnReservations.TryGetValue(key, out existing))
+                return TurnReservations.TryAdd(key, until);
+            if (existing > now) return false;
+            return TurnReservations.TryUpdate(key, until, existing);
         }
 
         public static List<AiOptimizationRecordView> GetRecords(int maxCount)
@@ -395,6 +415,8 @@ namespace Bot.ChromeNs
             var cards = BotConversationHistoryStore.LoadRange(seller, buyer, from, manualAt.AddSeconds(1), 100);
             var question = BuildRecentBuyerQuestion(turns, cards, manualAt);
             if (string.IsNullOrWhiteSpace(question)) return;
+            var key = BuildManualTurnKey(seller, buyer, question);
+            if (!TryReserveManualTurn(key, DateTime.Now)) return;
             var transcript = BuildTranscriptBeforeHuman(turns, cards, humanAnswer, manualAt);
 
             var shadowQuestion = question
