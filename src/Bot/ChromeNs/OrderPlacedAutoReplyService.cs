@@ -75,7 +75,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             DateTime botStartedAt,
-            out OrderPlacedReplyPlan plan)
+            out OrderPlacedReplyPlan plan,
+            string exactOrderIdHint = null)
         {
             plan = null;
             if (!Params.Robot.CanUseRobotReal) return false;
@@ -98,6 +99,16 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            var exactOrderId = Regex.Replace(exactOrderIdHint ?? string.Empty, @"\D", string.Empty);
+            if (exactOrderId.Length >= 8 && exactOrderId.Length <= 40
+                && !string.Equals(snapshot.OrderId, exactOrderId, StringComparison.Ordinal))
+            {
+                // Raw WebSocket digits outrank a parsed numeric token. Do this before publishing the
+                // snapshot/reserving the action so a rounded ghost ID can never become a second order.
+                Log.Info("订单号使用原始载荷精确字符串覆盖解析值: parsedOrderId=" + snapshot.OrderId
+                    + ", exactOrderId=" + exactOrderId);
+                snapshot.OrderId = exactOrderId;
+            }
             ObserveCanonicalOrderId(seller, buyer, snapshot.OrderId);
             OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
             Log.Info("订单事件通过严格证据校验: seller=" + seller

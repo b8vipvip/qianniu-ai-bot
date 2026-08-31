@@ -118,3 +118,25 @@ def test_websocket_diagnostics_distinguish_page_channels_from_business_cdp():
     assert '"已连接｜业务CDP=" + authoritativeCdpSessionCount + "｜页面通道=" + wsSessionCount' in s
     assert "RecordAuthoritativeCdpSessionCount" in s
 
+
+def test_raw_order_id_literal_wins_before_json_numeric_rounding():
+    direct = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    assert "RawOrderIdKeyRegex" in direct
+    assert "internal static string ExtractExactOrderIdFromRaw(string raw)" in direct
+    envelope = direct[direct.index("private static NotificationEnvelope BuildEnvelope"):direct.index("private static List<FlatValue> Flatten")]
+    assert envelope.index("ExtractExactOrderIdFromRaw(raw)") < envelope.index("FindValue(flat, OrderIdKeys)")
+    assert "string exactOrderIdHint = null" in direct
+    assert "string exactOrderIdHint = null" in order
+    plan = order[order.index("public static bool TryCreatePlan"):order.index("private static bool TryCreateBuyerFollowUpPlan")]
+    assert plan.index("snapshot.OrderId = exactOrderId;") < plan.index("OrderEventHub.Publish(snapshot)")
+
+
+def test_regression_order_id_above_js_safe_integer_is_kept_as_string_literal():
+    direct = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
+    sample = "5127395078262028714"
+    assert "2^53" in direct
+    assert "\\d{8,40}" in direct
+    # Guard the exact production incident shape: no code should hard-code a rounded replacement.
+    assert sample.replace("8714", "8000") not in direct
+
