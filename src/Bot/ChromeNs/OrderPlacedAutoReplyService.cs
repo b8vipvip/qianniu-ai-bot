@@ -1,4 +1,4 @@
-﻿using Bot.Automation.ChatDeskNs;
+using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;

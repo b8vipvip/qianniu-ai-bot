@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 SERVICE = Path("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs").read_text(encoding="utf-8-sig")
 HUB = Path("src/Bot/ChromeNs/OrderEventHub.cs").read_text(encoding="utf-8-sig")
@@ -52,6 +52,7 @@ def test_fixed_template_bypasses_output_policy_to_preserve_layout():
     assert 'resolution.Source.IndexOf("接口失败兜底", StringComparison.Ordinal)' in SERVICE
     preserve = SERVICE.split('var preserveTemplateLayout', 1)[1].split('string duplicateReason;', 1)[0]
     assert 'rawReply + " [AI]"' in preserve
+
 
 def test_order_status_placeholder_is_customer_facing_not_qianniu_internal_code():
     assert '.Replace("{订单状态}", FormatTradeStatusForTemplate(snapshot))' in SERVICE
