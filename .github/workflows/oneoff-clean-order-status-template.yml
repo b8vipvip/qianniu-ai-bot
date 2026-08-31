@@ -1,0 +1,153 @@
+name: One-off order status template cleanup
+
+on:
+  push:
+    branches:
+      - fix/order-status-template-1083
+    paths:
+      - .github/workflows/oneoff-clean-order-status-template.yml
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/order-status-template-1083
+          fetch-depth: 0
+      - name: Normalize source formatting and encoding
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          service_path = Path("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+          service = service_path.read_text(encoding="utf-8-sig")
+          old = '''        private static string FormatTradeStatusForTemplate(OrderSnapshot snapshot)
+          {
+              if (snapshot == null) return string.Empty;
+              var raw = (snapshot.TradeStatus ?? string.Empty).Trim();
+              var key = Regex.Replace(raw, @"[\\s_-]", string.Empty).ToLowerInvariant();
+              switch (key)
+              {
+                  case "tradebuyerpay":
+                  case "waitsellersendgoods":
+                      return "已付款";
+                  case "waitbuyerpay":
+                  case "tradenocreatepay":
+                      return "待付款";
+                  case "waitbuyerconfirmgoods":
+                  case "sellerconsignedpart":
+                      return "已发货";
+                  case "tradefinished":
+                  case "tradesuccess":
+                      return "交易完成";
+                  case "tradeclosed":
+                  case "tradeclosedbytaobao":
+                      return "已关闭";
+              }
+              if (snapshot.EventType == OrderEventType.Paid || snapshot.IsPaid == true) return "已付款";
+              if (snapshot.EventType == OrderEventType.RefundRequested) return "退款中";
+              if (snapshot.EventType == OrderEventType.Closed) return "已关闭";
+              if (snapshot.EventType == OrderEventType.Created) return "已下单";
+              return raw;
+          }
+          '''
+          new = '''        private static string FormatTradeStatusForTemplate(OrderSnapshot snapshot)
+          {
+              if (snapshot == null) return string.Empty;
+              var raw = (snapshot.TradeStatus ?? string.Empty).Trim();
+              var key = Regex.Replace(raw, @"[\\s_-]", string.Empty).ToLowerInvariant();
+              switch (key)
+              {
+                  case "tradebuyerpay":
+                  case "waitsellersendgoods":
+                      return "已付款";
+                  case "waitbuyerpay":
+                  case "tradenocreatepay":
+                      return "待付款";
+                  case "waitbuyerconfirmgoods":
+                  case "sellerconsignedpart":
+                      return "已发货";
+                  case "tradefinished":
+                  case "tradesuccess":
+                      return "交易完成";
+                  case "tradeclosed":
+                  case "tradeclosedbytaobao":
+                      return "已关闭";
+              }
+              if (snapshot.EventType == OrderEventType.Paid || snapshot.IsPaid == true) return "已付款";
+              if (snapshot.EventType == OrderEventType.RefundRequested) return "退款中";
+              if (snapshot.EventType == OrderEventType.Closed) return "已关闭";
+              if (snapshot.EventType == OrderEventType.Created) return "已下单";
+              return raw;
+          }
+          '''
+          # The previous patch is syntactically valid but its body lost class indentation. Reformat it deterministically.
+          start = service.index('        private static string FormatTradeStatusForTemplate(OrderSnapshot snapshot)')
+          end = service.index('        private static OrderPlacedReplyResolution Fail(string error)', start)
+          block = service[start:end]
+          lines = block.rstrip().splitlines()
+          formatted = []
+          for i, line in enumerate(lines):
+              if i == 0:
+                  formatted.append(line)
+              elif line.strip() == '{' or line.strip() == '}':
+                  # braces are method/switch braces; derive indentation from nearby syntax below
+                  formatted.append(line)
+              else:
+                  formatted.append(line)
+          # Use an explicit clean block to avoid formatter/toolchain dependencies.
+          clean = '''        private static string FormatTradeStatusForTemplate(OrderSnapshot snapshot)
+          {
+              if (snapshot == null) return string.Empty;
+              var raw = (snapshot.TradeStatus ?? string.Empty).Trim();
+              var key = Regex.Replace(raw, @"[\\s_-]", string.Empty).ToLowerInvariant();
+              switch (key)
+              {
+                  case "tradebuyerpay":
+                  case "waitsellersendgoods":
+                      return "已付款";
+                  case "waitbuyerpay":
+                  case "tradenocreatepay":
+                      return "待付款";
+                  case "waitbuyerconfirmgoods":
+                  case "sellerconsignedpart":
+                      return "已发货";
+                  case "tradefinished":
+                  case "tradesuccess":
+                      return "交易完成";
+                  case "tradeclosed":
+                  case "tradeclosedbytaobao":
+                      return "已关闭";
+              }
+              if (snapshot.EventType == OrderEventType.Paid || snapshot.IsPaid == true) return "已付款";
+              if (snapshot.EventType == OrderEventType.RefundRequested) return "退款中";
+              if (snapshot.EventType == OrderEventType.Closed) return "已关闭";
+              if (snapshot.EventType == OrderEventType.Created) return "已下单";
+              return raw;
+          }
+
+          '''
+          service = service[:start] + clean + service[end:]
+          service_path.write_text(service, encoding="utf-8")
+
+          test_path = Path("tests/test_order_reply_template_placeholders_v3_static.py")
+          test = test_path.read_text(encoding="utf-8-sig")
+          test = test.replace('    assert \'rawReply + " [AI]"\' in preserve\n\ndef test_order_status_placeholder', '    assert \'rawReply + " [AI]"\' in preserve\n\n\ndef test_order_status_placeholder')
+          test_path.write_text(test.rstrip() + "\n", encoding="utf-8")
+          PY
+      - name: Install test dependency
+        run: python -m pip install --disable-pip-version-check -q pytest
+      - name: Run focused regression test
+        run: python -m pytest -q tests/test_order_reply_template_placeholders_v3_static.py
+      - name: Commit cleanup
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs tests/test_order_reply_template_placeholders_v3_static.py
+          git diff --cached --check
+          git commit -m "style: normalize order status template patch"
+          git push origin HEAD:fix/order-status-template-1083
