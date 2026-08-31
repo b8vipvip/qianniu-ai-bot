@@ -140,3 +140,9 @@ def test_regression_order_id_above_js_safe_integer_is_kept_as_string_literal():
     # Guard the exact production incident shape: no code should hard-code a rounded replacement.
     assert sample.replace("8714", "8000") not in direct
 
+
+def test_delivery_verification_partial_is_included_in_legacy_msbuild_and_wpf_tmp_projects():
+    targets = read("src/Directory.Build.targets")
+    assert "QN.DeliveryVerification.cs" in targets
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\QN.DeliveryVerification.cs" />' in targets
+
