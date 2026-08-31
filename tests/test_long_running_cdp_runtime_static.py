@@ -28,10 +28,11 @@ def test_websocket_dispatch_is_singleton_and_does_not_root_closed_clients():
     assert "weak.Target as CDPClient" in source
 
 
-def test_precise_conversation_change_selects_runtime_command_webview():
+def test_precise_conversation_change_keeps_authoritative_runtime_command_webview():
     source = read("src/Bot/ChromeNs/CDPClient.cs")
 
-    assert 'PreferRuntimeSession(sellerNick, physicalSourceSession, buyerNick, "onConversationChange")' in source
+    assert 'PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange")' in source
+    assert 'PreferRuntimeSession(sellerNick, physicalSourceSession, buyerNick, "onConversationChange")' not in source
     assert "ResolvePreferredRuntimeClient" in source
     assert 'desc + "@runtime-active-session"' in source
     assert "活动CDP会话失效，已撤销会话偏好并回退权威通道" in source
@@ -45,7 +46,7 @@ def test_duplicate_status_cannot_overwrite_logical_current_buyer():
     assert "BotConnectionDiagnostics.RecordBuyerSeller(sellerNick, logicalBuyer)" in source
 
 
-def test_forwarded_conversation_change_preserves_physical_source_without_rebinding_qn():
+def test_forwarded_conversation_change_is_ingress_only_and_cannot_rebind_runtime_qn():
     bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
     client = read("src/Bot/ChromeNs/CDPClient.cs")
 
@@ -54,4 +55,5 @@ def test_forwarded_conversation_change_preserves_physical_source_without_rebindi
     assert "SetActiveConversationByNick" not in bridge
     assert "qn.CDP =" not in bridge
     assert "ForwardedInboundSourceSession" in client
-    assert "physicalSourceSession = (ForwardedInboundSourceSession.Value" in client
+    assert "physicalSourceSession = (ForwardedInboundSourceSession.Value" not in client
+    assert 'PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange")' in client

@@ -1,4 +1,4 @@
-﻿using Bot.Automation.ChatDeskNs;
+using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
@@ -50,6 +50,7 @@ namespace Bot.ChromeNs
             public bool FollowUp { get; set; }
             public DateTime Until { get; set; }
             public bool Delivered { get; set; }
+            public bool DeliveryUncertain { get; set; }
         }
 
         private sealed class OrderReplyActionState
@@ -74,7 +75,8 @@ namespace Bot.ChromeNs
             string seller,
             string buyer,
             DateTime botStartedAt,
-            out OrderPlacedReplyPlan plan)
+            out OrderPlacedReplyPlan plan,
+            string exactOrderIdHint = null)
         {
             plan = null;
             if (!Params.Robot.CanUseRobotReal) return false;
@@ -97,6 +99,16 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            var exactOrderId = Regex.Replace(exactOrderIdHint ?? string.Empty, @"\D", string.Empty);
+            if (exactOrderId.Length >= 8 && exactOrderId.Length <= 40
+                && !string.Equals(snapshot.OrderId, exactOrderId, StringComparison.Ordinal))
+            {
+                // Raw WebSocket digits outrank a parsed numeric token. Do this before publishing the
+                // snapshot/reserving the action so a rounded ghost ID can never become a second order.
+                Log.Info("订单号使用原始载荷精确字符串覆盖解析值: parsedOrderId=" + snapshot.OrderId
+                    + ", exactOrderId=" + exactOrderId);
+                snapshot.OrderId = exactOrderId;
+            }
             ObserveCanonicalOrderId(seller, buyer, snapshot.OrderId);
             OrderGuidanceDeliveryGuard.ObserveOrder(snapshot);
             Log.Info("订单事件通过严格证据校验: seller=" + seller
@@ -352,11 +364,18 @@ namespace Bot.ChromeNs
                     reason = "action_already_delivered";
                     return false;
                 }
+                if (_actionState.Records.Any(x => x.DeliveryUncertain && SameAction(x, plan)))
+                {
+                    // A send action was physically triggered but live echo and remote verification
+                    // were both unavailable. Never blind-resend on another Created/Paid ingress.
+                    reason = "action_delivery_uncertain";
+                    return false;
+                }
 
                 ActiveActions.Add(new OrderReplyActionRecord
                 {
                     Seller = Normalize(plan.Seller),
-                    Buyer = Normalize(plan.Buyer),
+                    Buyer = NormalizeBuyer(plan.Seller, plan.Buyer),
                     OrderId = plan.OrderId.Trim(),
                     FollowUp = plan.IsBuyerFollowUp,
                     Until = now.AddMinutes(10),
@@ -365,6 +384,34 @@ namespace Bot.ChromeNs
                 SaveActionStateLocked();
                 return true;
             }
+        }
+
+        internal static void MarkDeliveryUncertain(OrderPlacedReplyPlan plan, string reason)
+        {
+            if (plan == null) return;
+            lock (ActionSync)
+            {
+                EnsureActionStateLoadedLocked();
+                var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                if (existing == null)
+                {
+                    existing = new OrderReplyActionRecord();
+                    _actionState.Records.Add(existing);
+                }
+                existing.Seller = Normalize(plan.Seller);
+                existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
+                existing.OrderId = (plan.OrderId ?? string.Empty).Trim();
+                existing.FollowUp = plan.IsBuyerFollowUp;
+                existing.Until = DateTime.Now.AddMinutes(10);
+                existing.Delivered = false;
+                existing.DeliveryUncertain = true;
+                SaveActionStateLocked();
+            }
+            Log.ErrorWithMaxCount(
+                "订单发送状态不确定，10分钟内禁止自动重发以避免重复: seller=" + plan.Seller
+                + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                + ", reason=" + (reason ?? string.Empty),
+                20);
         }
 
         internal static void FinishExecution(OrderPlacedReplyPlan plan, bool delivered, int sentSegments)
@@ -388,11 +435,12 @@ namespace Bot.ChromeNs
                         _actionState.Records.Add(existing);
                     }
                     existing.Seller = Normalize(plan.Seller);
-                    existing.Buyer = Normalize(plan.Buyer);
+                    existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                     existing.OrderId = plan.OrderId.Trim();
                     existing.FollowUp = plan.IsBuyerFollowUp;
                     existing.Until = until;
                     existing.Delivered = delivered || sentSegments > 0;
+                    existing.DeliveryUncertain = false;
                 }
                 _actionState.Records.RemoveAll(x => x == null || x.Until <= DateTime.Now);
                 SaveActionStateLocked();
@@ -409,14 +457,14 @@ namespace Bot.ChromeNs
                 var exists = _actionState.Records.Any(x => x != null
                     && !x.FollowUp
                     && Normalize(x.Seller) == Normalize(seller)
-                    && Normalize(x.Buyer) == Normalize(buyer)
+                    && NormalizeBuyer(x.Seller, x.Buyer) == NormalizeBuyer(seller, buyer)
                     && string.Equals(x.OrderId, orderId, StringComparison.Ordinal));
                 if (!exists)
                 {
                     _actionState.Records.Add(new OrderReplyActionRecord
                     {
                         Seller = Normalize(seller),
-                        Buyer = Normalize(buyer),
+                        Buyer = NormalizeBuyer(seller, buyer),
                         OrderId = orderId,
                         FollowUp = false,
                         Until = DateTime.Now.AddHours(2),
@@ -430,12 +478,12 @@ namespace Bot.ChromeNs
         private static string FindCanonicalOrderIdLocked(string seller, string buyer, string orderId, bool requireExactCandidate = false)
         {
             var normalizedSeller = Normalize(seller);
-            var normalizedBuyer = Normalize(buyer);
+            var normalizedBuyer = NormalizeBuyer(seller, buyer);
             orderId = (orderId ?? string.Empty).Trim();
             var candidates = ActiveActions.Concat(_actionState == null ? new List<OrderReplyActionRecord>() : _actionState.Records)
                 .Where(x => x != null
                     && Normalize(x.Seller) == normalizedSeller
-                    && Normalize(x.Buyer) == normalizedBuyer
+                    && NormalizeBuyer(x.Seller, x.Buyer) == normalizedBuyer
                     && !string.IsNullOrWhiteSpace(x.OrderId))
                 .Select(x => x.OrderId.Trim())
                 .Distinct(StringComparer.Ordinal)
@@ -450,7 +498,7 @@ namespace Bot.ChromeNs
             if (record == null || plan == null) return false;
             return record.FollowUp == plan.IsBuyerFollowUp
                 && Normalize(record.Seller) == Normalize(plan.Seller)
-                && Normalize(record.Buyer) == Normalize(plan.Buyer)
+                && NormalizeBuyer(record.Seller, record.Buyer) == NormalizeBuyer(plan.Seller, plan.Buyer)
                 && (string.Equals((record.OrderId ?? string.Empty).Trim(), (plan.OrderId ?? string.Empty).Trim(), StringComparison.Ordinal)
                     || ArePrecisionAliases(record.OrderId, plan.OrderId));
         }
@@ -479,7 +527,7 @@ namespace Bot.ChromeNs
 
         private static string BuildReservationKey(string seller, string buyer, string orderId, bool followUp)
         {
-            return Normalize(seller) + "#" + Normalize(buyer) + "#" + (orderId ?? string.Empty).Trim()
+            return Normalize(seller) + "#" + NormalizeBuyer(seller, buyer) + "#" + (orderId ?? string.Empty).Trim()
                 + (followUp ? "#guidance-followup" : string.Empty);
         }
 
@@ -619,6 +667,13 @@ namespace Bot.ChromeNs
 
         private static OrderPlacedReplyResolution Fail(string error) { return new OrderPlacedReplyResolution { Success = false, Error = Short(error, 500) }; }
         private static string Normalize(string value) { return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty); }
+        private static string NormalizeBuyer(string seller, string buyer)
+        {
+            var canonical = BuyerIdentityAliasService.ResolveInternalNick(
+                (seller ?? string.Empty).Trim(),
+                (buyer ?? string.Empty).Trim());
+            return Normalize(string.IsNullOrWhiteSpace(canonical) ? buyer : canonical);
+        }
         private static string Short(string value, int max)
         {
             value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
@@ -652,13 +707,40 @@ namespace Bot.ChromeNs
                 // The generic chat path intentionally yields to a human agent. Configured order
                 // business rules are different: once a Created/Paid event has reserved a plan,
                 // manual replies must never consume or cancel this configured message.
+                var sendStartedAt = DateTime.Now;
                 KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, text);
                 var sent = await SendTextWithRetryAsync(plan.Buyer, text, 0);
                 if (sent) return true;
-                Log.Info("强制订单规则发送失败，准备重试: seller=" + plan.Seller
-                    + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
-                    + ", attempt=" + (attempt + 1) + ", reason=" + rpa.GetSendFailureReason());
-                if (attempt == 0) await Task.Delay(180);
+
+                // Live seller echo can be lost when the authoritative CDP page reconnects. Before
+                // retrying a mandatory order message, query the verified buyer conversation history.
+                // This prevents a false-negative live echo from becoming a duplicate customer send.
+                var remote = await VerifySellerEchoInRemoteHistoryAsync(
+                    plan.Seller,
+                    plan.Buyer,
+                    text,
+                    sendStartedAt).ConfigureAwait(false);
+                if (remote == RemoteSellerEchoVerification.Delivered)
+                {
+                    Log.Info("订单发送已由远端历史二次确认，取消自动重试: seller=" + plan.Seller
+                        + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                    return true;
+                }
+                if (remote == RemoteSellerEchoVerification.Unavailable)
+                {
+                    OrderPlacedAutoReplyService.MarkDeliveryUncertain(
+                        plan,
+                        "live_echo_missing_and_remote_history_unavailable");
+                    return false;
+                }
+
+                if (attempt == 0)
+                {
+                    Log.Info("强制订单规则发送失败且远端历史确认未送达，准备单次安全重试: seller="
+                        + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
+                        + ", attempt=1");
+                    await Task.Delay(180).ConfigureAwait(false);
+                }
             }
             return false;
         }
@@ -692,9 +774,19 @@ namespace Bot.ChromeNs
             {
                 if (plan != null)
                 {
-                    OrderPlacedAutoReplyService.Complete(
-                        plan,
-                        !string.Equals(actionReason, "precision_risk_order_id", StringComparison.Ordinal));
+                    // Only a durably delivered action may extend the normal long reservation.
+                    // In-flight/precision-risk/uncertain outcomes are not delivery success. In
+                    // particular, delivery-uncertain has its own 10-minute durable safety window;
+                    // converting it to Complete(true) here would suppress a legitimate retry for
+                    // the full order dedup period (often 24h).
+                    if (string.Equals(actionReason, "action_already_delivered", StringComparison.Ordinal))
+                    {
+                        OrderPlacedAutoReplyService.Complete(plan, true);
+                    }
+                    else if (!string.Equals(actionReason, "action_inflight", StringComparison.Ordinal))
+                    {
+                        OrderPlacedAutoReplyService.Complete(plan, false);
+                    }
                     Log.Info("下单自动回复动作级幂等已阻止重复执行: seller=" + plan.Seller
                         + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                         + ", reason=" + actionReason);

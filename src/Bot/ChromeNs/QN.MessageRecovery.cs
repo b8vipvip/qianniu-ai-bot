@@ -250,9 +250,7 @@ namespace Bot.ChromeNs
                     recovered = (messages ?? new List<QNChatMessage>())
                         .Where(m => m != null)
                         .Where(m =>
-                            (IsBuyerMessage(m)
-                                && m.fromid != null
-                                && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer))
+                            (IsRecoveredBuyerMessageForTarget(m, seller, buyer))
                             || IsPotentialRecoveredOrderCard(m))
                         .Where(m =>
                         {
@@ -289,9 +287,7 @@ namespace Bot.ChromeNs
             // 正常去重路径，避免为了修复漏答而把已经处理过的旧问题重新回复一次。
             var bypassThreshold = scheduledAt.AddSeconds(-8).Ticks;
             var recoveredBuyerMessages = recovered
-                .Where(m => IsBuyerMessage(m)
-                    && m.fromid != null
-                    && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer))
+                .Where(m => IsRecoveredBuyerMessageForTarget(m, seller, buyer))
                 .Where(m =>
                 {
                     var sort = IncomingMessageSafety.GetSortValue(m);
@@ -374,9 +370,7 @@ namespace Bot.ChromeNs
             }
 
             if (bypassBuyerDedup
-                && IsBuyerMessage(message)
-                && message.fromid != null
-                && BuyerIdentityAliasService.AreEquivalent(seller, message.fromid.nick, buyer))
+                && IsRecoveredBuyerMessageForTarget(message, seller, buyer))
             {
                 await ProcessRecoveredBuyerMessageAfterMissAsync(message, seller, buyer).ConfigureAwait(false);
                 return;
@@ -476,5 +470,15 @@ namespace Bot.ChromeNs
                 "千牛远端历史订单卡片",
                 out snapshot);
         }
+        private static bool IsRecoveredBuyerMessageForTarget(QNChatMessage message, string seller, string buyer)
+        {
+            if (message == null || message.fromid == null) return false;
+            // Remote history is fetched only after the target conversation itself has been verified.
+            // Therefore the sender identity is the authoritative buyer discriminator. Do not require
+            // toid.nick to equal one exact seller alias: media/history cards can target the main seller
+            // account while the active QN runtime is a dispatched sub-account.
+            return BuyerIdentityAliasService.AreEquivalent(seller, message.fromid.nick, buyer);
+        }
+
     }
 }

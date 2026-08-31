@@ -52,6 +52,12 @@ namespace Bot.ChromeNs
         private static readonly Regex OrderIdTextRegex = new Regex(
             @"(?:订单号|订单编号|主订单号|子订单号|交易号|订单)\s*[:：#]?\s*(\d{8,})",
             RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        // Never rely on a JToken/double round-trip for order identifiers. Taobao order IDs are
+        // commonly above JavaScript's 2^53 exact-integer boundary, so preserve the literal digits
+        // from the raw WebSocket payload before any JSON object conversion can round them.
+        private static readonly Regex RawOrderIdKeyRegex = new Regex(
+            @"[""']?(?:orderid|bizorderid|mainorderid|suborderid|tradeid|biztradeid|tid)[""']?\s*[:=]\s*[""']?(?<id>\d{8,40})[""']?",
+            RegexOptions.Compiled | RegexOptions.IgnoreCase);
 
         private static readonly string[] OrderIdKeys =
         {
@@ -135,14 +141,18 @@ namespace Bot.ChromeNs
                 var messages = chat == null || chat.result == null
                     ? new List<QNChatMessage>()
                     : chat.result.Where(x => x != null).ToList();
-                foreach (var message in messages)
+                var potential = messages.Where(MessageLooksPotential).ToList();
+                // A receiveNewMsg batch may contain several cards. Only pass a raw exact hint when
+                // both the payload and the business batch identify one unambiguous order.
+                var exactOrderIdHint = potential.Count == 1 ? ExtractExactOrderIdFromRaw(raw) : string.Empty;
+                foreach (var message in potential)
                 {
-                    if (!MessageLooksPotential(message)) continue;
                     await qn.ProcessDirectOrderMessageAsync(
                         message,
                         DirectOrderIdentityResolver.ResolveSeller(qn, message, null),
                         DirectOrderIdentityResolver.ResolveBuyer(qn, message, null),
-                        "receiveNewMsg系统订单卡片");
+                        "receiveNewMsg系统订单卡片",
+                        exactOrderIdHint);
                 }
             }
             catch (Exception ex)
@@ -300,7 +310,11 @@ namespace Bot.ChromeNs
                 .Take(180));
             if (string.IsNullOrWhiteSpace(text)) text = Short(raw, 1800);
 
-            var orderId = DigitsOnly(FindValue(flat, OrderIdKeys), 8, 40);
+            // Prefer the literal raw payload over parsed numeric tokens. This is the only
+            // representation guaranteed to preserve IDs above 2^53 exactly.
+            var orderId = ExtractExactOrderIdFromRaw(raw);
+            if (string.IsNullOrWhiteSpace(orderId))
+                orderId = DigitsOnly(FindValue(flat, OrderIdKeys), 8, 40);
             if (string.IsNullOrWhiteSpace(orderId))
             {
                 var match = OrderIdTextRegex.Match(text);
@@ -371,6 +385,30 @@ namespace Bot.ChromeNs
             var bracket = key.IndexOf('[');
             if (bracket >= 0) key = key.Substring(0, bracket);
             output.Add(new FlatValue { Path = path, Key = key, Value = value });
+        }
+
+        internal static string ExtractExactOrderIdFromRaw(string raw)
+        {
+            raw = raw ?? string.Empty;
+            if (raw.Length == 0) return string.Empty;
+
+            var candidates = new List<string>();
+            foreach (Match match in RawOrderIdKeyRegex.Matches(raw))
+            {
+                var id = match.Groups["id"].Value;
+                if (!string.IsNullOrWhiteSpace(id)) candidates.Add(id);
+            }
+            foreach (Match match in OrderIdTextRegex.Matches(raw))
+            {
+                var id = match.Groups[1].Value;
+                if (!string.IsNullOrWhiteSpace(id)) candidates.Add(id);
+            }
+
+            var distinct = candidates
+                .Where(x => x.Length >= 8 && x.Length <= 40)
+                .Distinct(StringComparer.Ordinal)
+                .ToList();
+            return distinct.Count == 1 ? distinct[0] : string.Empty;
         }
 
         private static string FindIdentity(IList<FlatValue> flat, string seller)
@@ -870,7 +908,8 @@ return JSON.stringify({ok:!!best,text:best});
             QNChatMessage message,
             string sellerHint,
             string buyerHint,
-            string source)
+            string source,
+            string exactOrderIdHint = null)
         {
             if (message == null) return;
             var seller = DirectOrderIdentityResolver.ResolveSeller(this, message, sellerHint);
@@ -889,7 +928,8 @@ return JSON.stringify({ok:!!best,text:best});
                 seller,
                 buyer,
                 _messageSafetyStartedAt,
-                out plan)) return;
+                out plan,
+                exactOrderIdHint)) return;
 
             if (plan == null)
             {

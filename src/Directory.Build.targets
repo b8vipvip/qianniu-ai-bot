@@ -151,6 +151,9 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.DeliveryVerification.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.DeliveryVerification.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.RuntimeSafety.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.RuntimeSafety.cs" />
   </ItemGroup>
