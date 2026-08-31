@@ -1,0 +1,45 @@
+name: Apply runtime stability 1077 patch
+
+on:
+  push:
+    branches:
+      - fix/runtime-stability-1077
+    paths:
+      - scripts/apply_runtime_stability_1077.py
+      - .github/workflows/runtime-stability-1077-apply.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/runtime-stability-1077
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Apply guarded source patch
+        run: python scripts/apply_runtime_stability_1077.py
+
+      - name: Run runtime stability static regressions
+        run: python -m pytest -q tests/test_runtime_stability_1077_static.py
+
+      - name: Commit patched sources and remove one-shot patcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm -f scripts/apply_runtime_stability_1077.py .github/workflows/runtime-stability-1077-apply.yml
+          git add -A
+          git diff --cached --stat
+          git commit -m "Fix runtime coalescing, delivery verification, and CDP routing"
+          git push origin HEAD:fix/runtime-stability-1077
