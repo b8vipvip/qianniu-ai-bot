@@ -49,4 +49,17 @@ t = replace_once(
     "forwarded duplicate ingress-only regression")
 CDP_TEST.write_text(t, encoding="utf-8")
 
-r = RUNTIME_TEST.read_text(encoding="utf-8-sig")n
+r = RUNTIME_TEST.read_text(encoding="utf-8-sig")
+extra = r'''
+
+
+def test_delivery_verification_partial_is_included_in_legacy_msbuild_and_wpf_tmp_projects():
+    targets = read("src/Directory.Build.targets")
+    assert "QN.DeliveryVerification.cs" in targets
+    assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\QN.DeliveryVerification.cs" />' in targets
+'''
+if "test_delivery_verification_partial_is_included_in_legacy_msbuild_and_wpf_tmp_projects" in r:
+    raise RuntimeError("delivery verification project inclusion test already present")
+RUNTIME_TEST.write_text(r.rstrip() + extra + "\n", encoding="utf-8")
+
+print("runtime stability 1077 compile/regression follow-up applied")
