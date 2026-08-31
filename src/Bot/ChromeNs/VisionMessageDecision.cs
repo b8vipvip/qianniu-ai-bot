@@ -82,7 +82,7 @@ namespace Bot.ChromeNs
                 }
 
                 if (!usable)
-                    return Skip("[图片]", "已跳过：本店既无可用本地OCR知识直答，也未配置可用视觉模型，未向买家发送消息。");
+                    return Skip("[图片]", "已跳过：本店未配置可用的视觉模型，且本地OCR+Knowledge V2不可用，未向买家发送消息。");
 
                 return new VisionMessageDecision
                 {
