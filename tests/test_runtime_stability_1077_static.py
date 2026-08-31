@@ -48,3 +48,20 @@ def test_manual_comparison_cancellation_is_not_generic_failure():
     files = list((ROOT / "src").rglob("*.cs"))
     sources = [p.read_text(encoding="utf-8-sig") for p in files]
     assert any("人工答案对比学习任务已取消" in s and "catch (OperationCanceledException)" in s for s in sources)
+
+
+def test_order_delivery_uncertain_does_not_become_long_delivered_reservation():
+    s = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    assert 'string.Equals(actionReason, "action_already_delivered", StringComparison.Ordinal)' in s
+    assert 'OrderPlacedAutoReplyService.Complete(plan, true);' in s
+    assert 'else if (!string.Equals(actionReason, "action_inflight", StringComparison.Ordinal))' in s
+    assert '!string.Equals(actionReason, "precision_risk_order_id", StringComparison.Ordinal)' not in s
+
+
+def test_order_action_identity_canonicalizes_buyer_aliases():
+    s = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    assert "private static string NormalizeBuyer(string seller, string buyer)" in s
+    assert "BuyerIdentityAliasService.ResolveInternalNick" in s
+    assert 'NormalizeBuyer(record.Seller, record.Buyer) == NormalizeBuyer(plan.Seller, plan.Buyer)' in s
+    assert 'Normalize(seller) + "#" + NormalizeBuyer(seller, buyer)' in s
+

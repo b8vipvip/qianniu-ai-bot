@@ -1,4 +1,4 @@
-﻿using Bot.Automation.ChatDeskNs;
+using Bot.Automation.ChatDeskNs;
 using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
@@ -364,7 +364,7 @@ namespace Bot.ChromeNs
                 ActiveActions.Add(new OrderReplyActionRecord
                 {
                     Seller = Normalize(plan.Seller),
-                    Buyer = Normalize(plan.Buyer),
+                    Buyer = NormalizeBuyer(plan.Seller, plan.Buyer),
                     OrderId = plan.OrderId.Trim(),
                     FollowUp = plan.IsBuyerFollowUp,
                     Until = now.AddMinutes(10),
@@ -388,7 +388,7 @@ namespace Bot.ChromeNs
                     _actionState.Records.Add(existing);
                 }
                 existing.Seller = Normalize(plan.Seller);
-                existing.Buyer = Normalize(plan.Buyer);
+                existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                 existing.OrderId = (plan.OrderId ?? string.Empty).Trim();
                 existing.FollowUp = plan.IsBuyerFollowUp;
                 existing.Until = DateTime.Now.AddMinutes(10);
@@ -424,7 +424,7 @@ namespace Bot.ChromeNs
                         _actionState.Records.Add(existing);
                     }
                     existing.Seller = Normalize(plan.Seller);
-                    existing.Buyer = Normalize(plan.Buyer);
+                    existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
                     existing.OrderId = plan.OrderId.Trim();
                     existing.FollowUp = plan.IsBuyerFollowUp;
                     existing.Until = until;
@@ -446,14 +446,14 @@ namespace Bot.ChromeNs
                 var exists = _actionState.Records.Any(x => x != null
                     && !x.FollowUp
                     && Normalize(x.Seller) == Normalize(seller)
-                    && Normalize(x.Buyer) == Normalize(buyer)
+                    && NormalizeBuyer(x.Seller, x.Buyer) == NormalizeBuyer(seller, buyer)
                     && string.Equals(x.OrderId, orderId, StringComparison.Ordinal));
                 if (!exists)
                 {
                     _actionState.Records.Add(new OrderReplyActionRecord
                     {
                         Seller = Normalize(seller),
-                        Buyer = Normalize(buyer),
+                        Buyer = NormalizeBuyer(seller, buyer),
                         OrderId = orderId,
                         FollowUp = false,
                         Until = DateTime.Now.AddHours(2),
@@ -467,12 +467,12 @@ namespace Bot.ChromeNs
         private static string FindCanonicalOrderIdLocked(string seller, string buyer, string orderId, bool requireExactCandidate = false)
         {
             var normalizedSeller = Normalize(seller);
-            var normalizedBuyer = Normalize(buyer);
+            var normalizedBuyer = NormalizeBuyer(seller, buyer);
             orderId = (orderId ?? string.Empty).Trim();
             var candidates = ActiveActions.Concat(_actionState == null ? new List<OrderReplyActionRecord>() : _actionState.Records)
                 .Where(x => x != null
                     && Normalize(x.Seller) == normalizedSeller
-                    && Normalize(x.Buyer) == normalizedBuyer
+                    && NormalizeBuyer(x.Seller, x.Buyer) == normalizedBuyer
                     && !string.IsNullOrWhiteSpace(x.OrderId))
                 .Select(x => x.OrderId.Trim())
                 .Distinct(StringComparer.Ordinal)
@@ -487,7 +487,7 @@ namespace Bot.ChromeNs
             if (record == null || plan == null) return false;
             return record.FollowUp == plan.IsBuyerFollowUp
                 && Normalize(record.Seller) == Normalize(plan.Seller)
-                && Normalize(record.Buyer) == Normalize(plan.Buyer)
+                && NormalizeBuyer(record.Seller, record.Buyer) == NormalizeBuyer(plan.Seller, plan.Buyer)
                 && (string.Equals((record.OrderId ?? string.Empty).Trim(), (plan.OrderId ?? string.Empty).Trim(), StringComparison.Ordinal)
                     || ArePrecisionAliases(record.OrderId, plan.OrderId));
         }
@@ -516,7 +516,7 @@ namespace Bot.ChromeNs
 
         private static string BuildReservationKey(string seller, string buyer, string orderId, bool followUp)
         {
-            return Normalize(seller) + "#" + Normalize(buyer) + "#" + (orderId ?? string.Empty).Trim()
+            return Normalize(seller) + "#" + NormalizeBuyer(seller, buyer) + "#" + (orderId ?? string.Empty).Trim()
                 + (followUp ? "#guidance-followup" : string.Empty);
         }
 
@@ -656,6 +656,13 @@ namespace Bot.ChromeNs
 
         private static OrderPlacedReplyResolution Fail(string error) { return new OrderPlacedReplyResolution { Success = false, Error = Short(error, 500) }; }
         private static string Normalize(string value) { return Regex.Replace((value ?? string.Empty).Trim().ToLowerInvariant(), @"\s+", string.Empty); }
+        private static string NormalizeBuyer(string seller, string buyer)
+        {
+            var canonical = BuyerIdentityAliasService.ResolveInternalNick(
+                (seller ?? string.Empty).Trim(),
+                (buyer ?? string.Empty).Trim());
+            return Normalize(string.IsNullOrWhiteSpace(canonical) ? buyer : canonical);
+        }
         private static string Short(string value, int max)
         {
             value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
@@ -756,9 +763,19 @@ namespace Bot.ChromeNs
             {
                 if (plan != null)
                 {
-                    OrderPlacedAutoReplyService.Complete(
-                        plan,
-                        !string.Equals(actionReason, "precision_risk_order_id", StringComparison.Ordinal));
+                    // Only a durably delivered action may extend the normal long reservation.
+                    // In-flight/precision-risk/uncertain outcomes are not delivery success. In
+                    // particular, delivery-uncertain has its own 10-minute durable safety window;
+                    // converting it to Complete(true) here would suppress a legitimate retry for
+                    // the full order dedup period (often 24h).
+                    if (string.Equals(actionReason, "action_already_delivered", StringComparison.Ordinal))
+                    {
+                        OrderPlacedAutoReplyService.Complete(plan, true);
+                    }
+                    else if (!string.Equals(actionReason, "action_inflight", StringComparison.Ordinal))
+                    {
+                        OrderPlacedAutoReplyService.Complete(plan, false);
+                    }
                     Log.Info("下单自动回复动作级幂等已阻止重复执行: seller=" + plan.Seller
                         + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId
                         + ", reason=" + actionReason);
