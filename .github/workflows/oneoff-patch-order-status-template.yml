@@ -90,6 +90,8 @@ jobs:
           if "test_order_status_placeholder_is_customer_facing_not_qianniu_internal_code" not in test:
               test_path.write_text(test.rstrip() + addition + "\n", encoding="utf-8-sig")
           PY
+      - name: Install focused test dependency
+        run: python -m pip install --disable-pip-version-check -q pytest
       - name: Run focused regression test
         run: python -m pytest -q tests/test_order_reply_template_placeholders_v3_static.py
       - name: Commit patch
