@@ -18,8 +18,8 @@ jobs:
         with:
           ref: fix/runtime-send-failure-1088
           fetch-depth: 0
-      - name: Apply patch script
-        run: python .github/scripts/oneoff_patch_runtime_send_1088.py
+      - name: Apply corrected patch script
+        run: python .github/scripts/oneoff_patch_runtime_send_1088_v2.py
       - name: Install focused tests
         run: python -m pip install --disable-pip-version-check -q pytest
       - name: Run focused regressions
@@ -28,7 +28,8 @@ jobs:
         run: |
           grep -q 'TryInvokeExactVerifiedSendButtonNow' src/Bot/ChromeNs/QNRpa.cs
           grep -q 'IsKnownBotOwnedDraftAsync' src/Bot/ChromeNs/NewOrderAttentionQueue.cs
-          grep -q 'deterministic_rule_send_failed' src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs
+          grep -q '固定规则发送失败后保留Failed终态' src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs
+          grep -q '回复管线返回时会话已是Failed' src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs
           grep -q 'IsAuthoritativeSellerSession' src/Bot/ChromeNs/CDPClient.cs
       - name: Commit patch
         run: |
