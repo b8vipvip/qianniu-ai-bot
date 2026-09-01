@@ -1,0 +1,38 @@
+name: One-off runtime send 1088 v4
+
+on:
+  push:
+    branches:
+      - fix/runtime-send-failure-1088
+    paths:
+      - .github/workflows/oneoff-runtime-send-1088-v4.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/runtime-send-failure-1088
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Apply v4 correction
+        run: python .github/scripts/oneoff_patch_runtime_send_1088_v4.py
+      - name: Install tests
+        run: python -m pip install --disable-pip-version-check pytest uiautomation
+      - name: Run full repository static tests
+        run: python -m pytest -q tests
+      - name: Commit correction
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/Bot/ChromeNs/QNRpa.cs src/Bot/ChromeNs/QNRpa.NativeSend.cs tests/test_runtime_send_failure_1088_static.py
+          git diff --cached --check
+          git commit -m "fix: validate HWND send target by Qianniu process"
+          git push origin HEAD:fix/runtime-send-failure-1088
