@@ -1,4 +1,4 @@
-﻿using Bot.ChatRecord;
+using Bot.ChatRecord;
 using BotLib;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -507,6 +507,20 @@ namespace Bot.ChromeNs
 
         private static readonly object Sync = new object();
         private static StoredState _state;
+
+        public static OrderSnapshot RefreshFromCanonical(OrderSnapshot snapshot)
+        {
+            if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.OrderId)) return snapshot;
+            lock (Sync)
+            {
+                EnsureLoaded();
+                var key = BuildKey(snapshot);
+                var existing = _state.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
+                if (existing == null || existing.Snapshot == null) return snapshot;
+                Merge(existing.Snapshot, snapshot);
+                return existing.Snapshot;
+            }
+        }
 
         public static OrderEventPublishResult Publish(OrderSnapshot snapshot)
         {

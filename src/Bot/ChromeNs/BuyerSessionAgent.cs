@@ -108,6 +108,7 @@ namespace Bot.ChromeNs
     {
         private const int MaxRememberedMessageKeys = 64;
         private const int MaxRememberedEvents = 64;
+        private const int MaxRememberedGenerationStates = 128;
         private static readonly ConcurrentDictionary<string, SessionState> Sessions =
             new ConcurrentDictionary<string, SessionState>(StringComparer.Ordinal);
 
@@ -164,6 +165,7 @@ namespace Bot.ChromeNs
                 var cts = new CancellationTokenSource();
                 state.GenerationCancellation = cts;
                 state.ActiveGenerations[generation] = cts;
+                SetGenerationStateLocked(state, generation, BuyerSessionAgentState.Observed);
                 token = cts.Token;
                 state.LastMessageKey = messageKey;
                 SetStateLocked(state, BuyerSessionAgentState.Observed, "buyer_message");
@@ -330,13 +332,14 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                previous = state.State;
+                if (!state.GenerationStates.TryGetValue(generation, out previous))
+                    previous = BuyerSessionAgentState.Observed;
+                if (!CanTransition(previous, next)) return false;
+                SetGenerationStateLocked(state, generation, next);
+
                 updateLatestState = state.Generation == generation;
                 if (updateLatestState)
-                {
-                    if (!CanTransition(previous, next)) return false;
                     SetStateLocked(state, next, reason);
-                }
 
                 if (next == BuyerSessionAgentState.Completed
                     || next == BuyerSessionAgentState.Cancelled
@@ -371,6 +374,7 @@ namespace Bot.ChromeNs
             {
                 if (!state.ActiveGenerations.TryGetValue(generation, out cts)) return;
                 state.ActiveGenerations.Remove(generation);
+                SetGenerationStateLocked(state, generation, BuyerSessionAgentState.Cancelled);
                 if (state.GenerationCancellation == cts) state.GenerationCancellation = null;
                 if (state.Generation == generation)
                     SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
@@ -389,10 +393,13 @@ namespace Bot.ChromeNs
             List<CancellationTokenSource> cancellations;
             lock (state.SyncRoot)
             {
+                var generations = state.ActiveGenerations.Keys.ToList();
                 cancellations = state.ActiveGenerations.Values
                     .Where(x => x != null)
                     .Distinct()
                     .ToList();
+                foreach (var generation in generations)
+                    SetGenerationStateLocked(state, generation, BuyerSessionAgentState.Cancelled);
                 state.ActiveGenerations.Clear();
                 state.GenerationCancellation = null;
                 if (state.Generation > 0)
@@ -408,6 +415,21 @@ namespace Bot.ChromeNs
                 + ", buyer=" + Normalize(buyerNick)
                 + ", count=" + cancellations.Count
                 + ", reason=" + Normalize(reason));
+        }
+
+        public bool TryGetGenerationState(
+            string sellerNick,
+            string buyerNick,
+            long generation,
+            out BuyerSessionAgentState generationState)
+        {
+            generationState = BuyerSessionAgentState.Idle;
+            SessionState state;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            lock (state.SyncRoot)
+            {
+                return state.GenerationStates.TryGetValue(generation, out generationState);
+            }
         }
 
         public BuyerSessionAgentSnapshot GetSnapshot(string sellerNick, string buyerNick)
@@ -603,6 +625,26 @@ namespace Bot.ChromeNs
             return (int)next >= (int)current;
         }
 
+        private static void SetGenerationStateLocked(
+            SessionState state,
+            long generation,
+            BuyerSessionAgentState next)
+        {
+            if (!state.GenerationStates.ContainsKey(generation))
+                state.GenerationStateOrder.Enqueue(generation);
+            state.GenerationStates[generation] = next;
+            while (state.GenerationStateOrder.Count > MaxRememberedGenerationStates)
+            {
+                var oldest = state.GenerationStateOrder.Dequeue();
+                if (oldest == state.Generation || state.ActiveGenerations.ContainsKey(oldest))
+                {
+                    state.GenerationStateOrder.Enqueue(oldest);
+                    break;
+                }
+                state.GenerationStates.Remove(oldest);
+            }
+        }
+
         private static void SetStateLocked(SessionState state, BuyerSessionAgentState next, string reason)
         {
             state.State = next;
@@ -635,6 +677,9 @@ namespace Bot.ChromeNs
             public CancellationTokenSource GenerationCancellation;
             public readonly Dictionary<long, CancellationTokenSource> ActiveGenerations =
                 new Dictionary<long, CancellationTokenSource>();
+            public readonly Dictionary<long, BuyerSessionAgentState> GenerationStates =
+                new Dictionary<long, BuyerSessionAgentState>();
+            public readonly Queue<long> GenerationStateOrder = new Queue<long>();
             public long EventSequence;
             public BuyerSessionEventKind LastEventKind;
             public DateTime LastEventAt;
