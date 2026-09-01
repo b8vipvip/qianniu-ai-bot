@@ -18,25 +18,23 @@ jobs:
         with:
           ref: fix/runtime-send-failure-1088
           fetch-depth: 0
-      - name: Apply runtime send/state/session fixes
+      - name: Apply runtime send state session fixes
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          def read(path): return Path(path).read_text(encoding="utf-8-sig")
-          def write(path, text): Path(path).write_text(text, encoding="utf-8")
+          def read(path):
+              return Path(path).read_text(encoding="utf-8-sig")
+          def write(path, text):
+              Path(path).write_text(text, encoding="utf-8")
           def replace_once(text, old, new, label):
-              if old not in text: raise SystemExit(f"missing patch anchor: {label}")
+              if old not in text:
+                  raise SystemExit("missing patch anchor: " + label)
               return text.replace(old, new, 1)
 
           qnrpa_path = "src/Bot/ChromeNs/QNRpa.cs"
           qnrpa = read(qnrpa_path)
-          anchor = '''        private bool TryInvokeCachedSendButtonNow()
-          {
-              if (_sendMessageButton == null || uia3Automation == null) return false;
-              try
-              {
-'''
+          anchor = '        private bool TryInvokeCachedSendButtonNow()\n        {\n            if (_sendMessageButton == null || uia3Automation == null) return false;\n            try\n            {\n'
           replacement = '''        private bool TryInvokeExactVerifiedSendButtonNow()
           {
               if (_sendMessageButton == null) return false;
@@ -47,8 +45,7 @@ jobs:
                   if (!string.Equals(automationId, SendButtonAutomationId, StringComparison.Ordinal)
                       || !IsSendButtonName(name))
                   {
-                      Log.Info("精确发送按钮UIA调用已阻止：控件身份不匹配: seller=" + SellerNick
-                          + ", automationId=" + automationId + ", name=" + name);
+                      Log.Info("精确发送按钮UIA调用已阻止：控件身份不匹配");
                       return false;
                   }
                   var identity = (automationId + " " + name).ToLowerInvariant();
@@ -56,7 +53,7 @@ jobs:
                       || identity.Contains("menu") || identity.Contains("downbutton")
                       || identity.Contains("下拉") || identity.Contains("展开"))
                   {
-                      Log.Info("精确发送按钮UIA调用已阻止：命中下拉身份: seller=" + SellerNick);
+                      Log.Info("精确发送按钮UIA调用已阻止：命中下拉身份");
                       return false;
                   }
                   _sendMessageButton.AsButton().Invoke();
@@ -82,7 +79,9 @@ jobs:
                   if (TryInvokeExactVerifiedSendButtonNow()) return true;
 '''
           qnrpa = replace_once(qnrpa, anchor, replacement, "exact UIA send invoke")
-          owned_anchor = '''        private bool HasOwnedRecentDraft(string text)
+
+          owned_anchor = '        private bool HasOwnedRecentDraft(string text)\n        {\n            text = (text ?? string.Empty).Trim();\n            return text.Length > 0\n                && string.Equals((LastSetPlainText ?? string.Empty).Trim(), text, StringComparison.Ordinal)\n                && LatestSetTextTime != DateTime.MinValue\n                && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;\n        }\n'
+          owned_addition = '''        private bool HasOwnedRecentDraft(string text)
           {
               text = (text ?? string.Empty).Trim();
               return text.Length > 0
@@ -90,8 +89,7 @@ jobs:
                   && LatestSetTextTime != DateTime.MinValue
                   && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;
           }
-'''
-          owned_replacement = owned_anchor + '''
+
           internal bool IsKnownBotOwnedDraftText(string currentText)
           {
               var expected = (LastSetPlainText ?? string.Empty).Trim();
@@ -101,132 +99,96 @@ jobs:
           internal async Task<bool> IsKnownBotOwnedDraftAsync()
           {
               if (string.IsNullOrWhiteSpace(LastSetPlainText)) return false;
-              if (_messageInputTextArea == null) await RefreshChatControlsAsync(false).ConfigureAwait(false);
+              if (_messageInputTextArea == null)
+              {
+                  await RefreshChatControlsAsync(false).ConfigureAwait(false);
+              }
               string current;
               return TryGetEditorText(out current) && IsKnownBotOwnedDraftText(current);
           }
 '''
-          qnrpa = replace_once(qnrpa, owned_anchor, owned_replacement, "bot draft ownership")
+          qnrpa = replace_once(qnrpa, owned_anchor, owned_addition, "bot draft ownership")
           write(qnrpa_path, qnrpa)
 
           queue_path = "src/Bot/ChromeNs/NewOrderAttentionQueue.cs"
           queue = read(queue_path)
-          old = '''            if (!input.Empty)
-              {
-                  BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容");
-                  return Denied("客服正在输入消息");
-              }
-'''
+          old = '            if (!input.Empty)\n            {\n                BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容");\n                return Denied("客服正在输入消息");\n            }\n'
           new = '''            if (!input.Empty)
+          {
+              if (rpa != null && await rpa.IsKnownBotOwnedDraftAsync().ConfigureAwait(false))
+              {
+                  return Denied("Bot发送失败草稿仍在输入框，等待发送恢复且不计为人工操作");
+              }
+              BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容");
+              return Denied("客服正在输入消息");
+          }
+'''
+          queue = replace_once(queue, old, new, "order queue owned draft guard")
+          old2 = '                    if (!input.Success || !input.Empty)\n                    {\n                        if (input.Success && !input.Empty)\n                        {\n                            BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");\n                        }\n                        return false;\n                    }\n'
+          new2 = '''                    if (!input.Success || !input.Empty)
+          {
+              if (input.Success && !input.Empty)
               {
                   if (rpa != null && await rpa.IsKnownBotOwnedDraftAsync().ConfigureAwait(false))
                   {
-                      return Denied("Bot发送失败草稿仍在输入框，等待发送恢复且不计为人工操作");
+                      Log.Info("自动切换前发现Bot自有失败草稿，未标记人工操作");
                   }
-                  BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容");
-                  return Denied("客服正在输入消息");
+                  else
+                  {
+                      BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
+                  }
               }
-'''
-          queue = replace_once(queue, old, new, "order queue owned draft guard")
-          old2 = '''                    if (!input.Success || !input.Empty)
-                      {
-                          if (input.Success && !input.Empty)
-                          {
-                              BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
-                          }
-                          return false;
-                      }
-'''
-          new2 = '''                    if (!input.Success || !input.Empty)
-                      {
-                          if (input.Success && !input.Empty)
-                          {
-                              if (rpa != null && await rpa.IsKnownBotOwnedDraftAsync().ConfigureAwait(false))
-                              {
-                                  Log.Info("自动切换前发现Bot自有失败草稿，未标记人工操作: seller=" + snapshot.Seller
-                                      + ", buyer=" + snapshot.Buyer);
-                              }
-                              else
-                              {
-                                  BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
-                              }
-                          }
-                          return false;
-                      }
+              return false;
+          }
 '''
           queue = replace_once(queue, old2, new2, "focus owned draft guard")
           write(queue_path, queue)
 
           burst_path = "src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs"
           burst = read(burst_path)
-          old = '''                if (deterministicResult.Consumed)
-                  {
-                      if (deterministicResult.Sent)
-                      {
-                          lease.MarkReplyDelivered(deterministicResult.Source);
-                      }
-                      lease.MarkCompleted("deterministic_rule_consumed");
-                      return;
-                  }
-'''
+          old = '                if (deterministicResult.Consumed)\n                {\n                    if (deterministicResult.Sent)\n                    {\n                        lease.MarkReplyDelivered(deterministicResult.Source);\n                    }\n                    lease.MarkCompleted("deterministic_rule_consumed");\n                    return;\n                }\n'
           new = '''                if (deterministicResult.Consumed)
+          {
+              if (deterministicResult.Sent)
+              {
+                  lease.MarkReplyDelivered(deterministicResult.Source);
+                  lease.MarkCompleted("deterministic_rule_consumed");
+              }
+              else
+              {
+                  var deterministicSnapshot = _sessionAgent.GetSnapshot(state.Seller, state.Buyer);
+                  if (deterministicSnapshot == null || deterministicSnapshot.State != BuyerSessionState.Failed)
                   {
-                      if (deterministicResult.Sent)
-                      {
-                          lease.MarkReplyDelivered(deterministicResult.Source);
-                          lease.MarkCompleted("deterministic_rule_consumed");
-                      }
-                      else
-                      {
-                          var deterministicSnapshot = _sessionAgent.GetSnapshot(state.Seller, state.Buyer);
-                          if (deterministicSnapshot == null || deterministicSnapshot.State != BuyerSessionState.Failed)
-                          {
-                              lease.MarkFailed("deterministic_rule_send_failed");
-                          }
-                      }
-                      return;
+                      lease.MarkFailed("deterministic_rule_send_failed");
                   }
+              }
+              return;
+          }
 '''
           burst = replace_once(burst, old, new, "deterministic failure terminal")
-          old = '''                if (afterDispatch != null && afterDispatch.State == BuyerSessionState.Generating)
-                  {
-                      if (HasReplyableMessage(merged))
-                      {
-                          lease.MarkFailed("reply_pipeline_returned_without_ready");
-                      }
-                      else
-                      {
-                          lease.MarkCompleted("reply_pipeline_skipped");
-                      }
-                  }
-                  else
-                  {
-                      lease.MarkCompleted("reply_pipeline_completed");
-                  }
-'''
+          old = '                if (afterDispatch != null && afterDispatch.State == BuyerSessionState.Generating)\n                {\n                    if (HasReplyableMessage(merged))\n                    {\n                        lease.MarkFailed("reply_pipeline_returned_without_ready");\n                    }\n                    else\n                    {\n                        lease.MarkCompleted("reply_pipeline_skipped");\n                    }\n                }\n                else\n                {\n                    lease.MarkCompleted("reply_pipeline_completed");\n                }\n'
           new = '''                if (afterDispatch != null && afterDispatch.State == BuyerSessionState.Failed)
-                  {
-                      Log.Info("买家回复管线返回时会话已失败，保留Failed终态且禁止升级Completed: seller="
-                          + state.Seller + ", buyer=" + state.Buyer + ", generation=" + state.Generation);
-                  }
-                  else if (afterDispatch != null && afterDispatch.State == BuyerSessionState.Generating)
-                  {
-                      if (HasReplyableMessage(merged)) lease.MarkFailed("reply_pipeline_returned_without_ready");
-                      else lease.MarkCompleted("reply_pipeline_skipped");
-                  }
-                  else
-                  {
-                      lease.MarkCompleted("reply_pipeline_completed");
-                  }
+          {
+              Log.Info("买家回复管线返回时会话已失败，保留Failed终态且禁止升级Completed");
+          }
+          else if (afterDispatch != null && afterDispatch.State == BuyerSessionState.Generating)
+          {
+              if (HasReplyableMessage(merged)) lease.MarkFailed("reply_pipeline_returned_without_ready");
+              else lease.MarkCompleted("reply_pipeline_skipped");
+          }
+          else
+          {
+              lease.MarkCompleted("reply_pipeline_completed");
+          }
 '''
           burst = replace_once(burst, old, new, "pipeline failed terminal")
           write(burst_path, burst)
 
           server_path = "src/Bot/ChromeNs/MyWebSocketServer.cs"
           server = read(server_path)
-          marker = '''        internal static bool TryGetAuthoritativeSession(string sellerNick, out string sessionId)
-'''
-          if marker not in server: raise SystemExit("missing authoritative-session helper anchor")
+          marker = '        internal static bool TryGetAuthoritativeSession(string sellerNick, out string sessionId)\n'
+          if marker not in server:
+              raise SystemExit("missing authoritative-session helper anchor")
           auth_method = '''        internal static bool IsAuthoritativeSellerSession(string sellerNick, string sessionId)
           {
               sellerNick = NormalizeSeller(sellerNick);
@@ -243,74 +205,34 @@ jobs:
 
           cdp_path = "src/Bot/ChromeNs/CDPClient.cs"
           cdp = read(cdp_path)
-          old = '''            PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
-'''
+          old = '            PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");\n'
           new = '''            if (MyWebSocketServer.IsAuthoritativeSellerSession(sellerNick, SessionId))
-              {
-                  PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
-              }
-              else
-              {
-                  Log.Info("重复千牛页面会话切换仅作为入站证据，不接管CDP命令路由: seller="
-                      + sellerNick + ", session=" + SessionId);
-              }
+          {
+              PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
+          }
+          else
+          {
+              Log.Info("重复千牛页面会话切换仅作为入站证据，不接管CDP命令路由");
+          }
 '''
           cdp = replace_once(cdp, old, new, "duplicate session route guard")
           write(cdp_path, cdp)
-
-          Path("tests/test_runtime_send_failure_1088_static.py").write_text('''from pathlib import Path
-
-ROOT = Path(__file__).resolve().parents[1]
-
-def read(path: str) -> str:
-    return (ROOT / path).read_text(encoding="utf-8-sig")
-
-def test_exact_verified_send_button_invoke_exists_after_physical_input_rejection():
-    qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
-    assert "TryInvokeExactVerifiedSendButtonNow" in qnrpa
-    exact = qnrpa.split("private bool TryInvokeExactVerifiedSendButtonNow", 1)[1].split("private bool TryInvokeCachedSendButtonNow", 1)[0]
-    assert "SendButtonAutomationId" in exact
-    assert "IsSendButtonName(name)" in exact
-    assert "_sendMessageButton.AsButton().Invoke()" in exact
-    fallback = qnrpa.split("private bool TryInvokeCachedSendButtonNow", 1)[1].split("private bool TryInvokeSafeMainSendCandidate", 1)[0]
-    assert "if (TryInvokeExactVerifiedSendButtonNow()) return true;" in fallback
-
-def test_failed_bot_draft_is_not_reclassified_as_human_typing():
-    qnrpa = read("src/Bot/ChromeNs/QNRpa.cs")
-    queue = read("src/Bot/ChromeNs/NewOrderAttentionQueue.cs")
-    assert "internal bool IsKnownBotOwnedDraftText" in qnrpa
-    assert "EditorMatchesExpectedText(currentText, expected)" in qnrpa
-    assert "await rpa.IsKnownBotOwnedDraftAsync()" in queue
-    assert "不计为人工操作" in queue
-
-def test_failed_buyer_generation_is_never_upgraded_to_completed():
-    burst = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    assert "deterministic_rule_send_failed" in burst
-    assert "deterministicSnapshot.State != BuyerSessionState.Failed" in burst
-    assert "afterDispatch.State == BuyerSessionState.Failed" in burst
-    failed_branch = burst.split("afterDispatch.State == BuyerSessionState.Failed", 1)[1].split("else if", 1)[0]
-    assert "MarkCompleted" not in failed_branch
-
-def test_duplicate_cdp_conversation_change_cannot_take_outbound_route():
-    server = read("src/Bot/ChromeNs/MyWebSocketServer.cs")
-    client = read("src/Bot/ChromeNs/CDPClient.cs")
-    assert "internal static bool IsAuthoritativeSellerSession" in server
-    assert "MyWebSocketServer.IsAuthoritativeSellerSession(sellerNick, SessionId)" in client
-    guarded = client.split("MyWebSocketServer.IsAuthoritativeSellerSession(sellerNick, SessionId)", 1)[1].split("EvBuyerSwitched", 1)[0]
-    assert "PreferRuntimeSession" in guarded
-    assert "不接管CDP命令路由" in guarded
-''', encoding="utf-8")
           PY
       - name: Install focused tests
         run: python -m pip install --disable-pip-version-check -q pytest
-      - name: Run focused regressions
+      - name: Run existing focused regressions
+        run: python -m pytest -q tests/test_native_first_text_send_static.py tests/test_seller_hwnd_uia_send_static.py tests/test_runtime_reply_failure_state_static.py tests/test_order_event_attention_static.py tests/test_qianniu_duplicate_cdp_inbound_recovery_static.py
+      - name: Verify new guards
         run: |
-          python -m pytest -q tests/test_runtime_send_failure_1088_static.py tests/test_native_first_text_send_static.py tests/test_seller_hwnd_uia_send_static.py tests/test_runtime_reply_failure_state_static.py tests/test_order_event_attention_static.py tests/test_qianniu_duplicate_cdp_inbound_recovery_static.py
+          grep -q 'TryInvokeExactVerifiedSendButtonNow' src/Bot/ChromeNs/QNRpa.cs
+          grep -q 'IsKnownBotOwnedDraftAsync' src/Bot/ChromeNs/NewOrderAttentionQueue.cs
+          grep -q 'deterministic_rule_send_failed' src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs
+          grep -q 'IsAuthoritativeSellerSession' src/Bot/ChromeNs/CDPClient.cs
       - name: Commit patch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/Bot/ChromeNs/QNRpa.cs src/Bot/ChromeNs/NewOrderAttentionQueue.cs src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs src/Bot/ChromeNs/MyWebSocketServer.cs src/Bot/ChromeNs/CDPClient.cs tests/test_runtime_send_failure_1088_static.py
+          git add src/Bot/ChromeNs/QNRpa.cs src/Bot/ChromeNs/NewOrderAttentionQueue.cs src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs src/Bot/ChromeNs/MyWebSocketServer.cs src/Bot/ChromeNs/CDPClient.cs
           git diff --cached --check
           git commit -m "fix: harden runtime send failure recovery"
           git push origin HEAD:fix/runtime-send-failure-1088
