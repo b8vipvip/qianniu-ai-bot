@@ -27,12 +27,23 @@ jobs:
         run: |
           python .github/scripts/oneoff_patch_runtime_1095.py
           python .github/scripts/oneoff_patch_runtime_1095_testfix.py
+          python .github/scripts/oneoff_patch_runtime_1095_nativepack.py
       - name: Install test dependencies
         shell: pwsh
         run: python -m pip install --disable-pip-version-check pytest uiautomation
       - name: Run focused regression
         shell: pwsh
         run: python -m pytest -q tests/test_runtime_1095_context_order_ocr_static.py tests/test_runtime_send_failure_1088_static.py tests/test_order_reply_template_placeholders_v3_static.py
+      - name: Verify OCR worker publish contains native VC runtime
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $out = Join-Path $env:RUNNER_TEMP 'ocr-release-check'
+          dotnet publish tools/LocalOcrWorker/LocalOcrWorker.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -p:PublishTrimmed=false -o $out
+          @('onnxruntime.dll','vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll','msvcp140_1.dll') | ForEach-Object {
+            $p = Join-Path $out $_
+            if (-not (Test-Path -LiteralPath $p)) { throw "missing OCR runtime dependency: $_" }
+          }
       - name: Run full repository static tests
         shell: pwsh
         run: python -m pytest -q tests
@@ -41,7 +52,7 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/Bot/ChromeNs/BuyerSessionAgent.cs src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs src/Bot/ChromeNs/OrderEventHub.cs src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs .github/workflows/windows-build.yml tests/test_runtime_1095_context_order_ocr_static.py tests/test_runtime_send_failure_1088_static.py
+          git add src/Bot/ChromeNs/BuyerSessionAgent.cs src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs src/Bot/ChromeNs/OrderEventHub.cs src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs tools/LocalOcrWorker/LocalOcrWorker.csproj tests/test_runtime_1095_context_order_ocr_static.py tests/test_runtime_send_failure_1088_static.py
           git diff --cached --check
           git commit -m "fix: preserve buyer context and complete local order snapshots"
           git push origin HEAD:fix/runtime-1095-context-order-ocr
