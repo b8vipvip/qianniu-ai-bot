@@ -363,12 +363,26 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    _sessionAgent.TryTransition(
+                    var deterministicSnapshot = _sessionAgent.GetSnapshot(
                         item.SellerNick,
-                        item.BuyerNick,
-                        item.SessionGeneration,
-                        BuyerSessionAgentState.Completed,
-                        "deterministic_rule_consumed");
+                        item.BuyerNick);
+                    if (deterministicSnapshot != null
+                        && deterministicSnapshot.Generation == item.SessionGeneration
+                        && deterministicSnapshot.State == BuyerSessionAgentState.Failed)
+                    {
+                        Log.Info("固定规则发送失败后保留Failed终态，禁止升级Completed: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", generation=" + item.SessionGeneration);
+                    }
+                    else
+                    {
+                        _sessionAgent.TryTransition(
+                            item.SellerNick,
+                            item.BuyerNick,
+                            item.SessionGeneration,
+                            BuyerSessionAgentState.Completed,
+                            "deterministic_rule_consumed");
+                    }
                 }
             });
         }
@@ -560,10 +574,19 @@ namespace Bot.ChromeNs
                     if (lease.IsCurrent)
                     {
                         var snapshot = _sessionAgent.GetSnapshot(burst.SellerNick, burst.BuyerNick);
+                        var failed = snapshot != null
+                            && snapshot.Generation == burst.SessionGeneration
+                            && snapshot.State == BuyerSessionAgentState.Failed;
                         var returnedWithoutReady = snapshot != null
                             && snapshot.Generation == burst.SessionGeneration
                             && snapshot.State == BuyerSessionAgentState.Generating;
-                        if (returnedWithoutReady && burst.HasReplyableItem)
+                        if (failed)
+                        {
+                            Log.Info("回复管线返回时会话已是Failed，保留失败终态且禁止升级Completed: seller="
+                                + burst.SellerNick + ", buyer=" + burst.BuyerNick
+                                + ", generation=" + burst.SessionGeneration);
+                        }
+                        else if (returnedWithoutReady && burst.HasReplyableItem)
                         {
                             lease.MarkFailed("reply_pipeline_returned_without_ready");
                             Log.Info("回复管线在答案就绪前返回，保持失败态而非误记Completed: seller="

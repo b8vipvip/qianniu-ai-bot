@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -116,7 +116,7 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool IsAuthoritativeSellerSession(string sellerNick, string sessionId)
+        internal bool IsAuthoritativeSellerSession(string sellerNick, string sessionId)
         {
             sellerNick = (sellerNick ?? string.Empty).Trim();
             sessionId = (sessionId ?? string.Empty).Trim();

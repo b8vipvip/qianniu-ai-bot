@@ -1,4 +1,4 @@
-﻿using BotLib.Extensions;
+using BotLib.Extensions;
 using BotLib.Wpf.Extensions;
 using BotLib;
 using FlaUI.Core.AutomationElements;
@@ -106,6 +106,26 @@ namespace Bot.ChromeNs
                 && string.Equals((LastSetPlainText ?? string.Empty).Trim(), text, StringComparison.Ordinal)
                 && LatestSetTextTime != DateTime.MinValue
                 && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;
+        }
+
+        internal bool IsKnownBotOwnedDraftText(string currentText)
+        {
+            var expected = (LastSetPlainText ?? string.Empty).Trim();
+            return expected.Length > 0
+                && !string.IsNullOrWhiteSpace(LastSendFailureReason)
+                && !LastSendWasCancelled
+                && EditorMatchesExpectedText(currentText, expected);
+        }
+
+        internal async Task<bool> IsKnownBotOwnedDraftAsync()
+        {
+            if (string.IsNullOrWhiteSpace(LastSetPlainText)) return false;
+            if (_messageInputTextArea == null)
+            {
+                await RefreshChatControlsAsync(false).ConfigureAwait(false);
+            }
+            string current;
+            return TryGetEditorText(out current) && IsKnownBotOwnedDraftText(current);
         }
 
         private async Task<CdpInputboxProbe> ProbeInputboxEmptyAsync(string stage, int timeoutMs)
