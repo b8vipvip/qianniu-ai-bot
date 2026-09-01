@@ -23,6 +23,7 @@ namespace Bot.ChromeNs
         public long SortValue { get; set; }
         public DateTime ReceivedAt { get; set; }
         public long SessionGeneration { get; set; }
+        public string SemanticContinuationContext { get; set; }
 
         public BuyerMessageBurstItem()
         {
@@ -78,9 +79,21 @@ namespace Bot.ChromeNs
                 .ToList();
             SessionGeneration = Items.Count < 1 ? 0 : Items.Max(x => x.SessionGeneration);
             CombinedQuestion = BuildCombinedQuestion(Items);
-            ModelQuestion = Items.Count <= 1
-                ? CombinedQuestion
-                : "【买家本轮连续消息，以下按发送顺序】\n" + CombinedQuestion;
+            var continuation = Items
+                .Select(x => (x.SemanticContinuationContext ?? string.Empty).Trim())
+                .LastOrDefault(x => !string.IsNullOrWhiteSpace(x));
+            if (!string.IsNullOrWhiteSpace(continuation)
+                && NormalizeCompare(CombinedQuestion).IndexOf(NormalizeCompare(continuation), StringComparison.Ordinal) < 0)
+            {
+                ModelQuestion = "【买家上一句与当前指代续问，请合并理解为一个完整问题】\n上一句："
+                    + continuation + "\n当前：" + CombinedQuestion;
+            }
+            else
+            {
+                ModelQuestion = Items.Count <= 1
+                    ? CombinedQuestion
+                    : "【买家本轮连续消息，以下按发送顺序】\n" + CombinedQuestion;
+            }
         }
 
         public static string BuildCombinedQuestion(IEnumerable<BuyerMessageBurstItem> items)
@@ -250,12 +263,22 @@ namespace Bot.ChromeNs
             public long LatestSessionGeneration;
         }
 
+        private sealed class RecentBuyerText
+        {
+            public string Text { get; set; }
+            public DateTime ReceivedAt { get; set; }
+            public long Generation { get; set; }
+        }
+
         private const int PreMergeRuleGateWaitMilliseconds = 2500;
+        private const int SemanticContinuationWindowSeconds = 15;
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, SemaphoreSlim> _preMergeRuleGates =
             new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
+        private readonly ConcurrentDictionary<string, RecentBuyerText> _recentBuyerTexts =
+            new ConcurrentDictionary<string, RecentBuyerText>(StringComparer.Ordinal);
         private readonly Func<BuyerMessageBurstLease, Task> _handler;
         private readonly BuyerSessionAgent _sessionAgent = new BuyerSessionAgent();
 
@@ -293,6 +316,8 @@ namespace Bot.ChromeNs
                 return;
             }
             item.SessionGeneration = observation.Generation;
+            AttachSemanticContinuation(item);
+            RememberRecentBuyerText(item);
             _sessionAgent.TryTransition(
                 item.SellerNick,
                 item.BuyerNick,
@@ -363,12 +388,13 @@ namespace Bot.ChromeNs
                 }
                 else
                 {
-                    var deterministicSnapshot = _sessionAgent.GetSnapshot(
+                    BuyerSessionAgentState deterministicState;
+                    if (_sessionAgent.TryGetGenerationState(
                         item.SellerNick,
-                        item.BuyerNick);
-                    if (deterministicSnapshot != null
-                        && deterministicSnapshot.Generation == item.SessionGeneration
-                        && deterministicSnapshot.State == BuyerSessionAgentState.Failed)
+                        item.BuyerNick,
+                        item.SessionGeneration,
+                        out deterministicState)
+                        && deterministicState == BuyerSessionAgentState.Failed)
                     {
                         Log.Info("固定规则发送失败后保留Failed终态，禁止升级Completed: seller="
                             + item.SellerNick + ", buyer=" + item.BuyerNick
@@ -385,6 +411,66 @@ namespace Bot.ChromeNs
                     }
                 }
             });
+        }
+
+        private void AttachSemanticContinuation(BuyerMessageBurstItem item)
+        {
+            if (item == null || !LooksLikeSemanticContinuation(item.DisplayText)) return;
+            var key = Key(item.SellerNick, item.BuyerNick);
+            RecentBuyerText previous;
+            if (!_recentBuyerTexts.TryGetValue(key, out previous) || previous == null) return;
+            var age = item.ReceivedAt - previous.ReceivedAt;
+            if (age < TimeSpan.Zero || age > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds)) return;
+            var previousText = NormalizeSemanticText(previous.Text);
+            var currentText = NormalizeSemanticText(item.DisplayText);
+            if (string.IsNullOrWhiteSpace(previousText)
+                || string.Equals(previousText, currentText, StringComparison.OrdinalIgnoreCase)) return;
+
+            item.SemanticContinuationContext = previousText;
+            if (previous.Generation > 0 && previous.Generation != item.SessionGeneration)
+            {
+                _sessionAgent.Cancel(
+                    item.SellerNick,
+                    item.BuyerNick,
+                    previous.Generation,
+                    "semantic_continuation_superseded");
+            }
+            Log.Info("买家短指代续问已关联上一句语义上下文: seller=" + item.SellerNick
+                + ", buyer=" + item.BuyerNick
+                + ", previousGeneration=" + previous.Generation
+                + ", generation=" + item.SessionGeneration
+                + ", ageMs=" + Math.Max(0, (long)age.TotalMilliseconds));
+        }
+
+        private void RememberRecentBuyerText(BuyerMessageBurstItem item)
+        {
+            if (item == null) return;
+            var text = NormalizeSemanticText(item.DisplayText);
+            if (string.IsNullOrWhiteSpace(text) || text.Length > 240) return;
+            _recentBuyerTexts[Key(item.SellerNick, item.BuyerNick)] = new RecentBuyerText
+            {
+                Text = text,
+                ReceivedAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt,
+                Generation = item.SessionGeneration
+            };
+        }
+
+        private static bool LooksLikeSemanticContinuation(string value)
+        {
+            var text = NormalizeSemanticText(value);
+            if (string.IsNullOrWhiteSpace(text) || text.Length > 32) return false;
+            var compact = Regex.Replace(text.ToLowerInvariant(), @"[\s，。！？!?、；;：:]", string.Empty);
+            var prefixes = new[] { "这个", "这款", "这种", "这个版本", "这个型号", "那个", "那款", "那种", "它" };
+            if (!prefixes.Any(x => compact.StartsWith(x, StringComparison.Ordinal))) return false;
+            if (compact == "这个" || compact == "这个呢" || compact == "那个" || compact == "那个呢" || compact == "它呢") return true;
+            return Regex.IsMatch(compact, @"支持|能用|可以|可用|适用|兼容|行吗|能不能|可不可以|怎么样|咋样|有吗|吗$|呢$");
+        }
+
+        private static string NormalizeSemanticText(string value)
+        {
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            value = Regex.Replace(value, @"\s+", " ");
+            return value;
         }
 
         private bool HasPendingBuyerMessages(string seller, string buyer)
@@ -573,13 +659,14 @@ namespace Bot.ChromeNs
                     await DispatchScopedAsync(burst, lease);
                     if (lease.IsCurrent)
                     {
-                        var snapshot = _sessionAgent.GetSnapshot(burst.SellerNick, burst.BuyerNick);
-                        var failed = snapshot != null
-                            && snapshot.Generation == burst.SessionGeneration
-                            && snapshot.State == BuyerSessionAgentState.Failed;
-                        var returnedWithoutReady = snapshot != null
-                            && snapshot.Generation == burst.SessionGeneration
-                            && snapshot.State == BuyerSessionAgentState.Generating;
+                        BuyerSessionAgentState generationState;
+                        var hasGenerationState = _sessionAgent.TryGetGenerationState(
+                            burst.SellerNick,
+                            burst.BuyerNick,
+                            burst.SessionGeneration,
+                            out generationState);
+                        var failed = hasGenerationState && generationState == BuyerSessionAgentState.Failed;
+                        var returnedWithoutReady = hasGenerationState && generationState == BuyerSessionAgentState.Generating;
                         if (failed)
                         {
                             Log.Info("回复管线返回时会话已是Failed，保留失败终态且禁止升级Completed: seller="

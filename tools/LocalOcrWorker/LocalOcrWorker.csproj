@@ -13,4 +13,19 @@
   <ItemGroup>
     <PackageReference Include="RapidOcrNet" Version="4.0.2" />
   </ItemGroup>
+
+  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <VcRuntimeDependency Include="$(SystemRoot)\System32\vcruntime140.dll" />
+    <VcRuntimeDependency Include="$(SystemRoot)\System32\vcruntime140_1.dll" />
+    <VcRuntimeDependency Include="$(SystemRoot)\System32\msvcp140.dll" />
+    <VcRuntimeDependency Include="$(SystemRoot)\System32\msvcp140_1.dll" />
+  </ItemGroup>
+
+  <Target Name="CopyOnnxVcRuntimeDependencies" AfterTargets="Publish" Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <Error Condition="!Exists('$(SystemRoot)\System32\vcruntime140.dll')" Text="Missing vcruntime140.dll required by ONNX Runtime." />
+    <Error Condition="!Exists('$(SystemRoot)\System32\vcruntime140_1.dll')" Text="Missing vcruntime140_1.dll required by ONNX Runtime." />
+    <Error Condition="!Exists('$(SystemRoot)\System32\msvcp140.dll')" Text="Missing msvcp140.dll required by ONNX Runtime." />
+    <Error Condition="!Exists('$(SystemRoot)\System32\msvcp140_1.dll')" Text="Missing msvcp140_1.dll required by ONNX Runtime." />
+    <Copy SourceFiles="@(VcRuntimeDependency)" DestinationFolder="$(PublishDir)" SkipUnchangedFiles="true" />
+  </Target>
 </Project>

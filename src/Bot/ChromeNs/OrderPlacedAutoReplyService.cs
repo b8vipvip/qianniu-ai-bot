@@ -283,6 +283,7 @@ namespace Bot.ChromeNs
         {
             if (plan == null || plan.Config == null) return Fail("下单自动回复计划为空");
             var cfg = plan.Config;
+            await RefreshLocalSnapshotBeforeRenderAsync(plan, cfg.OrderPlacedReplyText);
             var mode = string.IsNullOrWhiteSpace(cfg.OrderPlacedReplyMode) ? "固定预设答案" : cfg.OrderPlacedReplyMode.Trim();
             if (string.Equals(mode, "调用HTTP接口", StringComparison.Ordinal))
             {
@@ -303,6 +304,27 @@ namespace Bot.ChromeNs
             var reply = RenderTemplate(cfg.OrderPlacedReplyText, plan, "fixed-preset");
             if (string.IsNullOrWhiteSpace(reply)) return Fail("下单固定预设答案为空");
             return new OrderPlacedReplyResolution { Success = true, Reply = reply, Source = plan.IsBuyerFollowUp ? "下单自动回复-固定预设（买家明确续问）" : "下单自动回复-固定预设" };
+        }
+
+        private static async Task RefreshLocalSnapshotBeforeRenderAsync(OrderPlacedReplyPlan plan, string template)
+        {
+            if (plan == null || plan.Snapshot == null || string.IsNullOrWhiteSpace(plan.OrderId)) return;
+            var missingBefore = MissingTemplateFields(template, plan);
+            if (missingBefore.Count > 0)
+            {
+                // Same-process parsers often publish a richer snapshot a few milliseconds after the
+                // first confirmed order event. Allow only a tiny local settle; never wait on trade API.
+                await Task.Delay(120).ConfigureAwait(false);
+            }
+            var refreshed = OrderEventHub.RefreshFromCanonical(plan.Snapshot);
+            if (refreshed != null) plan.Snapshot = refreshed;
+            var missingAfter = MissingTemplateFields(template, plan);
+            Log.Info("订单固定预设渲染前已刷新Hub本地快照: orderId=" + plan.OrderId
+                + ", missingBefore=" + string.Join(",", missingBefore)
+                + ", missingAfter=" + string.Join(",", missingAfter)
+                + ", quantity=" + (plan.Snapshot == null ? 0 : plan.Snapshot.Quantity)
+                + ", paid=" + (plan.Snapshot == null || !plan.Snapshot.PaidAmount.HasValue ? "" : plan.Snapshot.PaidAmount.Value.ToString("0.##"))
+                + ", skuPresent=" + (plan.Snapshot != null && !string.IsNullOrWhiteSpace(plan.Snapshot.SkuText)));
         }
 
         public static void Complete(OrderPlacedReplyPlan plan, bool delivered)
