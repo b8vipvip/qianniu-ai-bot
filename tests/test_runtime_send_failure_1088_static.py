@@ -7,22 +7,19 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_exact_verified_send_button_invoke_is_safe_and_non_physical():
+def test_hwnd_safe_send_accepts_only_process_owned_verified_point():
     source = read("src/Bot/ChromeNs/QNRpa.cs")
-    assert "private bool TryInvokeExactVerifiedSendButtonNow()" in source
-    block = source.split("private bool TryInvokeExactVerifiedSendButtonNow()", 1)[1].split(
-        "private bool TryInvokeCachedSendButtonNow()", 1
+    native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    assert "_sendMessageButton.AsButton().Invoke()" not in source
+    assert "GetWindowThreadProcessId(target, out targetPid)" in native
+    assert "targetPid != expectedPid" in native
+    assert "安全点窗口不属于当前卖家千牛进程" in native
+    assert "允许同一千牛进程的独立根窗口" in native
+    process_guard = native.split("GetWindowThreadProcessId(target, out targetPid)", 1)[1].split(
+        "ScreenToClient", 1
     )[0]
-    assert "SendButtonAutomationId" in block
-    assert "IsSendButtonName(name)" in block
-    assert "_sendMessageButton.AsButton().Invoke()" in block
-    assert "arrow" in block
-    assert "dropdown" in block
-    assert "下拉" in block
-    fallback = source.split("private bool TryInvokeCachedSendButtonNow()", 1)[1].split(
-        "private bool TryInvokeSafeMainSendCandidate", 1
-    )[0]
-    assert "if (TryInvokeExactVerifiedSendButtonNow()) return true;" in fallback
+    assert process_guard.index("targetPid != expectedPid") < process_guard.index("root != expectedRoot")
+    assert "return false;" in process_guard.split("targetPid != expectedPid", 1)[1].split("var root", 1)[0]
 
 
 def test_unchanged_failed_bot_draft_does_not_become_fake_human_activity():
@@ -30,6 +27,8 @@ def test_unchanged_failed_bot_draft_does_not_become_fake_human_activity():
     queue = read("src/Bot/ChromeNs/NewOrderAttentionQueue.cs")
     assert "internal bool IsKnownBotOwnedDraftText(string currentText)" in rpa
     assert "EditorMatchesExpectedText(currentText, expected)" in rpa
+    assert "!string.IsNullOrWhiteSpace(LastSendFailureReason)" in rpa
+    assert "!LastSendWasCancelled" in rpa
     assert "internal async Task<bool> IsKnownBotOwnedDraftAsync()" in rpa
     first_guard = queue.split("if (!input.Empty)", 1)[1].split(
         "var current = await TryGetCurrentBuyerAsync", 1

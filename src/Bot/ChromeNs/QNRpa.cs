@@ -111,7 +111,10 @@ namespace Bot.ChromeNs
         internal bool IsKnownBotOwnedDraftText(string currentText)
         {
             var expected = (LastSetPlainText ?? string.Empty).Trim();
-            return expected.Length > 0 && EditorMatchesExpectedText(currentText, expected);
+            return expected.Length > 0
+                && !string.IsNullOrWhiteSpace(LastSendFailureReason)
+                && !LastSendWasCancelled
+                && EditorMatchesExpectedText(currentText, expected);
         }
 
         internal async Task<bool> IsKnownBotOwnedDraftAsync()
@@ -355,51 +358,11 @@ namespace Bot.ChromeNs
             }
         }
 
-        private bool TryInvokeExactVerifiedSendButtonNow()
-        {
-            if (_sendMessageButton == null) return false;
-            try
-            {
-                var automationId = _sendMessageButton.AutomationId ?? string.Empty;
-                var name = _sendMessageButton.Name ?? string.Empty;
-                if (!string.Equals(automationId, SendButtonAutomationId, StringComparison.Ordinal)
-                    || !IsSendButtonName(name))
-                {
-                    Log.Info("精确发送按钮UIA调用已阻止：控件身份不匹配: seller=" + SellerNick
-                        + ", automationId=" + automationId + ", name=" + name);
-                    return false;
-                }
-
-                var identity = (automationId + " " + name).ToLowerInvariant();
-                if (identity.Contains("arrow") || identity.Contains("dropdown")
-                    || identity.Contains("menu") || identity.Contains("downbutton")
-                    || identity.Contains("下拉") || identity.Contains("展开"))
-                {
-                    Log.Info("精确发送按钮UIA调用已阻止：命中下拉身份: seller=" + SellerNick);
-                    return false;
-                }
-
-                _sendMessageButton.AsButton().Invoke();
-                Log.Info("已通过精确发送按钮UIA Invoke执行发送: seller=" + SellerNick
-                    + ", automationId=" + automationId + ", name=" + name
-                    + ", rect=" + FormatRect(SafeBoundingRectangle(_sendMessageButton)));
-                return true;
-            }
-            catch (Exception ex)
-            {
-                Log.Info("精确发送按钮UIA Invoke失败: " + ex.Message
-                    + ", type=" + ex.GetType().FullName
-                    + ", hresult=0x" + ex.HResult.ToString("X8"));
-                return false;
-            }
-        }
-
         private bool TryInvokeCachedSendButtonNow()
         {
             if (_sendMessageButton == null || uia3Automation == null) return false;
             try
             {
-                if (TryInvokeExactVerifiedSendButtonNow()) return true;
                 var splitRect = _sendMessageButtonRect;
                 if ((splitRect.Width <= 0 || splitRect.Height <= 0) && _sendMessageButton != null)
                 {

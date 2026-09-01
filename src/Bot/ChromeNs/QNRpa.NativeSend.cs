@@ -1,4 +1,4 @@
-﻿using BotLib;
+using BotLib;
 using Newtonsoft.Json;
 using System;
 using System.Diagnostics;
@@ -230,14 +230,27 @@ namespace Bot.ChromeNs
 
             var target = WindowFromPoint(screenPoint);
             if (target == IntPtr.Zero) return false;
+
+            uint targetPid;
+            GetWindowThreadProcessId(target, out targetPid);
+            var expectedPid = unchecked((uint)desk.ProcessId);
+            if (targetPid == 0 || targetPid != expectedPid)
+            {
+                var rejectedRoot = GetAncestor(target, GaRoot);
+                if (rejectedRoot == IntPtr.Zero) rejectedRoot = target;
+                Log.Info("HWND安全发送已阻止：安全点窗口不属于当前卖家千牛进程: seller=" + SellerNick
+                    + ", expectedPid=" + expectedPid + ", actualPid=" + targetPid
+                    + ", actualRoot=" + rejectedRoot);
+                return false;
+            }
+
             var root = GetAncestor(target, GaRoot);
             var expectedRoot = new IntPtr(desk.Hwnd.Handle);
             if (root == IntPtr.Zero) root = target;
             if (root != expectedRoot)
             {
-                Log.Info("HWND安全发送已阻止：安全点不属于当前卖家千牛根窗口: seller=" + SellerNick
-                    + ", expectedRoot=" + expectedRoot + ", actualRoot=" + root);
-                return false;
+                Log.Info("HWND安全发送允许同一千牛进程的独立根窗口: seller=" + SellerNick
+                    + ", pid=" + targetPid + ", expectedRoot=" + expectedRoot + ", actualRoot=" + root);
             }
 
             var clientPoint = screenPoint;
