@@ -514,10 +514,18 @@ namespace Bot.ChromeNs
 
             var sellerNick = localUser.LoginID == null ? string.Empty : (localUser.LoginID.Nick ?? string.Empty).Trim();
             var buyerNick = localUser.Conversation == null ? string.Empty : (localUser.Conversation.Nick ?? string.Empty).Trim();
-                    // Forwarded duplicate pages are ingress-only. A duplicate page may report a
-                    // valid conversation event, but it must never become the runtime command session.
-                    // Promote only the authoritative handler that actually owns this QN instance.
-                    PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
+            // Forwarded duplicate pages are ingress-only. A duplicate page may report a
+            // valid conversation event, but it must never become the runtime command session.
+            var server = MyWebSocketServer.WSocketSvrInst;
+            if (server != null && server.IsAuthoritativeSellerSession(sellerNick, SessionId))
+            {
+                PreferRuntimeSession(sellerNick, SessionId, buyerNick, "onConversationChange");
+            }
+            else
+            {
+                Log.Info("重复千牛页面会话切换仅作为入站证据，不接管CDP命令路由: seller="
+                    + sellerNick + ", session=" + SessionId);
+            }
 
             if (EvBuyerSwitched != null)
             {

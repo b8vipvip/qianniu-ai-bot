@@ -273,6 +273,10 @@ namespace Bot.ChromeNs
             if (!input.Success) return Denied("暂时无法确认输入框状态");
             if (!input.Empty)
             {
+                if (rpa != null && await rpa.IsKnownBotOwnedDraftAsync().ConfigureAwait(false))
+                {
+                    return Denied("Bot发送失败草稿仍在输入框，等待发送恢复且不计为人工操作");
+                }
                 BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "客服输入框中存在未发送内容");
                 return Denied("客服正在输入消息");
             }
@@ -308,7 +312,15 @@ namespace Bot.ChromeNs
                     {
                         if (input.Success && !input.Empty)
                         {
-                            BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
+                            if (rpa != null && await rpa.IsKnownBotOwnedDraftAsync().ConfigureAwait(false))
+                            {
+                                Log.Info("自动切换前发现Bot自有失败草稿，未标记人工操作: seller="
+                                    + snapshot.Seller + ", buyer=" + snapshot.Buyer);
+                            }
+                            else
+                            {
+                                BotActivityCoordinator.MarkHumanInteraction(snapshot.Seller, "自动切换前检测到客服输入内容");
+                            }
                         }
                         return false;
                     }
