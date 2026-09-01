@@ -33,5 +33,11 @@ jobs:
           $onnx = Get-ChildItem -LiteralPath $out -Recurse -File -Filter onnxruntime.dll
           if (-not $onnx) { throw 'onnxruntime.dll missing from published worker' }
           Write-Host ('onnxruntime.dll=' + $onnx[0].FullName)
-          Write-Host '--- worker top-level files ---'
-          Get-ChildItem -LiteralPath $out -File | Select-Object Name,Length | Sort-Object Name | Format-Table -AutoSize
+          Write-Host '--- PE dependencies ---'
+          $dumpbin = Get-ChildItem 'C:\Program Files\Microsoft Visual Studio\2022\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe' -ErrorAction Stop | Sort-Object FullName -Descending | Select-Object -First 1
+          & $dumpbin.FullName /dependents $onnx[0].FullName
+          Write-Host '--- VC runtime candidates on runner ---'
+          @('vcruntime140.dll','vcruntime140_1.dll','msvcp140.dll','msvcp140_1.dll','msvcp140_2.dll','concrt140.dll') | ForEach-Object {
+            $p = Join-Path $env:WINDIR ('System32\' + $_)
+            if (Test-Path -LiteralPath $p) { Get-Item -LiteralPath $p | Select-Object Name,Length,@{N='Version';E={$_.VersionInfo.FileVersion}} }
+          } | Format-Table -AutoSize
