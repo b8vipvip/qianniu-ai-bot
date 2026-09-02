@@ -28,15 +28,16 @@ def test_model_question_is_used_by_both_text_reasoning_paths():
     assert "string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion" in legacy
 
 
-def test_premerge_has_one_authoritative_gate_and_hard_liveness_boundary():
+def test_premerge_has_one_authoritative_gate_and_no_late_send_ai_race():
     coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
     deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     assert "_preMergeRuleGates" not in coordinator
-    assert "PreMergeRuleExecutionDeadlineMilliseconds = 20000" in coordinator
-    assert "Task.WhenAny(rulesTask, deadlineTask)" in coordinator
-    assert "已fail-open继续普通合并链路" in coordinator
+    assert "PreMergeRuleExecutionDeadlineMilliseconds" not in coordinator
+    assert "Task.WhenAny(rulesTask, deadlineTask)" not in coordinator
+    assert "await DeterministicAutoReplyService.HandleBeforeMergeAsync(" in coordinator
     assert "pre_merge_enqueue_exception" in coordinator
     assert "gate.WaitAsync(1800)" in deterministic
+    assert "single authoritative deterministic-rule serialization gate" in deterministic
 
 
 def test_non_buyer_runtime_probe_is_guarded_before_success_correction():

@@ -275,9 +275,8 @@ namespace Bot.ChromeNs
             public long LatestGeneration { get; set; }
         }
 
-        // DeterministicAutoReplyService already owns the single per-buyer serialization gate.
-        // A second outer gate can strand every later generation behind one unhealthy fixed send.
-        private const int PreMergeRuleExecutionDeadlineMilliseconds = 20000;
+        // DeterministicAutoReplyService owns the single per-buyer serialization gate.
+        // Do not add a second outer gate or race a still-running fixed-send task against AI.
         private const int SemanticContinuationWindowSeconds = 180;
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
         private readonly ConcurrentDictionary<string, BurstState> _states =
@@ -336,39 +335,14 @@ namespace Bot.ChromeNs
                 var continueToMerge = true;
                 try
                 {
-                    // DeterministicAutoReplyService has the authoritative same-buyer gate. Run it
-                    // directly so an unhealthy earlier generation cannot own a second outer lock.
-                    // The hard deadline is a final liveness boundary, not the normal rule timeout.
-                    var rulesTask = DeterministicAutoReplyService.HandleBeforeMergeAsync(
+                    // The deterministic service owns the only same-buyer gate. Its bounded 1.8s
+                    // acquisition fails open for later generations, so an unhealthy fixed send can
+                    // no longer strand the whole buyer in Coalescing. We deliberately await the
+                    // selected rule task here: starting AI while that task can still send would
+                    // create a duplicate/out-of-order side-effect race.
+                    continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(
                         item,
                         allowLocalShortReply);
-                    using (var deadlineCts = CancellationTokenSource.CreateLinkedTokenSource(observation.CancellationToken))
-                    {
-                        deadlineCts.CancelAfter(PreMergeRuleExecutionDeadlineMilliseconds);
-                        var deadlineTask = Task.Delay(Timeout.Infinite, deadlineCts.Token);
-                        var completed = await Task.WhenAny(rulesTask, deadlineTask);
-                        if (completed == rulesTask)
-                        {
-                            deadlineCts.Cancel();
-                            continueToMerge = await rulesTask;
-                        }
-                        else
-                        {
-                            if (observation.CancellationToken.IsCancellationRequested) return;
-                            Log.ErrorWithMaxCount(
-                                "消息合并前固定规则执行超过硬截止，已fail-open继续普通合并链路: seller="
-                                + item.SellerNick + ", buyer=" + item.BuyerNick
-                                + ", generation=" + item.SessionGeneration
-                                + ", deadlineMs=" + PreMergeRuleExecutionDeadlineMilliseconds,
-                                50);
-                            rulesTask.ContinueWith(t =>
-                            {
-                                var error = t.Exception == null ? string.Empty : Safe(t.Exception.GetBaseException().Message, 220);
-                                Log.ErrorWithMaxCount("超时后的固定规则任务最终异常: " + error, 20);
-                            }, TaskContinuationOptions.OnlyOnFaulted);
-                            continueToMerge = true;
-                        }
-                    }
                 }
                 catch (OperationCanceledException)
                 {
