@@ -476,7 +476,7 @@ namespace Bot.ChromeNs
             }
 
             var routeStarted = Stopwatch.StartNew();
-            var plan = SmartReplyRouterService.BuildPlan(seller, buyer, question);
+            var plan = await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token);
             routeStarted.Stop();
             var best = plan.BestCandidate;
             var replyMode = ReplyModeService.GetMode(seller);
