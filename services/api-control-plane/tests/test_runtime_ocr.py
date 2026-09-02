@@ -52,7 +52,10 @@ def test_install_is_idempotent(monkeypatch):
     assert [path for path, _ in routes] == ["/api/runtime/v1/ocr"]
 
 
-def test_server_container_includes_runtime_ocr_module():
+def test_server_container_includes_runtime_and_prefetches_ocr_models():
     dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
     copy_lines = [line for line in dockerfile.splitlines() if line.startswith("COPY ")]
     assert any("runtime_ocr.py" in line for line in copy_lines)
+    assert "rapidocr download_models" in dockerfile
+    assert "RapidOCR default models initialized" in dockerfile
+    assert dockerfile.index("rapidocr download_models") < dockerfile.index("USER appuser")
