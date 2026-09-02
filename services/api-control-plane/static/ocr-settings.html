@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>服务端 OCR 配置</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <style>
+    html,body{background:transparent}
+    body{margin:0;padding:0}
+    .ocr-shell{max-width:1180px;margin:0 auto;padding:18px}
+    .ocr-page-head{margin:0 0 16px}
+    .ocr-page-head h1{margin:0 0 6px;font-size:24px}
+    .ocr-page-head p{margin:0;color:var(--muted,#667085)}
+    .ocr-status-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0}
+    .ocr-status-card{border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:14px;background:var(--panel,#fff)}
+    .ocr-status-card span{display:block;font-size:12px;color:var(--muted,#667085);margin-bottom:6px}
+    .ocr-status-card strong{font-size:16px;word-break:break-word}
+    .ocr-callout{padding:12px 14px;border:1px solid var(--border,#e5e7eb);border-radius:10px;background:rgba(127,127,127,.05);line-height:1.65}
+    .ocr-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:16px}
+    .ocr-result{min-height:22px;margin-top:10px;font-size:13px}
+    .ocr-result.good{color:#15803d}.ocr-result.bad{color:#b42318}
+    .ocr-env{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.8}
+    @media(max-width:700px){.ocr-shell{padding:8px}.form-grid{grid-template-columns:1fr!important}.span-2{grid-column:auto!important}}
+  </style>
+</head>
+<body>
+<main class="ocr-shell">
+  <header class="ocr-page-head">
+    <h1>服务端 OCR</h1>
+    <p>RapidOCR / ONNXRuntime 运行参数。无需人工配置即可使用，下面的配置用于覆盖默认值。</p>
+  </header>
+
+  <section class="panel">
+    <div class="panel-head">
+      <div><h2>运行状态</h2><p>模型随服务镜像准备，OCR 引擎首次实际识别时按需加载。</p></div>
+      <button id="ocrRefreshBtn" class="secondary" type="button">刷新</button>
+    </div>
+    <div class="ocr-status-grid">
+      <div class="ocr-status-card"><span>OCR 状态</span><strong id="ocrStatus">读取中…</strong></div>
+      <div class="ocr-status-card"><span>识别引擎</span><strong id="ocrEngine">RapidOCR/ONNXRuntime</strong></div>
+      <div class="ocr-status-card"><span>引擎加载</span><strong id="ocrEngineLoaded">读取中…</strong></div>
+      <div class="ocr-status-card"><span>当前活动请求</span><strong id="ocrActiveRequests">0</strong></div>
+      <div class="ocr-status-card"><span>配置来源</span><strong id="ocrSource">读取中…</strong></div>
+      <div class="ocr-status-card"><span>最后更新</span><strong id="ocrUpdatedAt">-</strong></div>
+    </div>
+    <div class="ocr-callout">
+      <strong>无需人工设置。</strong> 服务端默认启用 OCR；首次启动会把环境变量或内置默认值写入 SQLite。之后在本页面保存的配置为运行时有效配置，<strong>无需重启</strong>。关闭 OCR 后，运行时接口会返回 503，客户端可按现有降级链继续处理图片。
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><h2>OCR 参数</h2><p>修改后对新 OCR 请求立即生效。并发上限为服务端同时执行的 OCR 推理任务数量。</p></div></div>
+    <form id="ocrSettingsForm">
+      <div class="form-grid">
+        <label class="check span-2"><input id="ocrEnabled" type="checkbox">启用服务端 OCR</label>
+        <label>最大图片大小（MB）
+          <input id="ocrMaxImageMb" type="number" min="0.25" max="64" step="0.25" required>
+          <span class="hint">允许范围 0.25–64 MB，默认 8 MB。</span>
+        </label>
+        <label>单请求超时（秒）
+          <input id="ocrTimeoutSeconds" type="number" min="1" max="30" step="0.5" required>
+          <span class="hint">允许范围 1–30 秒，默认 8 秒。</span>
+        </label>
+        <label>最大并发
+          <input id="ocrMaxConcurrency" type="number" min="1" max="8" step="1" required>
+          <span class="hint">允许范围 1–8，默认 2。</span>
+        </label>
+        <label>最大返回文本字符
+          <input id="ocrMaxTextChars" type="number" min="256" max="12000" step="1" required>
+          <span class="hint">允许范围 256–12000，默认 6000。</span>
+        </label>
+      </div>
+      <div class="ocr-actions">
+        <button id="ocrSaveBtn" class="primary" type="submit">保存并立即生效</button>
+        <button id="ocrResetBtn" class="secondary" type="button">恢复环境默认值</button>
+      </div>
+      <div id="ocrResult" class="ocr-result"></div>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><div><h2>环境变量默认值</h2><p>这些参数不是必填项，只用于首次初始化或点击“恢复环境默认值”。</p></div></div>
+    <div class="ocr-env">
+      OCR_ENABLED=true<br>
+      OCR_MAX_IMAGE_BYTES=8388608<br>
+      OCR_TIMEOUT_SECONDS=8<br>
+      OCR_MAX_CONCURRENCY=2<br>
+      OCR_MAX_TEXT_CHARS=6000
+    </div>
+    <p class="hint">识别引擎固定为 RapidOCR/ONNXRuntime；当前没有需要人工选择的模型路径或模型名称。模型由服务端镜像构建过程预取。</p>
+  </section>
+</main>
+<script src="/static/ocr-settings.js?v=1"></script>
+</body>
+</html>
