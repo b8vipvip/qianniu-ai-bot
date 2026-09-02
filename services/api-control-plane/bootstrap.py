@@ -23,6 +23,7 @@ import github_vless_proxy
 import message_processing_traces
 import recharge_status_query
 import runtime_embedding_guard
+import runtime_ocr
 import runtime_routing_guard
 import runtime_shop_ai_proxy
 import runtime_streaming_guard
@@ -40,6 +41,7 @@ runtime_routing_guard.install(control_plane)
 chat2api_runtime_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
 runtime_embedding_guard.install(control_plane)
+runtime_ocr.install(control_plane)
 deep_test_guard.install(control_plane)
 scheduled_deep_test_retry.install(control_plane)
 wecom_policy_migration.install(control_plane)

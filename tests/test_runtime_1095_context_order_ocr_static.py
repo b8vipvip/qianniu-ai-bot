@@ -42,13 +42,18 @@ def test_fixed_preset_refreshes_only_local_hub_snapshot_before_render():
     assert "Merge(existing.Snapshot, snapshot)" in hub
 
 
-def test_ocr_release_bundles_onnx_vc_runtime_dependencies_at_publish():
-    project = read("tools/LocalOcrWorker/LocalOcrWorker.csproj")
-    assert 'AfterTargets="Publish"' in project
-    assert 'CopyOnnxVcRuntimeDependencies' in project
-    assert 'vcruntime140.dll' in project
-    assert 'vcruntime140_1.dll' in project
-    assert 'msvcp140.dll' in project
-    assert 'msvcp140_1.dll' in project
-    assert 'SourceFiles="@(VcRuntimeDependency)"' in project
-    assert 'DestinationFolder="$(PublishDir)"' in project
+def test_formal_release_uses_server_ocr_and_has_no_local_worker_dependency():
+    client = read("src/Bot/ChromeNs/LocalOcrService.cs")
+    runtime = read("services/api-control-plane/runtime_ocr.py")
+    workflow = read(".github/workflows/windows-build.yml")
+
+    assert '"/api/runtime/v1/ocr"' in client
+    assert 'new AuthenticationHeaderValue("Bearer", endpoint.ApiKey)' in client
+    assert '"X-Image-Sha256"' in client
+    assert "LocalOcrWorker.exe" not in client
+    assert '@app.post("/api/runtime/v1/ocr")' in runtime
+    assert "Depends(require_client)" in runtime
+    assert "RapidOCR" in runtime
+    assert "LocalOcrWorker.exe" not in workflow
+    assert "PP-OCRv6_det_small.onnx" not in workflow
+    assert "ppocrv6_small_dict.txt" not in workflow

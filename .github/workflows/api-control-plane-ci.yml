@@ -83,7 +83,9 @@ jobs:
         run: python -m pip install -r requirements.txt
       - name: Run repository static tests
         working-directory: .
-        run: python -m pytest -q --tb=short tests 2>&1 | tee repository-static.log
+        run: |
+          set -o pipefail
+          python -m pytest -q --tb=short tests 2>&1 | tee repository-static.log
       - name: Upload repository static diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -93,9 +95,16 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Compile Python
-        run: python -m py_compile app.py bootstrap.py bot_web_bot_enabled.py chat2api_runtime_guard.py deep_test_guard.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py github_vless_proxy.py message_processing_traces.py scheduled_deep_test_retry.py runtime_embedding_guard.py runtime_routing_guard.py runtime_streaming_guard.py version_update_admin.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_bot_update_cache.py tests/test_chat2api_runtime_guard.py tests/test_control_plane.py tests/test_deep_test_guard.py tests/test_github_vless_proxy.py tests/test_message_processing_traces.py tests/test_runtime_embedding_guard.py tests/test_scheduled_deep_test_retry.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
+        run: python -m py_compile app.py bootstrap.py bot_web_bot_enabled.py chat2api_runtime_guard.py deep_test_guard.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py github_vless_proxy.py message_processing_traces.py scheduled_deep_test_retry.py runtime_embedding_guard.py runtime_ocr.py runtime_routing_guard.py runtime_streaming_guard.py version_update_admin.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_bot_update_cache.py tests/test_chat2api_runtime_guard.py tests/test_control_plane.py tests/test_deep_test_guard.py tests/test_github_vless_proxy.py tests/test_message_processing_traces.py tests/test_runtime_embedding_guard.py tests/test_runtime_ocr.py tests/test_scheduled_deep_test_retry.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
       - name: Run control plane tests
-        run: python -m pytest -q --tb=short 2>&1 | tee pytest.log
+        env:
+          DATA_DIR: ${{ runner.temp }}/qianniu-api-control-plane-test-data
+          DATABASE_PATH: ${{ runner.temp }}/qianniu-api-control-plane-test-data/api-control-plane.db
+          APP_SECRET: ci-control-plane-tests-secret-at-least-32-bytes
+        run: |
+          set -o pipefail
+          mkdir -p "$DATA_DIR"
+          python -m pytest -q --tb=short 2>&1 | tee pytest.log
       - name: Upload pytest diagnostics
         if: always()
         uses: actions/upload-artifact@v4
@@ -113,7 +122,7 @@ jobs:
           node --check static/console-startup-guard.js
       - name: Build Ubuntu container
         run: docker build -t qianniu-api-control-plane:${{ github.sha }} .
-      - name: Smoke test Ubuntu container startup
+      - name: Smoke test Ubuntu container startup and OCR engine
         run: |
           set -euo pipefail
           FERNET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
@@ -133,6 +142,7 @@ jobs:
             if curl -fsS http://127.0.0.1:18081/healthz >/tmp/control-plane-health.json; then
               cat /tmp/control-plane-health.json
               curl --max-time 2 -fsS http://127.0.0.1:18081/api/public/v1/bot-update/latest >/tmp/bot-update-latest.json || true
+              docker exec qianniu-api-control-plane-smoke python -c "import io; from PIL import Image; import runtime_ocr; b=io.BytesIO(); Image.new('RGB',(32,32),'white').save(b,format='PNG'); r=runtime_ocr._run_ocr(b.getvalue()); assert r.get('ok') is True; assert r.get('engine') == 'RapidOCR/ONNXRuntime'; print('OCR engine smoke ok, elapsedMs=' + str(r.get('elapsedMs')))"
               exit 0
             fi
             sleep 2
@@ -167,6 +177,8 @@ jobs:
             services/api-control-plane/github_vless_proxy.py
             services/api-control-plane/bot_web_bot_enabled.py
             services/api-control-plane/scheduled_deep_test_retry.py
+            services/api-control-plane/runtime_embedding_guard.py
+            services/api-control-plane/runtime_ocr.py
             services/api-control-plane/runtime_routing_guard.py
             services/api-control-plane/runtime_streaming_guard.py
             services/api-control-plane/version_update_admin.py

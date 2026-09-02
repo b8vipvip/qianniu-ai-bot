@@ -37,7 +37,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     done; \
     apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; \
     apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-      install -y --no-install-recommends ca-certificates fonts-dejavu-core curl
+      install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        fonts-dejavu-core \
+        libgl1 \
+        libglib2.0-0t64 \
+        libx11-6 \
+        libxcb1 \
+        libxext6 \
+        libxrender1
 
 RUN --mount=type=cache,target=/root/.cache/sing-box,sharing=locked \
     set -eux; \
@@ -68,7 +77,25 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
       $trusted_args \
       -r requirements.txt
 
-COPY app.py bootstrap.py bot_client_shop_binding.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py bot_web_console.py bot_web_bot_enabled.py bot_web_admin.py bot_web_bot_qa.py bot_web_bot_qa_logic.py bot_web_conversation_knowledge.py chat2api_runtime_guard.py client_data_backup.py console_cache_guard.py deep_test_guard.py github_vless_proxy.py message_processing_traces.py runtime_shop_ai_proxy.py store_rule_sync.py recharge_status_query.py runtime_routing_guard.py runtime_streaming_guard.py runtime_embedding_guard.py scheduled_deep_test_retry.py version_update_admin.py wecom_bridge.py wecom_crypto.py wecom_settings.py wecom_policy_migration.py ./
+# RapidOCR stores its default models below the installed package directory. The
+# runtime process is intentionally non-root, so prefetch the checksum-verified
+# models while building the image instead of allowing the first buyer request to
+# attempt a write into root-owned site-packages or depend on runtime Internet.
+RUN set -eux; \
+    python -c "import cv2; print('OpenCV runtime ready: ' + cv2.__version__)"; \
+    for attempt in 1 2 3; do \
+      if rapidocr download_models; then \
+        break; \
+      fi; \
+      if [ "$attempt" -eq 3 ]; then \
+        echo 'RapidOCR model prefetch failed after 3 attempts' >&2; \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 5)); \
+    done; \
+    python -c "from rapidocr import RapidOCR; RapidOCR(); print('RapidOCR default models initialized')"
+
+COPY app.py bootstrap.py bot_client_shop_binding.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py bot_web_console.py bot_web_bot_enabled.py bot_web_admin.py bot_web_bot_qa.py bot_web_bot_qa_logic.py bot_web_conversation_knowledge.py chat2api_runtime_guard.py client_data_backup.py console_cache_guard.py deep_test_guard.py github_vless_proxy.py message_processing_traces.py runtime_shop_ai_proxy.py store_rule_sync.py recharge_status_query.py runtime_routing_guard.py runtime_streaming_guard.py runtime_embedding_guard.py runtime_ocr.py scheduled_deep_test_retry.py version_update_admin.py wecom_bridge.py wecom_crypto.py wecom_settings.py wecom_policy_migration.py ./
 COPY static ./static
 
 RUN useradd --create-home --uid 10001 appuser \

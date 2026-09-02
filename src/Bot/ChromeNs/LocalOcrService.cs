@@ -1,9 +1,11 @@
 using BotLib;
 using Newtonsoft.Json;
 using System;
-using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
@@ -23,14 +25,14 @@ namespace Bot.ChromeNs
         public string ImageSha256 { get; set; }
     }
 
-    internal sealed class LocalOcrWorkerResponse
+    internal sealed class RemoteOcrResponse
     {
         public bool ok { get; set; }
         public string text { get; set; }
         public double confidence { get; set; }
         public long elapsedMs { get; set; }
         public string engine { get; set; }
-        public string error { get; set; }
+        public string imageSha256 { get; set; }
     }
 
     internal sealed class LocalOcrCacheEnvelope
@@ -43,15 +45,18 @@ namespace Bot.ChromeNs
     }
 
     /// <summary>
-    /// Runs OCR locally through the bundled self-contained C# ONNX worker.
-    /// No image bytes are uploaded by this service. Failures are soft: the normal
-    /// vision pipeline continues without OCR evidence.
+    /// OCR facade retained for compatibility with the existing image-decision pipeline.
+    /// Inference runs on the authenticated server control plane. Windows only hashes,
+    /// caches and uploads the already-resolved image. Failures remain soft and fall
+    /// through to the normal vision-provider pipeline.
     /// </summary>
     public static class LocalOcrService
     {
-        private const int DefaultTimeoutMs = 9000;
+        private const int DefaultTimeoutMs = 10000;
         private const int MaxEvidenceChars = 6000;
+        private const long MaxImageBytes = 8L * 1024L * 1024L;
         private static readonly TimeSpan CacheTtl = TimeSpan.FromDays(30);
+        private static readonly HttpClient Http = CreateHttpClient();
 
         public static async Task<LocalOcrResult> TryRecognizeAsync(
             string imagePath,
@@ -62,7 +67,21 @@ namespace Bot.ChromeNs
             imagePath = (imagePath ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
             {
-                return Failure("本地图片文件不存在", startedAt);
+                return Failure("图片文件不存在", startedAt);
+            }
+
+            long imageLength;
+            try
+            {
+                imageLength = new FileInfo(imagePath).Length;
+            }
+            catch (Exception ex)
+            {
+                return Failure("读取图片信息失败: " + ex.Message, startedAt);
+            }
+            if (imageLength <= 0 || imageLength > MaxImageBytes)
+            {
+                return Failure("图片大小不符合服务端OCR限制", startedAt);
             }
 
             string sha256;
@@ -91,118 +110,144 @@ namespace Bot.ChromeNs
                 };
             }
 
-            var workerPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "local-ocr", "LocalOcrWorker.exe");
-            if (!File.Exists(workerPath))
+            var endpoint = ResolveControlPlaneEndpoint();
+            if (endpoint == null)
             {
-                return Failure("本地OCR组件未安装: " + workerPath, startedAt, sha256);
+                return Failure("未配置可用的服务端控制面OCR", startedAt, sha256);
             }
 
-            Process process = null;
             try
             {
-                var safeTimeout = Math.Max(1500, timeoutMs);
-                var psi = new ProcessStartInfo
+                var safeTimeout = Math.Max(1500, Math.Min(30000, timeoutMs));
+                byte[] imageBytes;
+                using (var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
                 {
-                    FileName = workerPath,
-                    Arguments = "--image \"" + EscapeArgument(imagePath) + "\" --timeout-ms "
-                        + safeTimeout.ToString(CultureInfo.InvariantCulture),
-                    WorkingDirectory = Path.GetDirectoryName(workerPath),
-                    UseShellExecute = false,
-                    CreateNoWindow = true,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    StandardOutputEncoding = Encoding.UTF8,
-                    StandardErrorEncoding = Encoding.UTF8
-                };
-                process = new Process { StartInfo = psi };
-                if (!process.Start())
-                {
-                    return Failure("本地OCR进程启动失败", startedAt, sha256);
-                }
-
-                var stdoutTask = process.StandardOutput.ReadToEndAsync();
-                var stderrTask = process.StandardError.ReadToEndAsync();
-                var exitTask = Task.Run(() => process.WaitForExit(safeTimeout));
-                var timeoutTask = Task.Delay(safeTimeout, cancellationToken);
-                var completed = await Task.WhenAny(exitTask, timeoutTask);
-                if (completed != exitTask || !exitTask.Result)
-                {
-                    TryKill(process);
-                    if (cancellationToken.IsCancellationRequested)
+                    timeout.CancelAfter(safeTimeout);
+                    imageBytes = await ReadAllBytesAsync(imagePath, timeout.Token).ConfigureAwait(false);
+                    using (var request = new HttpRequestMessage(HttpMethod.Post, NormalizeOcrUrl(endpoint.BaseUrl)))
+                    using (var content = new ByteArrayContent(imageBytes))
                     {
-                        return Failure("本地OCR已取消", startedAt, sha256);
+                        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
+                        request.Headers.TryAddWithoutValidation("Accept", "application/json");
+                        request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot/server-ocr");
+                        request.Headers.TryAddWithoutValidation("X-Image-Sha256", sha256);
+                        content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+                        request.Content = content;
+
+                        using (var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, timeout.Token).ConfigureAwait(false))
+                        {
+                            var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                            if (!response.IsSuccessStatusCode)
+                            {
+                                return Failure("服务端OCR HTTP " + (int)response.StatusCode + " " + LimitError(body), startedAt, sha256);
+                            }
+
+                            RemoteOcrResponse remote;
+                            try
+                            {
+                                remote = JsonConvert.DeserializeObject<RemoteOcrResponse>(body);
+                            }
+                            catch (Exception ex)
+                            {
+                                return Failure("服务端OCR响应解析失败: " + ex.Message, startedAt, sha256);
+                            }
+                            if (remote == null || !remote.ok)
+                            {
+                                return Failure("服务端OCR返回无效结果", startedAt, sha256);
+                            }
+                            if (!string.IsNullOrWhiteSpace(remote.imageSha256)
+                                && !string.Equals(remote.imageSha256, sha256, StringComparison.OrdinalIgnoreCase))
+                            {
+                                return Failure("服务端OCR图片哈希回执不一致", startedAt, sha256);
+                            }
+
+                            var result = new LocalOcrResult
+                            {
+                                Success = true,
+                                Text = Limit(remote.text),
+                                Confidence = Clamp(remote.confidence),
+                                ElapsedMs = remote.elapsedMs > 0
+                                    ? remote.elapsedMs
+                                    : Math.Max(0, (long)(DateTime.UtcNow - startedAt).TotalMilliseconds),
+                                CacheHit = false,
+                                Engine = string.IsNullOrWhiteSpace(remote.engine) ? "RapidOCR/ONNXRuntime" : remote.engine.Trim(),
+                                Error = string.Empty,
+                                ImageSha256 = sha256
+                            };
+                            TryWriteCache(result);
+                            Log.Info("服务端OCR完成: sha256=" + ShortHash(sha256)
+                                + ", chars=" + (result.Text == null ? 0 : result.Text.Length)
+                                + ", confidence=" + result.Confidence.ToString("0.000", CultureInfo.InvariantCulture)
+                                + ", elapsedMs=" + result.ElapsedMs
+                                + ", cacheHit=false");
+                            return result;
+                        }
                     }
-                    return Failure("本地OCR超时", startedAt, sha256);
                 }
-
-                var stdout = (await stdoutTask ?? string.Empty).Trim();
-                var stderr = (await stderrTask ?? string.Empty).Trim();
-                if (string.IsNullOrWhiteSpace(stdout))
-                {
-                    return Failure("本地OCR无输出" + (string.IsNullOrWhiteSpace(stderr) ? string.Empty : ": " + LimitError(stderr)), startedAt, sha256);
-                }
-
-                LocalOcrWorkerResponse response;
-                try
-                {
-                    response = JsonConvert.DeserializeObject<LocalOcrWorkerResponse>(stdout);
-                }
-                catch (Exception ex)
-                {
-                    return Failure("本地OCR输出解析失败: " + ex.Message, startedAt, sha256);
-                }
-
-                if (response == null || !response.ok)
-                {
-                    var error = response == null ? "本地OCR返回空结果" : response.error;
-                    return Failure(string.IsNullOrWhiteSpace(error) ? "本地OCR识别失败" : error, startedAt, sha256);
-                }
-
-                var text = Limit(response.text);
-                var result = new LocalOcrResult
-                {
-                    Success = true,
-                    Text = text,
-                    Confidence = Clamp(response.confidence),
-                    ElapsedMs = response.elapsedMs > 0
-                        ? response.elapsedMs
-                        : Math.Max(0, (long)(DateTime.UtcNow - startedAt).TotalMilliseconds),
-                    CacheHit = false,
-                    Engine = string.IsNullOrWhiteSpace(response.engine) ? "RapidOcrNet/ONNX" : response.engine.Trim(),
-                    Error = string.Empty,
-                    ImageSha256 = sha256
-                };
-                TryWriteCache(result);
-                Log.Info("本地OCR完成: sha256=" + ShortHash(sha256)
-                    + ", chars=" + (result.Text == null ? 0 : result.Text.Length)
-                    + ", confidence=" + result.Confidence.ToString("0.000", CultureInfo.InvariantCulture)
-                    + ", elapsedMs=" + result.ElapsedMs
-                    + ", cacheHit=false");
-                return result;
             }
             catch (OperationCanceledException)
             {
-                TryKill(process);
-                return Failure("本地OCR已取消", startedAt, sha256);
+                return Failure(cancellationToken.IsCancellationRequested ? "服务端OCR已取消" : "服务端OCR超时", startedAt, sha256);
             }
             catch (Exception ex)
             {
-                TryKill(process);
-                return Failure("本地OCR异常: " + ex.Message, startedAt, sha256);
-            }
-            finally
-            {
-                if (process != null) process.Dispose();
+                return Failure("服务端OCR异常: " + ex.Message, startedAt, sha256);
             }
         }
 
         public static string BuildPromptEvidence(LocalOcrResult result)
         {
             if (result == null || !result.Success || string.IsNullOrWhiteSpace(result.Text)) return string.Empty;
-            return "\n\n[本地OCR预识别，仅作辅助证据，可能存在错字；请以图片本身为准]\n"
+            return "\n\n[服务端OCR预识别，仅作辅助证据，可能存在错字；请以图片本身为准]\n"
                 + Limit(result.Text)
                 + "\n[OCR置信度=" + Clamp(result.Confidence).ToString("0.000", CultureInfo.InvariantCulture)
-                + ", 引擎=" + (result.Engine ?? "local") + "]";
+                + ", 引擎=" + (result.Engine ?? "server") + "]";
+        }
+
+        private static AiEndpointConfig ResolveControlPlaneEndpoint()
+        {
+            var endpoints = AiEndpointStore.GetEnabledEndpoints();
+            if (endpoints == null || endpoints.Count == 0) return null;
+            return endpoints.FirstOrDefault(x => x != null
+                && x.Type == "服务端控制面"
+                && !string.IsNullOrWhiteSpace(x.BaseUrl)
+                && !string.IsNullOrWhiteSpace(x.ApiKey));
+        }
+
+        private static string NormalizeOcrUrl(string baseUrl)
+        {
+            var value = (baseUrl ?? string.Empty).Trim().TrimEnd('/');
+            var suffixes = new[] { "/chat/completions", "/responses", "/embeddings", "/api/runtime/v1/ocr" };
+            foreach (var suffix in suffixes)
+            {
+                if (value.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = value.Substring(0, value.Length - suffix.Length).TrimEnd('/');
+                    break;
+                }
+            }
+            if (value.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+            {
+                value = value.Substring(0, value.Length - 3).TrimEnd('/');
+            }
+            return value + "/api/runtime/v1/ocr";
+        }
+
+        private static async Task<byte[]> ReadAllBytesAsync(string path, CancellationToken cancellationToken)
+        {
+            using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true))
+            {
+                if (stream.Length > MaxImageBytes) throw new IOException("图片超过OCR上传限制");
+                var buffer = new byte[stream.Length];
+                var offset = 0;
+                while (offset < buffer.Length)
+                {
+                    var read = await stream.ReadAsync(buffer, offset, buffer.Length - offset, cancellationToken).ConfigureAwait(false);
+                    if (read <= 0) throw new EndOfStreamException("图片读取不完整");
+                    offset += read;
+                }
+                return buffer;
+            }
         }
 
         private static LocalOcrCacheEnvelope TryReadCache(string sha256)
@@ -218,7 +263,7 @@ namespace Bot.ChromeNs
                     try { File.Delete(path); } catch { }
                     return null;
                 }
-                Log.Info("本地OCR缓存命中: sha256=" + ShortHash(sha256));
+                Log.Info("OCR缓存命中: sha256=" + ShortHash(sha256));
                 return envelope;
             }
             catch
@@ -242,7 +287,10 @@ namespace Bot.ChromeNs
                     Confidence = Clamp(result.Confidence),
                     Engine = result.Engine
                 };
-                File.WriteAllText(path, JsonConvert.SerializeObject(envelope), Encoding.UTF8);
+                var temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                File.WriteAllText(temp, JsonConvert.SerializeObject(envelope), new UTF8Encoding(false));
+                if (File.Exists(path)) File.Delete(path);
+                File.Move(temp, path);
             }
             catch
             {
@@ -270,11 +318,6 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string EscapeArgument(string value)
-        {
-            return (value ?? string.Empty).Replace("\"", "\\\"");
-        }
-
         private static string Limit(string value)
         {
             value = (value ?? string.Empty).Trim();
@@ -284,7 +327,7 @@ namespace Bot.ChromeNs
 
         private static string LimitError(string value)
         {
-            value = (value ?? string.Empty).Trim();
+            value = (value ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
             return value.Length <= 500 ? value : value.Substring(0, 500) + "…";
         }
 
@@ -302,7 +345,7 @@ namespace Bot.ChromeNs
 
         private static LocalOcrResult Failure(string error, DateTime startedAt, string sha256 = null)
         {
-            Log.Info("本地OCR跳过/失败: " + error);
+            Log.Info("服务端OCR跳过/失败: " + LimitError(error));
             return new LocalOcrResult
             {
                 Success = false,
@@ -310,22 +353,17 @@ namespace Bot.ChromeNs
                 Confidence = 0d,
                 ElapsedMs = Math.Max(0, (long)(DateTime.UtcNow - startedAt).TotalMilliseconds),
                 CacheHit = false,
-                Engine = "RapidOcrNet/ONNX",
+                Engine = "RapidOCR/ONNXRuntime",
                 Error = error ?? string.Empty,
                 ImageSha256 = sha256 ?? string.Empty
             };
         }
 
-        private static void TryKill(Process process)
+        private static HttpClient CreateHttpClient()
         {
-            if (process == null) return;
-            try
-            {
-                if (!process.HasExited) process.Kill();
-            }
-            catch
-            {
-            }
+            var http = new HttpClient();
+            http.Timeout = Timeout.InfiniteTimeSpan;
+            return http;
         }
     }
 }
