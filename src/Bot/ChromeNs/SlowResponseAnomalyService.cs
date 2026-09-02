@@ -99,7 +99,7 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    await AnalyzeAndNotifyAsync(report);
+                    await AnalyzeAndNotifyAsync(report).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -121,8 +121,7 @@ namespace Bot.ChromeNs
         {
             lock (FileSync)
             {
-                var reports = LoadReportsUnsafe();
-                return reports
+                return LoadReportsUnsafe()
                     .OrderByDescending(x => x.CreatedAt)
                     .Take(maxCount <= 0 ? 200 : maxCount)
                     .ToList();
@@ -196,9 +195,7 @@ namespace Bot.ChromeNs
             report.AnalysisStatus = "AI分析中";
             SaveOrUpdate(report);
 
-            var logExcerpt = ReadRecentLogTail(16000);
-            var prompt = BuildAnalysisPrompt(report, logExcerpt);
-            StructuredChatResult result = null;
+            StructuredChatResult result;
             try
             {
                 result = MyOpenAI.CallStructuredChat(
@@ -207,12 +204,12 @@ namespace Bot.ChromeNs
                         new JObject
                         {
                             ["role"] = "system",
-                            ["content"] = "你是桌面端AI客服系统的性能故障分析器。你的任务是分析一次超过15秒的慢响应。必须严格基于给出的时间数据和日志，不要编造未提供的事实。只输出JSON对象，字段为 severity、summary、likely_cause、evidence、recommendations。recommendations可以是字符串或字符串数组。"
+                            ["content"] = "你是桌面端AI客服系统的性能故障分析器。分析一次超过15秒的慢响应。严格基于给出的时间数据和日志，不要编造。只输出JSON对象，字段 severity、summary、likely_cause、evidence、recommendations。recommendations可以是字符串或字符串数组。"
                         },
                         new JObject
                         {
                             ["role"] = "user",
-                            ["content"] = prompt
+                            ["content"] = BuildAnalysisPrompt(report, ReadRecentLogTail(16000))
                         }
                     },
                     1000,
@@ -238,8 +235,7 @@ namespace Bot.ChromeNs
 
             SaveOrUpdate(report);
             Log.Error("[慢响应异常报告]\r\n" + FormatReport(report));
-
-            report.NotificationStatus = await NotifyEnterpriseWeChatAsync(report);
+            report.NotificationStatus = await NotifyEnterpriseWeChatAsync(report).ConfigureAwait(false);
             SaveOrUpdate(report);
             Log.Info("慢响应异常企业微信通知结果：reportId=" + report.Id + ", result=" + report.NotificationStatus);
         }
@@ -247,7 +243,7 @@ namespace Bot.ChromeNs
         private static string BuildAnalysisPrompt(SlowResponseAnomalyReport report, string logExcerpt)
         {
             var sb = new StringBuilder();
-            sb.AppendLine("请分析下面这次慢响应并给出可执行的根因判断。若证据不足，请明确写证据不足。 ");
+            sb.AppendLine("请分析下面这次慢响应并给出可执行的根因判断。若证据不足，请明确写证据不足。");
             sb.AppendLine("总耗时(ms)：" + report.TotalMilliseconds);
             sb.AppendLine("消息聚合/排队耗时(ms)：" + report.QueueMilliseconds);
             sb.AppendLine("答案生成耗时(ms)：" + report.GenerationMilliseconds);
@@ -261,30 +257,28 @@ namespace Bot.ChromeNs
             sb.AppendLine("最近运行日志尾部：");
             sb.AppendLine(Safe(logExcerpt, 14000));
             sb.AppendLine();
-            sb.AppendLine("请优先判断耗时发生在消息聚合/排队、知识库处理、AI接口/统一网关、模型生成、重试/超时、网络或其他阶段，并引用日志中的具体证据。不要把AI分析本身的耗时算入原始响应耗时。");
+            sb.AppendLine("优先判断耗时发生在消息聚合/排队、知识库处理、AI接口/统一网关、模型生成、重试/超时、网络或其他阶段，并引用具体证据。不要把AI分析本身的耗时算入原始响应耗时。");
             return sb.ToString();
         }
 
         private static void ApplyAiAnalysis(SlowResponseAnomalyReport report, string answer)
         {
             report.RawAnalysis = Safe(answer, 8000);
-            try
+            JObject obj;
+            if (StructuredJsonObjectRecovery.TryRecoverObject(answer, out obj) && obj != null)
             {
-                var jsonText = ExtractJsonObject(answer);
-                var obj = JObject.Parse(jsonText);
                 report.Severity = TokenText(obj["severity"], report.Severity, 80);
                 report.Summary = TokenText(obj["summary"], report.Summary, 1200);
                 report.LikelyCause = TokenText(obj["likely_cause"], "AI未明确给出根因。", 1600);
                 report.Evidence = TokenText(obj["evidence"], "AI未明确给出证据。", 2200);
                 report.Recommendations = TokenText(obj["recommendations"], "请结合日志继续人工排查。", 2200);
+                return;
             }
-            catch
-            {
-                report.Summary = Safe(answer, 1200);
-                report.LikelyCause = BuildTimingBasedCause(report);
-                report.Evidence = BuildTimingEvidence(report);
-                report.Recommendations = "AI返回内容不是标准JSON，建议结合原始分析和运行日志进一步核查。";
-            }
+
+            report.Summary = Safe(answer, 1200);
+            report.LikelyCause = BuildTimingBasedCause(report);
+            report.Evidence = BuildTimingEvidence(report);
+            report.Recommendations = "AI返回内容无法恢复为结构化JSON，建议结合原始分析和运行日志进一步核查。";
         }
 
         private static void ApplyFallbackAnalysis(SlowResponseAnomalyReport report, string error)
@@ -300,11 +294,9 @@ namespace Bot.ChromeNs
 
         private static string BuildTimingBasedCause(SlowResponseAnomalyReport report)
         {
-            if (report.GenerationMilliseconds >= report.QueueMilliseconds)
-            {
-                return "答案生成阶段占主要耗时，可能与AI接口、统一网关、模型生成、网络或接口重试有关。";
-            }
-            return "消息聚合或进入答案生成前的排队阶段占主要耗时，可能存在连续消息等待或同会话任务阻塞。";
+            return report.GenerationMilliseconds >= report.QueueMilliseconds
+                ? "答案生成阶段占主要耗时，可能与AI接口、统一网关、模型生成、网络或接口重试有关。"
+                : "消息聚合或进入答案生成前的排队阶段占主要耗时，可能存在连续消息等待或同会话任务阻塞。";
         }
 
         private static string BuildTimingEvidence(SlowResponseAnomalyReport report)
@@ -321,7 +313,7 @@ namespace Bot.ChromeNs
                 var cfg = BotFeatureStore.GetAutoReplyRules();
                 if (cfg != null && cfg.NotifyWeChat && !string.IsNullOrWhiteSpace(cfg.WeChatWebhook))
                 {
-                    results.Add("企业微信Webhook=" + await PostWeComWebhookAsync(cfg.WeChatWebhook, BuildNotificationText(report)));
+                    results.Add("企业微信Webhook=" + await PostWeComWebhookAsync(cfg.WeChatWebhook, BuildNotificationText(report)).ConfigureAwait(false));
                 }
             }
             catch (Exception ex)
@@ -348,7 +340,7 @@ namespace Bot.ChromeNs
                         report.Buyer,
                         BuildNotificationText(report),
                         decision,
-                        false);
+                        false).ConfigureAwait(false);
                     results.Add("企业微信应用消息=" + appResult);
                 }
             }
@@ -356,7 +348,6 @@ namespace Bot.ChromeNs
             {
                 results.Add("企业微信应用消息=失败：" + Safe(ex.Message, 200));
             }
-
             return results.Count == 0 ? "未配置企业微信通知通道" : string.Join("；", results);
         }
 
@@ -395,9 +386,9 @@ namespace Bot.ChromeNs
                     ["text"] = new JObject { ["content"] = message }
                 };
                 using (var content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json"))
-                using (var response = await NotifyHttp.PostAsync(uri, content))
+                using (var response = await NotifyHttp.PostAsync(uri, content).ConfigureAwait(false))
                 {
-                    var body = await response.Content.ReadAsStringAsync();
+                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
                     return response.IsSuccessStatusCode
                         ? "成功"
                         : "HTTP " + (int)response.StatusCode + " " + Safe(body, 200);
@@ -416,6 +407,8 @@ namespace Bot.ChromeNs
             return new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
         }
 
+        // Kept private with this exact name/signature because SendFailureAnomalyService deliberately
+        // reuses the same persistent report store through reflection.
         private static void SaveOrUpdate(SlowResponseAnomalyReport report)
         {
             lock (FileSync)
@@ -424,10 +417,7 @@ namespace Bot.ChromeNs
                 var index = reports.FindIndex(x => string.Equals(x.Id, report.Id, StringComparison.Ordinal));
                 if (index >= 0) reports[index] = report;
                 else reports.Add(report);
-                reports = reports
-                    .OrderByDescending(x => x.CreatedAt)
-                    .Take(MaxStoredReports)
-                    .ToList();
+                reports = reports.OrderByDescending(x => x.CreatedAt).Take(MaxStoredReports).ToList();
                 SaveReportsUnsafe(reports);
             }
             RaiseReportsChanged();
@@ -439,8 +429,8 @@ namespace Bot.ChromeNs
             {
                 if (!File.Exists(ReportFilePath)) return new List<SlowResponseAnomalyReport>();
                 var text = File.ReadAllText(ReportFilePath, Encoding.UTF8);
-                var list = JsonConvert.DeserializeObject<List<SlowResponseAnomalyReport>>(text);
-                return list ?? new List<SlowResponseAnomalyReport>();
+                return JsonConvert.DeserializeObject<List<SlowResponseAnomalyReport>>(text)
+                    ?? new List<SlowResponseAnomalyReport>();
             }
             catch (Exception ex)
             {
@@ -453,23 +443,23 @@ namespace Bot.ChromeNs
         {
             Directory.CreateDirectory(ReportDirectory);
             var target = ReportFilePath;
-            var temp = target + ".tmp";
-            File.WriteAllText(temp, JsonConvert.SerializeObject(reports, Formatting.Indented), Encoding.UTF8);
-            File.Copy(temp, target, true);
-            File.Delete(temp);
+            var temp = target + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                File.WriteAllText(temp, JsonConvert.SerializeObject(reports, Formatting.Indented), Encoding.UTF8);
+                File.Copy(temp, target, true);
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); } catch { }
+            }
         }
 
         private static void RaiseReportsChanged()
         {
             var handler = ReportsChanged;
             if (handler == null) return;
-            try
-            {
-                handler();
-            }
-            catch
-            {
-            }
+            try { handler(); } catch { }
         }
 
         private static string ReadRecentLogTail(int maxChars)
@@ -487,9 +477,7 @@ namespace Bot.ChromeNs
                         if (text.Length > maxChars) text = text.Substring(text.Length - maxChars);
                         return text;
                     }
-                    catch
-                    {
-                    }
+                    catch { }
                 }
                 return "当前日志文件无法读取。";
             }
@@ -499,36 +487,12 @@ namespace Bot.ChromeNs
             }
         }
 
-        private static string ExtractJsonObject(string text)
-        {
-            text = (text ?? string.Empty).Trim();
-            if (text.StartsWith("```", StringComparison.Ordinal))
-            {
-                var firstNewLine = text.IndexOf('\n');
-                var lastFence = text.LastIndexOf("```", StringComparison.Ordinal);
-                if (firstNewLine >= 0 && lastFence > firstNewLine)
-                {
-                    text = text.Substring(firstNewLine + 1, lastFence - firstNewLine - 1).Trim();
-                }
-            }
-            var start = text.IndexOf('{');
-            var end = text.LastIndexOf('}');
-            if (start >= 0 && end > start) return text.Substring(start, end - start + 1);
-            return text;
-        }
-
         private static string TokenText(JToken token, string fallback, int max)
         {
             if (token == null) return fallback ?? string.Empty;
-            string value;
-            if (token.Type == JTokenType.Array)
-            {
-                value = string.Join("\n", token.Values<string>().Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => "- " + x.Trim()));
-            }
-            else
-            {
-                value = token.ToString();
-            }
+            var value = token.Type == JTokenType.Array
+                ? string.Join("\n", token.Values<string>().Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => "- " + x.Trim()))
+                : token.ToString();
             value = Safe(value, max);
             return string.IsNullOrWhiteSpace(value) ? (fallback ?? string.Empty) : value;
         }
@@ -581,13 +545,10 @@ namespace Bot.ChromeNs
 
         [JsonIgnore]
         public double TotalSeconds { get { return TotalMilliseconds / 1000.0; } }
-
         [JsonIgnore]
         public double QueueSeconds { get { return QueueMilliseconds / 1000.0; } }
-
         [JsonIgnore]
         public double GenerationSeconds { get { return GenerationMilliseconds / 1000.0; } }
-
         [JsonIgnore]
         public string CreatedAtText { get { return CreatedAt == DateTime.MinValue ? string.Empty : CreatedAt.ToString("MM-dd HH:mm:ss"); } }
 

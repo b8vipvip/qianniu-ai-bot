@@ -1,3 +1,4 @@
+using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using System;
@@ -44,6 +45,13 @@ namespace Bot.ChromeNs
         public string Engine { get; set; }
     }
 
+    internal sealed class ServerOcrEndpoint
+    {
+        public string BaseUrl { get; set; }
+        public string ApiKey { get; set; }
+        public string Source { get; set; }
+    }
+
     /// <summary>
     /// OCR facade retained for compatibility with the existing image-decision pipeline.
     /// Inference runs on the authenticated server control plane. Windows only hashes,
@@ -58,8 +66,17 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan CacheTtl = TimeSpan.FromDays(30);
         private static readonly HttpClient Http = CreateHttpClient();
 
+        public static Task<LocalOcrResult> TryRecognizeAsync(
+            string imagePath,
+            CancellationToken cancellationToken,
+            int timeoutMs = DefaultTimeoutMs)
+        {
+            return TryRecognizeAsync(imagePath, null, cancellationToken, timeoutMs);
+        }
+
         public static async Task<LocalOcrResult> TryRecognizeAsync(
             string imagePath,
+            string sellerNick,
             CancellationToken cancellationToken,
             int timeoutMs = DefaultTimeoutMs)
         {
@@ -110,10 +127,10 @@ namespace Bot.ChromeNs
                 };
             }
 
-            var endpoint = ResolveControlPlaneEndpoint();
+            var endpoint = ResolveControlPlaneEndpoint(sellerNick);
             if (endpoint == null)
             {
-                return Failure("未配置可用的服务端控制面OCR", startedAt, sha256);
+                return Failure("未找到当前店铺可用的服务端控制面连接或令牌", startedAt, sha256);
             }
 
             try
@@ -179,7 +196,7 @@ namespace Bot.ChromeNs
                                 + ", chars=" + (result.Text == null ? 0 : result.Text.Length)
                                 + ", confidence=" + result.Confidence.ToString("0.000", CultureInfo.InvariantCulture)
                                 + ", elapsedMs=" + result.ElapsedMs
-                                + ", cacheHit=false");
+                                + ", cacheHit=false, endpointSource=" + endpoint.Source);
                             return result;
                         }
                     }
@@ -204,14 +221,57 @@ namespace Bot.ChromeNs
                 + ", 引擎=" + (result.Engine ?? "server") + "]";
         }
 
-        private static AiEndpointConfig ResolveControlPlaneEndpoint()
+        private static ServerOcrEndpoint ResolveControlPlaneEndpoint(string sellerNick)
         {
+            // OCR is a control-plane capability, not an AI provider. Reuse the same
+            // per-shop connection/token that Web sync, rules and update channels use.
+            // This avoids requiring users to create a fake "服务端控制面" AI endpoint.
+            try
+            {
+                var shop = ShopSettingsScope.Current;
+                if (shop == null && !string.IsNullOrWhiteSpace(sellerNick))
+                {
+                    shop = ShopContextLocator.ResolveRuntimeBySellerNick(sellerNick.Trim());
+                }
+                if (shop != null)
+                {
+                    var connection = new ShopControlPlaneConnectionStore(shop, new ShopScopedPathProvider());
+                    string token;
+                    string error;
+                    var serverUrl = connection.GetServerUrl();
+                    if (!string.IsNullOrWhiteSpace(serverUrl)
+                        && connection.TryGetToken(out token, out error)
+                        && !string.IsNullOrWhiteSpace(token))
+                    {
+                        return new ServerOcrEndpoint
+                        {
+                            BaseUrl = serverUrl,
+                            ApiKey = token.Trim(),
+                            Source = "shop-control-plane"
+                        };
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Info("服务端OCR读取店铺控制面连接失败，尝试兼容AI端点: " + LimitError(ex.Message));
+            }
+
+            // Backward compatibility for installations that previously configured a
+            // dedicated control-plane entry in the AI endpoint list.
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             if (endpoints == null || endpoints.Count == 0) return null;
-            return endpoints.FirstOrDefault(x => x != null
+            var endpoint = endpoints.FirstOrDefault(x => x != null
                 && x.Type == "服务端控制面"
                 && !string.IsNullOrWhiteSpace(x.BaseUrl)
                 && !string.IsNullOrWhiteSpace(x.ApiKey));
+            if (endpoint == null) return null;
+            return new ServerOcrEndpoint
+            {
+                BaseUrl = endpoint.BaseUrl,
+                ApiKey = endpoint.ApiKey,
+                Source = "legacy-ai-endpoint"
+            };
         }
 
         private static string NormalizeOcrUrl(string baseUrl)

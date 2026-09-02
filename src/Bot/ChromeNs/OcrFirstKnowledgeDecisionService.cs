@@ -11,9 +11,10 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// OCR-first local decision layer for image messages. It resolves the already-cached image,
-    /// runs the bundled PP-OCR/ONNX worker and only allows a direct reply when OCR confidence is
-    /// high AND Knowledge Engine V2 independently passes its existing CanDirectReply safety gate.
-    /// A miss is soft and immediately falls through to the normal vision provider pipeline.
+    /// calls the authenticated server OCR control-plane endpoint and only allows a direct reply
+    /// when OCR confidence is high AND Knowledge Engine V2 independently passes its existing
+    /// CanDirectReply safety gate. A miss is soft and immediately falls through to the normal
+    /// vision provider pipeline.
     /// </summary>
     internal static class OcrFirstKnowledgeDecisionService
     {
@@ -48,11 +49,14 @@ namespace Bot.ChromeNs
             LocalOcrResult ocr;
             try
             {
-                ocr = await LocalOcrService.TryRecognizeAsync(image.LocalCachePath, cancellationToken);
+                ocr = await LocalOcrService.TryRecognizeAsync(
+                    image.LocalCachePath,
+                    task.SellerNick,
+                    cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("OCR-first本地OCR失败，继续视觉模型链路: " + ex.Message, 20);
+                Log.ErrorWithMaxCount("OCR-first服务端OCR失败，继续视觉模型链路: " + ex.Message, 20);
                 return null;
             }
             if (!IsHighConfidenceUsefulText(ocr))
@@ -104,12 +108,12 @@ namespace Bot.ChromeNs
                 Success = true,
                 Answer = answer,
                 Error = string.Empty,
-                EndpointName = "local-ocr+knowledge-v2",
+                EndpointName = "server-ocr+knowledge-v2",
                 VisionModel = "none",
                 LatencyMs = sw.ElapsedMilliseconds,
                 VisualQuestion = string.IsNullOrWhiteSpace(task.CombinedQuestion) ? "[图片OCR]" : task.CombinedQuestion,
                 VisualSummary = string.Empty,
-                VisualTags = "local-ocr,knowledge-v2",
+                VisualTags = "server-ocr,knowledge-v2",
                 MatchedVisualKnowledgeId = "ocr-direct-knowledge-v2",
                 VisualKnowledgeScore = decision.Matches == null || decision.Matches.Count < 1 ? 0d : decision.Matches.Max(x => x.Score),
                 LocalOcrText = ocr.Text,

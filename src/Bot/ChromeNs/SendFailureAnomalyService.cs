@@ -182,10 +182,7 @@ namespace Bot.ChromeNs
 
         private static string ExtractJsonObject(string value)
         {
-            value = (value ?? string.Empty).Trim();
-            var start = value.IndexOf('{');
-            var end = value.LastIndexOf('}');
-            return start >= 0 && end > start ? value.Substring(start, end - start + 1) : value;
+            return StructuredJsonObjectRecovery.RecoverObjectText(value);
         }
 
         private static string Text(JToken token, string fallback, int max)
