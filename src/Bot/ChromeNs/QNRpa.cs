@@ -282,9 +282,6 @@ namespace Bot.ChromeNs
                     {
                         if (probe.IsEmpty && !draftClearedObserved)
                         {
-                            // Composer clearance proves only that Qianniu accepted/consumed the UI
-                            // action. It is not delivery evidence. Extend the observation window once
-                            // so a delayed seller echo can arrive without triggering a duplicate retry.
                             draftClearedObserved = true;
                             var extendedEnd = DateTime.Now.AddMilliseconds(4500);
                             if (extendedEnd > end) end = extendedEnd;
@@ -792,6 +789,39 @@ namespace Bot.ChromeNs
                 : (current.Result.Nick ?? string.Empty).Trim();
         }
 
+        private bool HasLiveOwnedDraft()
+        {
+            var expected = (LastSetPlainText ?? string.Empty).Trim();
+            if (!HasOwnedRecentDraft(expected)) return false;
+            string current;
+            return TryGetEditorText(out current) && EditorMatchesExpectedText(current, expected);
+        }
+
+        private async Task<bool> VerifyCurrentBuyerWithoutNavigationAsync(string buyer, string stage)
+        {
+            buyer = (buyer ?? string.Empty).Trim();
+            try
+            {
+                var currentNick = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
+                if (IsExpectedBuyer(buyer, currentNick))
+                {
+                    _qn.SetActiveConversationByNick(SellerNick,
+                        BuyerIdentityAliasService.ResolveInternalNick(SellerNick, currentNick), stage + "-只读确认");
+                    return true;
+                }
+
+                SetSendFailure(stage, "目标买家=" + buyer + "，当前买家="
+                    + (string.IsNullOrWhiteSpace(currentNick) ? "<空>" : currentNick)
+                    + "；Bot草稿已写入，禁止重开/切换会话");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                SetSendFailure(stage, "Bot草稿已写入，只读会话确认失败：" + ex.Message);
+                return false;
+            }
+        }
+
         private async Task<bool> VerifyCurrentBuyerAsync(string buyer, string stage)
         {
             buyer = (buyer ?? string.Empty).Trim();
@@ -801,6 +831,13 @@ namespace Bot.ChromeNs
                 {
                     SetSendFailure(stage, "千牛消息连接不可用");
                     return false;
+                }
+
+                if (HasLiveOwnedDraft())
+                {
+                    Log.Info("检测到本次Bot草稿已写入，发送前会话确认降级为只读快照，禁止重开/切换会话: stage="
+                        + stage + ", buyer=" + buyer);
+                    return await VerifyCurrentBuyerWithoutNavigationAsync(buyer, stage).ConfigureAwait(false);
                 }
 
                 for (var attempt = 0; attempt < 7; attempt++)
@@ -853,23 +890,53 @@ namespace Bot.ChromeNs
             }
         }
 
-        private void ClearExpectedDraft(string expected, string reason)
+        private async Task ClearExpectedDraftIfSafeAsync(string buyer, string expected, string reason)
         {
             try
             {
-                if (!HasExpectedDraft(expected)) return;
+                var currentBuyer = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
+                if (!IsExpectedBuyer(buyer, currentBuyer))
+                {
+                    Log.Info("发送失败草稿未清理：当前买家无法证明仍为目标买家。target=" + buyer
+                        + ", current=" + currentBuyer + ", reason=" + reason);
+                    return;
+                }
+
+                string currentText;
+                if (!TryGetEditorText(out currentText)
+                    || !EditorMatchesExpectedText(currentText, expected)
+                    || !IsKnownBotOwnedDraftText(currentText))
+                {
+                    Log.Info("发送失败草稿未清理：输入框不是本次Bot精确草稿或所有权无法证明。buyer="
+                        + buyer + ", reason=" + reason);
+                    return;
+                }
+
+                var buyerBeforeClear = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
+                if (!IsExpectedBuyer(buyer, buyerBeforeClear))
+                {
+                    Log.Info("发送失败草稿未清理：清理前买家已变化。target=" + buyer
+                        + ", current=" + buyerBeforeClear + ", reason=" + reason);
+                    return;
+                }
+
                 DispatcherEx.xInvoke(() =>
                 {
-                    if (!HasExpectedDraft(expected) || !FocusEditor()) return;
+                    string latestText;
+                    if (!TryGetEditorText(out latestText)
+                        || !EditorMatchesExpectedText(latestText, expected)
+                        || !IsKnownBotOwnedDraftText(latestText)
+                        || !FocusEditor()) return;
                     PressCtrlA();
                     PressBackspace();
                     LastSetPlainText = string.Empty;
-                    Log.Info("已清除过期/不安全发送草稿: reason=" + reason);
+                    LatestSetTextTime = DateTime.MinValue;
+                    Log.Info("已安全清除发送失败的Bot精确草稿: buyer=" + buyer + ", reason=" + reason);
                 });
             }
             catch (Exception ex)
             {
-                Log.Info("清除过期草稿失败: " + ex.Message);
+                Log.Info("安全清理发送失败草稿异常，已保留输入框避免误删人工内容: " + ex.Message);
             }
         }
 
@@ -1004,6 +1071,12 @@ namespace Bot.ChromeNs
                     try { sellerDesk.Show(); } catch (Exception ex) { Log.Info("显示文本发送窗口失败: " + ex.Message); }
                 }
 
+                if (!await RefreshChatControlsAsync(true).ConfigureAwait(false))
+                {
+                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
+                    return false;
+                }
+
                 var setOk = await TrySetPlainTextByCdpAsync(buyer, text).ConfigureAwait(false);
                 if (!setOk)
                 {
@@ -1014,25 +1087,19 @@ namespace Bot.ChromeNs
                 await Task.Delay(80).ConfigureAwait(false);
                 if (!VerifyAnswerFreshness(buyer, text, attemptStartedAt, "发送前答案时效检查"))
                 {
-                    ClearExpectedDraft(text, GetSendFailureReason());
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
                 if (!await VerifyCurrentBuyerAsync(buyer, "发送前会话确认").ConfigureAwait(false))
                 {
-                    ClearExpectedDraft(text, GetSendFailureReason());
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
                 if (!await HasExpectedDraftFastAsync(text, 1200).ConfigureAwait(false))
                 {
                     SetSendFailure("发送前文本确认", "输入框内容已变化或无法确认，已阻止发送");
-                    SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
-                    return false;
-                }
-
-                if (!await RefreshChatControlsAsync(true).ConfigureAwait(false))
-                {
                     SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                     return false;
                 }
@@ -1048,6 +1115,10 @@ namespace Bot.ChromeNs
                 {
                     CompleteAttemptLease(buyer, text);
                 }
+                else
+                {
+                    await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
+                }
                 Log.Info("自动发送完成: result=" + sendResult + ", buyer=" + buyer
                     + ", method=CDP页面按钮+HWND安全消息+UIA安全回退, failure="
                     + (sendResult ? string.Empty : GetSendFailureReason()));
@@ -1055,6 +1126,7 @@ namespace Bot.ChromeNs
             catch (Exception ex)
             {
                 SetSendFailure("自动发送异常", ex.Message);
+                await ClearExpectedDraftIfSafeAsync(buyer, text, GetSendFailureReason()).ConfigureAwait(false);
                 SendDeliveryWatchdog.CancelPending(SellerNick, buyer, text, GetSendFailureReason());
                 Log.Exception(ex);
                 sendResult = false;

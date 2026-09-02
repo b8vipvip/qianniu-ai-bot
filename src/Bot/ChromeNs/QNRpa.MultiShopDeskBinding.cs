@@ -128,16 +128,26 @@ namespace Bot.ChromeNs
                 ? string.Empty
                 : BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _qn.Buyer.Nick);
             if (!BuyerIdentityAliasService.AreEquivalent(SellerNick, currentBuyer, buyer)) return false;
+            if (!FocusEditor()) return false;
 
-            ClearExpectedDraft(expected,
-                string.IsNullOrWhiteSpace(reason) ? "Bot草稿已取消" : reason);
+            string latestText;
+            if (!TryGetEditorText(out latestText) || !EditorMatchesExpectedText(latestText, expected)) return false;
+
+            currentBuyer = _qn.Buyer == null
+                ? string.Empty
+                : BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _qn.Buyer.Nick);
+            if (!BuyerIdentityAliasService.AreEquivalent(SellerNick, currentBuyer, buyer)) return false;
+
+            PressCtrlA();
+            PressBackspace();
+            LastSetPlainText = string.Empty;
+            LatestSetTextTime = DateTime.MinValue;
 
             string remaining;
             var cleared = !TryGetEditorText(out remaining)
                 || !EditorMatchesExpectedText(remaining, expected);
             if (cleared)
             {
-                LatestSetTextTime = DateTime.MinValue;
                 Log.Info("已清除已取消的Bot专属草稿: seller=" + SellerNick
                     + ", buyer=" + buyer + ", reason=" + (reason ?? string.Empty));
             }
