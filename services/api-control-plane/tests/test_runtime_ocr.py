@@ -39,17 +39,35 @@ def test_install_is_idempotent(monkeypatch):
     routes = []
 
     class FakeApp:
-        def post(self, path):
+        def _route(self, method, path):
             def decorate(func):
-                routes.append((path, func))
+                routes.append((method, path, func))
                 return func
             return decorate
 
-    fake = SimpleNamespace(app=FakeApp(), require_client=lambda: {"name": "test"})
+        def get(self, path):
+            return self._route("GET", path)
+
+        def put(self, path):
+            return self._route("PUT", path)
+
+        def post(self, path):
+            return self._route("POST", path)
+
+    fake = SimpleNamespace(
+        app=FakeApp(),
+        require_client=lambda: {"name": "test"},
+        require_admin=lambda: "admin",
+    )
     monkeypatch.setattr(runtime_ocr, "_INSTALLED", False)
     runtime_ocr.install(fake)
     runtime_ocr.install(fake)
-    assert [path for path, _ in routes] == ["/api/runtime/v1/ocr"]
+    assert [(method, path) for method, path, _ in routes] == [
+        ("GET", "/api/admin/ocr/settings"),
+        ("PUT", "/api/admin/ocr/settings"),
+        ("POST", "/api/admin/ocr/settings/reset"),
+        ("POST", "/api/runtime/v1/ocr"),
+    ]
 
 
 def test_server_container_includes_runtime_and_prefetches_ocr_models():

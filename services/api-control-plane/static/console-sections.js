@@ -1,13 +1,15 @@
 (function(){
   const embeddedPages={
     wecom:{frameId:"wecomFrame",src:"/static/wecom.html?embedded=1"},
-    "recharge-query":{frameId:"rechargeQueryFrame",src:"/static/recharge-query.html?embedded=1"}
+    "recharge-query":{frameId:"rechargeQueryFrame",src:"/static/recharge-query.html?embedded=1"},
+    ocr:{frameId:"ocrSettingsFrame",src:"/static/ocr-settings.html?embedded=1"}
   };
-  const knownPages=new Set(["dashboard","providers","tests","clients","message-traces","wecom","recharge-query","deploy"]);
+  const knownPages=new Set(["dashboard","providers","tests","clients","message-traces","wecom","recharge-query","ocr","version-update","deploy"]);
 
   if(typeof titles!=="undefined"){
     titles.wecom=["企业微信","配置企业微信应用、加密回调和 AI 转人工策略。"];
     titles["recharge-query"]=["充值结果自动查询","配置充值状态查询、后台访问 Key 和即时测试。"];
+    titles.ocr=["服务端 OCR","配置 RapidOCR/ONNXRuntime 的启用状态、图片限制、超时、并发和文本上限。"];
   }
 
   function makePrimaryButton(anchor,page){
@@ -22,10 +24,25 @@
     return button;
   }
 
+  function insertPrimaryButton(page,label){
+    if(document.querySelector(`button.nav[data-page="${page}"]`))return;
+    const nav=document.querySelector("#appView .sidebar nav");
+    if(!nav)return;
+    const button=document.createElement("button");
+    button.className="nav";
+    button.type="button";
+    button.dataset.page=page;
+    button.textContent=label;
+    const before=nav.querySelector('button.nav[data-page="version-update"]')||nav.querySelector('button.nav[data-page="deploy"]');
+    if(before)nav.insertBefore(button,before);else nav.appendChild(button);
+    button.addEventListener("click",()=>navigate(page));
+  }
+
   // Promote configuration utilities from standalone secondary pages to the same first-level
   // navigation as dashboard/providers/tests. The legacy HTML remains as the content source.
   makePrimaryButton(document.querySelector('a.nav[href="/static/wecom.html"]'),"wecom");
   makePrimaryButton(document.querySelector('a.nav[href="/static/recharge-query.html"]'),"recharge-query");
+  insertPrimaryButton("ocr","服务端 OCR");
 
   // app.js historically attaches switchPage() to every .nav element, including real links.
   // Restore normal anchor behaviour for Bot Web and any future external first-level entry.
@@ -42,7 +59,7 @@
       section.className="page";
       const frame=document.createElement("iframe");
       frame.id=config.frameId;
-      frame.title=page==="wecom"?"企业微信配置":"充值结果自动查询配置";
+      frame.title=page==="wecom"?"企业微信配置":page==="recharge-query"?"充值结果自动查询配置":"服务端 OCR 配置";
       frame.loading="lazy";
       frame.style.cssText="display:block;width:100%;height:760px;min-height:720px;border:0;background:transparent;";
       section.appendChild(frame);
@@ -76,6 +93,9 @@
       }else if(page==="recharge-query"&&main){
         const heading=main.querySelector(":scope > h1");
         if(heading)heading.style.display="none";
+      }else if(page==="ocr"){
+        const header=doc.querySelector("header.ocr-page-head");
+        if(header)header.style.display="none";
       }
 
       const resize=()=>{
