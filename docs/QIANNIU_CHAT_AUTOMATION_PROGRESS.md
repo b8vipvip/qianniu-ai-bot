@@ -1,6 +1,6 @@
 # Qianniu Chat Automation Progress / 千牛聊天自动化进度
 
-Last updated / 最后更新：2026-09-02 16:19 +08:00 之后
+Last updated / 最后更新：2026-09-02 16:30 +08:00 之后
 
 本文件只记录**当前生产状态和仍需验证的事项**。早期 discovery / message lifecycle 研究证据保留在独立文档中，不再把历史实验 TODO 当作当前生产 TODO。
 
@@ -25,6 +25,7 @@ Last updated / 最后更新：2026-09-02 16:19 +08:00 之后
 - 前置规则等待有上限；
 - generation cancellation / fail-open 已实现；
 - 总 AI 预算仍为 50 秒；
+- 1.1.1139 真实日志曾确认 **50 秒 deadline 实际延迟数分钟**，根因方向为 ThreadPool continuation starvation；
 - PR #208 增加 ThreadPool starvation guard，保护 cancellation/timer/watchdog continuation。
 
 ### 2.3 Smart Reply / Knowledge
@@ -57,20 +58,22 @@ Last updated / 最后更新：2026-09-02 16:19 +08:00 之后
 
 ### P0 — Absolute generation freshness guard / generation 绝对年龄屏障
 
-当前 50 秒 timeout 仍依赖 cancellation/timer。虽然 1.1.1150 已提高 ThreadPool 最低容量，但生产链还缺少独立 wall-clock 最终屏障。
+PR #209 已实现独立最后防线，当前等待 CI 与真实运行验证：
+- 使用 dedicated background `Thread`，不依赖 ThreadPool timer continuation；
+- 每 250ms 扫描 generation；
+- generation 首次进入 `Generating` 后开始独立 wall-clock 计时；
+- 超过 55 秒仍活跃则 `BuyerSessionAgent.Cancel(..., absolute_generation_age_exceeded)`；
+- generation 从 `ActiveGenerations` 移除后，即使 provider 忽略 cancellation 迟到返回，现有 `lease.IsCurrent` 也会失败，因此不能继续 Ready/Sending；
+- 人工客服回复不触发取消；terminal generation watch 自动清理。
 
-需要：
-- AI 返回后检查 `DateTime.Now - aiStartedAt`；
-- 结果超过允许年龄则直接丢弃；
-- 不允许迟到 generation 进入 `Ready/Sending/Completed`；
-- 真正发送前再检查一次；
-- 只记录 generationId/elapsed/dropReason。
+这是一道最后防线，不替代正常 50 秒 cancellation。
 
-### P1 — 1.1.1150 runtime verification / 新版真实日志验证
+### P1 — 1.1.1150+ runtime verification / 新版真实日志验证
 
 下一份完整日志重点检查：
 - 50 秒 deadline 是否稳定；
 - 是否仍出现数分钟迟到 generation；
+- 是否出现 `absolute_generation_age_exceeded`，若出现则迟到结果后续不得再进入 Ready/Sending；
 - OCR 是否使用 `shop-control-plane`；
 - CDP 页面通道是否持续单调增长；
 - 重复消息平台弹窗是否被安全阻断。
@@ -90,8 +93,7 @@ Last updated / 最后更新：2026-09-02 16:19 +08:00 之后
 
 ## 5. Next execution / 下一步
 
-1. 编码 generation absolute-age freshness guard；
-2. 增加静态/行为契约；
-3. Windows CI、API CI、x64 Release 全绿后合并；
-4. 自动发布下一版；
-5. 新版真实测试后继续按日志挖掘。
+1. PR #209 Windows CI、API CI、x64 Release 全绿；
+2. 合并并自动发布下一版；
+3. 新版真实测试并导出完整日志；
+4. 按新日志继续挖掘，不凭旧文档重复修复已完成项。
