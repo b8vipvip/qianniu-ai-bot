@@ -40,6 +40,7 @@ def test_server_ocr_console_exposes_two_visual_priority_modes():
     html = read("services/api-control-plane/static/ocr-settings.html")
     js = read("services/api-control-plane/static/ocr-settings.js")
 
+    assert "无需人工配置即可使用" in html
     assert 'id="ocrVisionPriority"' in html
     assert 'value="ocr_first"' in html
     assert 'value="ai_first"' in html
