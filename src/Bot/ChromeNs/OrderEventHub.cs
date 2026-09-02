@@ -4,12 +4,14 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 
 namespace Bot.ChromeNs
 {
@@ -488,6 +490,10 @@ namespace Bot.ChromeNs
 
     internal static class OrderEventHub
     {
+        private const int StateMutexWaitMilliseconds = 3000;
+        private const int StateIoRetryCount = 4;
+        private const int StateIoRetryDelayMilliseconds = 60;
+
         private sealed class StoredOrderEvent
         {
             public string Key { get; set; }
@@ -505,6 +511,30 @@ namespace Bot.ChromeNs
             }
         }
 
+        private sealed class StateMutexLease : IDisposable
+        {
+            private readonly Mutex _mutex;
+            public bool Acquired { get; private set; }
+
+            public StateMutexLease(Mutex mutex, bool acquired)
+            {
+                _mutex = mutex;
+                Acquired = acquired;
+            }
+
+            public void Dispose()
+            {
+                if (Acquired)
+                {
+                    try { _mutex.ReleaseMutex(); }
+                    catch { }
+                    Acquired = false;
+                }
+                try { _mutex.Dispose(); }
+                catch { }
+            }
+        }
+
         private static readonly object Sync = new object();
         private static StoredState _state;
 
@@ -513,12 +543,17 @@ namespace Bot.ChromeNs
             if (snapshot == null || string.IsNullOrWhiteSpace(snapshot.OrderId)) return snapshot;
             lock (Sync)
             {
-                EnsureLoaded();
-                var key = BuildKey(snapshot);
-                var existing = _state.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
-                if (existing == null || existing.Snapshot == null) return snapshot;
-                Merge(existing.Snapshot, snapshot);
-                return existing.Snapshot;
+                var path = GetPath();
+                using (var lease = AcquireStateMutex(path))
+                {
+                    if (lease.Acquired) ReloadAndMergeFromDisk(path);
+                    else EnsureLoaded();
+                    var key = BuildKey(snapshot);
+                    var existing = _state.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
+                    if (existing == null || existing.Snapshot == null) return snapshot;
+                    Merge(existing.Snapshot, snapshot);
+                    return existing.Snapshot;
+                }
             }
         }
 
@@ -531,45 +566,93 @@ namespace Bot.ChromeNs
 
             lock (Sync)
             {
-                EnsureLoaded();
-                var now = DateTime.Now;
-                _state.Events.RemoveAll(x => x == null || x.SeenAt < now.AddDays(-30));
-                var key = BuildKey(snapshot);
-                var existing = _state.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
-                if (existing != null)
+                var path = GetPath();
+                using (var lease = AcquireStateMutex(path))
                 {
-                    Merge(existing.Snapshot, snapshot);
-                    existing.SeenAt = now;
-                    SaveInternal();
-                    Log.Info("订单事件已去重: key=" + key + ", buyer=" + snapshot.Buyer);
+                    if (lease.Acquired)
+                    {
+                        ReloadAndMergeFromDisk(path);
+                    }
+                    else
+                    {
+                        EnsureLoaded();
+                        Log.ErrorWithMaxCount("订单事件状态跨进程锁等待超时；本次事件继续处理，但持久化去重降级为进程内状态。", 10);
+                    }
+
+                    var now = DateTime.Now;
+                    _state.Events.RemoveAll(x => x == null || x.SeenAt < now.AddDays(-30));
+                    var key = BuildKey(snapshot);
+                    var existing = _state.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, key, StringComparison.Ordinal));
+                    if (existing != null)
+                    {
+                        Merge(existing.Snapshot, snapshot);
+                        existing.SeenAt = now;
+                        if (lease.Acquired) SaveInternal(path);
+                        Log.Info("订单事件已去重: key=" + key + ", buyer=" + snapshot.Buyer);
+                        return new OrderEventPublishResult
+                        {
+                            Detected = true,
+                            Accepted = false,
+                            Reason = "相同订单事件已处理",
+                            Snapshot = existing.Snapshot ?? snapshot
+                        };
+                    }
+
+                    _state.Events.Add(new StoredOrderEvent { Key = key, SeenAt = now, Snapshot = snapshot });
+                    if (_state.Events.Count > 2000)
+                    {
+                        _state.Events = _state.Events.OrderByDescending(x => x.SeenAt).Take(2000).ToList();
+                    }
+                    var persisted = lease.Acquired && SaveInternal(path);
+                    Log.Info("识别到结构化订单事件: event=" + snapshot.EventType
+                        + ", seller=" + snapshot.Seller
+                        + ", buyer=" + snapshot.Buyer
+                        + ", orderId=" + snapshot.OrderId
+                        + ", item=" + Short(snapshot.ItemTitle, 80)
+                        + ", status=" + snapshot.TradeStatus
+                        + ", persisted=" + persisted);
                     return new OrderEventPublishResult
                     {
                         Detected = true,
-                        Accepted = false,
-                        Reason = "相同订单事件已处理",
-                        Snapshot = existing.Snapshot ?? snapshot
+                        Accepted = true,
+                        Reason = persisted ? "新订单事件" : "新订单事件（状态持久化暂时降级）",
+                        Snapshot = snapshot
                     };
                 }
+            }
+        }
 
-                _state.Events.Add(new StoredOrderEvent { Key = key, SeenAt = now, Snapshot = snapshot });
-                if (_state.Events.Count > 2000)
-                {
-                    _state.Events = _state.Events.OrderByDescending(x => x.SeenAt).Take(2000).ToList();
-                }
-                SaveInternal();
-                Log.Info("识别到结构化订单事件: event=" + snapshot.EventType
-                    + ", seller=" + snapshot.Seller
-                    + ", buyer=" + snapshot.Buyer
-                    + ", orderId=" + snapshot.OrderId
-                    + ", item=" + Short(snapshot.ItemTitle, 80)
-                    + ", status=" + snapshot.TradeStatus);
-                return new OrderEventPublishResult
-                {
-                    Detected = true,
-                    Accepted = true,
-                    Reason = "新订单事件",
-                    Snapshot = snapshot
-                };
+        private static StateMutexLease AcquireStateMutex(string path)
+        {
+            var mutex = new Mutex(false, BuildStateMutexName(path));
+            var acquired = false;
+            try
+            {
+                acquired = mutex.WaitOne(StateMutexWaitMilliseconds);
+            }
+            catch (AbandonedMutexException)
+            {
+                acquired = true;
+                Log.Info("检测到订单事件状态锁的旧进程已退出，已接管互斥锁并继续恢复状态。");
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("获取订单事件跨进程状态锁失败：" + ex.Message, 10);
+            }
+            return new StateMutexLease(mutex, acquired);
+        }
+
+        private static string BuildStateMutexName(string path)
+        {
+            var normalized = string.Empty;
+            try { normalized = Path.GetFullPath(path ?? string.Empty).Trim().ToLowerInvariant(); }
+            catch { normalized = (path ?? string.Empty).Trim().ToLowerInvariant(); }
+            using (var sha = SHA256.Create())
+            {
+                var hash = BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(normalized)))
+                    .Replace("-", string.Empty)
+                    .ToLowerInvariant();
+                return @"Local\QianniuAiBot.OrderEventState." + hash.Substring(0, Math.Min(32, hash.Length));
             }
         }
 
@@ -603,39 +686,136 @@ namespace Bot.ChromeNs
         private static void EnsureLoaded()
         {
             if (_state != null) return;
-            try
-            {
-                var path = GetPath();
-                if (!File.Exists(path))
-                {
-                    _state = new StoredState();
-                    return;
-                }
-                _state = JsonConvert.DeserializeObject<StoredState>(File.ReadAllText(path, Encoding.UTF8)) ?? new StoredState();
-                if (_state.Events == null) _state.Events = new List<StoredOrderEvent>();
-            }
-            catch (Exception ex)
-            {
-                Log.Info("读取订单事件去重状态失败，使用空状态：" + ex.Message);
-                _state = new StoredState();
-            }
+            var path = GetPath();
+            var disk = TryReadState(path);
+            _state = disk ?? new StoredState();
+            if (_state.Events == null) _state.Events = new List<StoredOrderEvent>();
         }
 
-        private static void SaveInternal()
+        private static void ReloadAndMergeFromDisk(string path)
         {
+            var disk = TryReadState(path);
+            if (disk == null)
+            {
+                if (_state == null) _state = new StoredState();
+                if (_state.Events == null) _state.Events = new List<StoredOrderEvent>();
+                return;
+            }
+
+            if (_state == null || _state.Events == null || _state.Events.Count == 0)
+            {
+                _state = disk;
+                if (_state.Events == null) _state.Events = new List<StoredOrderEvent>();
+                return;
+            }
+
+            var merged = disk;
+            if (merged.Events == null) merged.Events = new List<StoredOrderEvent>();
+            foreach (var local in _state.Events.Where(x => x != null && !string.IsNullOrWhiteSpace(x.Key)))
+            {
+                var existing = merged.Events.FirstOrDefault(x => x != null && string.Equals(x.Key, local.Key, StringComparison.Ordinal));
+                if (existing == null)
+                {
+                    merged.Events.Add(local);
+                    continue;
+                }
+                if (existing.Snapshot == null) existing.Snapshot = local.Snapshot;
+                else Merge(existing.Snapshot, local.Snapshot);
+                if (local.SeenAt > existing.SeenAt) existing.SeenAt = local.SeenAt;
+            }
+            _state = merged;
+        }
+
+        private static StoredState TryReadState(string path)
+        {
+            if (!File.Exists(path)) return new StoredState();
+            Exception last = null;
+            for (var attempt = 1; attempt <= StateIoRetryCount; attempt++)
+            {
+                try
+                {
+                    using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    using (var reader = new StreamReader(stream, Encoding.UTF8, true))
+                    {
+                        var loaded = JsonConvert.DeserializeObject<StoredState>(reader.ReadToEnd()) ?? new StoredState();
+                        if (loaded.Events == null) loaded.Events = new List<StoredOrderEvent>();
+                        return loaded;
+                    }
+                }
+                catch (IOException ex)
+                {
+                    last = ex;
+                    if (attempt < StateIoRetryCount) Thread.Sleep(StateIoRetryDelayMilliseconds * attempt);
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("读取订单事件去重状态失败，保留上一份内存状态：" + ex.Message);
+                    return null;
+                }
+            }
+            if (last != null) Log.ErrorWithMaxCount("读取订单事件状态连续失败，保留上一份内存状态：" + last.Message, 10);
+            return null;
+        }
+
+        private static bool SaveInternal(string path)
+        {
+            var directory = Path.GetDirectoryName(path);
             try
             {
-                var path = GetPath();
-                var directory = Path.GetDirectoryName(path);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                var temp = path + ".tmp";
-                File.WriteAllText(temp, JsonConvert.SerializeObject(_state, Formatting.Indented), new UTF8Encoding(false));
-                if (File.Exists(path)) File.Delete(path);
-                File.Move(temp, path);
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("保存订单事件状态失败：" + ex.Message, 10);
+                Log.ErrorWithMaxCount("创建订单事件状态目录失败：" + ex.Message, 10);
+                return false;
+            }
+
+            var temp = path + "." + Process.GetCurrentProcess().Id + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                var bytes = new UTF8Encoding(false).GetBytes(JsonConvert.SerializeObject(_state, Formatting.Indented));
+                using (var stream = new FileStream(
+                    temp,
+                    FileMode.CreateNew,
+                    FileAccess.Write,
+                    FileShare.None,
+                    8192,
+                    FileOptions.WriteThrough))
+                {
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush(true);
+                }
+
+                Exception last = null;
+                for (var attempt = 1; attempt <= StateIoRetryCount; attempt++)
+                {
+                    try
+                    {
+                        if (File.Exists(path)) File.Replace(temp, path, null, true);
+                        else File.Move(temp, path);
+                        return true;
+                    }
+                    catch (IOException ex)
+                    {
+                        last = ex;
+                        if (attempt < StateIoRetryCount) Thread.Sleep(StateIoRetryDelayMilliseconds * attempt);
+                    }
+                }
+                if (last != null)
+                {
+                    Log.ErrorWithMaxCount("原子替换订单事件状态连续失败；旧状态文件已保留：" + last.Message, 10);
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("保存订单事件状态失败；旧状态文件已保留：" + ex.Message, 10);
+                return false;
+            }
+            finally
+            {
+                try { if (File.Exists(temp)) File.Delete(temp); }
+                catch { }
             }
         }
 
