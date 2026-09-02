@@ -37,7 +37,16 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     done; \
     apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update; \
     apt-get -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 \
-      install -y --no-install-recommends ca-certificates fonts-dejavu-core curl
+      install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        fonts-dejavu-core \
+        libgl1 \
+        libglib2.0-0t64 \
+        libx11-6 \
+        libxcb1 \
+        libxext6 \
+        libxrender1
 
 RUN --mount=type=cache,target=/root/.cache/sing-box,sharing=locked \
     set -eux; \
@@ -73,6 +82,7 @@ RUN --mount=type=cache,target=/root/.cache/pip,sharing=locked \
 # models while building the image instead of allowing the first buyer request to
 # attempt a write into root-owned site-packages or depend on runtime Internet.
 RUN set -eux; \
+    python -c "import cv2; print('OpenCV runtime ready: ' + cv2.__version__)"; \
     for attempt in 1 2 3; do \
       if rapidocr download_models; then \
         break; \
