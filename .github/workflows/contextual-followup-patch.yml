@@ -25,18 +25,33 @@ jobs:
           python-version: '3.10'
       - name: Apply source patch
         run: python tools/apply_contextual_followup_fix.py
-      - name: Normalize semantic regression contract
+      - name: Normalize semantic regression contracts
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('tests/test_contextual_followup_coalescing_static.py')
-          text = path.read_text(encoding='utf-8')
+
+          new_test = Path('tests/test_contextual_followup_coalescing_static.py')
+          text = new_test.read_text(encoding='utf-8')
           old = "    assert '\"可以吗\"' in source and '\"能用吗\"' in source and '\"多少钱\"' in source\n"
           new = "    assert '可以|可以吗|可以不' in source\n    assert '能|能吗|能用|能用吗|能不能' in source\n    assert '多久|什么时候|多少钱|在哪|哪里' in source\n"
           if old not in text:
-              raise SystemExit('semantic regression anchor missing')
-          path.write_text(text.replace(old, new, 1), encoding='utf-8')
+              raise SystemExit('semantic regex regression anchor missing')
+          new_test.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          legacy_test = Path('tests/test_runtime_1095_context_order_ocr_static.py')
+          text = legacy_test.read_text(encoding='utf-8-sig')
+          old = '''    assert "SemanticContinuationWindowSeconds = 15" in source
+    assert "买家上一句与当前指代续问，请合并理解为一个完整问题" in source
+'''
+          new = '''    # Semantic memory TTL is deliberately longer than the merge delay. This allows
+    # natural elliptical follow-ups minutes later without making every reply wait for that TTL.
+    assert "SemanticContinuationWindowSeconds = 180" in source
+    assert "买家当前消息是对上一条未解决问题的省略补充或催问" in source
+'''
+          if old not in text:
+              raise SystemExit('legacy semantic TTL regression anchor missing')
+          legacy_test.write_text(text.replace(old, new, 1), encoding='utf-8')
           PY
       - name: Run focused regressions
         run: |
@@ -46,7 +61,8 @@ jobs:
             tests/test_humanlike_burst_static.py \
             tests/test_send_delivery_and_burst_regressions_static.py \
             tests/test_non_buyer_conversation_guard_static.py \
-            tests/test_current_buyer_health_watchdog_static.py
+            tests/test_current_buyer_health_watchdog_static.py \
+            tests/test_runtime_1095_context_order_ocr_static.py
       - name: Run full repository static regressions
         run: python -m pytest -q tests
       - name: Commit production patch and remove applier
