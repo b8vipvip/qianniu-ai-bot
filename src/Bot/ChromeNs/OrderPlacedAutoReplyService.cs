@@ -363,7 +363,14 @@ namespace Bot.ChromeNs
                         return false;
                     }
 
-                    ReloadAndMergeActionStateLocked(path);
+                    string reloadError;
+                    if (!ReloadAndMergeActionStateLocked(path, out reloadError))
+                    {
+                        reason = "action_state_unavailable";
+                        Log.ErrorWithMaxCount("订单自动回复已阻止：动作级持久状态不可可靠读取，禁止把未知状态当空状态发送。 error="
+                            + Short(reloadError, 220), 20);
+                        return false;
+                    }
                     var now = DateTime.Now;
                     ActiveActions.RemoveAll(x => x == null || x.Until <= now);
                     _actionState.Records.RemoveAll(x => x == null || x.Until <= now);
@@ -462,7 +469,13 @@ namespace Bot.ChromeNs
                         Log.ErrorWithMaxCount("记录订单发送不确定状态时跨进程锁超时；保留既有durable in-flight窗口以防重复。", 20);
                         return;
                     }
-                    ReloadAndMergeActionStateLocked(path);
+                    string reloadError;
+                    if (!ReloadAndMergeActionStateLocked(path, out reloadError))
+                    {
+                        Log.ErrorWithMaxCount("记录订单发送不确定状态时无法可靠读取动作ledger；保留磁盘中既有in-flight安全窗口。 error="
+                            + Short(reloadError, 220), 20);
+                        return;
+                    }
                     var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
                     if (existing == null)
                     {
@@ -501,7 +514,13 @@ namespace Bot.ChromeNs
                         Log.ErrorWithMaxCount("完成订单动作时跨进程锁超时；durable in-flight将按10分钟安全窗口自然过期。", 20);
                         return;
                     }
-                    ReloadAndMergeActionStateLocked(path);
+                    string reloadError;
+                    if (!ReloadAndMergeActionStateLocked(path, out reloadError))
+                    {
+                        Log.ErrorWithMaxCount("完成订单动作时无法可靠读取动作ledger；不覆盖磁盘状态，让既有in-flight安全窗口自然过期。 error="
+                            + Short(reloadError, 220), 20);
+                        return;
+                    }
                     var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
                     if (existing != null) existing.InFlight = false;
 
@@ -546,7 +565,13 @@ namespace Bot.ChromeNs
                         Log.ErrorWithMaxCount("记录精确订单号时跨进程动作状态锁超时，本次仅跳过持久化观察。 orderId=" + orderId, 10);
                         return;
                     }
-                    ReloadAndMergeActionStateLocked(path);
+                    string reloadError;
+                    if (!ReloadAndMergeActionStateLocked(path, out reloadError))
+                    {
+                        Log.ErrorWithMaxCount("记录精确订单号时无法可靠读取动作ledger，本次跳过持久化观察。 error="
+                            + Short(reloadError, 220), 10);
+                        return;
+                    }
                     var exists = _actionState.Records.Any(x => x != null
                         && !x.FollowUp
                         && Normalize(x.Seller) == Normalize(seller)
@@ -630,39 +655,57 @@ namespace Bot.ChromeNs
         private static void EnsureActionStateLoadedLocked()
         {
             if (_actionState != null) return;
-            _actionState = ReadActionStateFromDiskLocked(GetActionStatePath());
-        }
-
-        private static OrderReplyActionState ReadActionStateFromDiskLocked(string path)
-        {
+            OrderReplyActionState disk;
             string error;
-            var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 4, 60, out error);
-            if (!string.IsNullOrWhiteSpace(error))
-            {
-                Log.ErrorWithMaxCount("读取订单自动回复动作幂等状态失败，保留可用内存状态：" + Short(error, 220), 10);
-                return new OrderReplyActionState();
-            }
-            if (string.IsNullOrWhiteSpace(raw)) return new OrderReplyActionState();
-            try
-            {
-                var state = JsonConvert.DeserializeObject<OrderReplyActionState>(raw) ?? new OrderReplyActionState();
-                if (state.Records == null) state.Records = new List<OrderReplyActionRecord>();
-                return state;
-            }
-            catch (Exception ex)
-            {
-                Log.ErrorWithMaxCount("解析订单自动回复动作幂等状态失败，保留可用内存状态：" + Short(ex.Message, 220), 10);
-                return new OrderReplyActionState();
-            }
-        }
-
-        private static void ReloadAndMergeActionStateLocked(string path)
-        {
-            var disk = ReadActionStateFromDiskLocked(path);
-            if (_actionState == null || _actionState.Records == null || _actionState.Records.Count == 0)
+            if (TryReadActionStateFromDiskLocked(GetActionStatePath(), out disk, out error))
             {
                 _actionState = disk;
                 return;
+            }
+            // Compatibility-only observation loader. The actual send reservation path always calls
+            // ReloadAndMergeActionStateLocked and fails closed on any read/parse uncertainty.
+            Log.ErrorWithMaxCount("初始化订单自动回复动作状态失败；发送路径将继续保持fail-closed。 error="
+                + Short(error, 220), 10);
+            _actionState = new OrderReplyActionState();
+        }
+
+        private static bool TryReadActionStateFromDiskLocked(
+            string path,
+            out OrderReplyActionState state,
+            out string error)
+        {
+            state = new OrderReplyActionState();
+            error = string.Empty;
+            string readError;
+            var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 4, 60, out readError);
+            if (!string.IsNullOrWhiteSpace(readError))
+            {
+                error = "read_failed: " + readError;
+                return false;
+            }
+            if (string.IsNullOrWhiteSpace(raw)) return true;
+            try
+            {
+                state = JsonConvert.DeserializeObject<OrderReplyActionState>(raw) ?? new OrderReplyActionState();
+                if (state.Records == null) state.Records = new List<OrderReplyActionRecord>();
+                return true;
+            }
+            catch (Exception ex)
+            {
+                state = new OrderReplyActionState();
+                error = "parse_failed: " + ex.Message;
+                return false;
+            }
+        }
+
+        private static bool ReloadAndMergeActionStateLocked(string path, out string error)
+        {
+            OrderReplyActionState disk;
+            if (!TryReadActionStateFromDiskLocked(path, out disk, out error)) return false;
+            if (_actionState == null || _actionState.Records == null || _actionState.Records.Count == 0)
+            {
+                _actionState = disk;
+                return true;
             }
             if (disk.Records == null) disk.Records = new List<OrderReplyActionRecord>();
             foreach (var local in _actionState.Records.Where(x => x != null))
@@ -683,6 +726,7 @@ namespace Bot.ChromeNs
                     existing.OrderId = local.OrderId;
             }
             _actionState = disk;
+            return true;
         }
 
         private static bool SameStoredAction(OrderReplyActionRecord left, OrderReplyActionRecord right)

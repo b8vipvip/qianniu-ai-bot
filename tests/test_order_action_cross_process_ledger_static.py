@@ -17,6 +17,8 @@ def test_action_ledger_persists_cross_process_inflight_before_send():
     assert "durable.InFlight = true" in begin
     assert "SaveActionStateLocked(path)" in begin
     assert "action_state_persist_failed" in begin
+    assert "action_state_unavailable" in begin
+    assert "ReloadAndMergeActionStateLocked(path, out reloadError)" in begin
 
 
 def test_action_ledger_write_is_atomic_and_old_valid_file_is_never_deleted_first():
@@ -30,6 +32,9 @@ def test_action_ledger_write_is_atomic_and_old_valid_file_is_never_deleted_first
     order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     state = order[order.index("private static void EnsureActionStateLoadedLocked"):order.index("private static string GetActionStatePath")]
     assert "ReadAllTextShared" in state
+    assert "TryReadActionStateFromDiskLocked" in state
+    assert "read_failed:" in state
+    assert "parse_failed:" in state
     assert "WriteAllTextAtomic" in state
     assert "File.WriteAllText(" not in state
     assert "File.Delete(path)" not in state
