@@ -1,4 +1,7 @@
+using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
 
@@ -88,6 +91,130 @@ namespace Bot.ChromeNs
             return (ch >= '\u3400' && ch <= '\u4DBF')
                 || (ch >= '\u4E00' && ch <= '\u9FFF')
                 || (ch >= '\uF900' && ch <= '\uFAFF');
+        }
+    }
+
+    /// <summary>
+    /// Generic recovery for structured model output used by diagnostics and learning. Providers may
+    /// wrap a valid JSON object in Markdown, an envelope object/array, a JSON string, or explanatory
+    /// prose. Recovery is quote/escape aware so braces inside natural-language fields do not corrupt
+    /// extraction. This intentionally returns the first real object rather than using first/last brace.
+    /// </summary>
+    internal static class StructuredJsonObjectRecovery
+    {
+        internal static string RecoverObjectText(string text)
+        {
+            JObject value;
+            return TryRecoverObject(text, out value)
+                ? value.ToString(Formatting.None)
+                : (text ?? string.Empty).Trim();
+        }
+
+        internal static bool TryRecoverObject(string text, out JObject result)
+        {
+            result = null;
+            text = (text ?? string.Empty).Trim();
+            if (text.Length == 0) return false;
+            if (TryCandidate(text, 0, out result)) return true;
+
+            foreach (Match fence in Regex.Matches(
+                text,
+                @"```(?:json)?\s*(?<body>[\s\S]*?)```",
+                RegexOptions.IgnoreCase))
+            {
+                if (TryCandidate(fence.Groups["body"].Value, 0, out result)) return true;
+            }
+
+            foreach (var candidate in ExtractBalancedObjects(text))
+            {
+                if (TryCandidate(candidate, 0, out result)) return true;
+            }
+            return false;
+        }
+
+        private static bool TryCandidate(string text, int depth, out JObject result)
+        {
+            result = null;
+            text = (text ?? string.Empty).Trim();
+            if (text.Length == 0 || depth > 5) return false;
+            try
+            {
+                return SelectObject(JToken.Parse(text), depth, out result);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool SelectObject(JToken token, int depth, out JObject result)
+        {
+            result = null;
+            if (token == null || depth > 5) return false;
+            var obj = token as JObject;
+            if (obj != null)
+            {
+                // Prefer the current object. Diagnostic schemas are themselves objects, while an
+                // outer provider envelope is still safe to parse and can be handled by its caller.
+                result = obj;
+                return true;
+            }
+
+            var array = token as JArray;
+            if (array != null)
+            {
+                foreach (var child in array)
+                {
+                    if (SelectObject(child, depth + 1, out result)) return true;
+                }
+                return false;
+            }
+
+            if (token.Type != JTokenType.String) return false;
+            var nested = Convert.ToString(((JValue)token).Value);
+            if (TryCandidate(nested, depth + 1, out result)) return true;
+            foreach (var candidate in ExtractBalancedObjects(nested))
+            {
+                if (TryCandidate(candidate, depth + 1, out result)) return true;
+            }
+            return false;
+        }
+
+        private static IEnumerable<string> ExtractBalancedObjects(string text)
+        {
+            var result = new List<string>();
+            text = text ?? string.Empty;
+            var start = -1;
+            var depth = 0;
+            var inString = false;
+            var escaped = false;
+            for (var i = 0; i < text.Length; i++)
+            {
+                var ch = text[i];
+                if (inString)
+                {
+                    if (escaped) { escaped = false; continue; }
+                    if (ch == '\\') { escaped = true; continue; }
+                    if (ch == '"') inString = false;
+                    continue;
+                }
+                if (ch == '"') { inString = true; continue; }
+                if (ch == '{')
+                {
+                    if (depth == 0) start = i;
+                    depth++;
+                    continue;
+                }
+                if (ch != '}' || depth <= 0) continue;
+                depth--;
+                if (depth == 0 && start >= 0)
+                {
+                    result.Add(text.Substring(start, i - start + 1));
+                    start = -1;
+                    if (result.Count >= 16) break;
+                }
+            }
+            return result;
         }
     }
 }
