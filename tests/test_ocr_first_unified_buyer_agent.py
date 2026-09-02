@@ -18,7 +18,8 @@ def test_ocr_first_runs_before_vision_provider_selection():
     assert "DirectKnowledgeMinOcrConfidence = 0.88" in local
     assert "KnowledgeEngineV2Service.IsSnapshotReady" in local
     assert "decision.CanDirectReply" in local
-    assert 'EndpointName = "local-ocr+knowledge-v2"' in local
+    assert 'EndpointName = "server-ocr+knowledge-v2"' in local
+    assert "task.SellerNick," in local
     assert "未调用视觉API" in local
 
 
