@@ -47,11 +47,14 @@ def test_server_ocr_runtime_is_authenticated_bounded_and_windows_release_exclude
     assert "rapidocr==" in requirements
     assert "onnxruntime==" in requirements
 
-    # Formal Windows releases must no longer depend on local inference binaries/models.
-    assert "LocalOcrWorker.exe" not in workflow
+    # Formal Windows releases must neither build nor copy local OCR inference assets.
+    assert "Build multilingual local OCR worker" not in workflow
+    assert "dotnet publish tools/LocalOcrWorker" not in workflow
     assert "PP-OCRv6_det_small.onnx" not in workflow
     assert "PP-OCRv6_rec_small.onnx" not in workflow
-    assert "package\\Bin\\local-ocr" not in workflow
+    # Keep a release-time tripwire that rejects accidental reintroduction of local OCR assets.
+    assert "Local OCR runtime must not be bundled after server OCR migration." in workflow
+    assert "Test-Path -LiteralPath 'package\\Bin\\local-ocr'" in workflow
 
 
 def test_buyer_session_agent_keeps_independent_generations_and_retires_merged_ones():
