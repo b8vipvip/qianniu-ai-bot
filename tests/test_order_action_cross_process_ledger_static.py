@@ -12,7 +12,7 @@ def test_action_ledger_persists_cross_process_inflight_before_send():
     begin = code[code.index("internal static bool TryBeginExecution"):code.index("internal static void MarkDeliveryUncertain")]
     assert "public bool InFlight" in code
     assert 'CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000)' in begin
-    assert "ReloadAndMergeActionStateLocked(path)" in begin
+    assert "ReloadAndMergeActionStateLocked(path, out reloadError)" in begin
     assert "action_inflight_cross_process" in begin
     assert "durable.InFlight = true" in begin
     assert "SaveActionStateLocked(path)" in begin
