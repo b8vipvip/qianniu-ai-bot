@@ -1,6 +1,6 @@
 # Qianniu AI Bot 项目交接上下文
 
-更新时间：2026-09-02 16:19 +08:00 之后  
+更新时间：2026-09-02 16:35 +08:00 之后  
 仓库：`b8vipvip/qianniu-ai-bot`  
 默认分支：`master`  
 当前稳定基线：`d5a72fd3fac83ced6780ac1213fbacecd784f64f`（PR #208 已合并）  
@@ -42,8 +42,8 @@
 ### 2.5 Coalescing / generation starvation
 - 前置规则等待已有上限与 generation cancellation；
 - generation timeout fail-open；
-- 1.1.1139 日志暴露 CLR ThreadPool continuation 饥饿后，PR #208 加入运行时 ThreadPool 最低容量保护；
-- 目标是让 `CancelAfter`、`Task.Delay`、delivery watchdog 等 continuation 不再被同步工作长期饿死。
+- 1.1.1139 日志确认过“50 秒 deadline 实际延迟数分钟”；
+- PR #208 加入运行时 ThreadPool 最低容量保护，让 `CancelAfter`、`Task.Delay`、delivery watchdog 等 continuation 不再被同步工作长期饿死。
 
 ### 2.6 Knowledge / 人工学习
 - Knowledge V2 FactKey 已细化；
@@ -52,56 +52,60 @@
 
 ## 3. CI / 发布状态
 
-PR #208 合并前 Windows CI、API control plane CI、Windows x64 Release 均成功。合并后：
-
+PR #208 合并后：
 - merge SHA：`d5a72fd3fac83ced6780ac1213fbacecd784f64f`；
 - Windows x64 Release build #1150：成功；
 - 自动更新发布链：成功；
 - rescue updater asset 发布链：成功；
 - 正式 release：`bot-v1.1.1150`。
 
+当前 PR #209 已完成第一轮修复并通过最新一轮：
+- Windows CI #970：成功；
+- API control plane CI #805：成功；
+- Windows x64 Release #1152：成功。
+
 ## 4. 当前仍需继续验证 / 修复的真实问题
 
-### P0 — generation 绝对年龄发送屏障仍缺失
+### P0 — generation 绝对年龄最后防线：已在 PR #209 实现，待合并与真实日志验证
 
-`BuyerStreamingReplyPipeline` 当前依赖 50 秒 `CancelAfter` 与 generation token。PR #208 修复了 ThreadPool starvation 风险，但如果某个下游调用完全忽略 cancellation，迟到结果返回后代码仍可能继续进入 `SetAnswerReady` / 发送路径。
+PR #209 在 `BuyerSessionAgentRuntimeBridge` 增加独立 dedicated background Thread：
+- 每 250ms 扫描已观察 seller+buyer 的 generation；
+- generation 首次进入 `Generating` 后开始独立 wall-clock 计时；
+- 活跃时间超过 55 秒时调用 `BuyerSessionAgent.Cancel(..., "absolute_generation_age_exceeded")`；
+- 取消会把 generation 从 `ActiveGenerations` 移除；
+- 即使下游 provider 完全忽略 cancellation 并迟到返回，现有 `lease.IsCurrent` 也会失败，因此不能继续进入 Ready/Sending；
+- 人工客服回复不触发取消；Completed/Cancelled/Failed watch 自动清理。
 
-下一步增加独立于 timer continuation 的 wall-clock freshness guard：
-- AI 返回后立即检查 `DateTime.Now - aiStartedAt`；
-- 超过允许年龄则丢弃迟到结果，不进入 Ready/Sending；
-- 真正发送前再次检查，防止 pre-send 阶段把旧结果送出；
-- 只记录 generationId、elapsedMs、dropReason，不记录敏感正文。
+这道防线不依赖 ThreadPool timer continuation，也不替代正常 50 秒 cancellation。
 
-这是一道最后防线，不替代 50 秒 timeout。
-
-### P1 — 需要 1.1.1150 新运行日志验证
+### P1 — 需要 1.1.1150+ 新运行日志验证
 
 重点证据：
 1. generation deadline 是否稳定约在 50–55 秒内；
 2. 是否还存在数分钟后 `Generating → Ready → Sending → Completed`；
-3. OCR 是否出现 `endpointSource=shop-control-plane`；
-4. 图片是否不再无故退回视觉 AI；
-5. CDP 页面通道是否长期单调增长；
-6. 平台“服务态度提醒”出现时是否明确 blocked 且无“继续发送”自动点击。
+3. 若出现 `absolute_generation_age_exceeded`，该 generation 后续不得再 Ready/Sending；
+4. OCR 是否出现 `endpointSource=shop-control-plane`；
+5. 图片是否不再无故退回视觉 AI；
+6. CDP 页面通道是否长期单调增长；
+7. 平台“服务态度提醒”出现时是否明确 blocked 且无“继续发送”自动点击。
 
-没有 1.1.1150 新日志前，不把上述验证项写成“已证明修复”。
+没有新版本真实日志前，不把运行时竞态写成“线上已证明修复”。
 
 ### P2 — CDP / WebSocket 生命周期继续观察
 
-1.1.1139 日志里业务 CDP 保持单实例，页面通道数量没有形成明确持续单调增长证据，因此当前不再把它定性为已确认泄漏。若 1.1.1150 长时日志出现通道持续上涨，再按 session/target 创建与释放链定位。
+1.1.1139 日志里业务 CDP 保持单实例，页面通道数量没有形成明确持续单调增长证据，因此当前不再把它定性为已确认泄漏。若新版本长时日志出现通道持续上涨，再按 session/target 创建与释放链定位。
 
-## 5. 本次重新检查 master 的结论
+## 5. 本次重新检查仓库的结论
 
 - 旧 `PENDING_RUNTIME_FIXES_20260902.md` 已不存在，旧清单已经收敛进当前交接文档；
-- 当前 open issues #46/#47/#48 是历史架构/功能规划，不是本轮运行时回归证据；
-- 当前没有 open PR；
-- master 自动发布与 rescue asset workflow 均成功；
-- 当前最值得继续编码的运行时安全缺口是 **generation 绝对年龄发送屏障**。
+- open issues #46/#47/#48 是历史架构/功能规划，不是本轮运行时回归证据；
+- PR #209 是当前唯一运行时修复 PR；
+- 旧文档基线 `1.1.1139` 已更新为 `1.1.1150`；
+- generation 独立绝对年龄屏障已经编码并通过 Windows/API/x64 三条 CI，下一步是合并与发布后真实日志验证。
 
 ## 6. 下一步执行顺序
 
-1. 实现 generation absolute-age freshness guard + 静态/行为测试；
-2. 跑 Windows CI / API CI / x64 Release；
-3. 合并并自动发布下一版；
-4. 用新版本真实聊天测试并导出完整运行日志；
-5. 根据日志继续挖掘，不凭旧文档重复修复已经完成的问题。
+1. 合并 PR #209；
+2. 等待 master x64 build 与自动发布链成功；
+3. 用新版本真实聊天测试并导出完整运行日志；
+4. 根据日志继续挖掘，不凭旧文档重复修复已经完成的问题。
