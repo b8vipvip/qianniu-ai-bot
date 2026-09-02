@@ -7,6 +7,7 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
+# Production invariant: a Qianniu policy confirmation is never an automatic retry surface.
 def test_service_attitude_prompt_is_a_terminal_platform_block_not_an_auto_confirm():
     guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
     assert "服务态度提醒" in guard
