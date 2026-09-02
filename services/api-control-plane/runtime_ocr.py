@@ -21,6 +21,7 @@ _ENGINE_LOCK = threading.Lock()
 _ENGINE: Optional[Any] = None
 _SEMAPHORE: Optional[asyncio.Semaphore] = None
 _SEMAPHORE_LOOP: Optional[asyncio.AbstractEventLoop] = None
+_INSTALLED = False
 
 
 def _get_semaphore() -> asyncio.Semaphore:
@@ -88,6 +89,11 @@ def _release_when_done(task: asyncio.Task, semaphore: asyncio.Semaphore) -> None
 
 
 def install(control_plane: Any) -> None:
+    global _INSTALLED
+    if _INSTALLED:
+        return
+    _INSTALLED = True
+
     app = control_plane.app
     require_client = control_plane.require_client
 
