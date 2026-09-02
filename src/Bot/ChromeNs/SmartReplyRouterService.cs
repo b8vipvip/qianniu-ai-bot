@@ -5,6 +5,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Bot.ChromeNs
 {
@@ -75,6 +77,19 @@ namespace Bot.ChromeNs
 
         public static SmartReplyPlan BuildPlan(string seller, string buyer, string question)
         {
+            return BuildPlanAsync(seller, buyer, question, CancellationToken.None)
+                .ConfigureAwait(false)
+                .GetAwaiter()
+                .GetResult();
+        }
+
+        public static async Task<SmartReplyPlan> BuildPlanAsync(
+            string seller,
+            string buyer,
+            string question,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             question = (question ?? string.Empty).Trim();
             var turns = ConversationContextStore.GetRecentTurns(seller, buyer, question, 16)
                 .Where(x => x != null && !string.IsNullOrWhiteSpace(x.Text))
@@ -109,16 +124,18 @@ namespace Bot.ChromeNs
                 var resolvedText = queryResolution == null || string.IsNullOrWhiteSpace(queryResolution.ResolvedQuery)
                     ? question
                     : queryResolution.ResolvedQuery;
-                var semantic = SemanticEmbeddingService.TryScore(
+                var semantic = await SemanticEmbeddingService.TryScoreAsync(
                     resolvedText,
                     BotFeatureStore.GetKnowledgeBase(),
-                    candidates);
+                    candidates,
+                    cancellationToken).ConfigureAwait(false);
                 if (semantic != null && semantic.Applied)
                 {
                     ApplySemanticScores(plan, candidates, semantic, question, resolvedText);
                 }
             }
 
+            cancellationToken.ThrowIfCancellationRequested();
             var best = plan.BestCandidate;
             if (ConversationProgressGuardService.RequiresContextualHandling(state))
             {
