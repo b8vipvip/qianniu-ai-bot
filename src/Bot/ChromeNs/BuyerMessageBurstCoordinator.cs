@@ -85,8 +85,8 @@ namespace Bot.ChromeNs
             if (!string.IsNullOrWhiteSpace(continuation)
                 && NormalizeCompare(CombinedQuestion).IndexOf(NormalizeCompare(continuation), StringComparison.Ordinal) < 0)
             {
-                ModelQuestion = "【买家上一句与当前指代续问，请合并理解为一个完整问题】\n上一句："
-                    + continuation + "\n当前：" + CombinedQuestion;
+                ModelQuestion = "【买家当前消息是对上一条未解决问题的省略补充或催问。请把主问题、后续片段以及最近商品/图片/订单上下文作为同一个问题整体理解，只回答一次，不要把‘？’、‘可以吗’、‘能用吗’之类片段当成新主题。】\n主问题："
+                    + continuation + "\n后续片段：" + CombinedQuestion;
             }
             else
             {
@@ -265,16 +265,20 @@ namespace Bot.ChromeNs
 
         private sealed class RecentBuyerText
         {
-            public string Text { get; set; }
-            public DateTime ReceivedAt { get; set; }
-            public long Generation { get; set; }
+            // Anchor is the last substantive unresolved utterance. Punctuation nudges and short
+            // elliptical confirmations update Latest* but never erase this semantic anchor.
+            public string AnchorText { get; set; }
+            public DateTime AnchorReceivedAt { get; set; }
+            public long AnchorGeneration { get; set; }
+            public string LatestText { get; set; }
+            public DateTime LatestReceivedAt { get; set; }
+            public long LatestGeneration { get; set; }
         }
 
-        private const int PreMergeRuleGateWaitMilliseconds = 2500;
-        private const int SemanticContinuationWindowSeconds = 15;
+        // DeterministicAutoReplyService owns the single per-buyer serialization gate.
+        // Do not add a second outer gate or race a still-running fixed-send task against AI.
+        private const int SemanticContinuationWindowSeconds = 180;
         private static readonly SemaphoreSlim LegacyAiConfigurationGate = new SemaphoreSlim(1, 1);
-        private readonly ConcurrentDictionary<string, SemaphoreSlim> _preMergeRuleGates =
-            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, BurstState> _states =
             new ConcurrentDictionary<string, BurstState>(StringComparer.Ordinal);
         private readonly ConcurrentDictionary<string, RecentBuyerText> _recentBuyerTexts =
@@ -326,40 +330,35 @@ namespace Bot.ChromeNs
                 "pre_merge_rules");
 
             var allowLocalShortReply = !HasPendingBuyerMessages(item.SellerNick, item.BuyerNick);
-            var preMergeGate = _preMergeRuleGates.GetOrAdd(
-                Key(item.SellerNick, item.BuyerNick),
-                _ => new SemaphoreSlim(1, 1));
             Task.Run(async () =>
             {
                 var continueToMerge = true;
-                var gateAcquired = false;
                 try
                 {
-                    gateAcquired = await preMergeGate.WaitAsync(
-                        PreMergeRuleGateWaitMilliseconds,
-                        observation.CancellationToken);
-                    if (gateAcquired)
-                    {
-                        continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(
-                            item,
-                            allowLocalShortReply);
-                    }
-                    else
-                    {
-                        Log.ErrorWithMaxCount(
-                            "消息合并前固定规则串行门等待超时，已跳过前置规则并继续普通合并链路: seller="
-                            + item.SellerNick + ", buyer=" + item.BuyerNick
-                            + ", generation=" + item.SessionGeneration
-                            + ", waitMs=" + PreMergeRuleGateWaitMilliseconds,
-                            50);
-                    }
+                    // The deterministic service owns the only same-buyer gate. Its bounded 1.8s
+                    // acquisition fails open for later generations, so an unhealthy fixed send can
+                    // no longer strand the whole buyer in Coalescing. We deliberately await the
+                    // selected rule task here: starting AI while that task can still send would
+                    // create a duplicate/out-of-order side-effect race.
+                    continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(
+                        item,
+                        allowLocalShortReply);
                 }
                 catch (OperationCanceledException)
                 {
-                    Log.Info("消息合并前固定规则已因generation失效取消等待: seller="
+                    if (observation.CancellationToken.IsCancellationRequested)
+                    {
+                        Log.Info("消息合并前固定规则已因generation显式失效取消: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", generation=" + item.SessionGeneration);
+                        return;
+                    }
+                    Log.ErrorWithMaxCount(
+                        "消息合并前固定规则发生非会话取消，已fail-open继续普通合并链路: seller="
                         + item.SellerNick + ", buyer=" + item.BuyerNick
-                        + ", generation=" + item.SessionGeneration);
-                    return;
+                        + ", generation=" + item.SessionGeneration,
+                        20);
+                    continueToMerge = true;
                 }
                 catch (Exception ex)
                 {
@@ -367,13 +366,7 @@ namespace Bot.ChromeNs
                         "消息合并前固定规则处理失败，继续普通合并链路: seller=" + item.SellerNick
                         + ", buyer=" + item.BuyerNick + ", error=" + Safe(ex.Message, 220),
                         20);
-                }
-                finally
-                {
-                    if (gateAcquired)
-                    {
-                        try { preMergeGate.Release(); } catch { }
-                    }
+                    continueToMerge = true;
                 }
 
                 if (observation.CancellationToken.IsCancellationRequested
@@ -384,7 +377,25 @@ namespace Bot.ChromeNs
 
                 if (continueToMerge)
                 {
-                    EnqueueForMerge(item);
+                    try
+                    {
+                        EnqueueForMerge(item);
+                    }
+                    catch (Exception ex)
+                    {
+                        _sessionAgent.TryTransition(
+                            item.SellerNick,
+                            item.BuyerNick,
+                            item.SessionGeneration,
+                            BuyerSessionAgentState.Failed,
+                            "pre_merge_enqueue_exception");
+                        Log.ErrorWithMaxCount(
+                            "消息进入合并队列异常，已结束Coalescing避免永久等待: seller="
+                            + item.SellerNick + ", buyer=" + item.BuyerNick
+                            + ", generation=" + item.SessionGeneration
+                            + ", error=" + Safe(ex.Message, 220),
+                            50);
+                    }
                 }
                 else
                 {
@@ -419,27 +430,45 @@ namespace Bot.ChromeNs
             var key = Key(item.SellerNick, item.BuyerNick);
             RecentBuyerText previous;
             if (!_recentBuyerTexts.TryGetValue(key, out previous) || previous == null) return;
-            var age = item.ReceivedAt - previous.ReceivedAt;
-            if (age < TimeSpan.Zero || age > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds)) return;
-            var previousText = NormalizeSemanticText(previous.Text);
-            var currentText = NormalizeSemanticText(item.DisplayText);
-            if (string.IsNullOrWhiteSpace(previousText)
-                || string.Equals(previousText, currentText, StringComparison.OrdinalIgnoreCase)) return;
 
-            item.SemanticContinuationContext = previousText;
-            if (previous.Generation > 0 && previous.Generation != item.SessionGeneration)
+            var currentAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
+            var anchorText = NormalizeSemanticText(previous.AnchorText);
+            if (string.IsNullOrWhiteSpace(anchorText) || previous.AnchorReceivedAt == DateTime.MinValue) return;
+            var age = currentAt - previous.AnchorReceivedAt;
+            if (age < TimeSpan.Zero || age > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds)) return;
+
+            var currentText = NormalizeSemanticText(item.DisplayText);
+            if (string.IsNullOrWhiteSpace(currentText)
+                || string.Equals(anchorText, currentText, StringComparison.OrdinalIgnoreCase)) return;
+
+            item.SemanticContinuationContext = anchorText;
+
+            // A dependent fragment is not an independent new topic. It supersedes only the previous
+            // generation in the same semantic chain; unrelated ordinary questions remain parallel.
+            var supersededGeneration = previous.LatestGeneration > 0
+                ? previous.LatestGeneration
+                : previous.AnchorGeneration;
+            if (supersededGeneration > 0 && supersededGeneration != item.SessionGeneration)
             {
                 _sessionAgent.Cancel(
                     item.SellerNick,
                     item.BuyerNick,
-                    previous.Generation,
+                    supersededGeneration,
                     "semantic_continuation_superseded");
             }
-            Log.Info("买家短指代续问已关联上一句语义上下文: seller=" + item.SellerNick
+            if (previous.LatestReceivedAt != DateTime.MinValue)
+            {
+                ResponseProgressTracker.MarkContextualContinuationMerged(
+                    item.SellerNick,
+                    item.BuyerNick,
+                    previous.LatestReceivedAt,
+                    currentText);
+            }
+            Log.Info("买家省略/催问续句已关联未解决主问题: seller=" + item.SellerNick
                 + ", buyer=" + item.BuyerNick
-                + ", previousGeneration=" + previous.Generation
+                + ", previousGeneration=" + supersededGeneration
                 + ", generation=" + item.SessionGeneration
-                + ", ageMs=" + Math.Max(0, (long)age.TotalMilliseconds));
+                + ", anchorAgeMs=" + Math.Max(0, (long)age.TotalMilliseconds));
         }
 
         private void RememberRecentBuyerText(BuyerMessageBurstItem item)
@@ -447,11 +476,47 @@ namespace Bot.ChromeNs
             if (item == null) return;
             var text = NormalizeSemanticText(item.DisplayText);
             if (string.IsNullOrWhiteSpace(text) || text.Length > 240) return;
-            _recentBuyerTexts[Key(item.SellerNick, item.BuyerNick)] = new RecentBuyerText
+            var key = Key(item.SellerNick, item.BuyerNick);
+            var receivedAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt;
+            var dependent = LooksLikeSemanticContinuation(text);
+
+            if (dependent)
             {
-                Text = text,
-                ReceivedAt = item.ReceivedAt == default(DateTime) ? DateTime.Now : item.ReceivedAt,
-                Generation = item.SessionGeneration
+                RecentBuyerText existing;
+                while (_recentBuyerTexts.TryGetValue(key, out existing) && existing != null)
+                {
+                    if (string.IsNullOrWhiteSpace(existing.AnchorText)
+                        || existing.AnchorReceivedAt == DateTime.MinValue
+                        || receivedAt - existing.AnchorReceivedAt > TimeSpan.FromSeconds(SemanticContinuationWindowSeconds))
+                    {
+                        break;
+                    }
+                    var updated = new RecentBuyerText
+                    {
+                        AnchorText = existing.AnchorText,
+                        AnchorReceivedAt = existing.AnchorReceivedAt,
+                        AnchorGeneration = existing.AnchorGeneration,
+                        LatestText = text,
+                        LatestReceivedAt = receivedAt,
+                        LatestGeneration = item.SessionGeneration
+                    };
+                    if (_recentBuyerTexts.TryUpdate(key, updated, existing)) return;
+                }
+
+                // A pure punctuation nudge has no standalone semantics and must never erase/create an anchor.
+                if (IsPunctuationOnlySemanticNudge(text)) return;
+            }
+
+            // A substantive question (or a short elliptical question with no usable predecessor) becomes
+            // the new anchor. Later punctuation/confirmation fragments can safely inherit it.
+            _recentBuyerTexts[key] = new RecentBuyerText
+            {
+                AnchorText = text,
+                AnchorReceivedAt = receivedAt,
+                AnchorGeneration = item.SessionGeneration,
+                LatestText = text,
+                LatestReceivedAt = receivedAt,
+                LatestGeneration = item.SessionGeneration
             };
         }
 
@@ -459,11 +524,29 @@ namespace Bot.ChromeNs
         {
             var text = NormalizeSemanticText(value);
             if (string.IsNullOrWhiteSpace(text) || text.Length > 32) return false;
-            var compact = Regex.Replace(text.ToLowerInvariant(), @"[\s，。！？!?、；;：:]", string.Empty);
-            var prefixes = new[] { "这个", "这款", "这种", "这个版本", "这个型号", "那个", "那款", "那种", "它" };
-            if (!prefixes.Any(x => compact.StartsWith(x, StringComparison.Ordinal))) return false;
-            if (compact == "这个" || compact == "这个呢" || compact == "那个" || compact == "那个呢" || compact == "它呢") return true;
-            return Regex.IsMatch(compact, @"支持|能用|可以|可用|适用|兼容|行吗|能不能|可不可以|怎么样|咋样|有吗|吗$|呢$");
+            if (IsPunctuationOnlySemanticNudge(text)) return true;
+
+            var compact = Regex.Replace(text.ToLowerInvariant(), @"[\s，。！？!?、；;：:…~～]", string.Empty);
+            if (string.IsNullOrWhiteSpace(compact)) return true;
+
+            var prefixes = new[] { "这个", "这款", "这种", "这个版本", "这个型号", "那个", "那款", "那种", "它", "这", "那" };
+            if (prefixes.Any(x => compact.StartsWith(x, StringComparison.Ordinal)))
+            {
+                if (compact == "这个" || compact == "这个呢" || compact == "那个" || compact == "那个呢" || compact == "它呢") return true;
+                if (Regex.IsMatch(compact, @"支持|能用|可以|可用|适用|兼容|行吗|能不能|可不可以|怎么样|咋样|有吗|吗$|呢$")) return true;
+            }
+
+            // Predicate-only / interrogative-only short turns omit the subject by definition.
+            // They are dependent only when an anchor actually exists; RememberRecentBuyerText falls
+            // back to treating them as a new anchor when no predecessor is available.
+            return Regex.IsMatch(compact,
+                @"^(?:可以|可以吗|可以不|行|行吗|行不行|能|能吗|能用|能用吗|能不能|支持|支持吗|可用|可用吗|适用|适用吗|兼容|兼容吗|有|有吗|是吗|对吗|确定吗|真的吗|真的|好了吗|好了没|怎么样|咋样|多久|什么时候|多少钱|在哪|哪里|怎么弄|怎么用|呢)$");
+        }
+
+        private static bool IsPunctuationOnlySemanticNudge(string value)
+        {
+            var compact = Regex.Replace(NormalizeSemanticText(value), @"[\s，。！？!?、；;：:…~～.\-—_]+", string.Empty);
+            return compact.Length == 0;
         }
 
         private static string NormalizeSemanticText(string value)

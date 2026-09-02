@@ -138,6 +138,34 @@ namespace Bot.ChromeNs
             return entry.Control;
         }
 
+        public static void MarkContextualContinuationMerged(
+            string seller,
+            string buyer,
+            DateTime previousDetectedAt,
+            string currentFragment)
+        {
+            if (previousDetectedAt == DateTime.MinValue) return;
+            var turnKey = TurnKey(seller, buyer, NormalizeDetectedAt(previousDetectedAt));
+            Entry entry;
+            if (!Entries.TryGetValue(turnKey, out entry) || entry == null) return;
+
+            lock (entry.Sync)
+            {
+                // Once an answer is already ready it is historical evidence, not a pending card.
+                if (entry.AnswerReadyAt != DateTime.MinValue) return;
+                if (entry.Control != null)
+                {
+                    entry.Control.SetStatus(
+                        "买家后续发送了省略补充/催问，本条已合并到最新问题语义中，不再独立生成答案",
+                        false);
+                }
+            }
+            Entry removed;
+            Entries.TryRemove(turnKey, out removed);
+            Log.Info("未完成买家问题已并入后续省略/催问: seller=" + seller
+                + ", buyer=" + buyer + ", fragment=" + (currentFragment ?? string.Empty));
+        }
+
         public static CtlConversation BeginAnswer(
             string seller, string buyer, string combinedQuestion, DateTime detectedAt)
         {

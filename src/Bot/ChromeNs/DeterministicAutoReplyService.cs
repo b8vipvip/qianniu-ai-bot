@@ -80,9 +80,9 @@ namespace Bot.ChromeNs
             var gateAcquired = await gate.WaitAsync(1800).ConfigureAwait(false);
             if (!gateAcquired)
             {
-                // Never let a deterministic rule lock strand the buyer generation in Coalescing.
-                // The outer coordinator already serializes the same buyer; this inner guard is only
-                // a compatibility barrier and must fail open when an earlier send is unhealthy.
+                // This is the single authoritative deterministic-rule serialization gate.
+                // It must fail open after a bounded wait so one unhealthy fixed send never strands
+                // later generations in Coalescing. The coordinator intentionally has no outer gate.
                 Log.ErrorWithMaxCount(
                     "固定规则内部串行门等待超时，已放行普通消息合并/AI链路: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick + ", waitMs=1800",

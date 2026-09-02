@@ -119,7 +119,7 @@ namespace Bot.ChromeNs
                 answer = await StreamingBuyerAnswerService.GetAnswerAsync(
                     burst.SellerNick,
                     burst.BuyerNick,
-                    burst.CombinedQuestion,
+                    string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion,
                     generationCts.Token,
                     partial =>
                     {

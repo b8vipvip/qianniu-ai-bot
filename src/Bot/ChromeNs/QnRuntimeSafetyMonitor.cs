@@ -123,6 +123,7 @@ namespace Bot.ChromeNs
             }
 
             var currentNick = qn.Buyer == null ? string.Empty : (qn.Buyer.Nick ?? string.Empty).Trim();
+            if (RejectNonBuyerProbe(qn, seller, first, currentNick, "first_read")) return;
             if (AreSameBuyer(seller, currentNick, firstNick))
             {
                 RecordProbeSuccess(qn, seller, firstNick, false);
@@ -137,6 +138,7 @@ namespace Bot.ChromeNs
                 RecordNoActiveChat(qn, seller, "当前会话切换中，第二次探测暂时为空");
                 return;
             }
+            if (RejectNonBuyerProbe(qn, seller, second, currentNick, "stable_read")) return;
             if (!AreSameBuyer(seller, firstNick, secondNick))
             {
                 RecordProbeFailure(qn, "当前会话连续两次读取不稳定: first=" + firstNick + ", second=" + secondNick);
@@ -148,6 +150,30 @@ namespace Bot.ChromeNs
             Log.Info("当前买家由主动探测修正: seller=" + seller
                 + ", previous=" + currentNick + ", current=" + resolved);
             RecordProbeSuccess(qn, seller, resolved, true);
+        }
+
+        private static bool RejectNonBuyerProbe(
+            QN qn,
+            string seller,
+            ConversationResponse response,
+            string cachedBuyer,
+            string stage)
+        {
+            if (qn == null || response == null || response.Result == null) return false;
+            string reason;
+            if (!NonBuyerConversationGuard.ShouldBlockConversation(qn.Seller, response.Result, out reason)) return false;
+
+            int failures;
+            ConsecutiveProbeFailures.TryRemove(qn, out failures);
+            BotConnectionDiagnostics.RecordCdpStatus(
+                true,
+                "当前选中的是非买家会话，保持已验证买家不变",
+                seller,
+                cachedBuyer);
+            Log.Info("当前买家主动探测识别到非买家会话，保持已验证buyer不变: seller="
+                + seller + ", cachedBuyer=" + (cachedBuyer ?? string.Empty)
+                + ", stage=" + stage + ", reason=" + reason);
+            return true;
         }
 
         private static bool HasVerifiedReceptionDesk(string seller)
