@@ -1,10 +1,10 @@
 # Qianniu AI Bot 项目交接上下文
 
-更新时间：2026-09-02 16:35 +08:00 之后  
+更新时间：2026-09-02 16:36 +08:00 之后  
 仓库：`b8vipvip/qianniu-ai-bot`  
 默认分支：`master`  
-当前稳定基线：`d5a72fd3fac83ced6780ac1213fbacecd784f64f`（PR #208 已合并）  
-当前正式客户端：`bot-v1.1.1150`
+当前稳定基线：`1cac49cd08e390f464ec9e35fbeea40048ed74a1`（PR #209 已合并）  
+当前正式客户端：`bot-v1.1.1154`
 
 ## 1. 当前目标
 
@@ -43,7 +43,8 @@
 - 前置规则等待已有上限与 generation cancellation；
 - generation timeout fail-open；
 - 1.1.1139 日志确认过“50 秒 deadline 实际延迟数分钟”；
-- PR #208 加入运行时 ThreadPool 最低容量保护，让 `CancelAfter`、`Task.Delay`、delivery watchdog 等 continuation 不再被同步工作长期饿死。
+- PR #208 加入运行时 ThreadPool 最低容量保护；
+- PR #209 再增加独立 dedicated-thread generation absolute-age watchdog，避免 ThreadPool timer 本身失效时迟到结果仍被发送。
 
 ### 2.6 Knowledge / 人工学习
 - Knowledge V2 FactKey 已细化；
@@ -52,33 +53,23 @@
 
 ## 3. CI / 发布状态
 
-PR #208 合并后：
-- merge SHA：`d5a72fd3fac83ced6780ac1213fbacecd784f64f`；
-- Windows x64 Release build #1150：成功；
-- 自动更新发布链：成功；
-- rescue updater asset 发布链：成功；
-- 正式 release：`bot-v1.1.1150`。
+PR #209 最终 head `c617e2a061a0c678fdd1720e6c3d3adbeb6bf7b2`：
+- Windows CI #971：成功；
+- API control plane CI #806：成功；
+- Windows x64 Release #1153：成功。
 
-当前 PR #209 已完成第一轮修复并通过最新一轮：
-- Windows CI #970：成功；
-- API control plane CI #805：成功；
-- Windows x64 Release #1152：成功。
+合并到 master 后：
+- merge SHA：`1cac49cd08e390f464ec9e35fbeea40048ed74a1`；
+- Windows CI #972：成功；
+- Windows x64 Release build #1154：成功；
+- auto-update release workflow #767：成功；
+- rescue updater asset workflow #324：成功；
+- 正式 release：`bot-v1.1.1154`；
+- x64 安装包 SHA-256：`252bd2b9fe09b612fa92a5119d9012146db367850ea27a543fcaf9f4d2ad7a55`。
 
-## 4. 当前仍需继续验证 / 修复的真实问题
+## 4. 当前仍需继续验证的真实问题
 
-### P0 — generation 绝对年龄最后防线：已在 PR #209 实现，待合并与真实日志验证
-
-PR #209 在 `BuyerSessionAgentRuntimeBridge` 增加独立 dedicated background Thread：
-- 每 250ms 扫描已观察 seller+buyer 的 generation；
-- generation 首次进入 `Generating` 后开始独立 wall-clock 计时；
-- 活跃时间超过 55 秒时调用 `BuyerSessionAgent.Cancel(..., "absolute_generation_age_exceeded")`；
-- 取消会把 generation 从 `ActiveGenerations` 移除；
-- 即使下游 provider 完全忽略 cancellation 并迟到返回，现有 `lease.IsCurrent` 也会失败，因此不能继续进入 Ready/Sending；
-- 人工客服回复不触发取消；Completed/Cancelled/Failed watch 自动清理。
-
-这道防线不依赖 ThreadPool timer continuation，也不替代正常 50 秒 cancellation。
-
-### P1 — 需要 1.1.1150+ 新运行日志验证
+### P1 — 需要 1.1.1154 新运行日志验证
 
 重点证据：
 1. generation deadline 是否稳定约在 50–55 秒内；
@@ -89,23 +80,23 @@ PR #209 在 `BuyerSessionAgentRuntimeBridge` 增加独立 dedicated background T
 6. CDP 页面通道是否长期单调增长；
 7. 平台“服务态度提醒”出现时是否明确 blocked 且无“继续发送”自动点击。
 
-没有新版本真实日志前，不把运行时竞态写成“线上已证明修复”。
+没有 1.1.1154 真实日志前，不把运行时竞态写成“线上已证明修复”。
 
 ### P2 — CDP / WebSocket 生命周期继续观察
 
-1.1.1139 日志里业务 CDP 保持单实例，页面通道数量没有形成明确持续单调增长证据，因此当前不再把它定性为已确认泄漏。若新版本长时日志出现通道持续上涨，再按 session/target 创建与释放链定位。
+1.1.1139 日志里业务 CDP 保持单实例，页面通道数量没有形成明确持续单调增长证据，因此当前不再把它定性为已确认泄漏。若 1.1.1154 长时日志出现通道持续上涨，再按 session/target 创建与释放链定位。
 
-## 5. 本次重新检查仓库的结论
+## 5. 当前仓库结论
 
-- 旧 `PENDING_RUNTIME_FIXES_20260902.md` 已不存在，旧清单已经收敛进当前交接文档；
+- 旧 `PENDING_RUNTIME_FIXES_20260902.md` 已不存在，旧清单已经收敛；
 - open issues #46/#47/#48 是历史架构/功能规划，不是本轮运行时回归证据；
-- PR #209 是当前唯一运行时修复 PR；
-- 旧文档基线 `1.1.1139` 已更新为 `1.1.1150`；
-- generation 独立绝对年龄屏障已经编码并通过 Windows/API/x64 三条 CI，下一步是合并与发布后真实日志验证。
+- PR #209 已合并，不再存在该运行时待合并项；
+- generation 独立绝对年龄屏障已经进入正式版本 1.1.1154；
+- 当前没有新的真实 1.1.1154 运行日志，因此下一阶段应以实际测试日志继续发掘问题，而不是继续凭旧日志猜测。
 
 ## 6. 下一步执行顺序
 
-1. 合并 PR #209；
-2. 等待 master x64 build 与自动发布链成功；
-3. 用新版本真实聊天测试并导出完整运行日志；
-4. 根据日志继续挖掘，不凭旧文档重复修复已经完成的问题。
+1. 客户端更新到 `bot-v1.1.1154`；
+2. 进行真实买家文本、图片、订单、长耗时 AI、平台重复消息提醒测试；
+3. 导出完整运行日志；
+4. 根据新日志继续定位和修复。
