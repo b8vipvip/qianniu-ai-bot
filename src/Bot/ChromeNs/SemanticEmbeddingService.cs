@@ -88,9 +88,22 @@ namespace Bot.ChromeNs
             IEnumerable<KnowledgeBaseEntry> allKnowledge,
             IEnumerable<SmartKnowledgeCandidate> localCandidates)
         {
+            return TryScoreAsync(query, allKnowledge, localCandidates, CancellationToken.None)
+                .ConfigureAwait(false)
+                .GetAwaiter()
+                .GetResult();
+        }
+
+        public static async Task<SemanticEmbeddingResult> TryScoreAsync(
+            string query,
+            IEnumerable<KnowledgeBaseEntry> allKnowledge,
+            IEnumerable<SmartKnowledgeCandidate> localCandidates,
+            CancellationToken cancellationToken)
+        {
             var result = new SemanticEmbeddingResult();
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 var model = GetConfiguredModel();
                 if (string.IsNullOrWhiteSpace(model)) return result;
                 var endpoint = ResolveEndpoint();
@@ -116,7 +129,8 @@ namespace Bot.ChromeNs
                 var inputs = new List<string> { query };
                 inputs.AddRange(immediateMissing.Select(x => x.Text));
                 var started = DateTime.Now;
-                var vectors = RequestEmbeddings(endpoint, model, inputs);
+                var vectors = await RequestEmbeddingsAsync(endpoint, model, inputs, cancellationToken)
+                    .ConfigureAwait(false);
                 result.LatencyMs = Math.Max(0, (long)(DateTime.Now - started).TotalMilliseconds);
                 if (vectors == null || vectors.Count != inputs.Count || vectors[0] == null || vectors[0].Length == 0)
                 {
@@ -150,6 +164,12 @@ namespace Bot.ChromeNs
                 QueueWarmup(endpoint, model, documents, cached);
                 return result;
             }
+            catch (OperationCanceledException)
+            {
+                if (cancellationToken.IsCancellationRequested) throw;
+                LogFailure("Embedding语义检索超过" + RequestTimeoutMilliseconds + "ms子预算，已自动降级到本地混合检索");
+                return result;
+            }
             catch (Exception ex)
             {
                 LogFailure("Embedding语义检索已自动降级到本地混合检索：" + ex.Message);
@@ -169,11 +189,15 @@ namespace Bot.ChromeNs
                 .ToList();
             if (missing.Count == 0 || !WarmupGate.Wait(0)) return;
 
-            Task.Run(() =>
+            Task.Run(async () =>
             {
                 try
                 {
-                    var vectors = RequestEmbeddings(endpoint, model, missing.Select(x => x.Text).ToList());
+                    var vectors = await RequestEmbeddingsAsync(
+                        endpoint,
+                        model,
+                        missing.Select(x => x.Text).ToList(),
+                        CancellationToken.None).ConfigureAwait(false);
                     if (vectors == null || vectors.Count != missing.Count) return;
                     var cache = LoadCache();
                     for (var i = 0; i < missing.Count; i++)
@@ -183,6 +207,10 @@ namespace Bot.ChromeNs
                     }
                     SaveCache(cache);
                     Log.Info("知识Embedding后台预热完成: model=" + model + ", count=" + missing.Count);
+                }
+                catch (OperationCanceledException)
+                {
+                    LogFailure("知识Embedding后台预热超过" + RequestTimeoutMilliseconds + "ms预算，已忽略");
                 }
                 catch (Exception ex)
                 {
@@ -195,10 +223,11 @@ namespace Bot.ChromeNs
             });
         }
 
-        private static List<float[]> RequestEmbeddings(
+        private static async Task<List<float[]>> RequestEmbeddingsAsync(
             AiEndpointConfig endpoint,
             string model,
-            IList<string> inputs)
+            IList<string> inputs,
+            CancellationToken cancellationToken)
         {
             if (endpoint == null || inputs == null || inputs.Count == 0) return null;
             var url = NormalizeEmbeddingUrl(endpoint.BaseUrl);
@@ -210,16 +239,22 @@ namespace Bot.ChromeNs
                 ["timeout_seconds"] = 15
             };
 
-            using (var timeout = new CancellationTokenSource(TimeSpan.FromMilliseconds(RequestTimeoutMilliseconds)))
+            using (var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken))
             using (var request = new HttpRequestMessage(HttpMethod.Post, url))
             {
+                linked.CancelAfter(RequestTimeoutMilliseconds);
                 request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", endpoint.ApiKey);
                 request.Headers.TryAddWithoutValidation("Accept", "application/json");
                 request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot/9.5.2");
                 request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
-                using (var response = Http.SendAsync(request, timeout.Token).GetAwaiter().GetResult())
+                using (var response = await Http.SendAsync(
+                    request,
+                    HttpCompletionOption.ResponseContentRead,
+                    linked.Token).ConfigureAwait(false))
                 {
-                    var body = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+                    linked.Token.ThrowIfCancellationRequested();
+                    var body = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    linked.Token.ThrowIfCancellationRequested();
                     if (!response.IsSuccessStatusCode)
                     {
                         throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 240));
