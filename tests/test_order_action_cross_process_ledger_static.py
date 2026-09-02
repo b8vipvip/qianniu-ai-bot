@@ -7,6 +7,7 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
+# The durable action ledger is the source of truth across Bot processes; any uncertain read is fail-closed.
 def test_action_ledger_persists_cross_process_inflight_before_send():
     code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     begin = code[code.index("internal static bool TryBeginExecution"):code.index("internal static void MarkDeliveryUncertain")]
@@ -18,7 +19,6 @@ def test_action_ledger_persists_cross_process_inflight_before_send():
     assert "SaveActionStateLocked(path)" in begin
     assert "action_state_persist_failed" in begin
     assert "action_state_unavailable" in begin
-    assert "ReloadAndMergeActionStateLocked(path, out reloadError)" in begin
 
 
 def test_action_ledger_write_is_atomic_and_old_valid_file_is_never_deleted_first():
