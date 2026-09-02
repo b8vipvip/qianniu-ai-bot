@@ -41,17 +41,13 @@ jobs:
 
           legacy_test = Path('tests/test_runtime_1095_context_order_ocr_static.py')
           text = legacy_test.read_text(encoding='utf-8-sig')
-          old = '''    assert "SemanticContinuationWindowSeconds = 15" in source
-    assert "买家上一句与当前指代续问，请合并理解为一个完整问题" in source
-'''
-          new = '''    # Semantic memory TTL is deliberately longer than the merge delay. This allows
-    # natural elliptical follow-ups minutes later without making every reply wait for that TTL.
-    assert "SemanticContinuationWindowSeconds = 180" in source
-    assert "买家当前消息是对上一条未解决问题的省略补充或催问" in source
-'''
-          if old not in text:
-              raise SystemExit('legacy semantic TTL regression anchor missing')
-          legacy_test.write_text(text.replace(old, new, 1), encoding='utf-8')
+          if 'SemanticContinuationWindowSeconds = 15' not in text:
+              raise SystemExit('legacy semantic TTL anchor missing')
+          if '买家上一句与当前指代续问，请合并理解为一个完整问题' not in text:
+              raise SystemExit('legacy semantic prompt anchor missing')
+          text = text.replace('SemanticContinuationWindowSeconds = 15', 'SemanticContinuationWindowSeconds = 180', 1)
+          text = text.replace('买家上一句与当前指代续问，请合并理解为一个完整问题', '买家当前消息是对上一条未解决问题的省略补充或催问', 1)
+          legacy_test.write_text(text, encoding='utf-8')
           PY
       - name: Run focused regressions
         run: |
