@@ -51,6 +51,7 @@ namespace Bot.ChromeNs
             public DateTime Until { get; set; }
             public bool Delivered { get; set; }
             public bool DeliveryUncertain { get; set; }
+            public bool InFlight { get; set; }
         }
 
         private sealed class OrderReplyActionState
@@ -352,59 +353,98 @@ namespace Bot.ChromeNs
 
             lock (ActionSync)
             {
-                EnsureActionStateLoadedLocked();
-                var now = DateTime.Now;
-                ActiveActions.RemoveAll(x => x == null || x.Until <= now);
-                _actionState.Records.RemoveAll(x => x == null || x.Until <= now);
+                var path = GetActionStatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000))
+                {
+                    if (!lease.Acquired)
+                    {
+                        reason = "action_state_lock_timeout";
+                        Log.ErrorWithMaxCount("订单自动回复已阻止：无法取得跨进程动作状态锁，避免多实例重复发送。", 20);
+                        return false;
+                    }
 
-                var canonical = FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId);
-                if (!string.IsNullOrWhiteSpace(canonical)
-                    && !string.Equals(canonical, plan.OrderId, StringComparison.Ordinal))
-                {
-                    Log.Info("订单号精度别名已归一化: orderId=" + plan.OrderId + ", canonicalOrderId=" + canonical);
-                    plan.OrderId = canonical;
-                    if (plan.Snapshot != null) plan.Snapshot.OrderId = canonical;
-                    plan.ReservationKey = BuildReservationKey(plan.Seller, plan.Buyer, canonical, plan.IsBuyerFollowUp);
-                }
+                    ReloadAndMergeActionStateLocked(path);
+                    var now = DateTime.Now;
+                    ActiveActions.RemoveAll(x => x == null || x.Until <= now);
+                    _actionState.Records.RemoveAll(x => x == null || x.Until <= now);
 
-                if (IsSuspiciousRoundedOrderId(plan.OrderId)
-                    && string.IsNullOrWhiteSpace(FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId, true)))
-                {
-                    reason = "precision_risk_order_id";
-                    Log.ErrorWithMaxCount("订单自动回复已阻止：检测到疑似 JavaScript Number 精度损失的长订单号，等待精确字符串订单事件补偿。 orderId="
-                        + plan.OrderId, 50);
-                    return false;
-                }
+                    var canonical = FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId);
+                    if (!string.IsNullOrWhiteSpace(canonical)
+                        && !string.Equals(canonical, plan.OrderId, StringComparison.Ordinal))
+                    {
+                        Log.Info("订单号精度别名已归一化: orderId=" + plan.OrderId + ", canonicalOrderId=" + canonical);
+                        plan.OrderId = canonical;
+                        if (plan.Snapshot != null) plan.Snapshot.OrderId = canonical;
+                        plan.ReservationKey = BuildReservationKey(plan.Seller, plan.Buyer, canonical, plan.IsBuyerFollowUp);
+                    }
 
-                if (ActiveActions.Any(x => SameAction(x, plan)))
-                {
-                    reason = "action_inflight";
-                    return false;
-                }
-                if (_actionState.Records.Any(x => x.Delivered && SameAction(x, plan)))
-                {
-                    reason = "action_already_delivered";
-                    return false;
-                }
-                if (_actionState.Records.Any(x => x.DeliveryUncertain && SameAction(x, plan)))
-                {
-                    // A send action was physically triggered but live echo and remote verification
-                    // were both unavailable. Never blind-resend on another Created/Paid ingress.
-                    reason = "action_delivery_uncertain";
-                    return false;
-                }
+                    if (IsSuspiciousRoundedOrderId(plan.OrderId)
+                        && string.IsNullOrWhiteSpace(FindCanonicalOrderIdLocked(plan.Seller, plan.Buyer, plan.OrderId, true)))
+                    {
+                        reason = "precision_risk_order_id";
+                        Log.ErrorWithMaxCount("订单自动回复已阻止：检测到疑似 JavaScript Number 精度损失的长订单号，等待精确字符串订单事件补偿。 orderId="
+                            + plan.OrderId, 50);
+                        return false;
+                    }
 
-                ActiveActions.Add(new OrderReplyActionRecord
-                {
-                    Seller = Normalize(plan.Seller),
-                    Buyer = NormalizeBuyer(plan.Seller, plan.Buyer),
-                    OrderId = plan.OrderId.Trim(),
-                    FollowUp = plan.IsBuyerFollowUp,
-                    Until = now.AddMinutes(10),
-                    Delivered = false
-                });
-                SaveActionStateLocked();
-                return true;
+                    if (ActiveActions.Any(x => SameAction(x, plan)))
+                    {
+                        reason = "action_inflight";
+                        return false;
+                    }
+                    if (_actionState.Records.Any(x => x.Delivered && SameAction(x, plan)))
+                    {
+                        reason = "action_already_delivered";
+                        return false;
+                    }
+                    if (_actionState.Records.Any(x => x.DeliveryUncertain && SameAction(x, plan)))
+                    {
+                        reason = "action_delivery_uncertain";
+                        return false;
+                    }
+                    if (_actionState.Records.Any(x => x.InFlight && x.Until > now && SameAction(x, plan)))
+                    {
+                        reason = "action_inflight_cross_process";
+                        return false;
+                    }
+
+                    var durable = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                    if (durable == null)
+                    {
+                        durable = new OrderReplyActionRecord();
+                        _actionState.Records.Add(durable);
+                    }
+                    durable.Seller = Normalize(plan.Seller);
+                    durable.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
+                    durable.OrderId = plan.OrderId.Trim();
+                    durable.FollowUp = plan.IsBuyerFollowUp;
+                    durable.Until = now.AddMinutes(10);
+                    durable.Delivered = false;
+                    durable.DeliveryUncertain = false;
+                    durable.InFlight = true;
+
+                    ActiveActions.Add(new OrderReplyActionRecord
+                    {
+                        Seller = durable.Seller,
+                        Buyer = durable.Buyer,
+                        OrderId = durable.OrderId,
+                        FollowUp = durable.FollowUp,
+                        Until = durable.Until,
+                        Delivered = false,
+                        DeliveryUncertain = false,
+                        InFlight = true
+                    });
+
+                    if (!SaveActionStateLocked(path))
+                    {
+                        ActiveActions.RemoveAll(x => x != null && SameAction(x, plan));
+                        durable.InFlight = false;
+                        reason = "action_state_persist_failed";
+                        Log.ErrorWithMaxCount("订单自动回复已阻止：动作级in-flight状态无法原子持久化，避免多实例重复发送。", 20);
+                        return false;
+                    }
+                    return true;
+                }
             }
         }
 
@@ -413,21 +453,32 @@ namespace Bot.ChromeNs
             if (plan == null) return;
             lock (ActionSync)
             {
-                EnsureActionStateLoadedLocked();
-                var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
-                if (existing == null)
+                ActiveActions.RemoveAll(x => x != null && SameAction(x, plan));
+                var path = GetActionStatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000))
                 {
-                    existing = new OrderReplyActionRecord();
-                    _actionState.Records.Add(existing);
+                    if (!lease.Acquired)
+                    {
+                        Log.ErrorWithMaxCount("记录订单发送不确定状态时跨进程锁超时；保留既有durable in-flight窗口以防重复。", 20);
+                        return;
+                    }
+                    ReloadAndMergeActionStateLocked(path);
+                    var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                    if (existing == null)
+                    {
+                        existing = new OrderReplyActionRecord();
+                        _actionState.Records.Add(existing);
+                    }
+                    existing.Seller = Normalize(plan.Seller);
+                    existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
+                    existing.OrderId = (plan.OrderId ?? string.Empty).Trim();
+                    existing.FollowUp = plan.IsBuyerFollowUp;
+                    existing.Until = DateTime.Now.AddMinutes(10);
+                    existing.Delivered = false;
+                    existing.DeliveryUncertain = true;
+                    existing.InFlight = false;
+                    SaveActionStateLocked(path);
                 }
-                existing.Seller = Normalize(plan.Seller);
-                existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
-                existing.OrderId = (plan.OrderId ?? string.Empty).Trim();
-                existing.FollowUp = plan.IsBuyerFollowUp;
-                existing.Until = DateTime.Now.AddMinutes(10);
-                existing.Delivered = false;
-                existing.DeliveryUncertain = true;
-                SaveActionStateLocked();
             }
             Log.ErrorWithMaxCount(
                 "订单发送状态不确定，10分钟内禁止自动重发以避免重复: seller=" + plan.Seller
@@ -441,31 +492,43 @@ namespace Bot.ChromeNs
             if (plan == null) return;
             lock (ActionSync)
             {
-                EnsureActionStateLoadedLocked();
                 ActiveActions.RemoveAll(x => x != null && SameAction(x, plan));
-                if (delivered || sentSegments > 0)
+                var path = GetActionStatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000))
                 {
-                    var now = DateTime.Now;
-                    var hours = plan.IsBuyerFollowUp
-                        ? 720
-                        : (plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours)));
-                    var until = delivered ? now.AddHours(hours) : now.AddMinutes(10);
-                    var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
-                    if (existing == null)
+                    if (!lease.Acquired)
                     {
-                        existing = new OrderReplyActionRecord();
-                        _actionState.Records.Add(existing);
+                        Log.ErrorWithMaxCount("完成订单动作时跨进程锁超时；durable in-flight将按10分钟安全窗口自然过期。", 20);
+                        return;
                     }
-                    existing.Seller = Normalize(plan.Seller);
-                    existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
-                    existing.OrderId = plan.OrderId.Trim();
-                    existing.FollowUp = plan.IsBuyerFollowUp;
-                    existing.Until = until;
-                    existing.Delivered = delivered || sentSegments > 0;
-                    existing.DeliveryUncertain = false;
+                    ReloadAndMergeActionStateLocked(path);
+                    var existing = _actionState.Records.FirstOrDefault(x => x != null && SameAction(x, plan));
+                    if (existing != null) existing.InFlight = false;
+
+                    if (delivered || sentSegments > 0)
+                    {
+                        var now = DateTime.Now;
+                        var hours = plan.IsBuyerFollowUp
+                            ? 720
+                            : (plan.Config == null ? 24 : Math.Max(1, Math.Min(720, plan.Config.OrderPlacedDedupHours)));
+                        var until = delivered ? now.AddHours(hours) : now.AddMinutes(10);
+                        if (existing == null)
+                        {
+                            existing = new OrderReplyActionRecord();
+                            _actionState.Records.Add(existing);
+                        }
+                        existing.Seller = Normalize(plan.Seller);
+                        existing.Buyer = NormalizeBuyer(plan.Seller, plan.Buyer);
+                        existing.OrderId = plan.OrderId.Trim();
+                        existing.FollowUp = plan.IsBuyerFollowUp;
+                        existing.Until = until;
+                        existing.Delivered = delivered || sentSegments > 0;
+                        existing.DeliveryUncertain = false;
+                        existing.InFlight = false;
+                    }
+                    _actionState.Records.RemoveAll(x => x == null || x.Until <= DateTime.Now);
+                    SaveActionStateLocked(path);
                 }
-                _actionState.Records.RemoveAll(x => x == null || x.Until <= DateTime.Now);
-                SaveActionStateLocked();
             }
         }
 
@@ -475,24 +538,35 @@ namespace Bot.ChromeNs
             if (orderId.Length < 8 || IsSuspiciousRoundedOrderId(orderId)) return;
             lock (ActionSync)
             {
-                EnsureActionStateLoadedLocked();
-                var exists = _actionState.Records.Any(x => x != null
-                    && !x.FollowUp
-                    && Normalize(x.Seller) == Normalize(seller)
-                    && NormalizeBuyer(x.Seller, x.Buyer) == NormalizeBuyer(seller, buyer)
-                    && string.Equals(x.OrderId, orderId, StringComparison.Ordinal));
-                if (!exists)
+                var path = GetActionStatePath();
+                using (var lease = CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000))
                 {
-                    _actionState.Records.Add(new OrderReplyActionRecord
+                    if (!lease.Acquired)
                     {
-                        Seller = Normalize(seller),
-                        Buyer = NormalizeBuyer(seller, buyer),
-                        OrderId = orderId,
-                        FollowUp = false,
-                        Until = DateTime.Now.AddHours(2),
-                        Delivered = false
-                    });
-                    SaveActionStateLocked();
+                        Log.ErrorWithMaxCount("记录精确订单号时跨进程动作状态锁超时，本次仅跳过持久化观察。 orderId=" + orderId, 10);
+                        return;
+                    }
+                    ReloadAndMergeActionStateLocked(path);
+                    var exists = _actionState.Records.Any(x => x != null
+                        && !x.FollowUp
+                        && Normalize(x.Seller) == Normalize(seller)
+                        && NormalizeBuyer(x.Seller, x.Buyer) == NormalizeBuyer(seller, buyer)
+                        && string.Equals(x.OrderId, orderId, StringComparison.Ordinal));
+                    if (!exists)
+                    {
+                        _actionState.Records.Add(new OrderReplyActionRecord
+                        {
+                            Seller = Normalize(seller),
+                            Buyer = NormalizeBuyer(seller, buyer),
+                            OrderId = orderId,
+                            FollowUp = false,
+                            Until = DateTime.Now.AddHours(2),
+                            Delivered = false,
+                            DeliveryUncertain = false,
+                            InFlight = false
+                        });
+                        SaveActionStateLocked(path);
+                    }
                 }
             }
         }
@@ -556,38 +630,85 @@ namespace Bot.ChromeNs
         private static void EnsureActionStateLoadedLocked()
         {
             if (_actionState != null) return;
-            try
-            {
-                var path = GetActionStatePath();
-                _actionState = File.Exists(path)
-                    ? JsonConvert.DeserializeObject<OrderReplyActionState>(File.ReadAllText(path, Encoding.UTF8))
-                    : new OrderReplyActionState();
-            }
-            catch
-            {
-                _actionState = new OrderReplyActionState();
-            }
-            if (_actionState == null) _actionState = new OrderReplyActionState();
-            if (_actionState.Records == null) _actionState.Records = new List<OrderReplyActionRecord>();
+            _actionState = ReadActionStateFromDiskLocked(GetActionStatePath());
         }
 
-        private static void SaveActionStateLocked()
+        private static OrderReplyActionState ReadActionStateFromDiskLocked(string path)
         {
+            string error;
+            var raw = CrossProcessAtomicStateFile.ReadAllTextShared(path, 4, 60, out error);
+            if (!string.IsNullOrWhiteSpace(error))
+            {
+                Log.ErrorWithMaxCount("读取订单自动回复动作幂等状态失败，保留可用内存状态：" + Short(error, 220), 10);
+                return new OrderReplyActionState();
+            }
+            if (string.IsNullOrWhiteSpace(raw)) return new OrderReplyActionState();
             try
             {
-                if (_actionState == null) return;
-                var path = GetActionStatePath();
-                var directory = Path.GetDirectoryName(path);
-                if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                var temp = path + ".tmp";
-                File.WriteAllText(temp, JsonConvert.SerializeObject(_actionState, Formatting.Indented), new UTF8Encoding(false));
-                if (File.Exists(path)) File.Delete(path);
-                File.Move(temp, path);
+                var state = JsonConvert.DeserializeObject<OrderReplyActionState>(raw) ?? new OrderReplyActionState();
+                if (state.Records == null) state.Records = new List<OrderReplyActionRecord>();
+                return state;
             }
             catch (Exception ex)
             {
-                Log.ErrorWithMaxCount("保存订单自动回复动作幂等状态失败：" + Short(ex.Message, 220), 10);
+                Log.ErrorWithMaxCount("解析订单自动回复动作幂等状态失败，保留可用内存状态：" + Short(ex.Message, 220), 10);
+                return new OrderReplyActionState();
             }
+        }
+
+        private static void ReloadAndMergeActionStateLocked(string path)
+        {
+            var disk = ReadActionStateFromDiskLocked(path);
+            if (_actionState == null || _actionState.Records == null || _actionState.Records.Count == 0)
+            {
+                _actionState = disk;
+                return;
+            }
+            if (disk.Records == null) disk.Records = new List<OrderReplyActionRecord>();
+            foreach (var local in _actionState.Records.Where(x => x != null))
+            {
+                var existing = disk.Records.FirstOrDefault(x => SameStoredAction(x, local));
+                if (existing == null)
+                {
+                    disk.Records.Add(local);
+                    continue;
+                }
+                if (local.Until > existing.Until) existing.Until = local.Until;
+                existing.Delivered = existing.Delivered || local.Delivered;
+                existing.DeliveryUncertain = !existing.Delivered
+                    && (existing.DeliveryUncertain || local.DeliveryUncertain);
+                existing.InFlight = !existing.Delivered
+                    && (existing.InFlight || local.InFlight);
+                if (IsSuspiciousRoundedOrderId(existing.OrderId) && !IsSuspiciousRoundedOrderId(local.OrderId))
+                    existing.OrderId = local.OrderId;
+            }
+            _actionState = disk;
+        }
+
+        private static bool SameStoredAction(OrderReplyActionRecord left, OrderReplyActionRecord right)
+        {
+            if (left == null || right == null || left.FollowUp != right.FollowUp) return false;
+            return Normalize(left.Seller) == Normalize(right.Seller)
+                && Normalize(left.Buyer) == Normalize(right.Buyer)
+                && (string.Equals((left.OrderId ?? string.Empty).Trim(), (right.OrderId ?? string.Empty).Trim(), StringComparison.Ordinal)
+                    || ArePrecisionAliases(left.OrderId, right.OrderId));
+        }
+
+        private static bool SaveActionStateLocked(string path)
+        {
+            if (_actionState == null) return true;
+            string error;
+            var ok = CrossProcessAtomicStateFile.WriteAllTextAtomic(
+                path,
+                JsonConvert.SerializeObject(_actionState, Formatting.Indented),
+                4,
+                60,
+                out error);
+            if (!ok)
+            {
+                Log.ErrorWithMaxCount("保存订单自动回复动作幂等状态失败；旧有效文件已保留：" + Short(error, 220), 10);
+            }
+            return ok;
         }
 
         private static string GetActionStatePath()
@@ -741,6 +862,7 @@ namespace Bot.ChromeNs
         {
             public bool Success { get; set; }
             public int SentSegments { get; set; }
+            public int SatisfiedSegments { get; set; }
         }
 
         private static List<string> SplitOrderPresetSegments(string answer)
@@ -797,6 +919,41 @@ namespace Bot.ChromeNs
             return false;
         }
 
+        private async Task<bool> IsOrderPresetSegmentAlreadySatisfiedAsync(OrderPlacedReplyPlan plan, string text)
+        {
+            if (plan == null || string.IsNullOrWhiteSpace(text)) return false;
+            var expected = BotOutboundMessageFormatter.StripAiMarker(text).Trim();
+            if (expected.Length == 0) return false;
+            var since = plan.IsBuyerFollowUp && plan.TriggerTime != DateTime.MinValue
+                ? plan.TriggerTime.AddSeconds(-5)
+                : plan.EventTime.AddSeconds(-20);
+
+            if (HasRecentSellerEcho(plan.Buyer, expected, since))
+            {
+                Log.Info("下单固定预设分段已由人工/现有卖家实时回显精确满足，跳过本段但继续后续分段: seller="
+                    + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                return true;
+            }
+
+            var remote = await VerifySellerEchoInRemoteHistoryAsync(
+                plan.Seller,
+                plan.Buyer,
+                expected,
+                since).ConfigureAwait(false);
+            if (remote == RemoteSellerEchoVerification.Delivered)
+            {
+                Log.Info("下单固定预设分段已由远端卖家历史精确满足，跳过本段但继续后续分段: seller="
+                    + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+                return true;
+            }
+            if (remote == RemoteSellerEchoVerification.Unavailable)
+            {
+                Log.Info("下单固定预设分段发送前远端历史不可用；没有精确已满足证据，继续执行配置的订单动作: seller="
+                    + plan.Seller + ", buyer=" + plan.Buyer + ", orderId=" + plan.OrderId);
+            }
+            return false;
+        }
+
         private async Task<OrderPresetSendResult> SendOrderPresetAnswerAsync(OrderPlacedReplyPlan plan, string answer)
         {
             var result = new OrderPresetSendResult();
@@ -805,9 +962,14 @@ namespace Bot.ChromeNs
             for (var i = 0; i < segments.Count; i++)
             {
                 if (i > 0) await Task.Delay(220);
+                if (await IsOrderPresetSegmentAlreadySatisfiedAsync(plan, segments[i]).ConfigureAwait(false))
+                {
+                    result.SatisfiedSegments++;
+                    continue;
+                }
                 Log.Info("下单固定预设分段强制自动发送: buyer=" + plan.Buyer
                     + ", segment=" + (i + 1) + "/" + segments.Count
-                    + ", manualReplyDoesNotSuppress=true");
+                    + ", manualReplyDoesNotSuppress=true, exactSellerEchoSatisfied=false");
                 if (!await SendMandatoryOrderTextAsync(plan, segments[i]))
                 {
                     result.Success = false;
@@ -815,7 +977,12 @@ namespace Bot.ChromeNs
                 }
                 result.SentSegments++;
             }
-            result.Success = true;
+            result.Success = result.SentSegments + result.SatisfiedSegments == segments.Count;
+            Log.Info("下单固定预设分段动作完成: buyer=" + plan.Buyer
+                + ", orderId=" + plan.OrderId
+                + ", botSentSegments=" + result.SentSegments
+                + ", exactSellerEchoSatisfiedSegments=" + result.SatisfiedSegments
+                + ", totalSegments=" + segments.Count);
             return result;
         }
 

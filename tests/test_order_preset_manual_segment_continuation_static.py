@@ -5,13 +5,19 @@ ROOT = Path(__file__).resolve().parents[1]
 def text(path):
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
-def test_order_fixed_preset_sends_all_segments_even_after_manual_takeover():
+def test_order_fixed_preset_continues_after_manual_takeover_but_skips_only_exactly_satisfied_segment():
     source = text("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
     assert "SendOrderPresetAnswerAsync" in source
     assert "SendMandatoryOrderTextAsync" in source
     assert "KnowledgeLearningService.AllowNextManualSend(plan.Seller, plan.Buyer, text)" in source
+    assert "IsOrderPresetSegmentAlreadySatisfiedAsync" in source
+    assert "VerifySellerEchoInRemoteHistoryAsync" in source
+    assert "BotOutboundMessageFormatter.StripAiMarker(text)" in source
+    assert "result.SatisfiedSegments++" in source
+    satisfied_at = source.index("result.SatisfiedSegments++")
+    send_log_at = source.index('Log.Info("下单固定预设分段强制自动发送', satisfied_at)
+    assert "continue;" in source[satisfied_at:send_log_at]
     assert "OrderPresetSegmentOutcome.CancelledByManual" not in source
-    assert "SatisfiedByManual" not in source
     assert "停止本段及全部剩余分段" not in source
     assert "manualReplyDoesNotSuppress=true" in source
 

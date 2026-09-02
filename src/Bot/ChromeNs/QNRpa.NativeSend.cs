@@ -86,6 +86,8 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            if (await StopIfPlatformSendBlockedAsync(buyer, "发送前").ConfigureAwait(false)) return false;
+
             var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer).ConfigureAwait(false);
             if (domTriggered)
             {
@@ -94,6 +96,8 @@ namespace Bot.ChromeNs
                 {
                     return true;
                 }
+
+                if (await StopIfPlatformSendBlockedAsync(buyer, "CDP页面发送按钮后").ConfigureAwait(false)) return false;
 
                 // A click may have reached Qianniu while the echo is late. Never perform another
                 // action unless the exact owned draft is still present.
@@ -122,6 +126,7 @@ namespace Bot.ChromeNs
                 {
                     return true;
                 }
+                if (await StopIfPlatformSendBlockedAsync(buyer, "HWND安全消息后").ConfigureAwait(false)) return false;
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
                     return await WaitForTextSendConfirmedAsync(
@@ -137,6 +142,7 @@ namespace Bot.ChromeNs
             }
 
             var uiResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
+            if (!uiResult && await StopIfPlatformSendBlockedAsync(buyer, "UIA发送后").ConfigureAwait(false)) return false;
             if (!uiResult && _lastSendButtonCoordinateClickRejected)
             {
                 LogInputIntegrityDiagnostic("物理坐标发送被系统拒绝");
@@ -249,8 +255,10 @@ namespace Bot.ChromeNs
             if (root == IntPtr.Zero) root = target;
             if (root != expectedRoot)
             {
-                Log.Info("HWND安全发送允许同一千牛进程的独立根窗口: seller=" + SellerNick
+                SetSendFailure("HWND安全发送", "安全点被当前千牛进程的独立弹窗覆盖，拒绝向未知根窗口投递点击");
+                Log.Info("HWND安全发送已阻止跨根窗口点击: seller=" + SellerNick
                     + ", pid=" + targetPid + ", expectedRoot=" + expectedRoot + ", actualRoot=" + root);
+                return false;
             }
 
             var clientPoint = screenPoint;
