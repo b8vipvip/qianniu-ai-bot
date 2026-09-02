@@ -77,7 +77,36 @@ namespace Bot
 
         void App_Startup(object sender, StartupEventArgs e)
         {
-
+            // The Qianniu runtime has several legacy synchronous UIA/CDP compatibility paths. Under
+            // burst traffic they can temporarily occupy the CLR's very small default worker pool,
+            // which in turn delays Task.Delay/CancelAfter continuations. A production log from
+            // 1.1.1139 showed a nominal 50-second generation deadline firing 5-12 minutes late.
+            // Reserve enough workers so timeout/cancellation and delivery watchdog continuations
+            // always have scheduling capacity while the remaining blocking paths are isolated.
+            try
+            {
+                int workerMin;
+                int ioMin;
+                ThreadPool.GetMinThreads(out workerMin, out ioMin);
+                var targetWorker = Math.Max(workerMin, Math.Max(32, Environment.ProcessorCount * 8));
+                var targetIo = Math.Max(ioMin, Math.Max(16, Environment.ProcessorCount * 4));
+                if (ThreadPool.SetMinThreads(targetWorker, targetIo))
+                {
+                    Log.Info("运行时线程池抗饥饿保护已启用: workerMin=" + targetWorker
+                        + ", ioMin=" + targetIo
+                        + ", cpu=" + Environment.ProcessorCount
+                        + "；确保AI超时、取消和发送确认定时器不会被同步兼容任务长期饿死。");
+                }
+                else
+                {
+                    Log.Info("运行时线程池抗饥饿保护未能调整最小线程数，继续使用CLR当前配置: workerMin="
+                        + workerMin + ", ioMin=" + ioMin);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("初始化运行时线程池抗饥饿保护失败: " + ex.Message, 5);
+            }
         }
 
         void App_DispatcherUnhandledException(object sender, System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
