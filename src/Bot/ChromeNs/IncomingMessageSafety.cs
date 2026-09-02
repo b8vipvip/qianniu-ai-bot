@@ -1,4 +1,5 @@
 using Bot.ChatRecord;
+using DbEntity;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -43,6 +44,205 @@ namespace Bot.ChromeNs
         }
     }
 
+    internal static class NonBuyerConversationGuard
+    {
+        private static readonly string[] StrongIdentityMarkers =
+        {
+            "(行业小二)", "（行业小二）", "行业小二",
+            "(平台小二)", "（平台小二）", "平台小二",
+            "(淘宝小二)", "（淘宝小二）", "淘宝小二",
+            "(天猫小二)", "（天猫小二）", "天猫小二",
+            "(阿里小二)", "（阿里小二）", "阿里小二",
+            "(官方小二)", "（官方小二）", "官方小二",
+            "(服务商)", "（服务商）", "官方服务商", "服务商消息",
+            "1688消息", "1688官方",
+            "群聊消息", "群消息",
+            "淘宝系统", "千牛系统", "平台系统", "系统消息",
+            "平台通知", "官方通知", "系统通知"
+        };
+
+        private static readonly string[] NonBuyerSourceTokens =
+        {
+            "cnalichn", "1688", "xiaoer", "serviceprovider", "service-provider",
+            "service_provider", "group", "chatroom", "chat-room", "tribe", "qun",
+            "official", "system", "platform-notify", "platform_notify"
+        };
+
+        public static bool ShouldBlockConversation(LocalUser seller, Conversation conversation, out string reason)
+        {
+            reason = string.Empty;
+            if (conversation == null) return false;
+
+            var sellerNick = seller == null ? string.Empty : Normalize(seller.Nick);
+            var sellerTargetId = seller == null ? string.Empty : Normalize(seller.TargetId);
+            var candidateNick = Normalize(conversation.Nick);
+            var candidateTargetId = Normalize(conversation.TargetId);
+
+            if (SameNonEmpty(sellerNick, candidateNick)
+                || SameNonEmpty(sellerTargetId, candidateTargetId))
+            {
+                reason = "self_identity";
+                return true;
+            }
+
+            if (ContainsStrongIdentityMarker(Join(conversation.Nick, conversation.Display)))
+            {
+                reason = "non_buyer_identity_marker";
+                return true;
+            }
+
+            if (IsNonBuyerSourceToken(conversation.TargetType)
+                || IsNonBuyerSourceToken(conversation.Type)
+                || IsNonBuyerSourceToken(conversation.ConversationType)
+                || IsNonBuyerSourceToken(conversation.Scene)
+                || IsNonBuyerSourceToken(conversation.Category)
+                || IsNonBuyerSourceToken(conversation.Source)
+                || IsNonBuyerSourceToken(conversation.Channel))
+            {
+                reason = "non_buyer_conversation_source";
+                return true;
+            }
+            return false;
+        }
+
+        public static bool ShouldBlockIdentity(string sellerNick, string candidateNick, out string reason)
+        {
+            reason = string.Empty;
+            sellerNick = Normalize(sellerNick);
+            candidateNick = Normalize(candidateNick);
+            if (SameNonEmpty(sellerNick, candidateNick))
+            {
+                reason = "self_identity";
+                return true;
+            }
+            if (ContainsStrongIdentityMarker(candidateNick))
+            {
+                reason = "non_buyer_identity_marker";
+                return true;
+            }
+            return false;
+        }
+
+        public static bool ShouldBlockMessage(QNChatMessage message, string sellerNick, string messageText, out string reason)
+        {
+            reason = string.Empty;
+            if (message == null) return false;
+
+            sellerNick = Normalize(sellerNick);
+            if (sellerNick.Length == 0 && message.loginid != null)
+                sellerNick = Normalize(message.loginid.nick);
+
+            var fromNick = message.fromid == null ? string.Empty : Normalize(message.fromid.nick);
+            var fromDisplay = message.fromid == null ? string.Empty : Normalize(message.fromid.display);
+
+            // Never classify seller echoes as non-buyer ingress; they are observational delivery/learning evidence.
+            if (SameNonEmpty(sellerNick, fromNick)) return false;
+
+            if (message.fromid != null && IsNonBuyerSourceToken(message.fromid.targetType))
+            {
+                reason = "non_buyer_sender_type";
+                return true;
+            }
+            if (message.toid != null && IsGroupSourceToken(message.toid.targetType))
+            {
+                reason = "group_conversation";
+                return true;
+            }
+            if (ContainsStrongIdentityMarker(Join(fromNick, fromDisplay)))
+            {
+                reason = "non_buyer_sender_identity";
+                return true;
+            }
+            if (ConversationContextStore.IsPlatformSystemTip(message, messageText))
+            {
+                reason = "platform_system_tip";
+                return true;
+            }
+
+            var headerTitle = message.originalData == null || message.originalData.header == null
+                ? string.Empty
+                : Normalize(message.originalData.header.title);
+            if (IsStrongSystemHeader(headerTitle))
+            {
+                reason = "platform_system_card";
+                return true;
+            }
+            return false;
+        }
+
+        private static bool IsStrongSystemHeader(string value)
+        {
+            value = Normalize(value);
+            if (value.Length == 0) return false;
+            return value == "系统通知"
+                || value == "平台通知"
+                || value == "官方通知"
+                || value == "淘宝通知"
+                || value == "千牛通知"
+                || value == "小二通知"
+                || value == "服务商通知"
+                || value.StartsWith("系统消息：", StringComparison.Ordinal)
+                || value.StartsWith("平台消息：", StringComparison.Ordinal);
+        }
+
+        private static bool IsGroupSourceToken(string value)
+        {
+            var token = NormalizeToken(value);
+            return token.Contains("group")
+                || token.Contains("chatroom")
+                || token.Contains("tribe")
+                || token == "qun"
+                || token.Contains("群聊");
+        }
+
+        private static bool IsNonBuyerSourceToken(string value)
+        {
+            var token = NormalizeToken(value);
+            if (token.Length == 0) return false;
+            foreach (var marker in NonBuyerSourceTokens)
+            {
+                if (token.Contains(NormalizeToken(marker))) return true;
+            }
+            return token.Contains("群聊")
+                || token.Contains("小二")
+                || token.Contains("服务商")
+                || token.Contains("系统通知")
+                || token.Contains("平台通知");
+        }
+
+        private static bool ContainsStrongIdentityMarker(string value)
+        {
+            value = Normalize(value);
+            if (value.Length == 0) return false;
+            foreach (var marker in StrongIdentityMarkers)
+            {
+                if (value.IndexOf(marker, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            }
+            return false;
+        }
+
+        private static string Join(params string[] values)
+        {
+            return string.Join("|", (values ?? new string[0]).Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
+
+        private static bool SameNonEmpty(string left, string right)
+        {
+            return left.Length > 0 && right.Length > 0
+                && string.Equals(left, right, StringComparison.Ordinal);
+        }
+
+        private static string Normalize(string value)
+        {
+            return (value ?? string.Empty).Trim();
+        }
+
+        private static string NormalizeToken(string value)
+        {
+            return Normalize(value).ToLowerInvariant().Replace(" ", string.Empty);
+        }
+    }
+
     internal static class IncomingMessageSafety
     {
         private static readonly string[] ImageExtensions = { ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".heic" };
@@ -51,6 +251,13 @@ namespace Bot.ChromeNs
 
         public static IncomingMessageDecision Evaluate(QNChatMessage message, string messageText, DateTime safetyStartedAt)
         {
+            string nonBuyerReason;
+            var sellerNick = message == null || message.loginid == null ? string.Empty : message.loginid.nick;
+            if (NonBuyerConversationGuard.ShouldBlockMessage(message, sellerNick, messageText, out nonBuyerReason))
+            {
+                return Skip("[非买家消息]", "已跳过：检测到小二/服务商/1688/群聊或平台系统消息；未调用AI，也未发送回复。 reason=" + nonBuyerReason);
+            }
+
             // Refresh the same seller+buyer timeline before deciding how to answer. This loads
             // recent manual-agent questions as well as buyer replies such as phone/model/account IDs.
             ConversationContextStore.RefreshAndRecord(message, messageText);
