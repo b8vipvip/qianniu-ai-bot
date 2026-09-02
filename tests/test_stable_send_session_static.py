@@ -27,7 +27,7 @@ def test_stale_answer_retry_is_cancelled_and_draft_is_cleared():
     assert "VerifyAnswerFreshness" in qnrpa
     assert "旧答案发送/重试已取消" in qnrpa
     assert "发送前答案时效检查" in qnrpa
-    assert "ClearExpectedDraft" in qnrpa
+    assert "ClearExpectedDraftIfSafeAsync" in qnrpa
 
 
 def test_mandatory_order_preset_keeps_priority_when_buyer_sends_follow_up():
@@ -40,22 +40,55 @@ def test_mandatory_order_preset_keeps_priority_when_buyer_sends_follow_up():
     assert qnrpa.index("ResponseProgressTracker.IsMandatoryOrderAnswer") < qnrpa.index("HasBuyerMessageAfter")
 
 
-def test_delivery_watchdog_starts_only_after_session_draft_checks_and_is_shop_bound():
+def test_delivery_watchdog_starts_only_after_transaction_guards_and_is_shop_bound():
     qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
     native = text("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     watchdog = text("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
     open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]
-    session_index = open_send.index('VerifyCurrentBuyerAsync(buyer, "发送前会话确认")')
-    draft_index = open_send.index("HasExpectedDraftFastAsync(text, 1200)", session_index)
-    refresh_index = open_send.index("RefreshChatControlsAsync(true)", draft_index)
-    ensure_index = open_send.index("SendDeliveryWatchdog.EnsurePending", refresh_index)
+    pre_session = open_send.index('VerifyCurrentBuyerAsync(buyer, "写入前会话确认")')
+    pre_refresh = open_send.index("RefreshChatControlsAsync(true)", pre_session)
+    write_index = open_send.index("TrySetPlainTextByCdpAsync(buyer, text)", pre_refresh)
+    post_session = open_send.index('VerifyCurrentBuyerAsync(buyer, "发送前会话确认")', write_index)
+    draft_index = open_send.index("HasExpectedDraftFastAsync(text, 1200)", post_session)
+    ensure_index = open_send.index("SendDeliveryWatchdog.EnsurePending", draft_index)
     send_index = open_send.index("sendResult = await TrySendTextNativeFirstAsync", ensure_index)
-    assert session_index < draft_index < refresh_index < ensure_index < send_index
+    assert pre_session < pre_refresh < write_index < post_session < draft_index < ensure_index < send_index
     assert "TrySendTextViaUiaAsync(buyer, text, sendStart)" in native
     assert "已准备本店真实发送回显监控（尚未开始计时）" in watchdog
     assert "Interlocked.CompareExchange(ref pending.Started, 1, 0)" in watchdog
     assert "pair.Value.Started == 0" in watchdog
     assert "pending.Shop.ShopKey" in watchdog
+
+
+def test_post_write_session_guard_is_read_only_when_bot_owns_the_draft():
+    qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
+    verify_start = qnrpa.index("private async Task<bool> VerifyCurrentBuyerAsync")
+    verify_end = qnrpa.index("private async Task ClearExpectedDraftIfSafeAsync", verify_start)
+    verify = qnrpa[verify_start:verify_end]
+    assert verify.index("if (HasLiveOwnedDraft())") < verify.index("for (var attempt = 0; attempt < 7; attempt++)")
+    assert "VerifyCurrentBuyerWithoutNavigationAsync(buyer, stage)" in verify
+
+    readonly_start = qnrpa.index("private async Task<bool> VerifyCurrentBuyerWithoutNavigationAsync")
+    readonly_end = qnrpa.index("private async Task<bool> VerifyCurrentBuyerAsync", readonly_start)
+    readonly_guard = qnrpa[readonly_start:readonly_end]
+    assert "ReadCurrentBuyerNickAsync" in readonly_guard
+    assert "OpenChat(" not in readonly_guard
+    assert "Task.Delay(" not in readonly_guard
+    assert "禁止重开/切换会话" in readonly_guard
+
+
+def test_failed_bot_draft_cleanup_requires_same_buyer_exact_text_and_bot_ownership():
+    qnrpa = text("src/Bot/ChromeNs/QNRpa.cs")
+    cleanup_start = qnrpa.index("private async Task ClearExpectedDraftIfSafeAsync")
+    cleanup_end = qnrpa.index("private async Task<bool> TrySetPlainTextByCdpAsync", cleanup_start)
+    cleanup = qnrpa[cleanup_start:cleanup_end]
+    assert "IsExpectedBuyer(buyer, currentBuyer)" in cleanup
+    assert "EditorMatchesExpectedText(currentText, expected)" in cleanup
+    assert "IsKnownBotOwnedDraftText(currentText)" in cleanup
+    assert "buyerBeforeClear" in cleanup
+    assert "IsExpectedBuyer(buyer, buyerBeforeClear)" in cleanup
+    assert "PressCtrlA()" in cleanup
+    assert "PressBackspace()" in cleanup
 
 
 def test_send_path_drops_wpf_context_and_never_uses_enter_for_delivery():
