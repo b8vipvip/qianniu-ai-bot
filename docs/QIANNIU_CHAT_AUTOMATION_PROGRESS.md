@@ -1,362 +1,110 @@
-# Qianniu Chat Automation Research Progress
+# Qianniu Chat Automation Progress / 千牛聊天自动化进度
 
-Last updated: 2026-07-16
+Last updated / 最后更新：2026-09-02 14:40 +08:00
 
-## 2026-07-16 message lifecycle v2 update
+本文件只记录**当前生产状态和仍需验证的事项**。早期 discovery / message lifecycle 研究证据保留在独立文档中，不再把 2026-07 的实验 TODO 当作当前生产 TODO。
 
-A privacy-safe lifecycle layer now exists under `tools/qn_discovery_lab`:
+## 当前正式基线
 
-- extraction computes `content_hash`, `content_chars`, `node_identity_hash`, semantic rule IDs, safe control counts, and the pre-normalization direction guess before redaction;
-- fragmented withdrawal rows and withdrawal rows containing hyperlinks are evaluated from all text fragments, not only the selected body;
-- withdrawal output is normalized to `type=system` and `direction=unknown`, while retaining `observed_direction_guess`;
-- lifecycle comparison distinguishes added, updated, unchanged, not observed, reobserved, candidate events, and confirmed buyer/seller withdrawals;
-- visible/offscreen and bounds are excluded from message and observation identity;
-- state files fail closed and permit only privacy-safe fields.
+- Release: `1.1.1139`
+- Commit: `63b25d59b307a210279119665d3c7c9c85755ecc`
+- Active PR: `#208 fix/runtime-starvation-ocr-config-20260902`
 
-Real local evidence already confirms in-place buyer and seller withdrawals and the seller-direction misclassification risk. The prior snapshots are legacy evidence because they predate the new semantic metadata. A new idle three-snapshot validation observed 24 stable keys with no updates. ScrollPattern and refocus validation were safely skipped, so visibility/history validation remains partial. See `docs/QIANNIU_MESSAGE_LIFECYCLE_VALIDATION.md`.
+## 已完成生产能力
 
-This document is the handoff source of truth for future AI/agent development. Read it before running new discovery experiments.
+### 入站与会话
 
-## 1. Goal and scope
+- 单一权威业务 CDP + 重复页面轻量入站补偿。
+- 重复入站短窗去重、已处理消息 key 去重。
+- 后台通知漏详细事件时主动切换目标 buyer 并补抓远端历史。
+- NonBuyerConversationGuard 前置屏蔽小二/服务商/1688/群聊/平台系统会话。
+- BuyerSessionAgent 统一 seller+buyer 时间线；人工 seller reply 只作为学习证据。
 
-The project goal is to obtain a reliable Qianniu chat automation path that can:
+### 文本回复
 
-1. Read the currently selected conversation and its visible/loaded messages.
-2. Identify the current contact/session.
-3. Write a reply into the chat input.
-4. Send exactly once and verify the result.
-5. Later integrate the proven path into the existing bot without breaking the existing Simplified Chinese repair.
+- BuyerMessageBurst 支持独立普通问题并发。
+- dependent fragment 语义续问在 180s TTL 内继承 substantive anchor。
+- `ModelQuestion` 已进入 Streaming/legacy AI。
+- Coalescing 外层重复 gate 已删除；固定规则使用唯一 1.8s gate 并 fail-open。
+- Semantic Embedding 前台 async + 2200ms 子预算，失败回退本地 hybrid retrieval。
+- AI 文本总预算配置为 50 秒。
 
-Discovery work must stay isolated under `tools/qn_discovery_lab` until the probe is verified end to end.
+### 图片/OCR
 
-## 2. Confirmed environment
+- 图片先本地缓存，撤回后可继续识别但禁止发送旧回复。
+- 图片指代续问继续走视觉上下文。
+- OCR 推理已迁移 API control plane；Windows 不再打包本地 OCR worker/model。
+- OCR-first 只有 OCR 高置信 + Knowledge V2 `CanDirectReply` 同时成立才免视觉 API 直答。
 
-- Qianniu / AliWorkbench version: `9.97.56N`
-- Install root: `C:\Program Files\AliWorkbench\9.97.56N`
-- Embedded browser: CEF / Chromium 130
-- Renderer user agent includes: `Chrome/130.0.0.0 Qianniu/9.97.56N`
-- Locale: `--lang=zh-CN`
-- Chat renderer command-line marker: `--render_id=bench_im-...`
-- Never use a fixed PID. The renderer PID changes frequently.
+### 订单
 
-`Resources/config/render_id.json` maps the following pages to `bench_im`:
+- OrderEventHub 统一订单事件。
+- 固定预设不等待 AI。
+- order action durable ledger 跨进程幂等。
+- OrderEventHub 状态文件跨进程锁 + 原子 replace。
+- exact seller echo 可满足当前固定分段，后续不同分段仍继续。
 
-- `https://alires-webui/web_msg-center/index.html`
-- `https://alires-webui/web_chat-packer/recent.html...`
-- `https://alires-webui/Message/message-notify.html`
+### 发送
 
-This confirms that the primary chat surface is a dedicated Web/CEF chat application, not merely a Windmill mini-app.
+- 发送前验证目标 buyer 与 Bot-owned draft。
+- CDP DOM send -> HWND safe point -> UIA fallback 分层执行。
+- fallback 前后重新检查 exact draft，避免不确定成功后的重复发送。
+- 卖家 echo / delivery verification 是最终成功证据。
+- 平台“服务态度提醒”禁止自动确认。
+- HWND root/modal 安全边界和 Windows integrity 诊断已存在。
 
-## 3. Static discovery findings
+### Knowledge V2 / 学习
 
-### 3.1 Windmill bridge chain
+- SQLite repository + structured index + working memory + feedback loop。
+- FactKey 当前包含 Subject / Predicate / Intent / ProductIds / Entities / Conditions / RequiredContext / Exclusions。
+- 人工答案即时对比学习 JSON 已支持 fence/wrapper/array/string/balanced object 恢复。
+- 无法恢复结构化结果时 fail-open `skipped`，不污染知识。
 
-The install directory contains:
+## 1.1.1139 真实运行日志结论
 
-- `WINDMILLResource/windmill/h5_bridge.js`
-- `WINDMILLResource/windmill/af-appx.min.js`
-- `WINDMILLResource/windmill/ext-api.js`
-- development variants under `WINDMILLResource/windmill/dev`
+### 已验证正常
 
-`h5_bridge.js` defines:
+- 启动数据库完整性 OK。
+- Web sync / rules sync / update SSE 正常。
+- 业务权威 CDP 始终为 1。
+- 多次真实发送均有 `deliveryVerified=True`。
+- 非买家/平台系统提示在普通回复链前被丢弃。
+- 本地优先高置信 Knowledge V2 直答可在毫秒级返回并真实送达。
 
-```javascript
-const JSAPI = {
-  call(func, param, callback) {
-    // ...
-    windmill.postMessage(...)
-  }
-};
-window.AlipayJSBridge = JSAPI;
-```
+### 新发现 P0：50 秒 deadline 实际延迟数分钟
 
-A candidate text-send call was found in `af-appx.min.js`:
+同一 buyer 的多个 generation 在日志中配置 `budgetSeconds=50`，但 timeout continuation 实际延迟到数分钟；最严重 generation 1 的本地答案约 751 秒后才返回，并继续进入 Ready/Sending。
 
-```javascript
-ddExec({
-  serviceName: "internal.chat",
-  actionName: "selectAndSendText",
-  args: {
-    content: text,
-    atList: [],
-    bizType: "E-App-" + appId
-  }
-})
-```
+当前判断：CLR ThreadPool 被同步 UIA/CDP/兼容工作占满时，`Task.Delay` / `CancelAfter` continuation 也被饿死。PR #208 已增加启动时 ThreadPool 最小 worker/I/O 容量保护。
 
-### 3.2 Important correction
+**回归通过条件：**连续消息压力下，50 秒 deadline 的实际触发必须接近配置值，不能再出现分钟级漂移；旧 generation 不能在数分钟后迟到发送。
 
-The call above occurs in a `shareTextMsg` branch. It is likely a mini-app "share text into chat" feature, not the primary chat input's direct send API.
+### 新发现 P1：OCR 控制面配置来源错误
 
-Do not present `internal.chat.selectAndSendText` as the final chat send API unless it is dynamically observed inside the `bench_im` renderer.
+客户端已经连接控制面 SSE，但 OCR 仍提示“未配置可用的服务端控制面OCR接口”。PR #208 改为按 seller/shop 从 `ShopControlPlaneConnectionStore` 直接取正式 URL/token，旧 AI endpoint 仅兼容回退。
 
-## 4. Dynamic reverse-engineering results
+**回归通过条件：**图片测试应出现 `endpointSource=shop-control-plane` 或 OCR 服务端成功日志；不得再因为没有额外 AI endpoint 而跳过 OCR。
 
-### 4.1 Frida attach
+### 新发现 P1：诊断 AI JSON 恢复未完全统一
 
-- Frida `17.15.5` successfully attaches to the current `bench_im` renderer.
-- A Python launcher was built to find the renderer by command line instead of a fixed PID.
+人工学习已修，但发送失败/慢响应诊断仍发现旧 first/last brace parser。PR #208 正在统一结构化恢复，避免诊断报告因 provider wrapper/fence 失真。
 
-### 4.2 Native JavaScript execution hooks that did not fire
+## 当前观察项（不是已确认 bug）
 
-The following symbols were found, hooked, and then tested while changing contacts, scrolling, and manually sending messages:
+- `页面通道=27`：本次约 1 小时日志内未持续增长，业务 CDP=1；继续观察，不凭单次数字判定泄漏。
+- Knowledge V2 `conflicts=93`：当前 FactKey 已细化，先按真实治理冲突处理；只有逐条证据证明误冲突才继续改算法。
+- 人工回复不取消 Bot generation：这是当前明确策略，不应被误当 bug；若未来需要“人工回复即接管”，必须作为产品策略单独设计，而不是隐式取消。
 
-- `WebControl::ExecuteJavaScript`
-- `WebControl::ExecuteJavaScriptFunction`
-- `webapp::mojom::WebViewProxy::ExecuteJavaScript`
+## 下一轮真实测试清单
 
-None fired during the tested manual chat operations.
-
-Correct interpretation: the observed manual-send path did not pass through these functions. Their mere presence does not prove they are safe or callable as an injection route.
-
-Do not call these C++ functions directly without a verified object instance, ABI/signature, owning thread, and valid CEF context. Blind calls can crash Qianniu.
-
-### 4.3 CEF/V8 symbol search
-
-Symbol searches returned:
-
-- `*CefV8Context*`: 0
-- `*CefFrame*`: 0
-- `*ExecuteFunction*`: 0
-
-Release symbols are stripped. Repeating broad `DebugSymbol.findFunctionsMatching` searches is low value unless a new module or symbol source is found.
-
-### 4.4 `AlipayJSBridge` memory hit correction
-
-A memory scan found the ASCII string `AlipayJSBridge` around `0x1d44...`.
-
-This was a raw string occurrence, not a verified V8 object pointer. Reading nearby pointers produced no usable object structure. Do not dereference that address as `window.AlipayJSBridge`, and do not treat it as a function/object handle.
-
-### 4.5 Runtime marker scan
-
-The `bench_im` process contained `h5_bridge.js` and `WINDMILLResource` strings in mapped module regions, but scans did not find:
-
-- `selectAndSendText`
-- `internal.chat`
-- `ddExec`
-
-Some V8 ranges changed protection/unmapped during scanning, so this is not a mathematical proof of absence. However, there is still no positive evidence that the Windmill candidate is the primary chat send path.
-
-### 4.6 CEF cache/resource scans
-
-Direct `findstr` and `Select-String` scans of CEF cache files were low value because Chromium cache, Code Cache, Service Worker CacheStorage, LevelDB, and GPU cache data are binary/structured.
-
-The install resource scan confirmed Windmill JS files and standard CEF `.pak/.bin/.dat` resources. Do not repeat broad text scans over every cache binary unless a parser for the specific cache format is introduced.
-
-## 5. Native modules loaded in `bench_im`
-
-The chat renderer loads several highly relevant native modules:
-
-- `MessageSDKBiz.dll`
-- `MessageSDKModel.dll`
-- `message_support.dll`
-- `aim.dll`
-- `AppBiz.dll`
-- `AssistIPC.dll`
-- `AssistIPC_shared.dll`
-- `syncsdkbiz.dll`
-- `ipc.dll`
-- `ipc_mojom.dll`
-- `WebApp.dll`
-- `WebView.dll`
-- `windmill.dll`
-- `prgdb.dll`
-- `FTSEngine.dll`
-- `libaccs.dll`
-- `wtnet.dll`
-
-This is positive evidence that an internal structured message pipeline exists. It does not imply a public or stable third-party API.
-
-Long-term reverse-engineering should focus on `MessageSDKBiz.dll`, `MessageSDKModel.dll`, `aim.dll`, and IPC boundaries rather than continuing to assume Windmill is the main chat path.
-
-## 6. Major verified result: Windows UI Automation works
-
-This is the first production-relevant success.
-
-Using `uiautomation==2.0.29`, the Qianniu accessibility tree exposes the chat UI in a structured way.
-
-### 6.1 Confirmed top-level controls
-
-- Window name: `千牛接待台`
-- Window class: `MutilChatView`
-- Chat document name: `千牛消息聊天`
-- CEF document class: `Chrome_RenderWidgetHostHWND`
-
-### 6.2 Confirmed message tree
-
-The chat document exposes:
-
-- `AutomationId = app`
-- `AutomationId = msgOutBody`
-- `AutomationId = J_msgContainer`
-- `AutomationId = J_msg_list`
-
-Loaded message nodes expose structured names containing:
-
-- sender/account names
-- timestamps
-- text message bodies
-- product titles/prices/URLs
-- UI message-node IDs such as `4210903391593.PNM`
-
-Therefore current/loaded chat information can be read without OCR or screenshots.
-
-### 6.3 Confirmed input control
-
-Stable input `AutomationId`:
-
-```text
-UIWindow.mutilcentralwidget.stackedWidget.SingleChatView.centralwidget.stackedWidget.SubChatView.ChatDisplayWidget.ChatContentView.splitter.sendMsgWidget.chatInputArea.plainTextEdit
-```
-
-The control supports `ValuePattern`.
-
-Verified test:
-
-1. Read the original input value.
-2. Set `UIA_PROBE_20260715_153738`.
-3. Read it back successfully.
-4. Restore the original empty value.
-5. Do not send.
-
-Observed output:
-
-```text
-[FOUND] input: (502,779,1006,935)[504x156]
-[FOUND] send : (920,938,986,962)[66x24] name= 发送
-[INFO] old input: ''
-[INFO] readback : 'UIA_PROBE_20260715_153738'
-[PASS] input write/read
-[INFO] restored : ''
-[SAFE] send button was located but NOT clicked
-```
-
-### 6.4 Confirmed send button
-
-Stable send-button `AutomationId`:
-
-```text
-UIWindow.mutilcentralwidget.stackedWidget.SingleChatView.centralwidget.stackedWidget.SubChatView.ChatDisplayWidget.ChatContentView.splitter.sendMsgWidget.enterAreaKeyWidget.sendMsg
-```
-
-Name: `发送`
-
-The button was located but has not yet been invoked in the verified record.
-
-## 7. Chosen architecture
-
-### Near-term, practical path
-
-Use Windows UI Automation for:
-
-- reading the currently selected conversation
-- extracting loaded messages
-- locating the input field
-- writing reply text
-- invoking the structured `发送` button
-- verifying the message appears in `J_msg_list`
-
-This is not fragile pixel-coordinate RPA. It uses stable accessibility controls and AutomationIds.
-
-### Medium-term path
-
-Continue native discovery in parallel for a background/non-visible structured stream:
-
-- hook `MessageSDKBiz.dll` / `MessageSDKModel.dll`
-- identify incoming-message callbacks and outgoing-message serialization
-- capture sender, receiver, conversation ID, message ID, type, text, timestamp, and status
-
-### Fallback/secondary paths
-
-- CEF DOM/accessibility extraction
-- local database/index analysis (`prgdb.dll`, `FTSEngine.dll`)
-- network-layer plaintext hooks after serialization/decryption
-
-## 8. Safety rules for sending
-
-Every independent send probe must:
-
-1. Default to dry-run.
-2. Require both `--send` and the exact confirmation token `SEND_TO_CURRENT_CHAT`.
-3. Display that it sends to the currently selected chat.
-4. Use a countdown before invoking send.
-5. Invoke the send button only once.
-6. Never automatically retry after an ambiguous result.
-7. Restore the original input on any pre-send validation failure.
-8. Verify through the UIA message tree and/or input clearing.
-9. Avoid modifying the main bot until the probe is verified.
-
-## 9. Development environment notes
-
-### Python
-
-A dedicated environment is used:
-
-```text
-tools/qn_discovery_lab/.venv-uia
-```
-
-`pywinauto` was abandoned because `win32ui` failed to load even in a clean venv. The working package is:
-
-```text
-uiautomation==2.0.29
-```
-
-### PowerShell / PSReadLine
-
-Long pasted arrays and here-strings repeatedly crash PSReadLine with `System.ArgumentOutOfRangeException` in `PSConsoleReadLine.ReallyRender`.
-
-Do not give the user long multi-line paste blocks. Prefer:
-
-- committing scripts to this repository
-- `git checkout <remote-branch> -- <path>`
-- short `Set-Content` / `-replace` commands
-- single valid Base64 payload only when generated and verified
-
-## 10. Experiments not to repeat without new evidence
-
-Do not repeat these as the next default step:
-
-- treating the `AlipayJSBridge` string address as a V8 object
-- scanning a tiny neighborhood around that string for object methods
-- broad searches for stripped `CefV8Context` symbols
-- hooking the three tested ExecuteJavaScript symbols and assuming silence means they can be actively called
-- broad `findstr` scans over active Chromium cache binaries
-- modifying `h5_bridge.js` before proving `bench_im` loads and calls it
-- claiming `internal.chat.selectAndSendText` is the final main-chat API
-- using a fixed renderer PID
-- using pixel coordinates or OCR when UIA controls are available
-
-## 11. Immediate next tasks
-
-1. Run the safe real-send probe in `tools/qn_discovery_lab/qn_uia_send_probe.py` against a dedicated test conversation.
-2. Require a unique timestamped message and verify it appears in the UIA tree.
-3. Build `qn_uia_extract_messages.py` that outputs normalized JSON:
-   - node AutomationId
-   - sender
-   - timestamp
-   - message type
-   - body/text
-   - visible/off-screen state
-4. Add deduplication keyed by message-node AutomationId plus content/time fallback.
-5. Build a watcher that reports newly added messages without sending.
-6. Add current-contact/session detection before any bot integration.
-7. Only after those pass, connect the UIA adapter to the existing response-generation code.
-8. Continue MessageSDK/AIM reverse engineering as a parallel, longer-term track.
-
-## 12. Current milestone status
-
-| Capability | Status |
-|---|---|
-| Locate current chat window | Verified |
-| Read loaded chat text | Verified |
-| Read sender/time/product metadata | Verified |
-| Locate input by AutomationId | Verified |
-| Write and read back input text | Verified |
-| Restore original input | Verified |
-| Locate send button by AutomationId | Verified |
-| Invoke send exactly once | Pending next probe |
-| Verify sent message in UIA tree | Pending next probe |
-| Background message stream | Not yet available |
-| Stable public/internal API | Not found |
-| Main bot integration | Intentionally deferred |
+1. 连续快速发送 8–10 条买家文本，覆盖普通问题 + 省略续问。
+2. 保持至少一个 AI 请求超过 50 秒，确认 timeout 约在 50–55 秒触发。
+3. 确认超时 generation 不会稍后进入 Ready/Sending。
+4. 发送包含文字的图片，确认 server OCR 使用当前 shop token。
+5. 暂时制造 OCR server failure，确认视觉模型 soft fallback。
+6. 继续运行 1 小时以上，比较 `页面通道` 是否单调增长。
+7. 订单 Created/Paid 固定回复各测一次，再人工发送完全相同分段验证 exact echo satisfied。
+
+## 发布门槛
+
+任何生产修复必须：分支 -> 回归/静态测试 -> PR -> Windows CI + API control plane CI + Windows x64 release build 全绿 -> merge master -> master release build -> auto-update release。
