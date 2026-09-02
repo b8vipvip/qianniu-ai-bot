@@ -46,11 +46,14 @@ def test_first_real_message_is_replayed_before_later_context_messages():
 def test_fast_path_claims_recovery_only_after_real_first_message_exists():
     source = read("src/Bot/ChromeNs/FirstInquiryStreamingGuard.cs")
 
-    candidate = source.index("var first = recentBuyerMessages.FirstOrDefault(IsRealFirstInquiryMessage)")
-    empty_guard = source.index("if (first == null)", candidate)
+    candidate = source.index("var first = recentBuyerMessages.FirstOrDefault(")
+    predicate = source.index("IsRealFirstInquiryMessage", candidate)
+    empty_guard = source.index("if (first == null)", predicate)
     claim = source.index("MarkBuyerMessageObserved(seller, buyer);", empty_guard)
 
-    assert candidate < empty_guard < claim
+    assert candidate < predicate < empty_guard < claim
+    assert "IsReplyableFirstInquiryCandidate" in source
+    assert "NonBuyerConversationGuard.ShouldBlockMessage" in source
 
 
 def test_later_background_notifications_do_not_restart_active_first_inquiry_recovery():
