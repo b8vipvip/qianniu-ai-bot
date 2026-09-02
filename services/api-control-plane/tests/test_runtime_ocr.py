@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+from pathlib import Path
 from types import SimpleNamespace
 
 from PIL import Image
@@ -49,3 +50,9 @@ def test_install_is_idempotent(monkeypatch):
     runtime_ocr.install(fake)
     runtime_ocr.install(fake)
     assert [path for path, _ in routes] == ["/api/runtime/v1/ocr"]
+
+
+def test_server_container_includes_runtime_ocr_module():
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+    copy_lines = [line for line in dockerfile.splitlines() if line.startswith("COPY ")]
+    assert any("runtime_ocr.py" in line for line in copy_lines)
