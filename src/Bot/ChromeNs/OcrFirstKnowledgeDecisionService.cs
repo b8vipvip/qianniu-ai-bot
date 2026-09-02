@@ -13,8 +13,9 @@ namespace Bot.ChromeNs
     /// OCR-first local decision layer for image messages. It resolves the already-cached image,
     /// calls the authenticated server OCR control-plane endpoint and only allows a direct reply
     /// when OCR confidence is high AND Knowledge Engine V2 independently passes its existing
-    /// CanDirectReply safety gate. A miss is soft and immediately falls through to the normal
-    /// vision provider pipeline.
+    /// CanDirectReply safety gate. When the server selects AI-first and a usable vision endpoint
+    /// exists, this early direct-reply layer yields immediately so visual AI remains the primary
+    /// decision source; OCR can still be attached later as auxiliary evidence by the vision path.
     /// </summary>
     internal static class OcrFirstKnowledgeDecisionService
     {
@@ -31,6 +32,22 @@ namespace Bot.ChromeNs
                 || !KnowledgeEngineV2Service.IsSnapshotReady(task.SellerNick))
             {
                 return null;
+            }
+
+            var priority = await VisionOcrPriorityService.ResolveAsync(task.SellerNick, cancellationToken).ConfigureAwait(false);
+            if (VisionOcrPriorityService.IsAiFirst(priority))
+            {
+                var visionEndpoints = AiEndpointStore.GetVisionEnabledEndpoints();
+                if (visionEndpoints != null && visionEndpoints.Count > 0)
+                {
+                    Log.Info("视觉理解优先级=AI接口优先，跳过OCR+知识库提前直答: seller=" + task.SellerNick
+                        + ", buyer=" + task.BuyerNick
+                        + ", visionEndpoints=" + visionEndpoints.Count);
+                    return null;
+                }
+
+                Log.Info("视觉理解优先级=AI接口优先，但未配置可用视觉模型，允许OCR+知识库兜底: seller="
+                    + task.SellerNick + ", buyer=" + task.BuyerNick);
             }
 
             var sw = Stopwatch.StartNew();
