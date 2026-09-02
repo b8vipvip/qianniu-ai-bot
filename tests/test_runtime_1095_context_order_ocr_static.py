@@ -9,8 +9,8 @@ def read(path):
 
 def test_deictic_followup_uses_recent_buyer_context_without_global_long_delay():
     source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
-    assert "SemanticContinuationWindowSeconds = 15" in source
-    assert "买家上一句与当前指代续问，请合并理解为一个完整问题" in source
+    assert "SemanticContinuationWindowSeconds = 180" in source
+    assert "买家当前消息是对上一条未解决问题的省略补充或催问" in source
     assert '"这个", "这款", "这种"' in source
     assert "semantic_continuation_superseded" in source
     assert "QuietDelayMilliseconds" in source

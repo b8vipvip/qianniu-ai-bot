@@ -619,7 +619,7 @@ namespace Bot.ChromeNs
                 answer = await Task.Run(() => MyOpenAI.GetAnswer(
                     burst.SellerNick,
                     burst.BuyerNick,
-                    burst.CombinedQuestion,
+                    string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion,
                     true));
             }
 

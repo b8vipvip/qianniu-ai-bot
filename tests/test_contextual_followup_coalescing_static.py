@@ -1,0 +1,57 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path):
+    return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+def test_contextual_followups_keep_substantive_anchor_and_support_ellipsis():
+    source = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    assert "SemanticContinuationWindowSeconds = 180" in source
+    assert "AnchorText" in source and "LatestGeneration" in source
+    assert "IsPunctuationOnlySemanticNudge" in source
+    assert '可以|可以吗|可以不' in source
+    assert '能|能吗|能用|能用吗|能不能' in source
+    assert '多久|什么时候|多少钱|在哪|哪里' in source
+    assert "semantic_continuation_superseded" in source
+    assert "previous.LatestGeneration" in source
+    assert "MarkContextualContinuationMerged" in source
+    assert "最近商品/图片/订单上下文" in source
+
+
+def test_model_question_is_used_by_both_text_reasoning_paths():
+    streaming = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    legacy = read("src/Bot/ChromeNs/QN.cs")
+    assert "string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion" in streaming
+    assert "string.IsNullOrWhiteSpace(burst.ModelQuestion) ? burst.CombinedQuestion : burst.ModelQuestion" in legacy
+
+
+def test_premerge_has_one_authoritative_gate_and_hard_liveness_boundary():
+    coordinator = read("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs")
+    deterministic = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
+    assert "_preMergeRuleGates" not in coordinator
+    assert "PreMergeRuleExecutionDeadlineMilliseconds = 20000" in coordinator
+    assert "Task.WhenAny(rulesTask, deadlineTask)" in coordinator
+    assert "已fail-open继续普通合并链路" in coordinator
+    assert "pre_merge_enqueue_exception" in coordinator
+    assert "gate.WaitAsync(1800)" in deterministic
+
+
+def test_non_buyer_runtime_probe_is_guarded_before_success_correction():
+    monitor = read("src/Bot/ChromeNs/QnRuntimeSafetyMonitor.cs")
+    first_guard = monitor.index('RejectNonBuyerProbe(qn, seller, first, currentNick, "first_read")')
+    same = monitor.index("AreSameBuyer(seller, currentNick, firstNick)", first_guard)
+    second_guard = monitor.index('RejectNonBuyerProbe(qn, seller, second, currentNick, "stable_read")')
+    corrected = monitor.index('"当前买家由主动探测修正', second_guard)
+    assert first_guard < same
+    assert second_guard < corrected
+    assert "保持已验证buyer不变" in monitor
+
+
+def test_pending_progress_card_can_be_terminally_folded_into_contextual_followup():
+    progress = read("src/Bot/ChromeNs/ResponseProgressTracker.cs")
+    assert "public static void MarkContextualContinuationMerged" in progress
+    assert "本条已合并到最新问题语义中" in progress
+    assert "entry.AnswerReadyAt != DateTime.MinValue" in progress
