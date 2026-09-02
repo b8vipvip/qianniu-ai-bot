@@ -17,10 +17,24 @@ namespace Bot.ChromeNs
     /// </summary>
     internal static class BuyerSessionAgentRuntimeBridge
     {
+        private sealed class WatchedSession
+        {
+            public string Seller { get; set; }
+            public string Buyer { get; set; }
+            public DateTime LastSeenUtc { get; set; }
+        }
+
         private static readonly Lazy<BuyerSessionAgent> AgentHolder =
             new Lazy<BuyerSessionAgent>(() => new BuyerSessionAgent());
         private static readonly ConcurrentDictionary<QN, byte> Attached = new ConcurrentDictionary<QN, byte>();
+        private static readonly ConcurrentDictionary<string, WatchedSession> WatchedSessions =
+            new ConcurrentDictionary<string, WatchedSession>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, DateTime> GenerationGeneratingSinceUtc =
+            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private const int AbsoluteGenerationAgeSeconds = 55;
+        private const int DeadlineWatchdogSleepMilliseconds = 250;
         private static Timer _timer;
+        private static Thread _deadlineWatchdogThread;
         private static int _started;
 
         private static BuyerSessionAgent Agent
@@ -32,7 +46,124 @@ namespace Bot.ChromeNs
         {
             if (Interlocked.Exchange(ref _started, 1) != 0) return;
             _timer = new Timer(_ => AttachExisting(), null, 300, 700);
-            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线；人工回复仅记录用于学习。" );
+            _deadlineWatchdogThread = new Thread(GenerationDeadlineWatchdogLoop)
+            {
+                IsBackground = true,
+                Name = "Qianniu.GenerationDeadlineWatchdog"
+            };
+            _deadlineWatchdogThread.Start();
+            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线；人工回复仅记录用于学习；generation绝对年龄看门狗=55s。" );
+        }
+
+        private static void GenerationDeadlineWatchdogLoop()
+        {
+            while (true)
+            {
+                try
+                {
+                    SweepGenerationDeadlines();
+                }
+                catch (Exception ex)
+                {
+                    Log.ErrorWithMaxCount("generation绝对年龄看门狗扫描失败: " + ex.Message, 20);
+                }
+                Thread.Sleep(DeadlineWatchdogSleepMilliseconds);
+            }
+        }
+
+        private static void SweepGenerationDeadlines()
+        {
+            var now = DateTime.UtcNow;
+            foreach (var pair in WatchedSessions.ToArray())
+            {
+                var watched = pair.Value;
+                if (watched == null) continue;
+                if ((now - watched.LastSeenUtc).TotalHours > 6)
+                {
+                    WatchedSession removedSession;
+                    WatchedSessions.TryRemove(pair.Key, out removedSession);
+                    continue;
+                }
+
+                var snapshot = Agent.GetSnapshot(watched.Seller, watched.Buyer);
+                if (snapshot == null || snapshot.RecentEvents == null) continue;
+                foreach (var generation in snapshot.RecentEvents
+                    .Where(x => x != null
+                        && x.Kind == BuyerSessionEventKind.BuyerActionAccepted
+                        && x.Generation > 0)
+                    .Select(x => x.Generation)
+                    .Distinct()
+                    .ToArray())
+                {
+                    BuyerSessionAgentState state;
+                    var watchKey = BuildGenerationWatchKey(watched.Seller, watched.Buyer, generation);
+                    if (!Agent.TryGetGenerationState(watched.Seller, watched.Buyer, generation, out state))
+                    {
+                        DateTime ignored;
+                        GenerationGeneratingSinceUtc.TryRemove(watchKey, out ignored);
+                        continue;
+                    }
+
+                    if (state == BuyerSessionAgentState.Generating)
+                    {
+                        GenerationGeneratingSinceUtc.TryAdd(watchKey, now);
+                    }
+
+                    if (state == BuyerSessionAgentState.Completed
+                        || state == BuyerSessionAgentState.Cancelled
+                        || state == BuyerSessionAgentState.Failed)
+                    {
+                        DateTime ignored;
+                        GenerationGeneratingSinceUtc.TryRemove(watchKey, out ignored);
+                        continue;
+                    }
+
+                    DateTime generatingSince;
+                    if (!GenerationGeneratingSinceUtc.TryGetValue(watchKey, out generatingSince)) continue;
+                    var elapsed = now - generatingSince;
+                    if (elapsed.TotalSeconds <= AbsoluteGenerationAgeSeconds) continue;
+
+                    Agent.Cancel(
+                        watched.Seller,
+                        watched.Buyer,
+                        generation,
+                        "absolute_generation_age_exceeded");
+                    DateTime removed;
+                    GenerationGeneratingSinceUtc.TryRemove(watchKey, out removed);
+                    Log.ErrorWithMaxCount(
+                        "generation超过绝对年龄已由独立线程硬取消，禁止迟到结果进入Ready/Sending: seller="
+                        + watched.Seller + ", buyer=" + watched.Buyer
+                        + ", generation=" + generation
+                        + ", elapsedMs=" + (long)elapsed.TotalMilliseconds
+                        + ", limitSeconds=" + AbsoluteGenerationAgeSeconds,
+                        100);
+                }
+            }
+        }
+
+        private static void WatchSession(string seller, string buyer)
+        {
+            seller = Normalize(seller);
+            buyer = Normalize(buyer);
+            if (seller.Length == 0 || buyer.Length == 0 || string.Equals(seller, buyer, StringComparison.Ordinal)) return;
+            var key = seller + "#" + buyer;
+            var now = DateTime.UtcNow;
+            WatchedSessions.AddOrUpdate(
+                key,
+                _ => new WatchedSession { Seller = seller, Buyer = buyer, LastSeenUtc = now },
+                (_, existing) =>
+                {
+                    existing = existing ?? new WatchedSession();
+                    existing.Seller = seller;
+                    existing.Buyer = buyer;
+                    existing.LastSeenUtc = now;
+                    return existing;
+                });
+        }
+
+        private static string BuildGenerationWatchKey(string seller, string buyer, long generation)
+        {
+            return Normalize(seller) + "#" + Normalize(buyer) + "#" + generation;
         }
 
         private static void AttachExisting()
@@ -59,6 +190,7 @@ namespace Bot.ChromeNs
                             Log.Info("BuyerSessionAgent忽略非买家后台通知: reason=" + nonBuyerReason);
                             return;
                         }
+                        WatchSession(e.Seller.Nick, e.Buyer.Nick);
                         var now = DateTime.Now;
                         Agent.RecordEvent(
                             e.Seller.Nick,
@@ -119,6 +251,7 @@ namespace Bot.ChromeNs
             }
             var buyer = sellerMessage ? to : from;
             if (buyer.Length == 0 || string.Equals(buyer, seller, StringComparison.Ordinal)) return;
+            WatchSession(seller, buyer);
 
             var display = IncomingMessageSafety.GetDisplayText(message, text);
             var key = IncomingMessageSafety.BuildMessageKey(message, text);
