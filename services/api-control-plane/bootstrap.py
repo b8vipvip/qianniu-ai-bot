@@ -24,6 +24,7 @@ import message_processing_traces
 import recharge_status_query
 import runtime_embedding_guard
 import runtime_ocr
+import runtime_ocr_priority
 import runtime_routing_guard
 import runtime_shop_ai_proxy
 import runtime_streaming_guard
@@ -42,6 +43,7 @@ chat2api_runtime_guard.install(control_plane)
 runtime_streaming_guard.install(control_plane)
 runtime_embedding_guard.install(control_plane)
 runtime_ocr.install(control_plane)
+runtime_ocr_priority.install(control_plane)
 deep_test_guard.install(control_plane)
 scheduled_deep_test_retry.install(control_plane)
 wecom_policy_migration.install(control_plane)
@@ -69,6 +71,7 @@ message_processing_traces.install(control_plane)
 @control_plane.app.on_event("startup")
 def initialize_control_plane_extensions() -> None:
     runtime_ocr.init_db(control_plane)
+    runtime_ocr_priority.init_db(control_plane)
     wecom_bridge.init_wecom_db()
     wecom_settings.init_wecom_settings_db()
     recharge_status_query.init_recharge_query_db()

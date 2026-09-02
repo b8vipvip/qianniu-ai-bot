@@ -23,5 +23,6 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\LocalOcrService.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\LocalOcrService.cs" />
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OcrFirstKnowledgeDecisionService.cs" Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OcrFirstKnowledgeDecisionService.cs')" />
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\VisionOcrPriorityService.cs" Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\VisionOcrPriorityService.cs')" />
   </ItemGroup>
 </Project>

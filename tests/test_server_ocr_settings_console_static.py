@@ -62,10 +62,10 @@ def test_primary_console_exposes_lazy_loaded_ocr_settings_page():
     assert 'id="ocrTimeoutSeconds"' in page
     assert 'id="ocrMaxConcurrency"' in page
     assert 'id="ocrMaxTextChars"' in page
-    assert "/static/ocr-settings.js?v=1" in page
+    assert "/static/ocr-settings.js?v=" in page
     assert "当前没有需要人工选择的模型路径或模型名称" in page
 
     assert 'ocrApi("/api/admin/ocr/settings")' in script
     assert 'method:"PUT"' in script
     assert 'ocrApi("/api/admin/ocr/settings/reset"' in script
-    assert "OCR 配置已保存并立即生效，无需重启服务" in script
+    assert "OCR 参数和视觉理解优先级已保存并立即生效，无需重启服务" in script
