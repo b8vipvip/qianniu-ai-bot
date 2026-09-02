@@ -14,12 +14,16 @@ def test_hwnd_safe_send_accepts_only_process_owned_verified_point():
     assert "GetWindowThreadProcessId(target, out targetPid)" in native
     assert "targetPid != expectedPid" in native
     assert "安全点窗口不属于当前卖家千牛进程" in native
-    assert "允许同一千牛进程的独立根窗口" in native
+    assert "允许同一千牛进程的独立根窗口" not in native
+    assert "HWND安全发送已阻止跨根窗口点击" in native
     process_guard = native.split("GetWindowThreadProcessId(target, out targetPid)", 1)[1].split(
         "ScreenToClient", 1
     )[0]
     assert process_guard.index("targetPid != expectedPid") < process_guard.index("root != expectedRoot")
     assert "return false;" in process_guard.split("targetPid != expectedPid", 1)[1].split("var root", 1)[0]
+    sibling_root_guard = process_guard.split("root != expectedRoot", 1)[1]
+    assert "拒绝向未知根窗口投递点击" in sibling_root_guard
+    assert "return false;" in sibling_root_guard
 
 
 def test_unchanged_failed_bot_draft_does_not_become_fake_human_activity():

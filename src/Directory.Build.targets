@@ -148,6 +148,12 @@
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QNRpa.ReliableSend.cs" />
   </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QNRpa.PlatformSendGuard.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QNRpa.PlatformSendGuard.cs" />
+  </ItemGroup>
+  <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\CrossProcessAtomicStateFile.cs')">
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\CrossProcessAtomicStateFile.cs" />
+  </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs')">
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\QN.MessageRecovery.cs" />
   </ItemGroup>

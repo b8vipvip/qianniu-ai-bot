@@ -42,7 +42,7 @@ def test_message_strategy_ui_exposes_ai_first_and_local_first():
 def test_local_first_high_confidence_knowledge_returns_before_any_ai_call():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
-    plan_at = pipeline.index("var plan = SmartReplyRouterService.BuildPlan")
+    plan_at = pipeline.index("var plan = await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token)")
     local_at = pipeline.index("replyMode == BotReplyMode.LocalFirst", plan_at)
     direct_at = pipeline.index("plan.Route == SmartReplyRouteKind.DirectKnowledge", local_at)
     return_at = pipeline.index("return directAnswer;", direct_at)
@@ -70,7 +70,7 @@ def test_handoff_and_fixed_rules_still_run_before_local_knowledge():
     pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
 
     manual = pipeline.index("BotFeatureStore.EvaluateAutoReplyRule(question)")
-    plan = pipeline.index("SmartReplyRouterService.BuildPlan(seller, buyer, question)")
+    plan = pipeline.index("SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token)")
     assert manual < plan
     assert "命中人工确认规则，未自动回复" in pipeline
 

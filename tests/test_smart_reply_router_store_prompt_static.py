@@ -24,7 +24,7 @@ def test_smart_reply_router_has_three_routes_and_two_stage_small_retrieval():
 def test_streaming_pipeline_uses_router_before_ai_and_keeps_manual_rules_first():
     code = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
     manual = code.index("var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question)")
-    plan = code.index("var plan = SmartReplyRouterService.BuildPlan(seller, buyer, question)")
+    plan = code.index("var plan = await SmartReplyRouterService.BuildPlanAsync(seller, buyer, question, token)")
     direct = code.index("plan.Route == SmartReplyRouteKind.DirectKnowledge", plan)
     prompt = code.index("SmartReplyRouterService.BuildPromptAddon(plan)", direct)
     assert manual < plan < direct < prompt

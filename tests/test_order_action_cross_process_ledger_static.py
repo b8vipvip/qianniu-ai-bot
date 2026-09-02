@@ -1,0 +1,50 @@
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path):
+    return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+# The durable action ledger is the source of truth across Bot processes; any uncertain read is fail-closed.
+def test_action_ledger_persists_cross_process_inflight_before_send():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    begin = code[code.index("internal static bool TryBeginExecution"):code.index("internal static void MarkDeliveryUncertain")]
+    assert "public bool InFlight" in code
+    assert 'CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000)' in begin
+    assert "ReloadAndMergeActionStateLocked(path, out reloadError)" in begin
+    assert "action_inflight_cross_process" in begin
+    assert "durable.InFlight = true" in begin
+    assert "SaveActionStateLocked(path)" in begin
+    assert "action_state_persist_failed" in begin
+    assert "action_state_unavailable" in begin
+
+
+def test_action_ledger_write_is_atomic_and_old_valid_file_is_never_deleted_first():
+    helper = read("src/Bot/ChromeNs/CrossProcessAtomicStateFile.cs")
+    assert "Guid.NewGuid().ToString(\"N\")" in helper
+    assert "FileMode.CreateNew" in helper
+    assert "FileOptions.WriteThrough" in helper
+    assert "stream.Flush(true)" in helper
+    assert "File.Replace(temp, path, null, true)" in helper
+    assert "File.Delete(path)" not in helper
+    order = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    state = order[order.index("private static void EnsureActionStateLoadedLocked"):order.index("private static string GetActionStatePath")]
+    assert "ReadAllTextShared" in state
+    assert "TryReadActionStateFromDiskLocked" in state
+    assert "read_failed:" in state
+    assert "parse_failed:" in state
+    assert "WriteAllTextAtomic" in state
+    assert "File.WriteAllText(" not in state
+    assert "File.Delete(path)" not in state
+
+
+def test_finish_and_uncertain_paths_clear_durable_inflight_under_same_mutex():
+    code = read("src/Bot/ChromeNs/OrderPlacedAutoReplyService.cs")
+    uncertain = code[code.index("internal static void MarkDeliveryUncertain"):code.index("internal static void FinishExecution")]
+    finish = code[code.index("internal static void FinishExecution"):code.index("private static void ObserveCanonicalOrderId")]
+    assert "existing.InFlight = false" in uncertain
+    assert "existing.DeliveryUncertain = true" in uncertain
+    assert "existing.InFlight = false" in finish
+    assert 'CrossProcessAtomicStateFile.Acquire(path, "OrderReplyActionState", 3000)' in finish

@@ -9,7 +9,14 @@ def test_order_card_parser_builds_structured_snapshot_without_persisting_raw_jso
     code = read("src/Bot/ChromeNs/OrderEventHub.cs")
     for field in ["OrderId", "ItemId", "ItemTitle", "SkuId", "SkuText", "Quantity", "TotalAmount", "PaidAmount", "TradeStatus", "IsPaid", "CreatedAt", "PaidAt", "ProductUrl", "ImageUrl", "RawCardHash", "EventType"]:
         assert "public " in code and field in code
-    assert "JObject.FromObject(message)" in code; assert "SHA256.Create()" in code; assert "order-event-state.json" in code; assert "File.WriteAllText(temp" in code; assert "RawCardJson" not in code; assert "seller + orderId + eventType" not in code
+    assert "JObject.FromObject(message)" in code
+    assert "SHA256.Create()" in code
+    assert "order-event-state.json" in code
+    assert "stream.Flush(true)" in code
+    assert "File.Replace(temp, path, null, true)" in code
+    assert "File.Delete(path)" not in code
+    assert "RawCardJson" not in code
+    assert "seller + orderId + eventType" not in code
 
 def test_order_event_hub_separates_created_and_paid_and_persists_dedup():
     code = read("src/Bot/ChromeNs/OrderEventHub.cs")
