@@ -68,6 +68,7 @@ message_processing_traces.install(control_plane)
 
 @control_plane.app.on_event("startup")
 def initialize_control_plane_extensions() -> None:
+    runtime_ocr.init_db(control_plane)
     wecom_bridge.init_wecom_db()
     wecom_settings.init_wecom_settings_db()
     recharge_status_query.init_recharge_query_db()
