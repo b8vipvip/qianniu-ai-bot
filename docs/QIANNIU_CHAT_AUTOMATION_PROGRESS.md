@@ -1,110 +1,97 @@
 # Qianniu Chat Automation Progress / 千牛聊天自动化进度
 
-Last updated / 最后更新：2026-09-02 14:40 +08:00
+Last updated / 最后更新：2026-09-02 16:19 +08:00 之后
 
-本文件只记录**当前生产状态和仍需验证的事项**。早期 discovery / message lifecycle 研究证据保留在独立文档中，不再把 2026-07 的实验 TODO 当作当前生产 TODO。
+本文件只记录**当前生产状态和仍需验证的事项**。早期 discovery / message lifecycle 研究证据保留在独立文档中，不再把历史实验 TODO 当作当前生产 TODO。
 
-## 当前正式基线
+## 1. Current production baseline / 当前生产基线
 
-- Release: `1.1.1139`
-- Commit: `63b25d59b307a210279119665d3c7c9c85755ecc`
-- Active PR: `#208 fix/runtime-starvation-ocr-config-20260902`
+- Default branch / 默认分支：`master`
+- Verified master commit / 已验证 master：`d5a72fd3fac83ced6780ac1213fbacecd784f64f`
+- Current formal release / 当前正式版本：`bot-v1.1.1150`
+- Windows x64 Release build #1150：成功
+- Auto-update release workflow：成功
+- Rescue updater asset workflow：成功
 
-## 已完成生产能力
+## 2. Completed / 已完成
 
-### 入站与会话
+### 2.1 Chat event ingestion / 聊天事件接入
+- WebSocket / CDP business session discovery 已完成；
+- 买家文本、订单卡片、图片消息已进入统一处理链；
+- 非买家会话隔离已完成。
 
-- 单一权威业务 CDP + 重复页面轻量入站补偿。
-- 重复入站短窗去重、已处理消息 key 去重。
-- 后台通知漏详细事件时主动切换目标 buyer 并补抓远端历史。
-- NonBuyerConversationGuard 前置屏蔽小二/服务商/1688/群聊/平台系统会话。
-- BuyerSessionAgent 统一 seller+buyer 时间线；人工 seller reply 只作为学习证据。
+### 2.2 Coalescing / Generation
+- 买家 burst coalescing 已实现；
+- 前置规则等待有上限；
+- generation cancellation / fail-open 已实现；
+- 总 AI 预算仍为 50 秒；
+- PR #208 增加 ThreadPool starvation guard，保护 cancellation/timer/watchdog continuation。
 
-### 文本回复
+### 2.3 Smart Reply / Knowledge
+- Semantic Embedding 前台已 true async；
+- embedding 子 deadline 约 2.2 秒；
+- Knowledge V2 FactKey 已细化；
+- 人工答案学习与异常诊断 JSON 解析已切换为结构化恢复器。
 
-- BuyerMessageBurst 支持独立普通问题并发。
-- dependent fragment 语义续问在 180s TTL 内继承 substantive anchor。
-- `ModelQuestion` 已进入 Streaming/legacy AI。
-- Coalescing 外层重复 gate 已删除；固定规则使用唯一 1.8s gate 并 fail-open。
-- Semantic Embedding 前台 async + 2200ms 子预算，失败回退本地 hybrid retrieval。
-- AI 文本总预算配置为 50 秒。
+### 2.4 Order events / 订单事件
+- OrderEventHub 跨进程原子持久化完成；
+- order action durable ledger 完成；
+- 固定回复按 segment 幂等；
+- 人工完全相同 segment 可满足该 segment，但不会取消后续不同 segment。
 
-### 图片/OCR
+### 2.5 Reliable send / 可靠发送
+- Bot-owned exact draft 校验；
+- CDP / 安全 HWND / UIA 分层发送；
+- fallback 前重新验证；
+- seller echo / delivery verification；
+- 平台“服务态度提醒”检测；
+- 不自动点击“继续发送”，阻断同文本盲重试。
 
-- 图片先本地缓存，撤回后可继续识别但禁止发送旧回复。
-- 图片指代续问继续走视觉上下文。
-- OCR 推理已迁移 API control plane；Windows 不再打包本地 OCR worker/model。
-- OCR-first 只有 OCR 高置信 + Knowledge V2 `CanDirectReply` 同时成立才免视觉 API 直答。
+### 2.6 OCR
+- 本地 OCR worker/model 已从 Windows release 移除；
+- 服务端 `/api/runtime/v1/ocr` 已实现；
+- 客户端使用本店 `ShopControlPlaneConnectionStore` URL/token 自动解析 OCR endpoint；
+- 不再要求人工配置伪造的“服务端控制面 AI 接口”。
 
-### 订单
+## 3. Remaining runtime work / 当前剩余运行时工作
 
-- OrderEventHub 统一订单事件。
-- 固定预设不等待 AI。
-- order action durable ledger 跨进程幂等。
-- OrderEventHub 状态文件跨进程锁 + 原子 replace。
-- exact seller echo 可满足当前固定分段，后续不同分段仍继续。
+### P0 — Absolute generation freshness guard / generation 绝对年龄屏障
 
-### 发送
+当前 50 秒 timeout 仍依赖 cancellation/timer。虽然 1.1.1150 已提高 ThreadPool 最低容量，但生产链还缺少独立 wall-clock 最终屏障。
 
-- 发送前验证目标 buyer 与 Bot-owned draft。
-- CDP DOM send -> HWND safe point -> UIA fallback 分层执行。
-- fallback 前后重新检查 exact draft，避免不确定成功后的重复发送。
-- 卖家 echo / delivery verification 是最终成功证据。
-- 平台“服务态度提醒”禁止自动确认。
-- HWND root/modal 安全边界和 Windows integrity 诊断已存在。
+需要：
+- AI 返回后检查 `DateTime.Now - aiStartedAt`；
+- 结果超过允许年龄则直接丢弃；
+- 不允许迟到 generation 进入 `Ready/Sending/Completed`；
+- 真正发送前再检查一次；
+- 只记录 generationId/elapsed/dropReason。
 
-### Knowledge V2 / 学习
+### P1 — 1.1.1150 runtime verification / 新版真实日志验证
 
-- SQLite repository + structured index + working memory + feedback loop。
-- FactKey 当前包含 Subject / Predicate / Intent / ProductIds / Entities / Conditions / RequiredContext / Exclusions。
-- 人工答案即时对比学习 JSON 已支持 fence/wrapper/array/string/balanced object 恢复。
-- 无法恢复结构化结果时 fail-open `skipped`，不污染知识。
+下一份完整日志重点检查：
+- 50 秒 deadline 是否稳定；
+- 是否仍出现数分钟迟到 generation；
+- OCR 是否使用 `shop-control-plane`；
+- CDP 页面通道是否持续单调增长；
+- 重复消息平台弹窗是否被安全阻断。
 
-## 1.1.1139 真实运行日志结论
+### P2 — CDP lifecycle observation / 生命周期观察
 
-### 已验证正常
+旧日志没有足够证据证明页面通道持续泄漏。保持观察；只有新版长时日志出现持续增长时才继续改生命周期代码。
 
-- 启动数据库完整性 OK。
-- Web sync / rules sync / update SSE 正常。
-- 业务权威 CDP 始终为 1。
-- 多次真实发送均有 `deliveryVerified=True`。
-- 非买家/平台系统提示在普通回复链前被丢弃。
-- 本地优先高置信 Knowledge V2 直答可在毫秒级返回并真实送达。
+## 4. Validation rule / 验证规则
 
-### 新发现 P0：50 秒 deadline 实际延迟数分钟
+任何“已修复”都至少满足其一：
 
-同一 buyer 的多个 generation 在日志中配置 `budgetSeconds=50`，但 timeout continuation 实际延迟到数分钟；最严重 generation 1 的本地答案约 751 秒后才返回，并继续进入 Ready/Sending。
+1. 生产代码 + CI/静态契约证明；或
+2. 新版本真实运行日志证明。
 
-当前判断：CLR ThreadPool 被同步 UIA/CDP/兼容工作占满时，`Task.Delay` / `CancelAfter` continuation 也被饿死。PR #208 已增加启动时 ThreadPool 最小 worker/I/O 容量保护。
+对于运行时竞态、真实发送、平台 UI、CDP 生命周期等问题，CI 通过不等于线上已验证，必须继续用新版本日志复核。
 
-**回归通过条件：**连续消息压力下，50 秒 deadline 的实际触发必须接近配置值，不能再出现分钟级漂移；旧 generation 不能在数分钟后迟到发送。
+## 5. Next execution / 下一步
 
-### 新发现 P1：OCR 控制面配置来源错误
-
-客户端已经连接控制面 SSE，但 OCR 仍提示“未配置可用的服务端控制面OCR接口”。PR #208 改为按 seller/shop 从 `ShopControlPlaneConnectionStore` 直接取正式 URL/token，旧 AI endpoint 仅兼容回退。
-
-**回归通过条件：**图片测试应出现 `endpointSource=shop-control-plane` 或 OCR 服务端成功日志；不得再因为没有额外 AI endpoint 而跳过 OCR。
-
-### 新发现 P1：诊断 AI JSON 恢复未完全统一
-
-人工学习已修，但发送失败/慢响应诊断仍发现旧 first/last brace parser。PR #208 正在统一结构化恢复，避免诊断报告因 provider wrapper/fence 失真。
-
-## 当前观察项（不是已确认 bug）
-
-- `页面通道=27`：本次约 1 小时日志内未持续增长，业务 CDP=1；继续观察，不凭单次数字判定泄漏。
-- Knowledge V2 `conflicts=93`：当前 FactKey 已细化，先按真实治理冲突处理；只有逐条证据证明误冲突才继续改算法。
-- 人工回复不取消 Bot generation：这是当前明确策略，不应被误当 bug；若未来需要“人工回复即接管”，必须作为产品策略单独设计，而不是隐式取消。
-
-## 下一轮真实测试清单
-
-1. 连续快速发送 8–10 条买家文本，覆盖普通问题 + 省略续问。
-2. 保持至少一个 AI 请求超过 50 秒，确认 timeout 约在 50–55 秒触发。
-3. 确认超时 generation 不会稍后进入 Ready/Sending。
-4. 发送包含文字的图片，确认 server OCR 使用当前 shop token。
-5. 暂时制造 OCR server failure，确认视觉模型 soft fallback。
-6. 继续运行 1 小时以上，比较 `页面通道` 是否单调增长。
-7. 订单 Created/Paid 固定回复各测一次，再人工发送完全相同分段验证 exact echo satisfied。
-
-## 发布门槛
-
-任何生产修复必须：分支 -> 回归/静态测试 -> PR -> Windows CI + API control plane CI + Windows x64 release build 全绿 -> merge master -> master release build -> auto-update release。
+1. 编码 generation absolute-age freshness guard；
+2. 增加静态/行为契约；
+3. Windows CI、API CI、x64 Release 全绿后合并；
+4. 自动发布下一版；
+5. 新版真实测试后继续按日志挖掘。
