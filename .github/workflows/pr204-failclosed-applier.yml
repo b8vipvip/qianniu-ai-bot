@@ -1,0 +1,44 @@
+name: PR204 fail-closed ledger applier
+
+on:
+  push:
+    branches:
+      - fix/embedding-order-platform-guard-20260902
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/embedding-order-platform-guard-20260902
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install --disable-pip-version-check pytest
+      - name: Apply fail-closed patch
+        run: python scripts/dev/apply_pr204_failclosed.py
+      - name: Run focused safety regressions
+        run: >-
+          python -m pytest -q
+          tests/test_order_action_cross_process_ledger_static.py
+          tests/test_runtime_send_failure_1088_static.py
+          tests/test_qianniu_service_attitude_block_static.py
+          tests/test_order_preset_manual_segment_continuation_static.py
+      - name: Commit and remove temporary applier
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm scripts/dev/apply_pr204_failclosed.py
+          git rm .github/workflows/pr204-failclosed-applier.yml
+          git add src tests
+          git diff --cached --check
+          git commit -m "fix: fail closed when order action ledger is unreadable"
+          git push origin HEAD:fix/embedding-order-platform-guard-20260902
