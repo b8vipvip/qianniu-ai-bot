@@ -1,17 +1,18 @@
 # Qianniu Chat Automation Progress / 千牛聊天自动化进度
 
-Last updated / 最后更新：2026-09-02 16:30 +08:00 之后
+Last updated / 最后更新：2026-09-02 16:36 +08:00 之后
 
 本文件只记录**当前生产状态和仍需验证的事项**。早期 discovery / message lifecycle 研究证据保留在独立文档中，不再把历史实验 TODO 当作当前生产 TODO。
 
 ## 1. Current production baseline / 当前生产基线
 
 - Default branch / 默认分支：`master`
-- Verified master commit / 已验证 master：`d5a72fd3fac83ced6780ac1213fbacecd784f64f`
-- Current formal release / 当前正式版本：`bot-v1.1.1150`
-- Windows x64 Release build #1150：成功
-- Auto-update release workflow：成功
-- Rescue updater asset workflow：成功
+- Verified master commit / 已验证运行时代码：`1cac49cd08e390f464ec9e35fbeea40048ed74a1`
+- Current formal release / 当前正式版本：`bot-v1.1.1154`
+- Windows CI #972：成功
+- Windows x64 Release build #1154：成功
+- Auto-update release workflow #767：成功
+- Rescue updater asset workflow #324：成功
 
 ## 2. Completed / 已完成
 
@@ -25,8 +26,10 @@ Last updated / 最后更新：2026-09-02 16:30 +08:00 之后
 - 前置规则等待有上限；
 - generation cancellation / fail-open 已实现；
 - 总 AI 预算仍为 50 秒；
-- 1.1.1139 真实日志曾确认 **50 秒 deadline 实际延迟数分钟**，根因方向为 ThreadPool continuation starvation；
-- PR #208 增加 ThreadPool starvation guard，保护 cancellation/timer/watchdog continuation。
+- 1.1.1139 真实日志曾确认 **50 秒 deadline 实际延迟数分钟**；
+- PR #208 增加 ThreadPool starvation guard；
+- PR #209 增加 dedicated background thread absolute-age watchdog：每 250ms 扫描，generation 首次进入 `Generating` 后计时，超过 55 秒仍活跃则硬取消；
+- watchdog 不依赖 ThreadPool timer continuation，因此作为正常 50 秒 cancellation 的独立最后防线。
 
 ### 2.3 Smart Reply / Knowledge
 - Semantic Embedding 前台已 true async；
@@ -56,31 +59,19 @@ Last updated / 最后更新：2026-09-02 16:30 +08:00 之后
 
 ## 3. Remaining runtime work / 当前剩余运行时工作
 
-### P0 — Absolute generation freshness guard / generation 绝对年龄屏障
-
-PR #209 已实现独立最后防线，当前等待 CI 与真实运行验证：
-- 使用 dedicated background `Thread`，不依赖 ThreadPool timer continuation；
-- 每 250ms 扫描 generation；
-- generation 首次进入 `Generating` 后开始独立 wall-clock 计时；
-- 超过 55 秒仍活跃则 `BuyerSessionAgent.Cancel(..., absolute_generation_age_exceeded)`；
-- generation 从 `ActiveGenerations` 移除后，即使 provider 忽略 cancellation 迟到返回，现有 `lease.IsCurrent` 也会失败，因此不能继续 Ready/Sending；
-- 人工客服回复不触发取消；terminal generation watch 自动清理。
-
-这是一道最后防线，不替代正常 50 秒 cancellation。
-
-### P1 — 1.1.1150+ runtime verification / 新版真实日志验证
+### P1 — 1.1.1154 runtime verification / 新版真实日志验证
 
 下一份完整日志重点检查：
 - 50 秒 deadline 是否稳定；
 - 是否仍出现数分钟迟到 generation；
-- 是否出现 `absolute_generation_age_exceeded`，若出现则迟到结果后续不得再进入 Ready/Sending；
+- 若出现 `absolute_generation_age_exceeded`，该 generation 后续不得再进入 Ready/Sending；
 - OCR 是否使用 `shop-control-plane`；
 - CDP 页面通道是否持续单调增长；
 - 重复消息平台弹窗是否被安全阻断。
 
 ### P2 — CDP lifecycle observation / 生命周期观察
 
-旧日志没有足够证据证明页面通道持续泄漏。保持观察；只有新版长时日志出现持续增长时才继续改生命周期代码。
+旧日志没有足够证据证明页面通道持续泄漏。保持观察；只有 1.1.1154 长时日志出现持续增长时才继续改生命周期代码。
 
 ## 4. Validation rule / 验证规则
 
@@ -93,7 +84,7 @@ PR #209 已实现独立最后防线，当前等待 CI 与真实运行验证：
 
 ## 5. Next execution / 下一步
 
-1. PR #209 Windows CI、API CI、x64 Release 全绿；
-2. 合并并自动发布下一版；
-3. 新版真实测试并导出完整日志；
+1. 客户端更新到 `bot-v1.1.1154`；
+2. 做真实买家文本、图片、订单、长耗时 AI 与平台重复消息提醒测试；
+3. 导出完整日志；
 4. 按新日志继续挖掘，不凭旧文档重复修复已完成项。
