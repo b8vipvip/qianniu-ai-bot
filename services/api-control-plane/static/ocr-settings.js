@@ -25,6 +25,10 @@ function ocrSourceLabel(value){
   return value||"-";
 }
 
+function ocrPriorityLabel(value){
+  return value==="ai_first"?"AI 视觉接口优先":"OCR 优先";
+}
+
 function ocrSetResult(message,ok=true){
   const box=ocrEl("ocrResult");
   box.textContent=message||"";
@@ -45,12 +49,22 @@ function ocrRender(data){
   ocrEl("ocrMaxTextChars").value=String(data.max_text_chars??6000);
 }
 
+function ocrRenderPriority(data){
+  const priority=data&&data.vision_priority==="ai_first"?"ai_first":"ocr_first";
+  ocrEl("ocrVisionPriority").value=priority;
+  ocrEl("ocrVisionPriorityStatus").textContent=ocrPriorityLabel(priority);
+}
+
 async function loadOcrSettings(){
   const refresh=ocrEl("ocrRefreshBtn");
   if(refresh)refresh.disabled=true;
   try{
-    const data=await ocrApi("/api/admin/ocr/settings");
+    const [data,priority]=await Promise.all([
+      ocrApi("/api/admin/ocr/settings"),
+      ocrApi("/api/admin/ocr/vision-priority")
+    ]);
     ocrRender(data);
+    ocrRenderPriority(priority);
     ocrSetResult("");
   }catch(err){
     ocrSetResult(err.message||String(err),false);
@@ -68,10 +82,12 @@ async function saveOcrSettings(event){
     const timeoutSeconds=Number(ocrEl("ocrTimeoutSeconds").value);
     const maxConcurrency=Number(ocrEl("ocrMaxConcurrency").value);
     const maxTextChars=Number(ocrEl("ocrMaxTextChars").value);
+    const visionPriority=ocrEl("ocrVisionPriority").value;
     if(!Number.isFinite(maxImageMb)||maxImageMb<0.25||maxImageMb>64)throw new Error("最大图片大小必须在 0.25–64 MB 之间");
     if(!Number.isFinite(timeoutSeconds)||timeoutSeconds<1||timeoutSeconds>30)throw new Error("OCR 超时必须在 1–30 秒之间");
     if(!Number.isInteger(maxConcurrency)||maxConcurrency<1||maxConcurrency>8)throw new Error("最大并发必须是 1–8 的整数");
     if(!Number.isInteger(maxTextChars)||maxTextChars<256||maxTextChars>12000)throw new Error("最大返回文本字符必须是 256–12000 的整数");
+    if(!["ocr_first","ai_first"].includes(visionPriority))throw new Error("视觉理解优先级无效");
 
     const data=await ocrApi("/api/admin/ocr/settings",{
       method:"PUT",
@@ -83,8 +99,13 @@ async function saveOcrSettings(event){
         max_text_chars:maxTextChars
       })
     });
+    const priority=await ocrApi("/api/admin/ocr/vision-priority",{
+      method:"PUT",
+      body:JSON.stringify({vision_priority:visionPriority})
+    });
     ocrRender(data);
-    ocrSetResult("OCR 配置已保存并立即生效，无需重启服务。",true);
+    ocrRenderPriority(priority);
+    ocrSetResult("OCR 参数和视觉理解优先级已保存并立即生效，无需重启服务。",true);
   }catch(err){
     ocrSetResult(err.message||String(err),false);
   }finally{
@@ -93,12 +114,16 @@ async function saveOcrSettings(event){
 }
 
 async function resetOcrSettings(){
-  if(!confirm("恢复环境变量/内置默认值？当前控制台 OCR 参数会被覆盖。"))return;
+  if(!confirm("恢复环境变量/内置默认值？当前控制台 OCR 参数和视觉理解优先级会被覆盖。"))return;
   const button=ocrEl("ocrResetBtn");
   button.disabled=true;
   try{
-    const data=await ocrApi("/api/admin/ocr/settings/reset",{method:"POST",body:"{}"});
+    const [data,priority]=await Promise.all([
+      ocrApi("/api/admin/ocr/settings/reset",{method:"POST",body:"{}"}),
+      ocrApi("/api/admin/ocr/vision-priority/reset",{method:"POST",body:"{}"})
+    ]);
     ocrRender(data);
+    ocrRenderPriority(priority);
     ocrSetResult("已恢复环境默认值并立即生效。",true);
   }catch(err){
     ocrSetResult(err.message||String(err),false);
