@@ -28,11 +28,15 @@ def test_incoming_messages_learn_buyer_nick_display_aliases_before_dedup():
     source = read("src/Bot/ChromeNs/QN.cs")
 
     start = source.index("private Task ProcessIncomingMessageAsync")
-    block = source[start: start + 1000]
+    end = source.index("private async Task ProcessBuyerBurstAsync", start)
+    block = source[start:end]
+    guard = block.index("NonBuyerConversationGuard.ShouldBlockMessage")
     observe = block.index("BuyerIdentityAliasService.ObserveMessage")
     dedup = block.index("_incomingMessageDeduplicator.TryAccept")
 
-    assert observe < dedup
+    # Non-buyer traffic must be rejected before it can teach aliases, while real buyer aliases
+    # must still be learned before the ordinary duplicate gate.
+    assert guard < observe < dedup
 
 
 def test_seller_echo_accepts_only_known_equivalent_buyer_aliases():

@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -47,6 +47,20 @@ namespace DbEntity
         public string Ccode { get; set; }
         [JsonProperty("targetId")]
         public string TargetId { get; set; }
+        [JsonProperty("targetType")]
+        public string TargetType { get; set; }
+        [JsonProperty("type")]
+        public string Type { get; set; }
+        [JsonProperty("conversationType")]
+        public string ConversationType { get; set; }
+        [JsonProperty("scene")]
+        public string Scene { get; set; }
+        [JsonProperty("category")]
+        public string Category { get; set; }
+        [JsonProperty("source")]
+        public string Source { get; set; }
+        [JsonProperty("channel")]
+        public string Channel { get; set; }
     }
 
     public class ActiveLocalUser

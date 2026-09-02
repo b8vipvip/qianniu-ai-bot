@@ -24,6 +24,12 @@ namespace Bot.ChromeNs
                     var to = (m.toid.nick ?? "").Trim();
                     if (buyer.Length == 0 || to != seller || buyer == seller) continue;
                     var question = MessageText(m);
+                    string nonBuyerReason;
+                    if (NonBuyerConversationGuard.ShouldBlockMessage(m, seller, question, out nonBuyerReason))
+                    {
+                        Log.Info("回访首答已跳过非买家消息: reason=" + nonBuyerReason);
+                        continue;
+                    }
                     var prior = ConversationContextStore.GetRecentTurns(seller, buyer, question, 24)
                         .Where(x => x != null && !x.Withdrawn && !string.IsNullOrWhiteSpace(x.Text))
                         .OrderByDescending(x => x.Timestamp).FirstOrDefault();

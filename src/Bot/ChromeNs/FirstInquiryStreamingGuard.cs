@@ -63,6 +63,13 @@ namespace Bot.ChromeNs
             try
             {
                 var active = JsonConvert.DeserializeObject<ActiveLocalUser>(e.Value);
+                string nonBuyerReason;
+                if (active != null && active.LoginID != null && active.Conversation != null
+                    && NonBuyerConversationGuard.ShouldBlockConversation(active.LoginID, active.Conversation, out nonBuyerReason))
+                {
+                    Log.Info("首条咨询后台通知快路径已拒绝非买家会话: reason=" + nonBuyerReason);
+                    return;
+                }
                 var seller = active == null || active.LoginID == null
                     ? string.Empty
                     : (active.LoginID.Nick ?? string.Empty).Trim();
@@ -102,6 +109,12 @@ namespace Bot.ChromeNs
             buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, buyer);
             ccode = (ccode ?? string.Empty).Trim();
             if (seller.Length == 0 || buyer.Length == 0 || ccode.Length == 0) return;
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockIdentity(seller, buyer, out nonBuyerReason))
+            {
+                Log.Info("首条咨询快路径已拒绝非买家身份: reason=" + nonBuyerReason);
+                return;
+            }
             if (!Params.Robot.CanUseRobotReal) return;
 
             var key = RecoveryKey(seller, buyer);
@@ -193,9 +206,7 @@ namespace Bot.ChromeNs
             var messages = history["result"]?["msgs"]?.ToObject<List<QNChatMessage>>();
             var threshold = windowStart.AddSeconds(-12).Ticks;
             var recentBuyerMessages = (messages ?? new List<QNChatMessage>())
-                .Where(m => m != null && m.fromid != null && m.toid != null)
-                .Where(m => m.toid.nick == seller
-                    && BuyerIdentityAliasService.AreEquivalent(seller, m.fromid.nick, buyer))
+                .Where(m => IsReplyableFirstInquiryCandidate(m, seller, buyer))
                 .Where(m =>
                 {
                     var sort = IncomingMessageSafety.GetSortValue(m);
@@ -207,7 +218,7 @@ namespace Bot.ChromeNs
             // "First inquiry" means the earliest real buyer-authored content. Product-page metadata,
             // automatically injected item links/cards, platform tips and withdrawal notices may be
             // useful context later, but they are never allowed to own or delay the first-inquiry slot.
-            var first = recentBuyerMessages.FirstOrDefault(IsRealFirstInquiryMessage);
+            var first = recentBuyerMessages.FirstOrDefault(m => IsRealFirstInquiryMessage(m, seller));
             if (first == null)
             {
                 Log.Info("首条咨询后台通知快路径未发现真实买家首消息，保留原后台补偿: seller="
@@ -263,10 +274,21 @@ namespace Bot.ChromeNs
             return true;
         }
 
-        private static bool IsRealFirstInquiryMessage(QNChatMessage message)
+        private static bool IsReplyableFirstInquiryCandidate(QNChatMessage message, string seller, string buyer)
+        {
+            if (message == null || message.fromid == null || message.toid == null) return false;
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockMessage(message, seller, GetMessageText(message), out nonBuyerReason)) return false;
+            return message.toid.nick == seller
+                && BuyerIdentityAliasService.AreEquivalent(seller, message.fromid.nick, buyer);
+        }
+
+        private static bool IsRealFirstInquiryMessage(QNChatMessage message, string seller)
         {
             if (message == null) return false;
             var text = GetMessageText(message);
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockMessage(message, seller, text, out nonBuyerReason)) return false;
             if (ConversationContextStore.IsPlatformSystemTip(message, text)) return false;
             if (ConversationContextStore.IsProductLink(message, text)) return false;
             if (ConversationContextStore.IsWithdrawalNotice(message, text)) return false;

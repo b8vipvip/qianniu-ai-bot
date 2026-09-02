@@ -43,6 +43,12 @@ namespace Bot.ChromeNs
         private void ScheduleBackgroundMessageRecovery(ShopRobotReceriveNewMessageEventArgs e)
         {
             if (e == null || e.Seller == null || e.Buyer == null) return;
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
+            {
+                Log.Info("非买家后台补偿已拒绝，禁止自动切换会话: reason=" + nonBuyerReason);
+                return;
+            }
             var seller = (e.Seller.Nick ?? string.Empty).Trim();
             BuyerIdentityAliasService.Observe(seller, e.Buyer.Nick, e.Buyer.Display, e.Buyer.TargetId);
             var buyer = BuyerIdentityAliasService.ResolveInternalNick(seller, e.Buyer.Nick);
@@ -348,6 +354,12 @@ namespace Bot.ChromeNs
         {
             if (message == null) return;
             var text = GetMessageText(message);
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockMessage(message, seller, text, out nonBuyerReason))
+            {
+                Log.Info("后台补偿非买家消息已丢弃，未进入订单/回复链: reason=" + nonBuyerReason);
+                return;
+            }
             if (IsPotentialRecoveredOrderCard(message))
             {
                 OrderPlacedReplyPlan orderPlan;
@@ -386,6 +398,12 @@ namespace Bot.ChromeNs
         {
             if (message == null) return Task.CompletedTask;
             var messageText = GetMessageText(message);
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockMessage(message, sellerNick, messageText, out nonBuyerReason))
+            {
+                Log.Info("后台补偿非买家买家候选已丢弃，未进入首问/订单/AI链: reason=" + nonBuyerReason);
+                return Task.CompletedTask;
+            }
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
             var detectedAt = DateTime.Now;
             if (!_handledBuyerMessageDeduplicator.TryAccept(messageKey))
@@ -473,6 +491,8 @@ namespace Bot.ChromeNs
         private static bool IsRecoveredBuyerMessageForTarget(QNChatMessage message, string seller, string buyer)
         {
             if (message == null || message.fromid == null) return false;
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockMessage(message, seller, GetMessageText(message), out nonBuyerReason)) return false;
             // Remote history is fetched only after the target conversation itself has been verified.
             // Therefore the sender identity is the authoritative buyer discriminator. Do not require
             // toid.nick to equal one exact seller alias: media/history cards can target the main seller

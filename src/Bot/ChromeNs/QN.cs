@@ -367,6 +367,13 @@ namespace Bot.ChromeNs
                 buyerNick = (buyerNick ?? string.Empty).Trim();
                 if (string.IsNullOrWhiteSpace(sellerNick) && string.IsNullOrWhiteSpace(buyerNick)) return;
 
+                string nonBuyerReason;
+                if (NonBuyerConversationGuard.ShouldBlockIdentity(sellerNick, buyerNick, out nonBuyerReason))
+                {
+                    Log.Info("非买家会话身份已拒绝，不更新当前buyer: source=" + source + ", reason=" + nonBuyerReason);
+                    return;
+                }
+
                 if (!string.IsNullOrWhiteSpace(sellerNick) && (_seller == null || _seller.Nick != sellerNick))
                 {
                     _seller = new LocalUser { Nick = sellerNick, Display = sellerNick };
@@ -403,6 +410,14 @@ namespace Bot.ChromeNs
 
         private void Cdp_EvShopRobotReceriveNewMessage(object sender, ShopRobotReceriveNewMessageEventArgs e)
         {
+            string nonBuyerReason;
+            if (e != null && e.Seller != null && e.Buyer != null
+                && NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
+            {
+                Log.Info("非买家后台消息通知已丢弃，不触发首问/补偿/学习: reason=" + nonBuyerReason);
+                return;
+            }
+
             // 这是后台新消息通知，不等于千牛当前可见聊天已经切换。
             // 绝不能在这里修改 QN.Buyer 或提前打开聊天，否则后台买家的答案可能发到当前可见买家。
             if (e != null && e.Seller != null && e.Buyer != null)
@@ -420,8 +435,14 @@ namespace Bot.ChromeNs
         {
             if (e == null) return;
             Seller = e.Seller;
-            Buyer = e.Buyer;
             CurQN = this;
+            string nonBuyerReason;
+            if (e.Buyer != null && NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
+            {
+                Log.Info("卖家切换事件携带非买家会话，保留当前真实buyer: reason=" + nonBuyerReason);
+                return;
+            }
+            Buyer = e.Buyer;
             SetActiveConversationByNick(e.Seller == null ? string.Empty : e.Seller.Nick, e.Buyer == null ? string.Empty : e.Buyer.Nick, "sellerSwitched");
 
             if (EvSellerSwitched != null)
@@ -433,8 +454,18 @@ namespace Bot.ChromeNs
         private Task ProcessIncomingMessageAsync(QNChatMessage message)
         {
             if (message == null) return Task.CompletedTask;
-            BuyerIdentityAliasService.ObserveMessage(_seller == null ? string.Empty : _seller.Nick, message);
             var messageText = GetMessageText(message);
+            string nonBuyerReason;
+            if (NonBuyerConversationGuard.ShouldBlockMessage(
+                message,
+                _seller == null ? string.Empty : _seller.Nick,
+                messageText,
+                out nonBuyerReason))
+            {
+                Log.Info("非买家普通入站消息已丢弃，未进入订单/首问/商品链接/AI链: reason=" + nonBuyerReason);
+                return Task.CompletedTask;
+            }
+            BuyerIdentityAliasService.ObserveMessage(_seller == null ? string.Empty : _seller.Nick, message);
             var messageKey = IncomingMessageSafety.BuildMessageKey(message, messageText);
 
             // Classify before consuming any transport dedupe key. A duplicate/partially hydrated CDP
@@ -840,8 +871,14 @@ namespace Bot.ChromeNs
         {
             if (e == null) return;
             Seller = e.Seller;
-            Buyer = e.Buyer;
             CurQN = this;
+            string nonBuyerReason;
+            if (e.Buyer != null && NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
+            {
+                Log.Info("非买家会话切换已拒绝，不污染当前buyer也不触发买家切换订阅: reason=" + nonBuyerReason);
+                return;
+            }
+            Buyer = e.Buyer;
             SetActiveConversationByNick(e.Seller == null ? string.Empty : e.Seller.Nick, e.Buyer == null ? string.Empty : e.Buyer.Nick, "buyerSwitched");
             if (EvBuyerSwitched != null)
             {

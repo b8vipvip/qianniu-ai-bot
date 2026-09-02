@@ -53,6 +53,12 @@ namespace Bot.ChromeNs
                     qn.EvShopRobotReceriveNewMessage += (sender, e) =>
                     {
                         if (e == null || e.Seller == null || e.Buyer == null) return;
+                        string nonBuyerReason;
+                        if (NonBuyerConversationGuard.ShouldBlockConversation(e.Seller, e.Buyer, out nonBuyerReason))
+                        {
+                            Log.Info("BuyerSessionAgent忽略非买家后台通知: reason=" + nonBuyerReason);
+                            return;
+                        }
                         var now = DateTime.Now;
                         Agent.RecordEvent(
                             e.Seller.Nick,
@@ -104,10 +110,16 @@ namespace Bot.ChromeNs
             if (seller.Length == 0 || from.Length == 0 || to.Length == 0) return;
 
             var sellerMessage = string.Equals(from, seller, StringComparison.Ordinal);
+            var text = GetMessageText(message);
+            string nonBuyerReason;
+            if (!sellerMessage && NonBuyerConversationGuard.ShouldBlockMessage(message, seller, text, out nonBuyerReason))
+            {
+                Log.Info("BuyerSessionAgent忽略非买家原始消息，禁止污染学习时间线: reason=" + nonBuyerReason);
+                return;
+            }
             var buyer = sellerMessage ? to : from;
             if (buyer.Length == 0 || string.Equals(buyer, seller, StringComparison.Ordinal)) return;
 
-            var text = GetMessageText(message);
             var display = IncomingMessageSafety.GetDisplayText(message, text);
             var key = IncomingMessageSafety.BuildMessageKey(message, text);
             var sort = IncomingMessageSafety.GetSortValue(message);
