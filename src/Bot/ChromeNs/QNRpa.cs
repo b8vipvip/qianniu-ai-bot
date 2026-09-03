@@ -236,7 +236,6 @@ namespace Bot.ChromeNs
         {
             text = (text ?? string.Empty).Trim();
             if (text.Length == 0) return false;
-
             var probe = await ProbeInputboxEmptyAsync("草稿确认", probeTimeoutMs).ConfigureAwait(false);
             if (probe.Completed)
             {
@@ -600,6 +599,7 @@ namespace Bot.ChromeNs
                 try { sellerDesk.Show(); } catch (Exception ex) { Log.Info("显示图片发送窗口失败: " + ex.Message); }
             }
             if (!await RefreshChatControlsAsync(true).ConfigureAwait(false)) return false;
+            if (!await ClearStaleComposerBeforeNewDraftAsync(buyer, string.Empty).ConfigureAwait(false)) return false;
 
             var setOk = await RunUiActionAsync(() => SetImage(image), "图片草稿写入", 3500).ConfigureAwait(false);
             if (!setOk) return false;
@@ -940,6 +940,113 @@ namespace Bot.ChromeNs
             }
         }
 
+        private async Task<bool> ClearStaleComposerBeforeNewDraftAsync(string buyer, string expected)
+        {
+            try
+            {
+                // Desktop Qianniu's composer is treated as the Bot's work buffer. The user-facing
+                // safety boundary is the proven seller+buyer conversation, not preservation of a
+                // stale desktop draft left by a previous failed Bot send.
+                var currentBuyer = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
+                if (!IsExpectedBuyer(buyer, currentBuyer))
+                {
+                    SetSendFailure("残留草稿清理", "清理前无法证明当前会话仍为目标买家；target=" + buyer
+                        + ", current=" + currentBuyer);
+                    return false;
+                }
+
+                if (_messageInputTextArea == null
+                    && !await RefreshChatControlsAsync(false).ConfigureAwait(false))
+                {
+                    SetSendFailure("残留草稿清理", "无法定位当前目标买家的千牛输入框");
+                    return false;
+                }
+
+                var cleared = await RunUiActionAsync(() =>
+                {
+                    string currentText;
+                    if (!TryGetEditorText(out currentText)) return false;
+                    var normalized = NormalizeEditorText(currentText);
+                    if (string.IsNullOrWhiteSpace(normalized)) return true;
+
+                    // A racing retry may already have placed this exact answer. Never clear an exact
+                    // current-task draft; the caller re-probes and adopts it instead of appending.
+                    if (!string.IsNullOrEmpty(expected) && EditorMatchesExpectedText(currentText, expected))
+                    {
+                        return true;
+                    }
+
+                    Log.Info("检测到电脑千牛输入框残留草稿，按Bot独占工作区策略先清空再执行新发送任务: buyer="
+                        + buyer + ", chars=" + normalized.Length);
+                    if (!FocusEditor()) return false;
+                    PressCtrlA();
+                    PressBackspace();
+                    Thread.Sleep(120);
+
+                    string afterClear;
+                    if (!TryGetEditorText(out afterClear)) return false;
+                    if (!string.IsNullOrWhiteSpace(NormalizeEditorText(afterClear))) return false;
+
+                    LastSetPlainText = string.Empty;
+                    LatestSetTextTime = DateTime.MinValue;
+                    return true;
+                }, "残留草稿清理", UiActionTimeoutMs).ConfigureAwait(false);
+
+                if (!cleared)
+                {
+                    SetSendFailure("残留草稿清理", "输入框残留内容清空失败，已阻止追加写入");
+                    return false;
+                }
+
+                var buyerAfterClear = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
+                if (!IsExpectedBuyer(buyer, buyerAfterClear))
+                {
+                    SetSendFailure("残留草稿清理", "清理后当前会话发生变化；target=" + buyer
+                        + ", current=" + buyerAfterClear);
+                    return false;
+                }
+
+                var after = await ProbeInputboxEmptyAsync("残留草稿清理后确认", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
+                if (!after.Completed)
+                {
+                    SetSendFailure("残留草稿清理", "清空后CDP无法确认输入框状态，禁止盲目追加写入");
+                    return false;
+                }
+
+                if (after.IsEmpty)
+                {
+                    Log.Info("电脑千牛残留草稿已清空并二次确认为空，可继续写入新Bot任务: buyer=" + buyer);
+                    return true;
+                }
+
+                // If another concurrent attempt wrote exactly the same target answer between the
+                // UIA clear and CDP re-probe, adopt it instead of deleting or duplicating it.
+                if (!string.IsNullOrEmpty(expected))
+                {
+                    var exactExisting = await RunUiActionAsync(
+                        () => HasExpectedDraft(expected),
+                        "残留草稿清理后并发草稿确认",
+                        UiActionTimeoutMs).ConfigureAwait(false);
+                    if (exactExisting)
+                    {
+                        LastSetPlainText = expected;
+                        LatestSetTextTime = DateTime.Now;
+                        Log.Info("残留草稿清理期间检测到并发写入的同任务精确草稿，直接接管发送: buyer=" + buyer);
+                        return true;
+                    }
+                }
+
+                SetSendFailure("残留草稿清理", "清空后二次确认仍检测到非本次内容，已阻止覆盖/追加发送");
+                return false;
+            }
+            catch (Exception ex)
+            {
+                SetSendFailure("残留草稿清理异常", ex.Message);
+                Log.Exception(ex);
+                return false;
+            }
+        }
+
         private async Task<bool> TrySetPlainTextByCdpAsync(string buyer, string text)
         {
             try
@@ -949,7 +1056,7 @@ namespace Bot.ChromeNs
                 var before = await ProbeInputboxEmptyAsync("写入前输入框检查", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
                 if (!before.Completed)
                 {
-                    SetSendFailure("CDP写入输入框", "写入前无法确认输入框是否为空，为避免覆盖人工草稿已停止发送");
+                    SetSendFailure("CDP写入输入框", "写入前无法确认输入框是否为空，已停止发送");
                     return false;
                 }
 
@@ -977,8 +1084,34 @@ namespace Bot.ChromeNs
                         return true;
                     }
 
-                    SetSendFailure("CDP写入输入框", "输入框已有非本次Bot草稿，已阻止覆盖/追加发送");
-                    return false;
+                    if (!await ClearStaleComposerBeforeNewDraftAsync(buyer, text).ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+
+                    var afterClear = await ProbeInputboxEmptyAsync("新任务写入前清空确认", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
+                    if (!afterClear.Completed)
+                    {
+                        SetSendFailure("CDP写入输入框", "残留草稿清理后无法确认输入框状态，已停止发送");
+                        return false;
+                    }
+                    if (!afterClear.IsEmpty)
+                    {
+                        var exactAfterClear = await RunUiActionAsync(
+                            () => HasExpectedDraft(text),
+                            "清理后同任务草稿确认",
+                            UiActionTimeoutMs).ConfigureAwait(false);
+                        if (exactAfterClear)
+                        {
+                            LastSetPlainText = text;
+                            LatestSetTextTime = DateTime.Now;
+                            Log.Info("清理残留草稿期间同任务草稿已写入，直接接管发送且不追加: buyer=" + buyer);
+                            return true;
+                        }
+
+                        SetSendFailure("CDP写入输入框", "残留草稿清理后二次检查仍非空，已阻止追加发送");
+                        return false;
+                    }
                 }
 
                 Log.Info("准备通过CDP写入输入框: buyer=" + buyer);
