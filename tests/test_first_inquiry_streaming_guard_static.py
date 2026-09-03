@@ -46,13 +46,19 @@ def test_first_inquiry_is_sent_locally_and_committed_only_after_real_send():
     mark = service.index("FirstInquiryFixedReplyService.MarkDelivered(", success)
     failure = service.index("else", mark)
     release = service.index("FirstInquiryFixedReplyService.ReleaseReservation(", failure)
+    local_short = service.index("if (allowLocalShortReply)", release)
+    failure_block = service[failure:local_short]
     sender = service.index("qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3)")
 
-    assert resolve < invoke_send < success < mark < failure < release
+    assert resolve < invoke_send < success < mark < failure < release < local_short
     assert sender > release  # generic helper implementation appears later in the source file
     assert "首条咨询固定回复" in service
     assert "未调用AI" in service
-    assert "Do not let an AI/context reply overtake a failed mandatory greeting" in service
+    # A failed mandatory greeting must consume this buyer message instead of falling through into
+    # local-short/context/AI generation. Assert the control flow, not a historical comment string.
+    assert "ReleaseReservation(" in failure_block
+    assert "return false;" in failure_block
+    assert "return true;" not in failure_block
 
 
 def test_off_hours_reply_is_a_fixed_local_rule_not_manual_keyword_or_ai_dependent():
