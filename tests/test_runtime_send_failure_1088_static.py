@@ -7,23 +7,33 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_hwnd_safe_send_accepts_only_process_owned_verified_point():
+def test_hwnd_safe_send_accepts_only_exact_verified_seller_root():
     source = read("src/Bot/ChromeNs/QNRpa.cs")
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
     assert "_sendMessageButton.AsButton().Invoke()" not in source
-    assert "GetWindowThreadProcessId(target, out targetPid)" in native
-    assert "targetPid != expectedPid" in native
-    assert "安全点窗口不属于当前卖家千牛进程" in native
-    assert "允许同一千牛进程的独立根窗口" not in native
+    assert "GetWindowThreadProcessId(expectedRoot, out rootPid)" in native
+    assert "rootPid == 0 || rootPid != expectedPid" in native
+    assert "GetAncestor(target, GaRoot)" in native
+    assert "if (root != expectedRoot)" in native
     assert "HWND安全发送已阻止跨根窗口点击" in native
-    process_guard = native.split("GetWindowThreadProcessId(target, out targetPid)", 1)[1].split(
-        "ScreenToClient", 1
-    )[0]
-    assert process_guard.index("targetPid != expectedPid") < process_guard.index("root != expectedRoot")
-    assert "return false;" in process_guard.split("targetPid != expectedPid", 1)[1].split("var root", 1)[0]
-    sibling_root_guard = process_guard.split("root != expectedRoot", 1)[1]
-    assert "拒绝向未知根窗口投递点击" in sibling_root_guard
-    assert "return false;" in sibling_root_guard
+    assert "GetWindowThreadProcessId(target, out targetPid)" in native
+    assert "if (targetPid != expectedPid)" in native
+    assert "HWND安全发送已验证千牛辅助进程子窗口" in native
+    assert "允许同一千牛进程的独立根窗口" not in native
+
+    root_owner = native.index("GetWindowThreadProcessId(expectedRoot, out rootPid)")
+    root_guard = native.index("rootPid == 0 || rootPid != expectedPid", root_owner)
+    target_root = native.index("var root = GetAncestor(target, GaRoot)", root_guard)
+    sibling_guard = native.index("if (root != expectedRoot)", target_root)
+    target_pid = native.index("GetWindowThreadProcessId(target, out targetPid)", sibling_guard)
+    helper_pid = native.index("if (targetPid != expectedPid)", target_pid)
+    post = native.index("PostMessage(target, WmLButtonDown", helper_pid)
+    assert root_owner < root_guard < target_root < sibling_guard < target_pid < helper_pid < post
+
+    root_guard_block = native[root_guard:target_root]
+    sibling_guard_block = native[sibling_guard:target_pid]
+    assert "return false;" in root_guard_block
+    assert "return false;" in sibling_guard_block
 
 
 def test_unchanged_failed_bot_draft_does_not_become_fake_human_activity():
