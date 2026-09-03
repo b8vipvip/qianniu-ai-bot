@@ -241,6 +241,31 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var autoSend = Params.Robot.GetIsAutoReply();
+
+            // A direct local decision can finish after the generation watchdog has already made the
+            // turn terminal. Never let that late result resurrect the progress card as Ready or arm
+            // a send watchdog. For auto-send, cross the session-agent stability barrier before any
+            // externally visible answer-ready state is published.
+            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+            {
+                Log.Info("Knowledge Engine V2迟到结果已丢弃，generation已失效，未进入答案就绪/发送: buyer="
+                    + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
+                return;
+            }
+            if (autoSend && !await lease.ConfirmStableAsync(80))
+            {
+                Log.Info("Knowledge Engine V2发送前稳定性确认失败，未发布迟到答案: buyer="
+                    + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
+                return;
+            }
+            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+            {
+                Log.Info("Knowledge Engine V2稳定性确认后generation失效，未发布答案: buyer="
+                    + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
+                return;
+            }
+
             var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var ctl = ResponseProgressTracker.BeginAnswer(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt);
@@ -257,7 +282,6 @@ namespace Bot.ChromeNs
                 "本地知识V2",
                 detectedAt,
                 readyAt);
-            var autoSend = Params.Robot.GetIsAutoReply();
             BotRuntimeStats.RecordDisplayedAnswer(autoSend);
 
             var best = decision.Matches.FirstOrDefault(IsApprovedMatchForLogging);
@@ -277,7 +301,9 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            if (!lease.IsCurrent || !await lease.ConfirmStableAsync(80))
+            // The lease was stable before publishing Ready, but re-check immediately before the
+            // side effect as a second barrier against a concurrent hard invalidation.
+            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");
                 return;
