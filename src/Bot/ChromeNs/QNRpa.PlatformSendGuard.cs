@@ -202,6 +202,9 @@ namespace Bot.ChromeNs
                             }
 
                             ResetSendFailure();
+                            var submissionEvidence = method + "发送动作后本次Bot精确草稿稳定清空，且目标买家复核通过";
+                            SendDeliveryWatchdog.MarkSubmissionAccepted(
+                                SellerNick, buyer, text, submissionEvidence);
                             BotConnectionDiagnostics.RecordSendAttempt(
                                 true,
                                 method + "，发送动作后输入框稳定清空，按千牛已接收提交处理；卖家回显可异步补证");
