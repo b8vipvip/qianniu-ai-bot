@@ -15,13 +15,21 @@ def test_service_attitude_prompt_auto_continues_only_after_buyer_and_unique_butt
     assert "继续发送" in guard
     assert "服务态度提醒继续发送前会话确认" in guard
     assert "VerifyCurrentBuyerWithoutNavigationAsync" in guard
-    assert "continueButtons.Length != 1" in guard
-    assert "continueButtons[0].AsButton().Invoke()" in guard
+    assert "continueButtons.Count != 1" in guard
+    assert "result.ContinueButton.AsButton().Invoke()" in guard
     assert "千牛服务态度提醒已自动点击“继续发送”" in guard
+
     # Ambiguous/missing button and buyer mismatch must still fail closed.
     assert 'SetSendCancellation("平台发送拦截"' in guard
     assert "无法安全自动确认，已停止本次发送且禁止盲目重试" in guard
     assert "Bot不会点击“继续发送”" not in guard
+
+    # Side-effectful continuation must be single-flight and fully awaited. Never race an Invoke
+    # worker against a timeout because the abandoned worker could click after the caller failed.
+    assert "_serviceAttitudeProbeGate.WaitAsync(0)" in guard
+    assert "InvokeServiceAttitudeContinue(detected)" in guard
+    assert "Task.WhenAny(action" not in guard
+    assert "PlatformSendBlockProbeTimeoutMs" not in guard
 
 
 def test_native_send_uses_submission_guard_between_authoritative_actions():
@@ -39,12 +47,19 @@ def test_native_send_uses_submission_guard_between_authoritative_actions():
     after_uia = native.index('StopIfPlatformSendBlockedAsync(buyer, "UIA发送后")', legacy_uia)
     assert first < cdp < cdp_confirm < hwnd < hwnd_confirm < safe_uia < uia_confirm < legacy_uia < after_uia
 
-    # The shared submission-aware confirmation probes the platform reminder before stable-empty
-    # acceptance and again after the stability window, so a modal is never bypassed by draft clear.
-    first_probe = guard.index('buyer, method + "提交确认"')
-    stable_probe = guard.index('buyer, method + "稳定清空后平台确认"', first_probe)
-    success = guard.index("发送提交确认成功", stable_probe)
-    assert first_probe < stable_probe < success
+    # Stable-empty acceptance still cannot bypass a visible reminder: the stable boundary performs
+    # one serialized/final platform check and then revalidates the buyer before recording submission.
+    stable_probe = guard.index('buyer, method + "稳定清空后平台确认"')
+    buyer_check = guard.index('buyer, method + "提交后会话确认"', stable_probe)
+    watchdog = guard.index("SendDeliveryWatchdog.MarkSubmissionAccepted", buyer_check)
+    success = guard.index("发送提交确认成功", watchdog)
+    assert stable_probe < buyer_check < watchdog < success
+
+    # No longer restore the 1.1.1189 eight-pass late scanner that piled up UIA traversals and delayed
+    # the next order segment. Exactly one delayed single-flight safety check is retained.
+    assert "Task.Delay(650)" in guard
+    assert "迟到服务态度提醒单次监控" in guard
+    assert "for (var attempt = 0; attempt < 8; attempt++)" not in guard
 
 
 def test_hwnd_sender_never_clicks_a_modal_or_other_sibling_root_window():

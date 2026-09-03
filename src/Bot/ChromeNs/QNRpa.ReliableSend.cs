@@ -23,12 +23,30 @@ namespace Bot.ChromeNs
 
         internal void SetSendFailure(string stage, string detail)
         {
-            LastSendWasCancelled = false;
             stage = (stage ?? string.Empty).Trim();
             detail = (detail ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+
+            // A stale answer is not a transport failure. QNRpa's pre-send freshness guard can
+            // discover that the buyer sent a newer turn after this answer was prepared. Production
+            // logs from 1.1.1189 showed that classifying that result as an ordinary failure caused
+            // QN.SendTextWithRetryAsync to send the already-invalid greeting again. Preserve the
+            // existing retry contract by marking only explicit stale-answer reasons as cancelled.
+            LastSendWasCancelled = IsNonRetryableStaleAnswer(stage, detail);
             LastSendFailureReason = string.IsNullOrWhiteSpace(detail) ? stage : stage + "：" + detail;
             BotConnectionDiagnostics.RecordSendAttempt(false, LastSendFailureReason);
             Log.Info("发送阶段失败: " + LastSendFailureReason);
+            if (LastSendWasCancelled)
+            {
+                Log.Info("发送失败已分类为不可重试的旧答案取消，可靠发送层必须立即停止重试: "
+                    + LastSendFailureReason);
+            }
+        }
+
+        private static bool IsNonRetryableStaleAnswer(string stage, string detail)
+        {
+            var combined = (stage ?? string.Empty) + " " + (detail ?? string.Empty);
+            return combined.IndexOf("买家已发送更新消息", StringComparison.Ordinal) >= 0
+                || combined.IndexOf("旧答案不会发送", StringComparison.Ordinal) >= 0;
         }
 
         internal void SetSendCancellation(string stage, string detail)

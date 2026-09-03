@@ -3,6 +3,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.NativeSend.cs"
 PLATFORM = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.PlatformSendGuard.cs"
+RELIABLE = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.ReliableSend.cs"
+RPA = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.cs"
+QN = ROOT / "src" / "Bot" / "ChromeNs" / "QN.cs"
 WATCHDOG = ROOT / "src" / "Bot" / "ChromeNs" / "SendDeliveryWatchdog.cs"
 
 
@@ -38,26 +41,66 @@ def test_native_send_accepts_verified_submission_instead_of_echo_only_retry():
     assert "VerifyCurrentBuyerWithoutNavigationAsync" in platform
 
 
-def test_service_attitude_reminder_auto_continues_only_for_exact_verified_action():
+def test_service_attitude_reminder_is_single_flight_and_never_abandons_side_effectful_invoke():
     text = read(PLATFORM)
 
     assert "服务态度提醒" in text
     assert "继续发送" in text
-    assert "continueButtons.Length != 1" in text
-    assert "continueButtons[0].AsButton().Invoke()" in text
+    assert "_serviceAttitudeProbeGate" in text
+    assert "_serviceAttitudeProbeGate.WaitAsync(0)" in text
+    assert "continueButtons.Count != 1" in text
+    assert "result.ContinueButton.AsButton().Invoke()" in text
     assert "千牛服务态度提醒已自动点击“继续发送”" in text
 
-    # Buyer proof must occur before the UIA action, and the late-popup watcher keeps checking
-    # after a stable composer submission so a reminder that animates in later is not stranded.
+    # Buyer proof must happen before the exact unique continuation is invoked.
     buyer_check = text.index("服务态度提醒继续发送前会话确认")
-    invoke = text.index("continueButtons[0].AsButton().Invoke()")
-    assert buyer_check < invoke
+    invoke_call = text.index("InvokeServiceAttitudeContinue(detected)", buyer_check)
+    assert buyer_check < invoke_call
+
+    # Never restore the 1.1.1189 ghost-click pattern: a side-effectful Task.Run was raced against
+    # a timeout, so the caller returned failure while the abandoned worker could click later.
+    assert "PlatformSendBlockProbeTimeoutMs" not in text
+    assert "Task.WhenAny(action" not in text
+    assert "自动点击“继续发送”超时" not in text
+    assert "一旦开始点击" not in text or "Task.WhenAny(action" not in text
+
+    # Late reminder handling is one delayed single-flight check, not the old 8 overlapping scans.
     assert "ArmLateServiceAttitudeContinuationWatch" in text
-    assert "迟到服务态度提醒监控" in text
+    assert "Task.Delay(650)" in text
+    assert "迟到服务态度提醒单次监控" in text
+    assert "for (var attempt = 0; attempt < 8; attempt++)" not in text
+    assert "千牛服务态度提醒单飞探测已在执行" in text
 
     # The legacy policy that deliberately refused this exact continuation must not return.
     assert "Bot不会点击“继续发送”" not in text
     assert "该平台提示必须由人工判断，Bot禁止自动确认" not in text
+
+
+def test_stale_answer_is_non_retryable_before_reliable_retry_loop():
+    reliable = read(RELIABLE)
+    rpa = read(RPA)
+    qn = read(QN)
+
+    # QNRpa's freshness guard still identifies the production stale-answer condition.
+    assert "买家已发送更新消息，旧答案不会发送" in rpa
+    assert "旧答案发送/重试已取消" in rpa
+
+    # Central failure classification promotes only explicit stale-answer reasons to cancellation.
+    assert "IsNonRetryableStaleAnswer" in reliable
+    assert 'IndexOf("买家已发送更新消息"' in reliable
+    assert 'IndexOf("旧答案不会发送"' in reliable
+    assert "LastSendWasCancelled = IsNonRetryableStaleAnswer" in reliable
+    assert "可靠发送层必须立即停止重试" in reliable
+
+    # QN's existing contract must observe cancellation immediately after SendTextAsync, before the
+    # first retry log/action, and again after a retry action.
+    send = qn.index("var ok = await SendTextAsync(buyer, text)")
+    cancel = qn.index("if (!ok && rpa.LastSendWasCancelled)", send)
+    retry = qn.index("自动发送失败，准备重试第", cancel)
+    assert send < cancel < retry
+    retry_action = qn.index("ok = await SendTextAsync(buyer, text)", retry)
+    retry_cancel = qn.index("if (!ok && rpa.LastSendWasCancelled)", retry_action)
+    assert retry < retry_action < retry_cancel
 
 
 def test_delivery_watchdog_keeps_echo_as_best_proof_but_never_false_fails_verified_submission():
