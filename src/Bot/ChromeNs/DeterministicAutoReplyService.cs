@@ -22,15 +22,18 @@ namespace Bot.ChromeNs
 {
     /// <summary>
     /// Executes deterministic buyer replies before the burst/context merge window.
-    /// Fixed replies never inspect or wait for AI endpoints. The strict order is:
-    /// first-inquiry greeting -> off-hours reply -> configurable local short reply -> ordinary burst/context/AI handling.
+    /// Fixed replies never inspect or wait for AI endpoints. Off-hours is an exclusive policy:
+    /// off-hours reply -> first-inquiry greeting -> configurable local short reply -> ordinary burst/context/AI handling.
     /// </summary>
     internal static class DeterministicAutoReplyService
     {
         private const string DefaultOffHoursReply =
             "亲，人工客服当前已下班，工作时间为每天 {工作时间}。您的问题已记录，请在上班时间联系或等待人工处理。";
+        private const int OffHoursRepeatMinutes = 2;
 
         private static readonly ConcurrentDictionary<string, SemaphoreSlim> BuyerGates =
+            new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, SemaphoreSlim> OffHoursGates =
             new ConcurrentDictionary<string, SemaphoreSlim>(StringComparer.Ordinal);
         private static readonly ConcurrentDictionary<string, DateTime> OffHoursDeliveredUntil =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
@@ -53,8 +56,6 @@ namespace Bot.ChromeNs
             BuyerMessageBurstItem item,
             bool allowLocalShortReply)
         {
-            // Register the settings tab explicitly from a production-reached code path as a backup
-            // for QN construction. Initialize is idempotent and never changes send behavior itself.
             try { Bot.Knowledge.LocalShortReplyUi.Initialize(); } catch { }
 
             if (item == null
@@ -76,37 +77,47 @@ namespace Bot.ChromeNs
             }
 
             var key = Key(item.SellerNick, item.BuyerNick);
+            ShopContext shop = null;
+            try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(item.SellerNick); }
+            catch { shop = null; }
+
+            // Off-hours must be decided before the ordinary deterministic-rule gate. A slow or
+            // failed mandatory send must never make a later message fail-open into Knowledge/AI.
+            if (shop != null)
+            {
+                using (ShopSettingsScope.Enter(shop))
+                {
+                    string offHoursReply;
+                    if (TryResolveOffHours(out offHoursReply))
+                    {
+                        return await HandleOffHoursExclusiveAsync(item, key, offHoursReply).ConfigureAwait(false);
+                    }
+                }
+            }
+
             var gate = BuyerGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
             var gateAcquired = await gate.WaitAsync(1800).ConfigureAwait(false);
             if (!gateAcquired)
             {
-                // This is the single authoritative deterministic-rule serialization gate.
-                // It must fail open after a bounded wait so one unhealthy fixed send never strands
-                // later generations in Coalescing. The coordinator intentionally has no outer gate.
+                // Work-hours-only deterministic rules still fail open after a bounded wait so one
+                // unhealthy greeting/local short reply cannot strand unrelated normal generations.
+                // Off-hours traffic never reaches this branch because it is intercepted above.
                 Log.ErrorWithMaxCount(
-                    "固定规则内部串行门等待超时，已放行普通消息合并/AI链路: seller="
+                    "普通固定规则内部串行门等待超时，已放行消息合并/AI链路: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick + ", waitMs=1800",
                     50);
                 return true;
             }
             try
             {
-                ShopContext shop = null;
-                try { shop = ShopContextLocator.ResolveRuntimeBySellerNick(item.SellerNick); }
-                catch { shop = null; }
-
                 if (shop != null)
                 {
                     using (ShopSettingsScope.Enter(shop))
                     {
-                        return await HandleScopedBeforeMergeAsync(item, key, allowLocalShortReply);
+                        return await HandleScopedBeforeMergeAsync(item, key, allowLocalShortReply).ConfigureAwait(false);
                     }
                 }
 
-                // Deterministic business rules are shop-scoped configuration. Running them without
-                // a resolved ShopKey can silently read legacy/global defaults (historically 09:00-18:00)
-                // and send a fabricated off-hours answer. Fail open to the ordinary message pipeline
-                // instead of guessing another shop's configuration.
                 Log.ErrorWithMaxCount(
                     "固定规则前置缺少店铺作用域，已停止固定规则发送并继续普通消息链路: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick,
@@ -128,13 +139,81 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static async Task<bool> HandleOffHoursExclusiveAsync(
+            BuyerMessageBurstItem item,
+            string buyerKey,
+            string resolvedReply)
+        {
+            var gate = OffHoursGates.GetOrAdd(buyerKey, _ => new SemaphoreSlim(1, 1));
+            var gateAcquired = await gate.WaitAsync(1800).ConfigureAwait(false);
+            if (!gateAcquired)
+            {
+                Log.ErrorWithMaxCount(
+                    "下班独占串行门等待超时，已fail-closed阻止Knowledge/AI链路: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick + ", waitMs=1800",
+                    50);
+                return false;
+            }
+
+            try
+            {
+                // Re-read the shop-scoped clock after serialization; a message waiting across the
+                // work-start boundary should resume normal handling rather than send a stale notice.
+                string currentReply;
+                if (!TryResolveOffHours(out currentReply)) return true;
+                if (string.IsNullOrWhiteSpace(currentReply)) currentReply = resolvedReply;
+
+                DateTime until;
+                if (OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) && until > DateTime.Now)
+                {
+                    Log.Info("下班独占策略已消费买家消息，距离下一次下班提示不足2分钟，不进入其它回复链: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", next=" + until.ToString("HH:mm:ss"));
+                    return false;
+                }
+
+                var qn = QN.FindExistingBySellerNick(item.SellerNick);
+                if (qn == null)
+                {
+                    Log.ErrorWithMaxCount(
+                        "下班独占策略找不到客服运行实例，已fail-closed阻止Knowledge/AI链路: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick,
+                        20);
+                    return false;
+                }
+
+                var ok = await SendFixedAsync(qn, item, currentReply, "下班自动回复").ConfigureAwait(false);
+                if (ok)
+                {
+                    OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(OffHoursRepeatMinutes);
+                }
+                else
+                {
+                    // Keep the policy exclusive even if transport fails. A short retry guard avoids
+                    // a message storm repeatedly occupying the sender while still allowing recovery.
+                    OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddSeconds(15);
+                }
+                return false;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount(
+                    "下班独占策略异常，已fail-closed阻止Knowledge/AI链路: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick + ", error=" + ex.Message,
+                    20);
+                return false;
+            }
+            finally
+            {
+                gate.Release();
+            }
+        }
+
         private static async Task<bool> HandleScopedBeforeMergeAsync(
             BuyerMessageBurstItem item,
             string buyerKey,
             bool allowLocalShortReply)
         {
-            // The global auto-reply switch still controls all automatic sends. When it is off,
-            // preserve the historical merge/display path without attempting a fixed send.
             if (!Params.Robot.GetIsAutoReply()) return true;
 
             var qn = QN.FindExistingBySellerNick(item.SellerNick);
@@ -149,8 +228,22 @@ namespace Bot.ChromeNs
 
             var question = (item.DisplayText ?? string.Empty).Trim();
 
-            // Priority 1: a real buyer-authored/replyable message must get the configured first
-            // inquiry greeting before any quiet-delay, context merge, Smart Reply or AI decision.
+            // Defense in depth for a work-hours boundary crossed after the pre-check: off-hours
+            // still outranks first inquiry/local rules and consumes the message exclusively.
+            string offHoursReply;
+            if (TryResolveOffHours(out offHoursReply))
+            {
+                DateTime until;
+                if (!OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) || until <= DateTime.Now)
+                {
+                    var offHoursOk = await SendFixedAsync(qn, item, offHoursReply, "下班自动回复").ConfigureAwait(false);
+                    OffHoursDeliveredUntil[buyerKey] = offHoursOk
+                        ? DateTime.Now.AddMinutes(OffHoursRepeatMinutes)
+                        : DateTime.Now.AddSeconds(15);
+                }
+                return false;
+            }
+
             string firstReply;
             var firstReserved = FirstInquiryFixedReplyService.TryResolve(
                 item.SellerNick,
@@ -163,7 +256,7 @@ namespace Bot.ChromeNs
                     qn,
                     item,
                     firstReply,
-                    "首条咨询固定回复");
+                    "首条咨询固定回复").ConfigureAwait(false);
                 if (firstOk)
                 {
                     FirstInquiryFixedReplyService.MarkDelivered(
@@ -178,37 +271,10 @@ namespace Bot.ChromeNs
                         qn.Rpa == null
                             ? "首条咨询固定回复发送失败"
                             : qn.Rpa.GetSendFailureReason());
-                    // Do not let an AI/context reply overtake a failed mandatory greeting.
                     return false;
                 }
             }
 
-            // Priority 2: after the first greeting has had its chance, off-hours is evaluated on
-            // the same individual message, still before any burst merge. While closed, normal AI
-            // handling is suppressed. The fixed off-hours text is deduplicated for 30 minutes.
-            string offHoursReply;
-            if (TryResolveOffHours(out offHoursReply))
-            {
-                DateTime until;
-                if (!OffHoursDeliveredUntil.TryGetValue(buyerKey, out until) || until <= DateTime.Now)
-                {
-                    var offHoursOk = await SendFixedAsync(
-                        qn,
-                        item,
-                        offHoursReply,
-                        "下班自动回复");
-                    if (offHoursOk)
-                    {
-                        OffHoursDeliveredUntil[buyerKey] = DateTime.Now.AddMinutes(30);
-                    }
-                }
-                return false;
-            }
-
-            // Priority 3: exact, user-managed short-message replies. These are intentionally local
-            // and deterministic: no knowledge routing, embeddings, prompt construction or AI HTTP.
-            // If the same message already triggered the mandatory first-inquiry greeting, consume it
-            // without sending a second acknowledgement.
             if (allowLocalShortReply)
             {
                 var manualDecision = BotFeatureStore.EvaluateAutoReplyRule(question);
@@ -234,21 +300,17 @@ namespace Bot.ChromeNs
                             qn,
                             item,
                             localAnswer,
-                            "本地短消息回复");
+                            "本地短消息回复").ConfigureAwait(false);
                         Log.Info("本地短消息精确命中: seller=" + item.SellerNick
                             + ", buyer=" + item.BuyerNick
                             + ", phrase=" + matchedPhrase
                             + ", success=" + localOk
                             + ", aiCalled=false");
-                        // Fail closed: if the deterministic send failed, do not immediately follow it
-                        // with an unrelated AI answer for the same acknowledgement message.
                         return false;
                     }
                 }
             }
 
-            // A first greeting does not consume the buyer's actual question during work hours.
-            // Only now may the original message enter the normal merge/context/AI pipeline.
             return true;
         }
 
@@ -292,9 +354,7 @@ namespace Bot.ChromeNs
                     source + "在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
 
-                // Fixed business replies are small and deterministic. Give the existing reliable
-                // sender three attempts so a short UIA/CDP refresh does not lose the mandatory reply.
-                var ok = await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3);
+                var ok = await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3).ConfigureAwait(false);
                 if (ok)
                 {
                     ReplyDeduplicationService.RememberDelivered(
@@ -330,14 +390,13 @@ namespace Bot.ChromeNs
             }
         }
 
-        // Kept for older call sites/tests. New buyer traffic must use HandleBeforeMergeAsync.
         public static async Task<bool> TryHandleAsync(
             BuyerMessageBurst burst,
             BuyerMessageBurstLease lease)
         {
             if (burst == null || burst.Items == null || burst.Items.Count < 1) return false;
             var item = burst.Items[0];
-            return !await HandleBeforeMergeAsync(item);
+            return !await HandleBeforeMergeAsync(item).ConfigureAwait(false);
         }
 
         private static bool TryResolveOffHours(out string answer)
@@ -415,10 +474,6 @@ namespace Bot.ChromeNs
         public string UpdatedAt { get; set; }
     }
 
-    /// <summary>
-    /// Shop-scoped exact-match replies for acknowledgements/closings that do not need AI reasoning.
-    /// The match is intentionally conservative: no Contains, no semantic similarity, no embeddings.
-    /// </summary>
     internal static class LocalShortReplyService
     {
         internal const string ConfigFileName = "local-short-replies.json";
@@ -738,10 +793,6 @@ namespace Bot.ChromeNs
 
 namespace Bot.Knowledge
 {
-    /// <summary>
-    /// Adds a shop-scoped “短消息回复” page immediately after “问答管理”.
-    /// Registration is idempotent and deliberately independent from AI availability.
-    /// </summary>
     internal static class LocalShortReplyUi
     {
         private static readonly ConditionalWeakTable<KnowledgeCenterWindow, object> Enhanced =

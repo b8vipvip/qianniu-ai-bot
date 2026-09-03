@@ -21,12 +21,23 @@ def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
     dispatch = coordinator.index("private async Task DispatchScopedAsync")
     assert "DeterministicAutoReplyService" not in coordinator[dispatch:]
 
-    first = deterministic.index("FirstInquiryFixedReplyService.TryResolve(")
+    # Off-hours is the exclusive highest-priority policy and must be decided before the ordinary
+    # deterministic gate, first-inquiry greeting, local short reply, merge window, or AI dispatch.
     off_hours = deterministic.index("TryResolveOffHours(out offHoursReply)")
+    ordinary_gate = deterministic.index("BuyerGates.GetOrAdd")
+    first = deterministic.index("FirstInquiryFixedReplyService.TryResolve(")
     local_short = deterministic.index("LocalShortReplyService.TryResolve(")
-    assert first < off_hours < local_short
+    assert off_hours < ordinary_gate < first < local_short
+    assert "HandleOffHoursExclusiveAsync" in deterministic
+    assert "OffHoursRepeatMinutes = 2" in deterministic
+    assert "下班独占串行门等待超时，已fail-closed阻止Knowledge/AI链路" in deterministic
     assert "SendTextWithRetryAsync(item.BuyerNick, answer, 3)" in deterministic
-    assert "Do not let an AI/context reply overtake a failed mandatory greeting" in deterministic
+
+    # First-inquiry is still mandatory during work hours: a failed send consumes the message and
+    # cannot fall through into a later local-short/context/AI response.
+    first_block = deterministic[first:local_short]
+    release = first_block.index("FirstInquiryFixedReplyService.ReleaseReservation(")
+    assert "return false;" in first_block[release:]
 
 
 def test_order_auto_reply_still_precedes_burst_merge_path():

@@ -75,8 +75,9 @@ namespace Bot.ChromeNs
         /// Preferred text-send pipeline. It never guesses an undocumented IMSDK API and never
         /// invokes the whole Qt split button. First try a send control exposed inside the injected
         /// web page, then a HWND-targeted left-button message at the already verified safe point,
-        /// and finally retain the existing physical-coordinate + safe-child UIA fallbacks.
-        /// Every transition revalidates the exact Bot-owned draft to prevent double sends.
+        /// then a proven left/main-action UIA child, and only then retain the legacy physical
+        /// coordinate fallback. Every transition revalidates the exact Bot-owned draft to prevent
+        /// double sends.
         /// </summary>
         private async Task<bool> TrySendTextNativeFirstAsync(string buyer, string text, DateTime sendStart)
         {
@@ -138,7 +139,38 @@ namespace Bot.ChromeNs
             if (!await HasExpectedDraftFastAsync(text, 900).ConfigureAwait(false))
             {
                 return await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "UIA回退前确认", 1800).ConfigureAwait(false);
+                    buyer, text, sendStart, "安全UIA回退前确认", 1800).ConfigureAwait(false);
+            }
+
+            // Do not make a physical Mouse.Click the first fallback after HWND rejection. On
+            // machines where Qianniu runs at a higher integrity level that click can throw
+            // AccessDenied even though UI Automation can still invoke the verified left/main
+            // action. Keeping this before the legacy UIA path also prevents the old regression
+            // where unrelated hardening reintroduced a physical-click dependency.
+            var safeUiaInvoked = await RunUiActionAsync(
+                TryInvokeCachedSendButtonNow,
+                "发送按钮左侧UIA安全调用（原生前置）",
+                UiActionTimeoutMs).ConfigureAwait(false);
+            if (safeUiaInvoked)
+            {
+                if (await WaitForTextSendConfirmedAsync(
+                    buyer, text, sendStart, "发送按钮左侧UIA安全调用（原生前置）", 3000).ConfigureAwait(false))
+                {
+                    return true;
+                }
+                if (await StopIfPlatformSendBlockedAsync(buyer, "安全UIA调用后").ConfigureAwait(false)) return false;
+                if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
+                {
+                    return await WaitForTextSendConfirmedAsync(
+                        buyer, text, sendStart, "安全UIA调用延迟确认", 2200).ConfigureAwait(false);
+                }
+                ResetSendFailure();
+            }
+
+            if (!await HasExpectedDraftFastAsync(text, 900).ConfigureAwait(false))
+            {
+                return await WaitForTextSendConfirmedAsync(
+                    buyer, text, sendStart, "物理/UIA兼容回退前确认", 1800).ConfigureAwait(false);
             }
 
             var uiResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
@@ -237,28 +269,51 @@ namespace Bot.ChromeNs
             var target = WindowFromPoint(screenPoint);
             if (target == IntPtr.Zero) return false;
 
-            uint targetPid;
-            GetWindowThreadProcessId(target, out targetPid);
             var expectedPid = unchecked((uint)desk.ProcessId);
-            if (targetPid == 0 || targetPid != expectedPid)
+            var expectedRoot = new IntPtr(desk.Hwnd.Handle);
+            if (expectedPid == 0 || expectedRoot == IntPtr.Zero) return false;
+
+            // The seller root is the trust anchor. Qianniu can host the composer/send surface in a
+            // helper process, so targetPid alone is not a safe ownership model. First prove that
+            // the cached seller root still belongs to the bound seller process, then require the
+            // point target to have that exact same root HWND. Only after those two proofs may an
+            // auxiliary target PID be accepted.
+            uint rootPid;
+            GetWindowThreadProcessId(expectedRoot, out rootPid);
+            if (rootPid == 0 || rootPid != expectedPid)
             {
-                var rejectedRoot = GetAncestor(target, GaRoot);
-                if (rejectedRoot == IntPtr.Zero) rejectedRoot = target;
-                Log.Info("HWND安全发送已阻止：安全点窗口不属于当前卖家千牛进程: seller=" + SellerNick
-                    + ", expectedPid=" + expectedPid + ", actualPid=" + targetPid
-                    + ", actualRoot=" + rejectedRoot);
+                SetSendFailure("HWND安全发送", "当前卖家根窗口进程归属已漂移，拒绝发送");
+                Log.Info("HWND安全发送已阻止卖家根窗口进程漂移: seller=" + SellerNick
+                    + ", expectedPid=" + expectedPid + ", rootPid=" + rootPid
+                    + ", expectedRoot=" + expectedRoot);
                 return false;
             }
 
             var root = GetAncestor(target, GaRoot);
-            var expectedRoot = new IntPtr(desk.Hwnd.Handle);
             if (root == IntPtr.Zero) root = target;
             if (root != expectedRoot)
             {
-                SetSendFailure("HWND安全发送", "安全点被当前千牛进程的独立弹窗覆盖，拒绝向未知根窗口投递点击");
+                uint rejectedPid;
+                GetWindowThreadProcessId(target, out rejectedPid);
+                SetSendFailure("HWND安全发送", "安全点不属于当前已验证卖家根窗口，拒绝向未知窗口投递点击");
                 Log.Info("HWND安全发送已阻止跨根窗口点击: seller=" + SellerNick
-                    + ", pid=" + targetPid + ", expectedRoot=" + expectedRoot + ", actualRoot=" + root);
+                    + ", targetPid=" + rejectedPid + ", expectedRoot=" + expectedRoot + ", actualRoot=" + root);
                 return false;
+            }
+
+            uint targetPid;
+            GetWindowThreadProcessId(target, out targetPid);
+            if (targetPid == 0)
+            {
+                Log.Info("HWND安全发送无法读取安全点进程，已拒绝: seller=" + SellerNick
+                    + ", expectedRoot=" + expectedRoot + ", target=" + target);
+                return false;
+            }
+            if (targetPid != expectedPid)
+            {
+                Log.Info("HWND安全发送已验证千牛辅助进程子窗口: seller=" + SellerNick
+                    + ", mainPid=" + expectedPid + ", helperPid=" + targetPid
+                    + ", verifiedRoot=" + expectedRoot + ", target=" + target);
             }
 
             var clientPoint = screenPoint;
@@ -282,7 +337,8 @@ namespace Bot.ChromeNs
             }
 
             Log.Info("已向当前卖家千牛左侧主发送安全点投递HWND鼠标消息: seller=" + SellerNick
-                + ", target=" + target + ", point=" + screenPoint.X + "," + screenPoint.Y
+                + ", target=" + target + ", targetPid=" + targetPid
+                + ", point=" + screenPoint.X + "," + screenPoint.Y
                 + ", arrowGuard=" + arrowGuard);
             return true;
         }
