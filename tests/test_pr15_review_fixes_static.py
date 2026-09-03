@@ -19,8 +19,24 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     assert '"发送前文本确认"' in qnrpa
     assert "HasExpectedDraftFastAsync" in qnrpa
     assert "输入框内容已变化或无法确认，已阻止发送" in qnrpa
-    assert "写入前无法确认输入框是否为空，为避免覆盖人工草稿已停止发送" in qnrpa
-    assert "输入框已有非本次Bot草稿，已阻止覆盖/追加发送" in qnrpa
+
+    # The desktop Qianniu composer is a Bot work buffer, so a stale draft from a previous
+    # failed Bot send may be cleared. The safety invariant is now stronger and more precise:
+    # prove the target buyer before touching the composer, preserve/adopt an exact current-task
+    # draft, then re-read the editor, re-check the buyer, and require a CDP empty confirmation
+    # before writing anything new. Any uncertainty remains fail-closed.
+    cleanup = qnrpa.index("ClearStaleComposerBeforeNewDraftAsync")
+    buyer_read = qnrpa.index("ReadCurrentBuyerNickAsync()", cleanup)
+    buyer_guard = qnrpa.index("IsExpectedBuyer(buyer, currentBuyer)", buyer_read)
+    exact_draft = qnrpa.index("EditorMatchesExpectedText(currentText, expected)", buyer_guard)
+    clear = qnrpa.index("检测到电脑千牛输入框残留草稿", exact_draft)
+    reread = qnrpa.index("TryGetEditorText(out afterClear)", clear)
+    buyer_after = qnrpa.index("buyerAfterClear", reread)
+    cdp_after = qnrpa.index("残留草稿清理后确认", buyer_after)
+    assert cleanup < buyer_read < buyer_guard < exact_draft < clear < reread < buyer_after < cdp_after
+    assert "清空后CDP无法确认输入框状态，禁止盲目追加写入" in qnrpa
+    assert "输入框已有非本次Bot草稿，已阻止覆盖/追加发送" not in qnrpa
+
     assert "UIA写入确认" in qnrpa
     open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]
     assert "SetPlainText(text)" not in open_send

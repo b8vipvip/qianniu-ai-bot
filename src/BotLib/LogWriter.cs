@@ -39,13 +39,13 @@ namespace BotLib
         public void Close(string reason)
         {
             WriteLine(string.Format("日志关闭({1})：原因={3},持续时间={0},托管内存占用={4}MB\r\n程序版本={2}\r\n===============================\r\n", new object[]
-			{
-				(DateTime.Now - _start).TotalSeconds,
-				DateTime.Now.ToString(),
-				_environmentStr,
-				reason,
-				((double)GC.GetTotalMemory(true) / Math.Pow(2.0, 20.0)).ToString("0.0")
-			}));
+            {
+                (DateTime.Now - _start).TotalSeconds,
+                DateTime.Now.ToString(),
+                _environmentStr,
+                reason,
+                ((double)GC.GetTotalMemory(true) / Math.Pow(2.0, 20.0)).ToString("0.0")
+            }));
             _file.Close();
         }
 
@@ -63,20 +63,20 @@ namespace BotLib
                 if (cnt > 0 && cnt < 20 && cnt % 10 == 0)
                 {
                     text = string.Concat(new object[]
-					{
-						"第",
-						cnt,
-						"次发生该写入,超出20次将不再提示",
-						Environment.NewLine,
-						text
-					});
+                    {
+                        "第",
+                        cnt,
+                        "次发生该写入,超出20次将不再提示",
+                        Environment.NewLine,
+                        text
+                    });
                 }
                 if (cnt > 20)
                 {
                     return;
                 }
             }
-            text = string.Concat(tag,"(",DateTime.Now.ToString(),"):",text,	Environment.NewLine);
+            text = string.Concat(tag,"(",DateTime.Now.ToString(),"):",text, Environment.NewLine);
             if (writeStackTrace)
             {
                 if (string.IsNullOrEmpty(stackTrace))
@@ -99,7 +99,6 @@ namespace BotLib
             }
             return builder.ToString();
         }
-
 
         public void Error(string text)
         {
@@ -189,19 +188,30 @@ namespace BotLib
 
         private class LoopSaveFile
         {
+            private const int DefaultSegmentBytes = 1024 * 1024;
+            private const int OversizedEntryChunkChars = 400 * 1024;
+            private static readonly TimeSpan LogRetention = TimeSpan.FromHours(24);
+            private static readonly TimeSpan MaintenanceInterval = TimeSpan.FromMinutes(1);
+
             public string FileName { get; set; }
             private bool _saveLogByDay;
             private NoReEnterTimer _timer;
-            private int _limitFileSize = 0;
-            private DateTime _checkFileSizeTime = DateTime.MinValue;
+            private int _limitFileSize;
+            private DateTime _lastMaintenanceUtc = DateTime.MinValue;
             private ConcurrentQueue<string> _cache = new ConcurrentQueue<string>();
+            private readonly Encoding _encoding = Encoding.GetEncoding("gb2312");
 
             public LoopSaveFile(string fn, int maxFileByte, bool saveLogByDay)
             {
                 FileName = fn;
-                _limitFileSize = maxFileByte;
+                // Runtime log files must never grow beyond one 1024 KiB segment. Honor a smaller
+                // caller limit, but clamp legacy larger/default limits to the production contract.
+                _limitFileSize = maxFileByte > 0
+                    ? Math.Min(maxFileByte, DefaultSegmentBytes)
+                    : DefaultSegmentBytes;
                 _saveLogByDay = saveLogByDay;
-                KeepFileSizeOrBackupFileByDay();
+                EnsureDirectory();
+                MaintainLogFiles(true);
                 _timer = new NoReEnterTimer(WriteLoop, 1000, 0);
             }
 
@@ -210,28 +220,96 @@ namespace BotLib
                 Close();
             }
 
-            private void WriteLoop()
+            private void EnsureDirectory()
             {
-                if (_cache.Count > 0)
+                try
                 {
-                    try
-                    {
-                        KeepFileSizeOrBackupFileByDay();
-                        using (StreamWriter streamWriter = OpenStream(true))
-                        {
-                            string value;
-                            while (_cache.Count > 0 && _cache.TryDequeue(out value))
-                            {
-                                streamWriter.WriteLine(value);
-                            }
-                        }
-                    }
-                    catch
-                    {
-                    }
+                    var directory = Path.GetDirectoryName(FileName);
+                    if (!string.IsNullOrWhiteSpace(directory)) Directory.CreateDirectory(directory);
+                }
+                catch
+                {
                 }
             }
 
+            private void WriteLoop()
+            {
+                try
+                {
+                    MaintainLogFiles(false);
+                    if (_cache.Count <= 0) return;
+
+                    var batch = new List<string>();
+                    var currentBytes = CurrentFileLength();
+                    string value;
+                    while (_cache.TryDequeue(out value))
+                    {
+                        foreach (var part in SplitOversizedEntry(value ?? string.Empty))
+                        {
+                            var entryBytes = _encoding.GetByteCount(part + Environment.NewLine);
+                            if (currentBytes > 0 && currentBytes + entryBytes > _limitFileSize)
+                            {
+                                WriteBatch(batch);
+                                batch.Clear();
+                                RotateCurrentFile();
+                                currentBytes = 0;
+                            }
+
+                            batch.Add(part);
+                            currentBytes += entryBytes;
+
+                            if (currentBytes >= _limitFileSize)
+                            {
+                                WriteBatch(batch);
+                                batch.Clear();
+                                RotateCurrentFile();
+                                currentBytes = 0;
+                            }
+                        }
+                    }
+
+                    WriteBatch(batch);
+                }
+                catch
+                {
+                    // Logging must never crash the Bot. A later timer pass will continue with new data.
+                }
+            }
+
+            private IEnumerable<string> SplitOversizedEntry(string value)
+            {
+                if (_encoding.GetByteCount(value + Environment.NewLine) <= _limitFileSize)
+                {
+                    yield return value;
+                    yield break;
+                }
+
+                var offset = 0;
+                while (offset < value.Length)
+                {
+                    var take = Math.Min(OversizedEntryChunkChars, value.Length - offset);
+                    var chunk = value.Substring(offset, take);
+                    while (take > 256 && _encoding.GetByteCount(chunk + Environment.NewLine) > _limitFileSize)
+                    {
+                        take /= 2;
+                        chunk = value.Substring(offset, take);
+                    }
+                    yield return chunk;
+                    offset += take;
+                }
+            }
+
+            private void WriteBatch(ICollection<string> batch)
+            {
+                if (batch == null || batch.Count == 0) return;
+                using (StreamWriter streamWriter = OpenStream(true))
+                {
+                    foreach (var value in batch)
+                    {
+                        streamWriter.WriteLine(value);
+                    }
+                }
+            }
 
             public string GetFileNameFromDate(DateTime date)
             {
@@ -242,50 +320,74 @@ namespace BotLib
 
             private StreamWriter OpenStream(bool append)
             {
+                EnsureDirectory();
                 FileStream stream = new FileStream(FileName, append ? FileMode.Append : FileMode.Create, FileAccess.Write, FileShare.ReadWrite);
-                return new StreamWriter(stream, Encoding.GetEncoding("gb2312"));
+                return new StreamWriter(stream, _encoding);
             }
 
-            private void KeepFileSizeOrBackupFileByDay()
+            private long CurrentFileLength()
             {
-                if ((DateTime.Now - _checkFileSizeTime).TotalMinutes >= 5.0)
+                try
                 {
-                    _checkFileSizeTime = DateTime.Now;
-                    BackOldLogIfNeed();
-                    ClearFileIfNeed();
+                    return File.Exists(FileName) ? new FileInfo(FileName).Length : 0L;
+                }
+                catch
+                {
+                    return 0L;
                 }
             }
 
-            private bool BackOldLogIfNeed()
+            private void MaintainLogFiles(bool force)
             {
-                bool rt = false;
+                var nowUtc = DateTime.UtcNow;
+                if (!force && nowUtc - _lastMaintenanceUtc < MaintenanceInterval) return;
+                _lastMaintenanceUtc = nowUtc;
+
                 try
                 {
-                    if (_saveLogByDay && File.Exists(FileName))
+                    if (File.Exists(FileName))
                     {
-                        var fi = new FileInfo(FileName);
-                        if (fi.CreationTime.Date != DateTime.Now.Date && fi.Length > 0L)
+                        var current = new FileInfo(FileName);
+                        if (current.Length > 0
+                            && (current.Length >= _limitFileSize
+                                || current.CreationTimeUtc < nowUtc.Subtract(LogRetention)))
                         {
-                            string fileNameFromDate = GetFileNameFromDate(DateTime.Now.AddDays(-1.0));
-                            File.Copy(FileName, fileNameFromDate);
-                            File.Delete(FileName);
-                            rt = true;
+                            RotateCurrentFile();
                         }
                     }
                 }
-                catch (Exception)
+                catch
                 {
                 }
-                return rt;
+
+                DeleteExpiredSegments(nowUtc.Subtract(LogRetention));
             }
 
-            private void ClearFileIfNeed()
+            private string BuildSegmentFileName(DateTime stampUtc, int sequence)
+            {
+                var directory = Path.GetDirectoryName(FileName) ?? string.Empty;
+                var stem = Path.GetFileNameWithoutExtension(FileName);
+                var extension = Path.GetExtension(FileName);
+                var name = stem + "." + stampUtc.ToLocalTime().ToString("yyyyMMdd-HHmmss-fff")
+                    + "." + sequence.ToString("D3") + extension;
+                return Path.Combine(directory, name);
+            }
+
+            private void RotateCurrentFile()
             {
                 try
                 {
-                    if (_limitFileSize > 0 && IsFileTooBig())
+                    if (!File.Exists(FileName)) return;
+                    var info = new FileInfo(FileName);
+                    if (info.Length <= 0) return;
+
+                    var stamp = info.LastWriteTimeUtc == DateTime.MinValue ? DateTime.UtcNow : info.LastWriteTimeUtc;
+                    for (var sequence = 0; sequence < 10000; sequence++)
                     {
-                        Clear();
+                        var destination = BuildSegmentFileName(stamp, sequence);
+                        if (File.Exists(destination)) continue;
+                        File.Move(FileName, destination);
+                        return;
                     }
                 }
                 catch
@@ -293,15 +395,31 @@ namespace BotLib
                 }
             }
 
-            private bool IsFileTooBig()
+            private void DeleteExpiredSegments(DateTime cutoffUtc)
             {
-                bool rt = false;
-                if (File.Exists(FileName))
+                try
                 {
-                    var fi = new FileInfo(FileName);
-                    rt = (fi.Length > (long)_limitFileSize);
+                    var directory = Path.GetDirectoryName(FileName);
+                    if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory)) return;
+                    var stem = Path.GetFileNameWithoutExtension(FileName);
+                    var extension = Path.GetExtension(FileName);
+                    var pattern = stem + ".*" + extension;
+                    foreach (var path in Directory.GetFiles(directory, pattern))
+                    {
+                        try
+                        {
+                            if (string.Equals(path, FileName, StringComparison.OrdinalIgnoreCase)) continue;
+                            var info = new FileInfo(path);
+                            if (info.LastWriteTimeUtc < cutoffUtc) info.Delete();
+                        }
+                        catch
+                        {
+                        }
+                    }
                 }
-                return rt;
+                catch
+                {
+                }
             }
 
             public void Clear()
@@ -332,7 +450,6 @@ namespace BotLib
             {
                 Flush();
             }
-
         }
     }
 }
