@@ -25,16 +25,24 @@ def test_native_send_checks_platform_block_between_every_physical_send_fallback(
     after_cdp = native.index('StopIfPlatformSendBlockedAsync(buyer, "CDP页面发送按钮后")', cdp)
     hwnd = native.index("TryPostSafeMainSendMouseMessage", after_cdp)
     after_hwnd = native.index('StopIfPlatformSendBlockedAsync(buyer, "HWND安全消息后")', hwnd)
-    uia = native.index("TrySendTextViaUiaAsync", after_hwnd)
+    safe_uia = native.index("TryInvokeCachedSendButtonNow", after_hwnd)
+    after_safe_uia = native.index('StopIfPlatformSendBlockedAsync(buyer, "安全UIA调用后")', safe_uia)
+    uia = native.index("TrySendTextViaUiaAsync", after_safe_uia)
     after_uia = native.index('StopIfPlatformSendBlockedAsync(buyer, "UIA发送后")', uia)
-    assert first < cdp < after_cdp < hwnd < after_hwnd < uia < after_uia
+    assert first < cdp < after_cdp < hwnd < after_hwnd < safe_uia < after_safe_uia < uia < after_uia
 
 
 def test_hwnd_sender_never_clicks_a_modal_or_other_sibling_root_window():
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
-    block = native[native.index("if (root != expectedRoot)"):][:700]
-    assert "拒绝向未知根窗口投递点击" in block
+    block = native[native.index("if (root != expectedRoot)"):][:900]
+    assert "安全点不属于当前已验证卖家根窗口" in block
+    assert "HWND安全发送已阻止跨根窗口点击" in block
     assert "return false;" in block
+    # Helper processes are acceptable only under the exact seller root. A sibling/modal root must
+    # still fail before targetPid helper handling and before any PostMessage call.
+    helper = native.index("if (targetPid != expectedPid)", native.index("if (root != expectedRoot)"))
+    post = native.index("PostMessage(target, WmLButtonDown", helper)
+    assert native.index("if (root != expectedRoot)") < helper < post
     assert "允许同一千牛进程的独立根窗口" not in block
     qn = read("src/Bot/ChromeNs/QN.cs")
     assert "if (!ok && rpa.LastSendWasCancelled)" in qn
