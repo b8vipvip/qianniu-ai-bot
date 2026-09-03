@@ -77,7 +77,9 @@ namespace Bot.ChromeNs
         /// web page, then a HWND-targeted left-button message at the already verified safe point,
         /// then a proven left/main-action UIA child, and only then retain the legacy physical
         /// coordinate fallback. Every transition revalidates the exact Bot-owned draft to prevent
-        /// double sends.
+        /// double sends. A verified send action followed by a stable empty composer is accepted as
+        /// a Qianniu submission even if the real-time seller echo is late/missing, so the same text
+        /// is never re-written merely because transport evidence arrived late.
         /// </summary>
         private async Task<bool> TrySendTextNativeFirstAsync(string buyer, string text, DateTime sendStart)
         {
@@ -92,28 +94,28 @@ namespace Bot.ChromeNs
             var domTriggered = await TryTriggerSendViaCdpDomAsync(buyer).ConfigureAwait(false);
             if (domTriggered)
             {
-                if (await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "CDP页面发送按钮", 2600).ConfigureAwait(false))
+                if (await WaitForTextSubmissionAcceptedAsync(
+                    buyer, text, sendStart, "CDP页面发送按钮", 1700).ConfigureAwait(false))
                 {
                     return true;
                 }
+                if (LastSendWasCancelled) return false;
 
-                if (await StopIfPlatformSendBlockedAsync(buyer, "CDP页面发送按钮后").ConfigureAwait(false)) return false;
-
-                // A click may have reached Qianniu while the echo is late. Never perform another
-                // action unless the exact owned draft is still present.
+                // Only fall through to another action when the exact owned draft is still present.
+                // If the draft disappeared but submission could not be proven safely, fail closed;
+                // never reconstruct the same text for a second click.
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
-                    return await WaitForTextSendConfirmedAsync(
-                        buyer, text, sendStart, "CDP页面发送按钮延迟确认", 2200).ConfigureAwait(false);
+                    SetSendFailure("CDP页面发送按钮后确认", "发送动作后草稿已不存在，但未能完成安全提交确认；禁止重复写入");
+                    return false;
                 }
                 ResetSendFailure();
             }
 
             if (!await HasExpectedDraftFastAsync(text, 900).ConfigureAwait(false))
             {
-                return await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "原生发送切换前确认", 1800).ConfigureAwait(false);
+                SetSendFailure("原生发送切换前确认", "未执行新的发送动作且本次草稿已不存在，禁止继续发送");
+                return false;
             }
 
             var hwndPosted = await RunUiActionAsync(
@@ -122,24 +124,24 @@ namespace Bot.ChromeNs
                 UiActionTimeoutMs).ConfigureAwait(false);
             if (hwndPosted)
             {
-                if (await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "发送按钮HWND安全消息", 3000).ConfigureAwait(false))
+                if (await WaitForTextSubmissionAcceptedAsync(
+                    buyer, text, sendStart, "发送按钮HWND安全消息", 1800).ConfigureAwait(false))
                 {
                     return true;
                 }
-                if (await StopIfPlatformSendBlockedAsync(buyer, "HWND安全消息后").ConfigureAwait(false)) return false;
+                if (LastSendWasCancelled) return false;
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
-                    return await WaitForTextSendConfirmedAsync(
-                        buyer, text, sendStart, "HWND安全消息延迟确认", 2200).ConfigureAwait(false);
+                    SetSendFailure("HWND安全消息后确认", "发送动作后草稿已不存在，但未能完成安全提交确认；禁止重复写入");
+                    return false;
                 }
                 ResetSendFailure();
             }
 
             if (!await HasExpectedDraftFastAsync(text, 900).ConfigureAwait(false))
             {
-                return await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "安全UIA回退前确认", 1800).ConfigureAwait(false);
+                SetSendFailure("安全UIA回退前确认", "本次精确草稿已不存在，禁止执行第二次发送动作");
+                return false;
             }
 
             // Do not make a physical Mouse.Click the first fallback after HWND rejection. On
@@ -153,33 +155,45 @@ namespace Bot.ChromeNs
                 UiActionTimeoutMs).ConfigureAwait(false);
             if (safeUiaInvoked)
             {
-                if (await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "发送按钮左侧UIA安全调用（原生前置）", 3000).ConfigureAwait(false))
+                if (await WaitForTextSubmissionAcceptedAsync(
+                    buyer, text, sendStart, "发送按钮左侧UIA安全调用（原生前置）", 1800).ConfigureAwait(false))
                 {
                     return true;
                 }
-                if (await StopIfPlatformSendBlockedAsync(buyer, "安全UIA调用后").ConfigureAwait(false)) return false;
+                if (LastSendWasCancelled) return false;
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
-                    return await WaitForTextSendConfirmedAsync(
-                        buyer, text, sendStart, "安全UIA调用延迟确认", 2200).ConfigureAwait(false);
+                    SetSendFailure("安全UIA调用后确认", "发送动作后草稿已不存在，但未能完成安全提交确认；禁止重复写入");
+                    return false;
                 }
                 ResetSendFailure();
             }
 
             if (!await HasExpectedDraftFastAsync(text, 900).ConfigureAwait(false))
             {
-                return await WaitForTextSendConfirmedAsync(
-                    buyer, text, sendStart, "物理/UIA兼容回退前确认", 1800).ConfigureAwait(false);
+                SetSendFailure("物理/UIA兼容回退前确认", "本次精确草稿已不存在，禁止执行兼容发送动作");
+                return false;
             }
 
             var uiResult = await TrySendTextViaUiaAsync(buyer, text, sendStart).ConfigureAwait(false);
-            if (!uiResult && await StopIfPlatformSendBlockedAsync(buyer, "UIA发送后").ConfigureAwait(false)) return false;
-            if (!uiResult && _lastSendButtonCoordinateClickRejected)
+            if (uiResult) return true;
+            if (await StopIfPlatformSendBlockedAsync(buyer, "UIA发送后").ConfigureAwait(false)) return false;
+
+            // The legacy UIA path still contains its historical echo wait. If its click really
+            // submitted the draft but the live echo was missed, recover as submission-success here
+            // instead of allowing the outer reliable sender to write the same text again.
+            if (!await HasExpectedDraftFastAsync(text, 650).ConfigureAwait(false))
+            {
+                var accepted = await WaitForTextSubmissionAcceptedAsync(
+                    buyer, text, sendStart, "UIA兼容发送后提交确认", 1300).ConfigureAwait(false);
+                if (accepted) return true;
+            }
+
+            if (_lastSendButtonCoordinateClickRejected)
             {
                 LogInputIntegrityDiagnostic("物理坐标发送被系统拒绝");
             }
-            return uiResult;
+            return false;
         }
 
         /// <summary>

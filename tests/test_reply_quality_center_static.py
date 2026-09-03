@@ -55,17 +55,33 @@ def test_response_progress_records_route_answer_latency_without_false_manual_can
     assert "MessageProcessingTraceService.RecordCancelled" in code
 
 
-def test_real_send_metrics_use_seller_echo_or_watchdog_timeout():
+def test_real_send_metrics_distinguish_echo_submission_and_unproven_timeout():
     code = read("src/Bot/ChromeNs/SendDeliveryWatchdog.cs")
+
     timeout_remove = code.index("Pending.TryRemove(pending.Id")
-    timeout_metric = code.index("ReplyQualityMetricsService.RecordSendResult", timeout_remove)
+    submission_branch = code.index("if (!delivered && submissionTicks > 0)", timeout_remove)
+    submission_metric = code.index("ReplyQualityMetricsService.RecordSendResult", submission_branch)
+    true_timeout_branch = code.index("if (!delivered)", submission_branch + 1)
+    timeout_metric = code.index("ReplyQualityMetricsService.RecordSendResult", true_timeout_branch)
+
     confirm = code.index("public static bool ConfirmDelivery")
     confirm_remove = code.index("Pending.TryRemove(pair.Key", confirm)
     confirm_metric = code.index("ReplyQualityMetricsService.RecordSendResult", confirm_remove)
-    assert timeout_remove < timeout_metric
+
+    # A seller echo is the strongest proof and remains a successful send metric.
     assert confirm < confirm_remove < confirm_metric
     assert "true," in code[confirm_metric:confirm_metric + 160]
-    assert "false," in code[timeout_metric:timeout_metric + 500]
+
+    # A verified Qianniu submission is also successful for transport metrics even when the live
+    # echo is absent; this is the state that used to create false failures and duplicate retries.
+    assert timeout_remove < submission_branch < submission_metric < true_timeout_branch
+    assert "true," in code[submission_metric:submission_metric + 160]
+    assert "[本店发送回显缺失但提交已确认]" in code[submission_branch:true_timeout_branch]
+
+    # Only when neither seller echo nor verified submission exists may the watchdog count failure.
+    assert true_timeout_branch < timeout_metric < confirm
+    assert "false," in code[timeout_metric:timeout_metric + 160]
+    assert "也没有取得输入框稳定清空等千牛提交证据" in code[true_timeout_branch:confirm]
 
 
 def test_validator_and_reviewed_knowledge_feed_quality_metrics():

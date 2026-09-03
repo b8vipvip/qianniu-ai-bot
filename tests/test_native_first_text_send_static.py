@@ -61,9 +61,15 @@ def test_hwnd_fallback_targets_same_verified_seller_root_and_left_safe_region():
 
 def test_each_fallback_revalidates_exact_owned_draft_and_reports_integrity_mismatch():
     native = read("src/Bot/ChromeNs/QNRpa.NativeSend.cs")
+    guard = read("src/Bot/ChromeNs/QNRpa.PlatformSendGuard.cs")
 
     assert native.count("HasExpectedDraftFastAsync(text") >= 4
-    assert "WaitForTextSendConfirmedAsync" in native
+    # Real production logs proved echo-only confirmation can falsely return failure after Qianniu
+    # already consumed the draft. Native actions must now use submission-aware confirmation.
+    assert "WaitForTextSubmissionAcceptedAsync" in native
+    assert "WaitForTextSendConfirmedAsync" not in native
+    assert "稳定清空确认" in guard
+    assert "提交后会话确认" in guard
     assert "targetHigherIntegrity=" in native
     assert "TokenIntegrityLevel" in native
     assert 'return "High"' in native

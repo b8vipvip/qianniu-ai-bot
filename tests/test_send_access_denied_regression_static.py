@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.NativeSend.cs"
 QNRPA = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.cs"
+PLATFORM = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.PlatformSendGuard.cs"
 
 
 def _native() -> str:
@@ -11,6 +12,10 @@ def _native() -> str:
 
 def _qnrpa() -> str:
     return QNRPA.read_text(encoding="utf-8-sig")
+
+
+def _platform() -> str:
+    return PLATFORM.read_text(encoding="utf-8-sig")
 
 
 def test_qianniu_helper_pid_is_only_trusted_under_exact_verified_seller_root():
@@ -55,11 +60,18 @@ def test_safe_uia_main_action_runs_before_legacy_physical_coordinate_fallback():
     assert "protectedArrowStart" in qnrpa
 
 
-def test_every_new_prephysical_send_transition_revalidates_owned_draft_and_echo():
-    text = _native()
+def test_every_new_prephysical_send_transition_revalidates_owned_draft_and_submission():
+    native = _native()
+    platform = _platform()
 
-    assert "安全UIA回退前确认" in text
-    assert "安全UIA调用延迟确认" in text
-    assert "物理/UIA兼容回退前确认" in text
-    assert text.count("HasExpectedDraftFastAsync(text") >= 6
-    assert "WaitForTextSendConfirmedAsync" in text
+    assert "安全UIA回退前确认" in native
+    assert "物理/UIA兼容回退前确认" in native
+    assert native.count("HasExpectedDraftFastAsync(text") >= 6
+
+    # Do not restore the echo-only confirmation that caused production duplicate sends after an
+    # already-consumed draft. Every authoritative action now shares submission-aware confirmation.
+    assert "WaitForTextSendConfirmedAsync" not in native
+    assert native.count("WaitForTextSubmissionAcceptedAsync") >= 4
+    assert "稳定清空确认" in platform
+    assert "提交后会话确认" in platform
+    assert "禁止因实时回显缺失重新写入同一文本" in platform
