@@ -30,6 +30,8 @@ namespace Bot.ChromeNs
             public DateTime AnswerReadyAt;
             public DateTime WatchStartedAt;
             public int Started;
+            public long SubmissionAcceptedTicks;
+            public string SubmissionEvidence;
         }
 
         public static void OnBuyerMessageObserved(string seller, string buyer, DateTime observedAt)
@@ -78,7 +80,9 @@ namespace Bot.ChromeNs
                 DetectedAt = detectedAt == DateTime.MinValue ? readyAt : detectedAt,
                 AnswerReadyAt = readyAt,
                 WatchStartedAt = DateTime.MinValue,
-                Started = 0
+                Started = 0,
+                SubmissionAcceptedTicks = 0,
+                SubmissionEvidence = string.Empty
             };
             Pending[pending.Id] = pending;
             Log.Info("已准备本店真实发送回显监控（尚未开始计时）: shop=" + shop.ShopKey
@@ -111,12 +115,60 @@ namespace Bot.ChromeNs
                     DetectedAt = now,
                     AnswerReadyAt = now,
                     WatchStartedAt = DateTime.MinValue,
-                    Started = 0
+                    Started = 0,
+                    SubmissionAcceptedTicks = 0,
+                    SubmissionEvidence = string.Empty
                 };
                 Pending[pending.Id] = pending;
             }
             Activate(pending);
             return pending.Id;
+        }
+
+        /// <summary>
+        /// Record a strong local submission proof without pretending that a seller echo was seen.
+        /// Production logs show Qianniu can consume the exact Bot draft and clear the composer while
+        /// the real-time seller echo is delayed/missed. That state must suppress retry/anomaly paths,
+        /// but the pending watchdog remains alive so a later real echo can still upgrade the proof.
+        /// </summary>
+        public static bool MarkSubmissionAccepted(string seller, string buyer, string answer, string evidence)
+        {
+            seller = (seller ?? string.Empty).Trim();
+            buyer = (buyer ?? string.Empty).Trim();
+            answer = (answer ?? string.Empty).Trim();
+            evidence = (evidence ?? string.Empty).Replace("\r", " ").Replace("\n", " ").Trim();
+            var normalized = Normalize(answer);
+            if (seller.Length == 0 || buyer.Length == 0 || normalized.Length == 0) return false;
+
+            var shopKey = ScopeKey(seller);
+            var matches = Pending
+                .Where(pair => pair.Value != null
+                    && pair.Value.Shop != null
+                    && string.Equals(pair.Value.Shop.ShopKey, shopKey, StringComparison.Ordinal)
+                    && pair.Value.Started != 0
+                    && string.Equals(pair.Value.Seller, seller, StringComparison.Ordinal)
+                    && string.Equals(pair.Value.Buyer, buyer, StringComparison.Ordinal)
+                    && Normalize(pair.Value.Answer) == normalized)
+                .Select(pair => pair.Value)
+                .ToList();
+
+            if (matches.Count == 0) return false;
+
+            var now = DateTime.Now;
+            foreach (var pending in matches)
+            {
+                pending.SubmissionEvidence = evidence;
+                Interlocked.Exchange(ref pending.SubmissionAcceptedTicks, now.Ticks);
+            }
+
+            // Mark the outbound body as Bot-owned immediately. A late seller echo/history recovery
+            // must not be mistaken for a human reply merely because its live echo event was missed.
+            KnownBotAnswers[AnswerKey(seller, buyer, answer)] = now.AddMinutes(2);
+            CleanupKnownAnswers();
+            Log.Info("发送回显监控已记录千牛提交证据，继续等待真实卖家回显但禁止据此判失败/重发: shop="
+                + shopKey + ", seller=" + seller + ", buyer=" + buyer
+                + ", matchedWatchdogs=" + matches.Count + ", evidence=" + evidence);
+            return true;
         }
 
         public static int CancelPending(string seller, string buyer, string answer, string reason)
@@ -214,14 +266,39 @@ namespace Bot.ChromeNs
 
                     PendingDelivery removed;
                     if (!Pending.TryRemove(pending.Id, out removed) || !ReferenceEquals(removed, pending)) return;
+
+                    var submissionTicks = Interlocked.Read(ref pending.SubmissionAcceptedTicks);
+                    if (!delivered && submissionTicks > 0)
+                    {
+                        ReplyQualityMetricsService.RecordSendResult(
+                            true,
+                            Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
+                        var evidence = string.IsNullOrWhiteSpace(pending.SubmissionEvidence)
+                            ? "发送动作后本次Bot精确草稿稳定清空"
+                            : pending.SubmissionEvidence;
+                        ResponseProgressTracker.MarkDeliveryConfirmed(
+                            pending.Seller,
+                            pending.Buyer,
+                            pending.Answer,
+                            "千牛已接收发送提交；实时卖家回显缺失，未据此判失败");
+                        Log.Info("[本店发送回显缺失但提交已确认] shop=" + pending.Shop.ShopKey
+                            + ", seller=" + pending.Seller + ", buyer=" + pending.Buyer
+                            + ", watchdogId=" + pending.Id + ", submissionAcceptedAt="
+                            + new DateTime(submissionTicks).ToString("HH:mm:ss.fff")
+                            + ", evidence=" + evidence
+                            + "; 不生成发送失败异常，不触发同文本重发。");
+                        return;
+                    }
+
                     if (!delivered)
                     {
                         ReplyQualityMetricsService.RecordSendResult(
                             false,
                             Math.Max(0, (long)(DateTime.Now - pending.DetectedAt).TotalMilliseconds));
                         var reason = "答案已经生成并进入自动发送流程，并且已真正进入发送动作，但在 "
-                            + (VerifyDelayMilliseconds / 1000) + " 秒内未检测到相同内容的卖家消息回显。"
-                            + "可能是输入框/发送按钮操作未真正送达、回显事件缺失，或发送结果被错误判定。";
+                            + (VerifyDelayMilliseconds / 1000) + " 秒内既未检测到相同内容的卖家消息回显，"
+                            + "也没有取得输入框稳定清空等千牛提交证据。"
+                            + "可能是输入框/发送按钮操作未真正送达、回显事件缺失，或发送结果无法证明。";
                         ResponseProgressTracker.MarkDeliveryTimedOut(
                             pending.Seller, pending.Buyer, pending.Answer, reason);
                         Log.Error("[本店发送异常] shop=" + pending.Shop.ShopKey
