@@ -56,8 +56,10 @@ namespace Bot.ChromeNs
             }
             if (detected == null || !detected.Detected) return false;
 
-            // Do not let a modal from a stale/other conversation authorize a click.
-            if (!await VerifyCurrentBuyerAsync(buyer, "服务态度提醒继续发送前会话确认").ConfigureAwait(false))
+            // A modal is part of the already-open conversation. Never navigate while it is present:
+            // read the current buyer only and require an exact/equivalent match before authorizing it.
+            if (!await VerifyCurrentBuyerWithoutNavigationAsync(
+                buyer, "服务态度提醒继续发送前会话确认").ConfigureAwait(false))
             {
                 SetSendCancellation("平台发送拦截", "检测到千牛“服务态度提醒”，但当前会话无法证明仍为目标买家，已拒绝自动确认");
                 Log.ErrorWithMaxCount(
@@ -122,6 +124,145 @@ namespace Bot.ChromeNs
                 + SellerNick + ", buyer=" + buyer + ", stage=" + stage + ", detail=" + detail,
                 50);
             return true;
+        }
+
+        /// <summary>
+        /// A verified send action followed by a stable empty composer is strong evidence that
+        /// Qianniu accepted this exact Bot-owned draft. Live seller echo is still preferred, but a
+        /// missing/delayed echo must never cause the same text to be written and sent a second time.
+        /// The platform reminder is probed before accepting the empty composer so a late reminder is
+        /// auto-confirmed instead of being mistaken for successful delivery.
+        /// </summary>
+        private async Task<bool> WaitForTextSubmissionAcceptedAsync(
+            string buyer,
+            string text,
+            DateTime sendStart,
+            string method,
+            int timeoutMs)
+        {
+            var end = DateTime.Now.AddMilliseconds(Math.Max(900, timeoutMs));
+            var emptyObserved = false;
+            var emptyObservedAt = DateTime.MinValue;
+            var platformProbeAfterAction = false;
+
+            while (DateTime.Now < end)
+            {
+                try
+                {
+                    if (_qn != null && _qn.HasRecentSellerEcho(buyer, text, sendStart))
+                    {
+                        BotConnectionDiagnostics.RecordSendAttempt(true, method + "，卖家消息已回显");
+                        Log.Info(method + "发送确认成功：已收到卖家消息回显。buyer=" + buyer);
+                        return true;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("检查卖家消息回显失败: " + ex.Message);
+                }
+
+                var remaining = Math.Max(250, (int)(end - DateTime.Now).TotalMilliseconds);
+                var probe = await ProbeInputboxEmptyAsync(
+                    method + "提交确认", Math.Min(700, remaining)).ConfigureAwait(false);
+                if (probe.Completed && probe.IsEmpty)
+                {
+                    if (!emptyObserved)
+                    {
+                        emptyObserved = true;
+                        emptyObservedAt = DateTime.Now;
+                        Log.Info(method + "发送动作后观察到本次输入框清空，进入稳定提交确认；buyer=" + buyer);
+                    }
+
+                    // A service-attitude modal may appear just after Qianniu consumes the composer.
+                    // Probe before accepting the clear state; exact reminder/continue is auto-clicked.
+                    if (await StopIfPlatformSendBlockedAsync(
+                        buyer, method + "提交确认").ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+                    platformProbeAfterAction = true;
+
+                    if ((DateTime.Now - emptyObservedAt).TotalMilliseconds >= 220)
+                    {
+                        var stable = await ProbeInputboxEmptyAsync(
+                            method + "稳定清空确认", 650).ConfigureAwait(false);
+                        if (stable.Completed && stable.IsEmpty)
+                        {
+                            // Re-probe after the stability window to catch a reminder whose UI
+                            // appeared slightly later than the composer clear event.
+                            if (await StopIfPlatformSendBlockedAsync(
+                                buyer, method + "稳定清空后平台确认").ConfigureAwait(false))
+                            {
+                                return false;
+                            }
+                            if (!await VerifyCurrentBuyerWithoutNavigationAsync(
+                                buyer, method + "提交后会话确认").ConfigureAwait(false))
+                            {
+                                return false;
+                            }
+
+                            ResetSendFailure();
+                            BotConnectionDiagnostics.RecordSendAttempt(
+                                true,
+                                method + "，发送动作后输入框稳定清空，按千牛已接收提交处理；卖家回显可异步补证");
+                            Log.Info(method + "发送提交确认成功：本次精确草稿在发送动作后稳定清空；"
+                                + "禁止因实时回显缺失重新写入同一文本。buyer=" + buyer);
+                            ArmLateServiceAttitudeContinuationWatch(buyer, method);
+                            return true;
+                        }
+                    }
+                }
+                else if (probe.Completed && !probe.IsEmpty
+                    && !platformProbeAfterAction
+                    && (DateTime.Now - sendStart).TotalMilliseconds >= 350)
+                {
+                    // Some Qianniu builds keep the draft visible while the reminder is showing.
+                    if (await StopIfPlatformSendBlockedAsync(
+                        buyer, method + "发送动作后平台确认").ConfigureAwait(false))
+                    {
+                        return false;
+                    }
+                    platformProbeAfterAction = true;
+                }
+
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+
+            if (await StopIfPlatformSendBlockedAsync(
+                buyer, method + "超时前平台确认").ConfigureAwait(false))
+            {
+                return false;
+            }
+
+            SetSendFailure(
+                "发送确认",
+                method + "后既未检测到卖家回显，也未观察到发送动作后的稳定输入框清空；"
+                    + "emptyObserved=" + emptyObserved);
+            return false;
+        }
+
+        private void ArmLateServiceAttitudeContinuationWatch(string buyer, string method)
+        {
+            var startedAt = DateTime.Now;
+            Task.Run(async () =>
+            {
+                try
+                {
+                    for (var attempt = 0; attempt < 8; attempt++)
+                    {
+                        await Task.Delay(attempt == 0 ? 260 : 320).ConfigureAwait(false);
+                        if (_lastServiceAttitudeContinueAt >= startedAt) return;
+                        var blocked = await StopIfPlatformSendBlockedAsync(
+                            buyer, method + "迟到服务态度提醒监控").ConfigureAwait(false);
+                        if (blocked) return;
+                        if (_lastServiceAttitudeContinueAt >= startedAt) return;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Log.Info("迟到服务态度提醒监控异常: " + ex.Message);
+                }
+            });
         }
 
         private ServiceAttitudeProbeResult ProbeServiceAttitudeReminder(bool clickContinue)
