@@ -9,8 +9,14 @@
       OrderTemplateTradeDetailBridge.cs and OrderTemplateReceiveNewMessageTradeDetailBridge.cs.
       The legacy source files remain in the repository for history/regression reference, but are no
       longer compiled, preventing two enrichment pipelines from racing to send the same order reply.
+
+      OrderTemplateRequiredFieldsPriority.cs is part of the same runtime contract. It must be
+      compiled together with V2 so the required-field owner is ordered ahead of the legacy
+      messageCenterNotify consumers before a sparse order snapshot can be rendered and sent.
     -->
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRequiredFieldsV2.cs" />
+    <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRequiredFieldsPriority.cs"
+             Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\OrderTemplateRequiredFieldsPriority.cs')" />
     <Compile Include="$(MSBuildProjectDirectory)\ChromeNs\RechargeStatusAutoQueryService.cs" />
   </ItemGroup>
   <ItemGroup Condition="Exists('$(MSBuildProjectDirectory)\ChromeNs\BotWebConsoleSyncService.cs')">
