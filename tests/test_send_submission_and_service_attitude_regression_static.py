@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 NATIVE = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.NativeSend.cs"
 PLATFORM = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.PlatformSendGuard.cs"
+WATCHDOG = ROOT / "src" / "Bot" / "ChromeNs" / "SendDeliveryWatchdog.cs"
 
 
 def read(path: Path) -> str:
@@ -31,8 +32,9 @@ def test_native_send_accepts_verified_submission_instead_of_echo_only_retry():
     first_empty = platform.index("emptyObserved = true")
     stable_empty = platform.index("稳定清空确认", first_empty)
     buyer_check = platform.index("提交后会话确认", stable_empty)
-    success = platform.index("发送提交确认成功", buyer_check)
-    assert first_empty < stable_empty < buyer_check < success
+    watchdog_mark = platform.index("SendDeliveryWatchdog.MarkSubmissionAccepted", buyer_check)
+    success = platform.index("发送提交确认成功", watchdog_mark)
+    assert first_empty < stable_empty < buyer_check < watchdog_mark < success
     assert "VerifyCurrentBuyerWithoutNavigationAsync" in platform
 
 
@@ -56,3 +58,27 @@ def test_service_attitude_reminder_auto_continues_only_for_exact_verified_action
     # The legacy policy that deliberately refused this exact continuation must not return.
     assert "Bot不会点击“继续发送”" not in text
     assert "该平台提示必须由人工判断，Bot禁止自动确认" not in text
+
+
+def test_delivery_watchdog_keeps_echo_as_best_proof_but_never_false_fails_verified_submission():
+    watchdog = read(WATCHDOG)
+
+    assert "MarkSubmissionAccepted" in watchdog
+    assert "SubmissionAcceptedTicks" in watchdog
+    assert "SubmissionEvidence" in watchdog
+    assert "Interlocked.Exchange(ref pending.SubmissionAcceptedTicks" in watchdog
+    assert "Interlocked.Read(ref pending.SubmissionAcceptedTicks)" in watchdog
+
+    # Real seller echo remains the preferred proof and can remove the pending watchdog first.
+    assert "HasRecentSellerEcho" in watchdog
+    assert "已通过卖家消息回显确认真实发送" in watchdog
+
+    # If echo is missing after 9 seconds but the send layer already proved Qianniu accepted the
+    # exact draft, do not emit a false failure/anomaly and do not make that answer eligible to resend.
+    accepted = watchdog.index("if (!delivered && submissionTicks > 0)")
+    success = watchdog.index("[本店发送回显缺失但提交已确认]", accepted)
+    failure = watchdog.index("if (!delivered)", accepted + 1)
+    anomaly = watchdog.index("SendFailureAnomalyService.Queue", failure)
+    assert accepted < success < failure < anomaly
+    assert "不生成发送失败异常，不触发同文本重发" in watchdog
+    assert "KnownBotAnswers[AnswerKey(seller, buyer, answer)]" in watchdog
