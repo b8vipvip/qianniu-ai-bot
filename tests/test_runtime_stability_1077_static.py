@@ -7,11 +7,27 @@ def read(rel):
     return (ROOT / rel).read_text(encoding="utf-8-sig")
 
 
-def test_deterministic_rule_gate_is_bounded_and_fail_open():
+def test_deterministic_rule_gates_are_bounded_with_correct_failure_policy():
     s = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     assert "await gate.WaitAsync();" not in s
     assert "gate.WaitAsync(1800)" in s
-    assert "固定规则内部串行门等待超时，已放行普通消息合并/AI链路" in s
+
+    # Ordinary work-hours fixed rules remain bounded + fail-open so one unhealthy greeting/local
+    # reply cannot strand normal traffic. Off-hours has a separate bounded fail-closed gate because
+    # no Knowledge/AI answer is allowed during the configured off-hours window.
+    ordinary_gate = s.index("var gate = BuyerGates.GetOrAdd")
+    ordinary_try = s.index("try", ordinary_gate)
+    ordinary_block = s[ordinary_gate:ordinary_try]
+    assert "gate.WaitAsync(1800)" in ordinary_block
+    assert "已放行消息合并/AI链路" in ordinary_block
+    assert "return true;" in ordinary_block
+
+    offhours = s.index("private static async Task<bool> HandleOffHoursExclusiveAsync")
+    scoped = s.index("private static async Task<bool> HandleScopedBeforeMergeAsync", offhours)
+    offhours_block = s[offhours:scoped]
+    assert "gate.WaitAsync(1800)" in offhours_block
+    assert "fail-closed阻止Knowledge/AI链路" in offhours_block
+    assert "return false;" in offhours_block
 
 
 def test_forwarded_duplicate_session_cannot_be_promoted_for_commands():
@@ -145,4 +161,3 @@ def test_delivery_verification_partial_is_included_in_legacy_msbuild_and_wpf_tmp
     targets = read("src/Directory.Build.targets")
     assert "QN.DeliveryVerification.cs" in targets
     assert '<Compile Include="$(MSBuildProjectDirectory)\\ChromeNs\\QN.DeliveryVerification.cs" />' in targets
-
