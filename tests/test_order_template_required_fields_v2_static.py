@@ -85,16 +85,26 @@ def test_enrichment_logs_each_requested_diagnostic_without_raw_order_payload():
     assert "File.WriteAllText" not in source
 
 
-def test_query_retries_until_required_fields_are_complete_and_payment_can_arrive_later():
+def test_query_retries_are_bounded_for_structured_fields_and_payment_can_arrive_later():
     source = read(SOURCE)
 
-    assert "new[] { 0, 500, 1000, 2000, 3000, 5000, 7000 }" in source
-    assert "MissingRequiredFields(plan.Config, snapshot).Count == 0" in source
+    assert 'missingAtStart.Contains("sku") || missingAtStart.Contains("buyer_remark")' in source
+    assert "new[] { 0, 250, 500, 1000, 1500 }" in source
+    assert "new[] { 0, 500, 1000, 2000, 3000, 5000, 7000 }" not in source
+    assert 'remaining.Contains("sku")' in source
+    assert 'remaining.Contains("buyer_remark")' in source
     assert "trade.payTime ?? itemPayTime" in source
     assert "snapshot.PaidAmount = total" in source
     assert "snapshot.EventType = OrderEventType.Paid" in source
     assert "Inflight.TryRemove(inflightKey" in source
     assert "OrderPlacedAutoReplyService.Complete(plan, false)" in source
+
+
+def test_required_fields_v2_reuses_structured_sku_parser_before_render_and_after_trade_query():
+    source = read(SOURCE)
+    assert "SkuText = OrderSkuPayloadRecoveryBridge.ResolveSkuTextFromPayload(raw)" in source
+    assert "JObject.FromObject(trade).ToString(Formatting.None)" in source
+    assert "OrderSkuPayloadRecoveryBridge.ResolveSkuTextFromPayload(" in source
 
 
 def test_success_path_reuses_existing_safe_order_reply_pipeline():

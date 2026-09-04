@@ -76,8 +76,8 @@ def test_duplicate_cdp_bridge_never_replaces_outbound_cdp_ownership():
 def test_duplicate_cdp_bridge_deduplicates_exact_cross_page_replays_with_bounded_state():
     bridge = read("src/Bot/ChromeNs/DuplicateCdpInboundRecoveryBridge.cs")
 
-    assert "InboundFingerprintWindow = TimeSpan.FromSeconds(3)" in bridge
-    assert "InboundFingerprintRetention = TimeSpan.FromSeconds(30)" in bridge
+    assert "InboundFingerprintWindow = TimeSpan.FromMinutes(2)" in bridge
+    assert "InboundFingerprintRetention = TimeSpan.FromMinutes(5)" in bridge
     assert "SessionSellerRetention = TimeSpan.FromHours(2)" in bridge
     assert "ConcurrentDictionary<string, DateTime> RecentInboundFingerprints" in bridge
     assert "TryAcceptInboundFingerprint(seller, e.Type, response, now)" in bridge

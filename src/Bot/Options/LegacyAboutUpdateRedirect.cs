@@ -355,6 +355,23 @@ namespace Bot.ChromeNs
             return true;
         }
 
+        internal static string ResolveSkuTextFromPayload(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+            try
+            {
+                var root = ParseExpanded(raw);
+                var flat = Flatten(root);
+                var combined = BuildCombinedText(raw, flat);
+                string strategy;
+                return Clean(ResolveSkuText(flat, combined, out strategy), 240);
+            }
+            catch
+            {
+                return string.Empty;
+            }
+        }
+
         private static string ResolveSkuText(
             IList<FlatValue> flat,
             string combined,

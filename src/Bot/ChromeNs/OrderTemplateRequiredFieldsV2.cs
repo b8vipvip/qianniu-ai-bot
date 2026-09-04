@@ -1,4 +1,4 @@
-﻿using Bot.ChatRecord;
+using Bot.ChatRecord;
 using Bot.Options;
 using BotLib;
 using DbEntity;
@@ -356,7 +356,13 @@ namespace Bot.ChromeNs
 
             var securityBuyerUid = GetCachedBuyerSecurityId(plan.Seller, plan.Buyer);
             probe.BuyerSecurityIdFound = !string.IsNullOrWhiteSpace(securityBuyerUid);
-            var delays = new[] { 0, 500, 1000, 2000, 3000, 5000, 7000 };
+            var missingAtStart = MissingRequiredFields(plan.Config, snapshot);
+            var needsStructuredFields = missingAtStart.Contains("sku") || missingAtStart.Contains("buyer_remark");
+            // Never hold the mandatory order reply for the old 18.5-second cumulative ladder.
+            // SKU/buyer remark get a short bounded eventual-consistency window; other fields query once.
+            var delays = needsStructuredFields
+                ? new[] { 0, 250, 500, 1000, 1500 }
+                : new[] { 0 };
 
             for (var attempt = 0; attempt < delays.Length; attempt++)
             {
@@ -383,7 +389,12 @@ namespace Bot.ChromeNs
                     probe.TradeFound = true;
                     MergeTrade(snapshot, trade);
                     UpdateProbe(probe, snapshot);
-                    if (MissingRequiredFields(plan.Config, snapshot).Count == 0) break;
+                    var remaining = MissingRequiredFields(plan.Config, snapshot);
+                    if (remaining.Count == 0
+                        || (!remaining.Contains("sku") && !remaining.Contains("buyer_remark")))
+                    {
+                        break;
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -595,6 +606,15 @@ namespace Bot.ChromeNs
                 .Select(x => NormalizeSku(x.sku))
                 .Where(x => !string.IsNullOrWhiteSpace(x))
                 .Distinct(StringComparer.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(sku))
+            {
+                try
+                {
+                    sku = OrderSkuPayloadRecoveryBridge.ResolveSkuTextFromPayload(
+                        JObject.FromObject(trade).ToString(Formatting.None));
+                }
+                catch { }
+            }
             if (string.IsNullOrWhiteSpace(snapshot.SkuText) && sku.Length > 0)
             {
                 snapshot.SkuText = Safe(sku, 240);
@@ -722,6 +742,7 @@ namespace Bot.ChromeNs
                 Seller = seller,
                 Buyer = buyer,
                 OrderId = orderId,
+                SkuText = OrderSkuPayloadRecoveryBridge.ResolveSkuTextFromPayload(raw),
                 BuyerRemark = Safe(FindValue(flat, BuyerRemarkKeys), 500),
                 TradeStatus = string.IsNullOrWhiteSpace(status) ? (paid == true ? "已付款" : "新下单") : status,
                 IsPaid = paid,
