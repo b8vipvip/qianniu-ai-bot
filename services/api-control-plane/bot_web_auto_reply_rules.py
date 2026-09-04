@@ -133,7 +133,10 @@ def _normalize(values: Dict[str, Any], *, fill_defaults: bool) -> Dict[str, Any]
 
 
 def _validate_for_web(values: Dict[str, Any]) -> Dict[str, Any]:
-    normalized = _normalize(values, fill_defaults=True)
+    try:
+        normalized = _normalize(values, fill_defaults=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
     if normalized["off_hours_reply_mode"] == "固定预设答案" and not normalized["off_hours_fixed_text"]:
         raise HTTPException(status_code=422, detail="选择固定预设答案时，下班固定回复不能为空")
     return normalized
