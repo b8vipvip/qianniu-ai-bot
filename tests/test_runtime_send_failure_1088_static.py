@@ -23,12 +23,14 @@ def test_hwnd_safe_send_accepts_only_exact_verified_seller_root():
 
     root_owner = native.index("GetWindowThreadProcessId(expectedRoot, out rootPid)")
     root_guard = native.index("rootPid == 0 || rootPid != expectedPid", root_owner)
-    target_root = native.index("var root = GetAncestor(target, GaRoot)", root_guard)
-    sibling_guard = native.index("if (root != expectedRoot)", target_root)
+    target_root = native.index("GetAncestor(target, GaRoot)", root_guard)
+    constrained = native.index("ResolveTargetInsideVerifiedSellerRoot(expectedRoot, screenPoint)", target_root)
+    constrained_proof = native.index("constrainedRoot == expectedRoot", constrained)
+    sibling_guard = native.index("if (root != expectedRoot)", constrained_proof)
     target_pid = native.index("GetWindowThreadProcessId(target, out targetPid)", sibling_guard)
     helper_pid = native.index("if (targetPid != expectedPid)", target_pid)
     post = native.index("PostMessage(target, WmLButtonDown", helper_pid)
-    assert root_owner < root_guard < target_root < sibling_guard < target_pid < helper_pid < post
+    assert root_owner < root_guard < target_root < constrained < constrained_proof < sibling_guard < target_pid < helper_pid < post
 
     root_guard_block = native[root_guard:target_root]
     sibling_guard_block = native[sibling_guard:target_pid]

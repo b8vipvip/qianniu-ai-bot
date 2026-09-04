@@ -39,6 +39,7 @@ namespace Bot.ChromeNs
             {
                 Log.Info("发送失败已分类为不可重试的旧答案取消，可靠发送层必须立即停止重试: "
                     + LastSendFailureReason);
+                ClearCancelledExactBotDraftIfPresent();
             }
         }
 
@@ -47,6 +48,39 @@ namespace Bot.ChromeNs
             var combined = (stage ?? string.Empty) + " " + (detail ?? string.Empty);
             return combined.IndexOf("买家已发送更新消息", StringComparison.Ordinal) >= 0
                 || combined.IndexOf("旧答案不会发送", StringComparison.Ordinal) >= 0;
+        }
+
+        /// <summary>
+        /// A cancelled Bot answer must not remain visible in Qianniu's composer after a newer buyer
+        /// turn invalidates it. Clear only when the current editor still matches LastSetPlainText
+        /// exactly, and re-check after focusing before sending any key input. Manual/operator text or
+        /// a newer Bot draft is never touched.
+        /// </summary>
+        private void ClearCancelledExactBotDraftIfPresent()
+        {
+            try
+            {
+                var expected = (LastSetPlainText ?? string.Empty).Trim();
+                if (expected.Length == 0) return;
+
+                string current;
+                if (!TryGetEditorText(out current) || !EditorMatchesExpectedText(current, expected)) return;
+                if (!FocusEditor()) return;
+
+                string focusedCurrent;
+                if (!TryGetEditorText(out focusedCurrent)
+                    || !EditorMatchesExpectedText(focusedCurrent, expected)) return;
+
+                PressCtrlA();
+                PressBackspace();
+                LastSetPlainText = string.Empty;
+                LatestSetTextTime = DateTime.MinValue;
+                Log.Info("已清除因买家更新消息而作废的Bot精确草稿，避免旧答案滞留千牛输入框");
+            }
+            catch (Exception ex)
+            {
+                Log.Info("清除作废Bot精确草稿失败，未触碰无法证明所有权的输入内容: " + ex.Message);
+            }
         }
 
         internal void SetSendCancellation(string stage, string detail)
@@ -79,9 +113,6 @@ namespace Bot.ChromeNs
 
             _preUpdateChatBrowserRectTime = DateTime.Now;
 
-            // Multi-shop safety: the process may own several Qianniu top-level windows.
-            // Always resolve the Desk proven for this seller instead of scanning whichever
-            // process window happens to be Desk.Inst / MainWindowHandle.
             var sellerDesk = ResolveSellerDesk();
             if (sellerDesk == null)
             {
@@ -117,10 +148,6 @@ namespace Bot.ChromeNs
             {
                 try
                 {
-                    // New Qianniu builds no longer reliably expose a top-level class named
-                    // MutilChatView. Use the already verified seller HWND as the UIA root.
-                    // This also prevents two shops in one AliWorkbench process from sharing
-                    // the same UIAutomation subtree.
                     var mainWnd = uia3Automation.FromHandle(new IntPtr(expectedHwnd));
                     if (mainWnd == null)
                     {
@@ -177,14 +204,10 @@ namespace Bot.ChromeNs
         {
             descendants = descendants ?? new AutomationElement[0];
 
-            // Stable id remains the strongest signal when present.
             var exact = descendants.FirstOrDefault(k => string.Equals(
                 SafeAutomationId(k), ChatInputAutomationId, StringComparison.Ordinal));
             if (exact != null) return exact;
 
-            // New Qianniu versions have changed the surrounding top-level/window class while
-            // preserving a rich-edit based composer. Prefer a TextRichEdit in the lower half
-            // of the verified seller window, then the largest/lower candidate.
             var rootRect = SafeBoundingRectangle(root);
             var candidates = descendants
                 .Where(k => string.Equals(SafeClassName(k), "TextRichEdit", StringComparison.Ordinal))
@@ -194,8 +217,6 @@ namespace Bot.ChromeNs
                 .ToArray();
             if (candidates.Length > 0) return candidates[0];
 
-            // Last compatibility fallback: an element whose AutomationId still ends with the
-            // historical composer suffix even if Qianniu renamed its prefix hierarchy.
             return descendants
                 .Where(k => SafeAutomationId(k).EndsWith("sendMsgWidget.chatInputArea.plainTextEdit", StringComparison.Ordinal))
                 .OrderByDescending(k => SafeBoundingRectangle(k).Bottom)
@@ -323,8 +344,6 @@ namespace Bot.ChromeNs
 
             string text;
             if (!TryGetEditorText(out text)) return false;
-            // 图片粘贴在 UIA 文本属性中通常表现为对象占位内容，而调用方没有可比较的文本。
-            // 对文本消息必须严格逐字匹配；只有图片发送路径（expected 为空）允许以“编辑器存在非空内容”作为草稿存在证明。
             if (string.IsNullOrEmpty(expected)) return !string.IsNullOrWhiteSpace(NormalizeEditorText(text));
             return EditorMatchesExpectedText(text, expected);
         }

@@ -10,8 +10,11 @@ namespace Bot.ChromeNs
 {
     public partial class QNRpa
     {
+        private const int PlatformReadProbeTimeoutMs = 650;
         private static readonly TimeSpan ServiceAttitudeContinueThrottle = TimeSpan.FromMilliseconds(1200);
         private readonly SemaphoreSlim _serviceAttitudeProbeGate = new SemaphoreSlim(1, 1);
+        private readonly object _serviceAttitudeReadProbeSync = new object();
+        private Task<ServiceAttitudeProbeResult> _serviceAttitudeReadProbeTask;
         private int _lateServiceAttitudeWatchArmed;
         private DateTime _lastServiceAttitudeContinueAt = DateTime.MinValue;
 
@@ -24,18 +27,20 @@ namespace Bot.ChromeNs
         }
 
         /// <summary>
-        /// Handle Qianniu's service-attitude reminder as one single-flight transaction.
-        /// Production evidence from 1.1.1189 proved that abandoning a side-effectful UIA Invoke
-        /// behind Task.WhenAny can create a ghost send: the caller records failure while the
-        /// abandoned worker later clicks "继续发送". Therefore detection, buyer proof and the
-        /// side effect are serialized here, and once the Invoke starts it is always awaited to
-        /// completion. No second UIA scan may overlap this transaction.
+        /// Handle Qianniu's service-attitude reminder without letting a read-only UIA traversal
+        /// block the send mainline. Read detection is cached single-flight and bounded; if one
+        /// traversal stalls, later sends reuse that same worker instead of starting more scans and
+        /// continue after the bounded wait. Only an actually detected reminder enters the action
+        /// gate. Once the side-effectful Invoke starts it is still always awaited to completion so
+        /// the 1.1.1189 ghost-click regression cannot return.
         /// </summary>
         private async Task<bool> StopIfPlatformSendBlockedAsync(string buyer, string stage)
         {
-            // Never queue another expensive UIA traversal behind an in-flight one. The owner of
-            // the gate is already responsible for the currently visible reminder; send/late-watch
-            // callers may continue their own non-UIA confirmation path without creating scan piles.
+            var detected = await GetBoundedServiceAttitudeReadProbeAsync(buyer, stage).ConfigureAwait(false);
+            if (detected == null || !detected.Detected) return false;
+
+            // Only the side-effect transaction is serialized. A second caller never queues behind
+            // an Invoke already in progress; the owner is responsible for the visible reminder.
             if (!await _serviceAttitudeProbeGate.WaitAsync(0).ConfigureAwait(false))
             {
                 Log.Info("千牛服务态度提醒单飞探测已在执行，跳过并发UIA扫描: seller=" + SellerNick
@@ -45,21 +50,6 @@ namespace Bot.ChromeNs
 
             try
             {
-                ServiceAttitudeProbeResult detected;
-                try
-                {
-                    // Read-only scan is awaited to completion. The implementation first checks
-                    // top-level reminder titles and only falls back to the verified seller root,
-                    // avoiding the old all-window/all-descendant repeated scans.
-                    detected = await Task.Run(() => ProbeServiceAttitudeReminder(false)).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    Log.Info("千牛平台发送拦截探测失败，保持原发送状态: " + ex.Message);
-                    return false;
-                }
-                if (detected == null || !detected.Detected) return false;
-
                 if (!await VerifyCurrentBuyerWithoutNavigationAsync(
                     buyer, "服务态度提醒继续发送前会话确认").ConfigureAwait(false))
                 {
@@ -95,9 +85,9 @@ namespace Bot.ChromeNs
                 ServiceAttitudeProbeResult result;
                 try
                 {
-                    // IMPORTANT: there is intentionally no Task.WhenAny timeout here. Once this
-                    // side-effectful UIA Invoke starts, the caller must observe its real outcome;
-                    // otherwise an abandoned worker can click later after the send was marked failed.
+                    // IMPORTANT: never race this side effect against Task.Delay/WhenAny. Once UIA
+                    // Invoke starts, the caller observes its real outcome; otherwise an abandoned
+                    // worker can click later after the send has already been marked failed.
                     result = await Task.Run(() => InvokeServiceAttitudeContinue(detected)).ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -132,12 +122,51 @@ namespace Bot.ChromeNs
             }
         }
 
+        private async Task<ServiceAttitudeProbeResult> GetBoundedServiceAttitudeReadProbeAsync(
+            string buyer,
+            string stage)
+        {
+            Task<ServiceAttitudeProbeResult> probe;
+            lock (_serviceAttitudeReadProbeSync)
+            {
+                // A timed-out read probe is harmless but may still be blocked inside Windows UIA.
+                // Reuse it until it really completes so no caller can pile another expensive tree
+                // traversal on top of the stuck one.
+                if (_serviceAttitudeReadProbeTask == null || _serviceAttitudeReadProbeTask.IsCompleted)
+                {
+                    _serviceAttitudeReadProbeTask = Task.Run(() => ProbeServiceAttitudeReminder(false));
+                }
+                probe = _serviceAttitudeReadProbeTask;
+            }
+
+            var winner = await Task.WhenAny(
+                probe,
+                Task.Delay(PlatformReadProbeTimeoutMs)).ConfigureAwait(false);
+            if (winner != probe)
+            {
+                Log.Info("千牛服务态度提醒只读探测超时，已放行发送主链且复用同一后台探测避免UIA堆积: seller="
+                    + SellerNick + ", buyer=" + buyer + ", stage=" + stage
+                    + ", timeoutMs=" + PlatformReadProbeTimeoutMs);
+                return null;
+            }
+
+            try
+            {
+                return await probe.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Log.Info("千牛平台发送拦截只读探测失败，保持原发送状态: " + ex.Message);
+                return null;
+            }
+        }
+
         /// <summary>
         /// A verified send action followed by a stable empty composer is strong evidence that
         /// Qianniu accepted this exact Bot-owned draft. Live seller echo is still preferred, but a
         /// missing/delayed echo must never cause the same text to be written and sent a second time.
-        /// Platform-reminder scans are deliberately bounded by count (not abandoned by timeout):
-        /// at most one early check, one stable-clear check, and one late single-flight check.
+        /// Platform-reminder scans are deliberately bounded by count: at most one early check, one
+        /// stable-clear check, and one late single-flight check. Each read check is time-bounded.
         /// </summary>
         private async Task<bool> WaitForTextSubmissionAcceptedAsync(
             string buyer,
@@ -186,8 +215,6 @@ namespace Bot.ChromeNs
                             method + "稳定清空确认", 650).ConfigureAwait(false);
                         if (stable.Completed && stable.IsEmpty)
                         {
-                            // One final platform check at the stable-clear boundary. It is serialized
-                            // and fully awaited, so no orphan UIA worker can act after this method exits.
                             if (!stablePlatformProbeDone)
                             {
                                 stablePlatformProbeDone = true;
@@ -224,7 +251,6 @@ namespace Bot.ChromeNs
                     && (DateTime.Now - sendStart).TotalMilliseconds >= 350)
                 {
                     earlyPlatformProbeDone = true;
-                    // Some Qianniu builds keep the draft visible while the reminder is showing.
                     if (await StopIfPlatformSendBlockedAsync(
                         buyer, method + "发送动作后平台确认").ConfigureAwait(false))
                     {
@@ -249,11 +275,6 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        /// <summary>
-        /// A reminder can animate in shortly after Qianniu consumes the composer. One delayed
-        /// single-flight check is sufficient as a safety net. The former 8 x 260/320ms loop was
-        /// removed because timed-out UIA workers overlapped and delayed the next order segment.
-        /// </summary>
         private void ArmLateServiceAttitudeContinuationWatch(string buyer, string method)
         {
             if (Interlocked.CompareExchange(ref _lateServiceAttitudeWatchArmed, 1, 0) != 0)
@@ -282,12 +303,6 @@ namespace Bot.ChromeNs
             });
         }
 
-        /// <summary>
-        /// Locate the reminder without performing a side effect. Fast path checks the names of
-        /// application top-level windows first; the screenshot/production reminder is a titled
-        /// modal. Only if no titled reminder is found do we scan the already verified seller root.
-        /// This avoids repeatedly traversing every Qianniu top-level subtree.
-        /// </summary>
         private ServiceAttitudeProbeResult ProbeServiceAttitudeReminder(bool clickContinue)
         {
             var result = new ServiceAttitudeProbeResult();
@@ -352,8 +367,6 @@ namespace Bot.ChromeNs
                         StringComparison.Ordinal)));
                 }
 
-                // De-duplicate the same UIA object if the verified seller root and modal root happen
-                // to expose it through equivalent wrappers.
                 continueButtons = continueButtons.Distinct().ToList();
                 if (continueButtons.Count != 1)
                 {
