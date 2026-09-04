@@ -36,8 +36,10 @@ def test_cdp_execute_requests_are_serialized_and_timeout_invalidates_session():
     source = text("src/Bot/ChromeNs/CDPClient.cs")
 
     assert "SemaphoreSlim _executeGate" in source
-    assert "await _executeGate.WaitAsync().ConfigureAwait(false)" in source
-    assert "_executeGate.Release()" in source
+    assert "ExecuteGateWaitTimeoutMs = 1500" in source
+    assert "await _executeGate.WaitAsync(ExecuteGateWaitTimeoutMs).ConfigureAwait(false)" in source
+    assert "CDP调用等待串行门超时，已快速失败避免排队放大" in source
+    assert "if (gateAcquired) _executeGate.Release();" in source
     assert "CDP调用超时" in source
     assert "InvalidateSession(\"调用超时:" in source
 
