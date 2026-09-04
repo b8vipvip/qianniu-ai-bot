@@ -6,7 +6,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +15,8 @@ BOOTSTRAP_PATH = ROOT / "services" / "api-control-plane" / "bootstrap.py"
 DOCKERFILE_PATH = ROOT / "services" / "api-control-plane" / "Dockerfile"
 WEB_JS_PATH = ROOT / "services" / "api-control-plane" / "static" / "bot-web-auto-reply-rules.js"
 LOADER_JS_PATH = ROOT / "services" / "api-control-plane" / "static" / "bot-web-bot-enabled.js"
+HAS_FASTAPI = importlib.util.find_spec("fastapi") is not None
+needs_server_deps = pytest.mark.skipif(not HAS_FASTAPI, reason="server dependencies are not installed in Windows static CI")
 
 
 def load_module():
@@ -77,6 +78,7 @@ def local_rules(module, **changes):
     return data
 
 
+@needs_server_deps
 def test_first_runtime_sync_adopts_windows_rules_without_overwrite(tmp_path):
     module = load_module()
     prepare(module, tmp_path)
@@ -102,6 +104,7 @@ def test_first_runtime_sync_adopts_windows_rules_without_overwrite(tmp_path):
     assert snapshot["current"] == current
 
 
+@needs_server_deps
 def test_web_change_waits_for_actual_windows_confirmation(tmp_path):
     module = load_module()
     prepare(module, tmp_path)
@@ -141,6 +144,7 @@ def test_web_change_waits_for_actual_windows_confirmation(tmp_path):
     assert module._snapshot(1)["applied_revision"] == 2
 
 
+@needs_server_deps
 def test_rule_state_is_isolated_by_client_id(tmp_path):
     module = load_module()
     prepare(module, tmp_path)
@@ -152,7 +156,10 @@ def test_rule_state_is_isolated_by_client_id(tmp_path):
     assert module._snapshot(2)["desired"]["manual_handoff_keywords"] == "店铺二"
 
 
+@needs_server_deps
 def test_validation_rejects_bad_time_and_empty_fixed_reply(tmp_path):
+    from fastapi import HTTPException
+
     module = load_module()
     prepare(module, tmp_path)
     with pytest.raises(HTTPException) as bad_time:
