@@ -14,6 +14,7 @@ namespace Bot.ChromeNs
     {
         private const int FollowUpWindowSeconds = 45;
         private const int CaptionWindowSeconds = 15;
+        private const int SourceClockSkewToleranceSeconds = 15;
 
         private sealed class RecentVisionContext
         {
@@ -132,6 +133,16 @@ namespace Bot.ChromeNs
                 .DefaultIfEmpty(DateTime.Now)
                 .Max();
             var elapsed = latestAt - recent.ObservedAt;
+            if (elapsed < TimeSpan.Zero
+                && elapsed >= TimeSpan.FromSeconds(-SourceClockSkewToleranceSeconds))
+            {
+                // 千牛的原始消息时间与本机接收时间并不保证完全单调。日志中已经出现约 -7.5s
+                // 的轻微逆序；这不是“图片过期”，而是来源时钟/回灌顺序偏差。小幅负值按同一时刻处理。
+                Log.Info("最近图片上下文检测到可容忍的消息时间逆序，按同轮续问处理: seller=" + burst.SellerNick
+                    + ", buyer=" + burst.BuyerNick
+                    + ", elapsedMs=" + (long)elapsed.TotalMilliseconds);
+                elapsed = TimeSpan.Zero;
+            }
             if (elapsed < TimeSpan.Zero || elapsed > TimeSpan.FromSeconds(FollowUpWindowSeconds))
             {
                 RecentVisionContext expired;
@@ -168,7 +179,10 @@ namespace Bot.ChromeNs
                 burst.BuyerNick,
                 items,
                 burst.Version);
-            var combinedLease = new BuyerMessageBurstLease(combinedBurst, () => lease.IsCurrent);
+            var combinedLease = new BuyerMessageBurstLease(
+                combinedBurst,
+                () => lease.IsCurrent,
+                ResolveSessionAgent(lease));
 
             Log.Info("图片指代续问已重新绑定最近图片: seller=" + burst.SellerNick
                 + ", buyer=" + burst.BuyerNick
@@ -176,6 +190,23 @@ namespace Bot.ChromeNs
                 + ", reason=" + (referential ? "图片指代" : "图片说明文字")
                 + ", question=" + SafeLog(question, 100));
             await next(combinedLease);
+        }
+
+        private static BuyerSessionAgent ResolveSessionAgent(BuyerMessageBurstLease lease)
+        {
+            if (lease == null) return null;
+            try
+            {
+                var field = typeof(BuyerMessageBurstLease).GetField(
+                    "_sessionAgent",
+                    BindingFlags.Instance | BindingFlags.NonPublic);
+                return field == null ? null : field.GetValue(lease) as BuyerSessionAgent;
+            }
+            catch (Exception ex)
+            {
+                Log.ErrorWithMaxCount("图片续问恢复generation取消令牌失败，将退回IsCurrent保护: " + ex.Message, 10);
+                return null;
+            }
         }
 
         internal static bool IsVisionReferentialFollowUp(string text)
@@ -267,7 +298,9 @@ namespace Bot.ChromeNs
                 SafetyDecision = source.SafetyDecision,
                 VisionDecision = source.VisionDecision,
                 SortValue = source.SortValue,
-                ReceivedAt = source.ReceivedAt
+                ReceivedAt = source.ReceivedAt,
+                SessionGeneration = source.SessionGeneration,
+                SemanticContinuationContext = source.SemanticContinuationContext
             };
         }
 
