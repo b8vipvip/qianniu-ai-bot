@@ -9,6 +9,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "services" / "api-control-plane" / "bot_web_settings_ack.py"
 BOOTSTRAP_PATH = ROOT / "services" / "api-control-plane" / "bootstrap.py"
+DOCKERFILE_PATH = ROOT / "services" / "api-control-plane" / "Dockerfile"
 
 
 def load_module():
@@ -112,3 +113,9 @@ def test_bootstrap_installs_ack_after_console_and_initializes_table():
     assert "import bot_web_settings_ack" in text
     assert "bot_web_console.install(control_plane)\nbot_web_settings_ack.install(control_plane, bot_web_console)" in text
     assert "bot_web_console.init_bot_web_db()\n    bot_web_settings_ack.init_db()" in text
+
+
+def test_api_control_plane_image_packages_ack_module_imported_by_bootstrap():
+    dockerfile = DOCKERFILE_PATH.read_text(encoding="utf-8-sig")
+    copy_lines = [line for line in dockerfile.splitlines() if line.startswith("COPY ")]
+    assert any("bot_web_settings_ack.py" in line and "bootstrap.py" in line for line in copy_lines)
