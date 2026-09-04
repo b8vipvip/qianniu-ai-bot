@@ -43,11 +43,12 @@ DEFAULT_RULE_SETTINGS: Dict[str, Any] = {
     "off_hours_fixed_text": "亲，人工客服当前已下班，工作时间为每天 {工作时间}。您的问题已记录，请在上班时间联系或等待人工处理。",
     # These defaults are only placeholders before the Windows client adopts its real
     # local values. Existing rows are upgraded by field adoption, never by overwriting
-    # the client with these values.
+    # the client with these values. The timeout placeholder matches the current Windows
+    # runtime clamp: raw values <= 3 seconds are effectively 3 seconds.
     "order_placed_reply_enabled": False,
     "order_placed_reply_mode": "固定预设答案",
     "order_placed_reply_text": "",
-    "order_placed_api_timeout_seconds": 10,
+    "order_placed_api_timeout_seconds": 3,
     "order_placed_reply_delay_seconds": 0,
 }
 
