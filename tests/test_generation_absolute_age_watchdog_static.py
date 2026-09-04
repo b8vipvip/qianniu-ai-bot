@@ -25,7 +25,9 @@ def test_generation_watchdog_tracks_each_generation_and_hard_cancels_late_work()
     assert "BuyerSessionEventKind.BuyerActionAccepted" in source
     assert "Agent.TryGetGenerationState" in source
     assert "state == BuyerSessionAgentState.Generating" in source
-    assert "GenerationGeneratingSinceUtc.TryAdd(watchKey, now)" in source
+    assert "ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations" in source
+    assert "WatchedGenerations.GetOrAdd" in source
+    assert "foreach (var pair in WatchedGenerations.ToArray())" in source
     assert "elapsed.TotalSeconds <= AbsoluteGenerationAgeSeconds" in source
     assert '"absolute_generation_age_exceeded"' in source
     assert "Agent.Cancel(" in source
@@ -41,4 +43,4 @@ def test_generation_watchdog_is_not_triggered_by_human_reply_and_drops_terminal_
     assert "state == BuyerSessionAgentState.Completed" in source
     assert "state == BuyerSessionAgentState.Cancelled" in source
     assert "state == BuyerSessionAgentState.Failed" in source
-    assert "GenerationGeneratingSinceUtc.TryRemove" in source
+    assert "WatchedGenerations.TryRemove" in source
