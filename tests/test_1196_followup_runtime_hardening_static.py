@@ -43,12 +43,14 @@ def test_owned_draft_forget_helper_clears_state_without_self_recursion():
     assert "LatestSetTextTime = DateTime.MinValue;" in helper
 
 
-def test_generation_deadline_watch_is_not_tied_to_recent_event_ring():
+def test_generation_deadline_watch_is_not_tied_to_recent_event_ring_or_transient_generating_sample():
     bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
     assert "ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations" in bridge
     assert "foreach (var pair in WatchedGenerations.ToArray())" in bridge
     assert "WatchedGenerations.GetOrAdd" in bridge
-    assert "generation lifetime is not coupled to a diagnostic ring" in bridge
+    assert "BuyerActionAccepted" in bridge
+    assert "one end-to-end generation lifetime" in bridge
+    assert "state == BuyerSessionAgentState.Generating" not in bridge
     assert "Agent.Cancel(" in bridge
     assert "absolute_generation_age_exceeded" in bridge
 
