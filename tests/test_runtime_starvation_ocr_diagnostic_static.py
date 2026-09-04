@@ -42,9 +42,15 @@ def test_diagnostic_json_paths_do_not_use_first_last_brace_extraction():
     assert "LastIndexOf('}')" not in slow
 
 
-def test_handoff_docs_no_longer_present_2026_08_send_todos_as_pending():
+def test_handoff_docs_track_current_runtime_contract_instead_of_2026_08_pending_todos():
     incident = read("docs/QIANNIU_SEND_RELIABILITY_INCIDENTS.md")
     progress = read("docs/QIANNIU_CHAT_AUTOMATION_PROGRESS.md")
-    assert "5.1 发送状态机：已完成" in incident
-    assert "1.1.1139 新事故" in incident
-    assert "50 秒 deadline 实际延迟数分钟" in progress
+    handoff = read("docs/PROJECT_HANDOFF_CONTEXT.md")
+
+    assert "bot-v1.1.1213" in incident
+    assert "bot-v1.1.1139" in incident  # retained as historical incident evidence, not a pending TODO
+    assert "BuyerActionAccepted" in progress
+    assert "55 秒绝对期限覆盖" in progress
+    assert "1.5 秒" in progress and "9 秒" in progress
+    assert "当前没有开放 PR" in handoff
+    assert "下一步应使用 `bot-v1.1.1213` 真实运行日志继续挖掘" in handoff
