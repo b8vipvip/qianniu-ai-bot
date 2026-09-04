@@ -15,6 +15,7 @@ import bot_web_bot_enabled
 import bot_web_bot_qa
 import bot_web_console
 import bot_web_conversation_knowledge
+import bot_web_settings_ack
 import chat2api_runtime_guard
 import client_data_backup
 import console_cache_guard
@@ -56,6 +57,7 @@ github_vless_proxy.install(control_plane)
 control_plane.app.include_router(bot_update_cache.router)
 control_plane.app.include_router(bot_update_push.router)
 bot_web_console.install(control_plane)
+bot_web_settings_ack.install(control_plane, bot_web_console)
 bot_client_shop_binding.install(control_plane)
 bot_web_bot_enabled.install(control_plane)
 bot_web_admin.install(control_plane)
@@ -76,6 +78,7 @@ def initialize_control_plane_extensions() -> None:
     wecom_settings.init_wecom_settings_db()
     recharge_status_query.init_recharge_query_db()
     bot_web_console.init_bot_web_db()
+    bot_web_settings_ack.init_db()
     bot_client_shop_binding.init_db()
     bot_web_bot_enabled.init_db()
     bot_web_conversation_knowledge.init_db()
