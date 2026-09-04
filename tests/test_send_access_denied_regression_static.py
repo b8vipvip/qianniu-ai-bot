@@ -23,20 +23,24 @@ def test_qianniu_helper_pid_is_only_trusted_under_exact_verified_seller_root():
 
     # The seller desk root remains the trust anchor. A helper PID can only be used after the
     # verified root HWND still belongs to the bound seller process and the point target resolves
-    # back to that exact root. This prevents the historical regression without permitting an
-    # arbitrary cross-process coordinate send.
+    # back to that exact root. An external overlay may be bypassed only by resolving the same
+    # verified safe point from inside expectedRoot and re-proving that exact root.
     assert "GetWindowThreadProcessId(expectedRoot, out rootPid)" in text
     assert "rootPid == 0 || rootPid != expectedPid" in text
-    assert "var root = GetAncestor(target, GaRoot);" in text
+    assert "GetAncestor(target, GaRoot)" in text
+    assert "ResolveTargetInsideVerifiedSellerRoot" in text
+    assert "constrainedRoot == expectedRoot" in text
     assert "if (root != expectedRoot)" in text
     assert "if (targetPid != expectedPid)" in text
     assert "HWND安全发送已验证千牛辅助进程子窗口" in text
 
     root_owner = text.index("GetWindowThreadProcessId(expectedRoot, out rootPid)")
-    root_match = text.index("if (root != expectedRoot)", root_owner)
+    target_root = text.index("GetAncestor(target, GaRoot)", root_owner)
+    constrained = text.index("ResolveTargetInsideVerifiedSellerRoot(expectedRoot, screenPoint)", target_root)
+    root_match = text.index("if (root != expectedRoot)", constrained)
     helper_accept = text.index("if (targetPid != expectedPid)", root_match)
     post_message = text.index("PostMessage(target, WmLButtonDown", helper_accept)
-    assert root_owner < root_match < helper_accept < post_message
+    assert root_owner < target_root < constrained < root_match < helper_accept < post_message
 
 
 def test_safe_uia_main_action_runs_before_legacy_physical_coordinate_fallback():
