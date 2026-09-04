@@ -19,7 +19,7 @@ namespace Bot.ChromeNs
 {
     internal static class BuyerStreamingReplyPipeline
     {
-        internal const int TotalAiBudgetSeconds = 50;
+        internal const int TotalAiBudgetSeconds = 40;
         private static readonly ConcurrentDictionary<int, bool> PatchedCoordinators =
             new ConcurrentDictionary<int, bool>();
         private static Timer _patchTimer;
@@ -400,6 +400,14 @@ namespace Bot.ChromeNs
 
     internal static class StreamingBuyerAnswerService
     {
+        // Keep the provider pipeline well inside BuyerSessionAgent's 55-second absolute-age watchdog.
+        // The stream phase has its own budget so multiple endpoints can never consume the entire
+        // generation lifetime and starve the structured fallback.
+        private const int StreamPhaseBudgetSeconds = 20;
+        private const int StreamAttemptDefaultSeconds = 15;
+        private const int StreamAttemptMaxSeconds = 18;
+        private const int StructuredFallbackSeconds = 15;
+
         private sealed class StreamResult
         {
             public bool Success;
@@ -587,6 +595,23 @@ namespace Bot.ChromeNs
             var answer = await StreamMessagesAsync(messages, token, partial);
             if (string.IsNullOrWhiteSpace(answer))
             {
+                if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
+                    && best != null
+                    && best.Entry != null)
+                {
+                    var safeFallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
+                    KnowledgeLearningService.RegisterAnswerSource(
+                        seller, buyer, question, safeFallback, "智能路由-AI失败离线安全兜底");
+                    MessageProcessingTraceService.RecordKnowledgeDecision(
+                        seller,
+                        buyer,
+                        "AI接口失败，使用安全离线知识兜底",
+                        "knowledgeId=" + best.Entry.Id + "；route=" + plan.Route,
+                        0);
+                    Log.Info("Smart Reply AI失败后使用安全离线知识兜底: buyer=" + buyer
+                        + ", knowledgeId=" + best.Entry.Id);
+                    return safeFallback;
+                }
                 return "错误：所有AI接口均未返回有效答案。";
             }
             answer = ReplyTranscriptSanitizer.Sanitize(answer);
@@ -616,34 +641,46 @@ namespace Bot.ChromeNs
         {
             var endpoints = AiEndpointStore.GetEnabledEndpoints();
             var errors = new List<string>();
-            foreach (var endpoint in endpoints)
+            using (var streamPhaseCts = CancellationTokenSource.CreateLinkedTokenSource(token))
             {
-                token.ThrowIfCancellationRequested();
-                var result = await StreamOneAsync(endpoint, messages, token, partial);
-                BotRuntimeStats.RecordAiCall(
-                    endpoint,
-                    result.InputTokens,
-                    result.OutputTokens,
-                    result.Success,
-                    result.LatencyMs,
-                    result.Success ? "流式成功" : result.Error);
-                endpoint.LastLatencyMs = result.LatencyMs;
-                endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
-                if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                streamPhaseCts.CancelAfter(TimeSpan.FromSeconds(StreamPhaseBudgetSeconds));
+                try
                 {
-                    var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
-                    if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
-                    errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
-                    continue;
+                    foreach (var endpoint in endpoints)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var result = await StreamOneAsync(endpoint, messages, streamPhaseCts.Token, partial);
+                        BotRuntimeStats.RecordAiCall(
+                            endpoint,
+                            result.InputTokens,
+                            result.OutputTokens,
+                            result.Success,
+                            result.LatencyMs,
+                            result.Success ? "流式成功" : result.Error);
+                        endpoint.LastLatencyMs = result.LatencyMs;
+                        endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
+                        if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                        {
+                            var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
+                            if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                            errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
+                            continue;
+                        }
+                        errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
+                    }
                 }
-                errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
+                catch (OperationCanceledException)
+                {
+                    if (token.IsCancellationRequested) throw;
+                    errors.Add("流式阶段达到" + StreamPhaseBudgetSeconds + "秒预算，提前进入非流式兜底");
+                }
             }
 
             token.ThrowIfCancellationRequested();
             try
             {
                 var fallback = await Task.Run(
-                    () => MyOpenAI.CallStructuredChat(messages, 220, 0.15, 30, token),
+                    () => MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token),
                     token);
                 if (fallback != null && fallback.Success && !string.IsNullOrWhiteSpace(fallback.Answer))
                 {
@@ -683,8 +720,8 @@ namespace Bot.ChromeNs
             };
             var payloadText = payload.ToString(Newtonsoft.Json.Formatting.None);
             var timeoutSeconds = endpoint.TimeoutSeconds <= 0
-                ? 30
-                : Math.Max(8, Math.Min(35, endpoint.TimeoutSeconds));
+                ? StreamAttemptDefaultSeconds
+                : Math.Max(8, Math.Min(StreamAttemptMaxSeconds, endpoint.TimeoutSeconds));
 
             try
             {

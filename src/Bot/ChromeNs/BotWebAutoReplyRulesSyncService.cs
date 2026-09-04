@@ -28,6 +28,10 @@ namespace Bot.ChromeNs
     internal static class BotWebAutoReplyRulesSyncService
     {
         private const int SyncIntervalSeconds = 5;
+        private const int UnsupportedEndpointBackoffMinutes = 15;
+        private const int AuthFailureBackoffMinutes = 5;
+        private const int TransientBackoffBaseSeconds = 15;
+        private const int TransientBackoffMaxSeconds = 300;
         private const string AiOffHoursMode = "AI告知下班时间";
         private const string FixedOffHoursMode = "固定预设答案";
 
@@ -36,6 +40,8 @@ namespace Bot.ChromeNs
             public ShopContext Shop;
             public DateTime NextSyncUtc = DateTime.MinValue;
             public int Syncing;
+            public int ConsecutiveFailures;
+            public bool UnsupportedEndpointLogged;
             public string LastApplyError = string.Empty;
         }
 
@@ -95,8 +101,10 @@ namespace Bot.ChromeNs
                 try { await SyncOnceAsync(state); }
                 catch (Exception ex)
                 {
+                    var delay = ScheduleTransientBackoff(state);
                     using (ShopSettingsScope.Enter(state.Shop))
-                        Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步失败：" + Safe(ex.Message, 260), 20);
+                        Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步暂时失败，已退避重试："
+                            + Safe(ex.Message, 260) + "，retrySeconds=" + (int)delay.TotalSeconds, 20);
                 }
                 finally { Interlocked.Exchange(ref state.Syncing, 0); }
             });
@@ -137,7 +145,39 @@ namespace Bot.ChromeNs
                     {
                         var body = await response.Content.ReadAsStringAsync();
                         if (!response.IsSuccessStatusCode)
-                            throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
+                        {
+                            var code = (int)response.StatusCode;
+                            if (response.StatusCode == HttpStatusCode.NotFound
+                                || response.StatusCode == HttpStatusCode.MethodNotAllowed)
+                            {
+                                state.ConsecutiveFailures = 0;
+                                state.NextSyncUtc = DateTime.UtcNow.AddMinutes(UnsupportedEndpointBackoffMinutes);
+                                if (!state.UnsupportedEndpointLogged)
+                                {
+                                    state.UnsupportedEndpointLogged = true;
+                                    Log.Info("本店 Bot Web自动回复规则同步端点尚未部署，保留Windows本地规则并降频探测：HTTP "
+                                        + code + "，retryMinutes=" + UnsupportedEndpointBackoffMinutes);
+                                }
+                                return;
+                            }
+                            if (response.StatusCode == HttpStatusCode.Unauthorized
+                                || response.StatusCode == HttpStatusCode.Forbidden)
+                            {
+                                state.ConsecutiveFailures++;
+                                state.NextSyncUtc = DateTime.UtcNow.AddMinutes(AuthFailureBackoffMinutes);
+                                Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步鉴权失败，保留本地规则并退避：HTTP "
+                                    + code + " " + Safe(body, 300) + "，retryMinutes=" + AuthFailureBackoffMinutes, 10);
+                                return;
+                            }
+
+                            var delay = ScheduleTransientBackoff(state);
+                            Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步服务暂不可用，保留本地规则并退避：HTTP "
+                                + code + " " + Safe(body, 300) + "，retrySeconds=" + (int)delay.TotalSeconds, 20);
+                            return;
+                        }
+                        state.ConsecutiveFailures = 0;
+                        state.UnsupportedEndpointLogged = false;
+                        state.NextSyncUtc = DateTime.UtcNow.AddSeconds(SyncIntervalSeconds);
                         var root = JObject.Parse(body);
                         var desired = root["desired_settings"] as JObject;
                         if (desired == null) return;
@@ -154,6 +194,18 @@ namespace Bot.ChromeNs
                     }
                 }
             }
+        }
+
+        private static TimeSpan ScheduleTransientBackoff(ShopRuleState state)
+        {
+            state.ConsecutiveFailures = Math.Min(16, state.ConsecutiveFailures + 1);
+            var exponent = Math.Min(5, Math.Max(0, state.ConsecutiveFailures - 1));
+            var seconds = Math.Min(
+                TransientBackoffMaxSeconds,
+                TransientBackoffBaseSeconds * (1 << exponent));
+            var delay = TimeSpan.FromSeconds(seconds);
+            state.NextSyncUtc = DateTime.UtcNow.Add(delay);
+            return delay;
         }
 
         private static JObject BuildCurrentSettings()
