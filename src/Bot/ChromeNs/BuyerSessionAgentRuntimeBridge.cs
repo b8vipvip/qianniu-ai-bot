@@ -29,7 +29,7 @@ namespace Bot.ChromeNs
             public string Seller { get; set; }
             public string Buyer { get; set; }
             public long Generation { get; set; }
-            public DateTime GeneratingSinceUtc { get; set; }
+            public DateTime AcceptedAtUtc { get; set; }
         }
 
         private static readonly Lazy<BuyerSessionAgent> AgentHolder =
@@ -60,7 +60,7 @@ namespace Bot.ChromeNs
                 Name = "Qianniu.GenerationDeadlineWatchdog"
             };
             _deadlineWatchdogThread.Start();
-            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线；人工回复仅记录用于学习；generation绝对年龄看门狗=55s。" );
+            Log.Info("BuyerSessionAgent统一事件桥已启动：原始买家/卖家/订单/撤回/系统消息进入同一seller+buyer时间线；人工回复仅记录用于学习；generation绝对年龄看门狗=55s（从买家动作接受时起计时）。" );
         }
 
         private static void GenerationDeadlineWatchdogLoop()
@@ -83,11 +83,13 @@ namespace Bot.ChromeNs
         {
             var now = DateTime.UtcNow;
 
-            // First discover generations while their BuyerActionAccepted event is still in the
-            // bounded recent-event ring. Once a generation enters Generating it gets its own
-            // persistent watch record below; therefore a busy seller/buyer timeline can no longer
-            // push the accepted event out of the 64-event ring and accidentally disable the 55s
-            // absolute deadline.
+            // Discover every still-active actionable buyer generation as soon as its accepted event
+            // appears in the bounded recent-event ring. The previous implementation waited until a
+            // 250ms sample happened to observe the transient Generating state. Fast local/V2 paths
+            // can advance Generating -> Ready inside that sampling window, so they could completely
+            // miss registration and escape the 55s deadline. The absolute deadline is now anchored
+            // to BuyerActionAccepted and therefore covers Coalescing/Processing/Generating/Ready/
+            // Sending/Waiting as one end-to-end generation lifetime.
             foreach (var pair in WatchedSessions.ToArray())
             {
                 var watched = pair.Value;
@@ -101,14 +103,15 @@ namespace Bot.ChromeNs
 
                 var snapshot = Agent.GetSnapshot(watched.Seller, watched.Buyer);
                 if (snapshot == null || snapshot.RecentEvents == null) continue;
-                foreach (var generation in snapshot.RecentEvents
+                foreach (var acceptedEvent in snapshot.RecentEvents
                     .Where(x => x != null
                         && x.Kind == BuyerSessionEventKind.BuyerActionAccepted
                         && x.Generation > 0)
-                    .Select(x => x.Generation)
-                    .Distinct()
+                    .GroupBy(x => x.Generation)
+                    .Select(x => x.OrderBy(y => y.ObservedAt).First())
                     .ToArray())
                 {
+                    var generation = acceptedEvent.Generation;
                     BuyerSessionAgentState state;
                     var watchKey = BuildGenerationWatchKey(watched.Seller, watched.Buyer, generation);
                     if (!Agent.TryGetGenerationState(watched.Seller, watched.Buyer, generation, out state))
@@ -118,32 +121,31 @@ namespace Bot.ChromeNs
                         continue;
                     }
 
-                    if (state == BuyerSessionAgentState.Generating)
-                    {
-                        WatchedGenerations.GetOrAdd(
-                            watchKey,
-                            _ => new WatchedGeneration
-                            {
-                                Seller = watched.Seller,
-                                Buyer = watched.Buyer,
-                                Generation = generation,
-                                GeneratingSinceUtc = now
-                            });
-                    }
-
                     if (state == BuyerSessionAgentState.Completed
                         || state == BuyerSessionAgentState.Cancelled
                         || state == BuyerSessionAgentState.Failed)
                     {
                         WatchedGeneration ignored;
                         WatchedGenerations.TryRemove(watchKey, out ignored);
+                        continue;
                     }
+
+                    var acceptedAtUtc = ToUtcSafe(acceptedEvent.ObservedAt, now);
+                    WatchedGenerations.GetOrAdd(
+                        watchKey,
+                        _ => new WatchedGeneration
+                        {
+                            Seller = watched.Seller,
+                            Buyer = watched.Buyer,
+                            Generation = generation,
+                            AcceptedAtUtc = acceptedAtUtc
+                        });
                 }
             }
 
-            // Sweep the persistent generation registry independently from RecentEvents. This is the
-            // critical part of the watchdog: generation lifetime is not coupled to a diagnostic ring
-            // buffer whose entries can be evicted by duplicate/order/human-reply traffic.
+            // Sweep the persistent generation registry independently from RecentEvents. Once an
+            // actionable generation is registered, later duplicate/order/human-reply traffic can no
+            // longer evict its diagnostic event and disable the absolute lifetime deadline.
             foreach (var pair in WatchedGenerations.ToArray())
             {
                 var watched = pair.Value;
@@ -165,7 +167,7 @@ namespace Bot.ChromeNs
                     continue;
                 }
 
-                var elapsed = now - watched.GeneratingSinceUtc;
+                var elapsed = now - watched.AcceptedAtUtc;
                 if (elapsed.TotalSeconds <= AbsoluteGenerationAgeSeconds) continue;
 
                 Agent.Cancel(
@@ -182,6 +184,24 @@ namespace Bot.ChromeNs
                     + ", elapsedMs=" + (long)elapsed.TotalMilliseconds
                     + ", limitSeconds=" + AbsoluteGenerationAgeSeconds,
                     100);
+            }
+        }
+
+        private static DateTime ToUtcSafe(DateTime value, DateTime fallbackUtc)
+        {
+            if (value == default(DateTime)) return fallbackUtc;
+            try
+            {
+                var utc = value.Kind == DateTimeKind.Utc
+                    ? value
+                    : value.ToUniversalTime();
+                // A small source-clock skew must not create a negative generation age. If the
+                // observed timestamp is implausibly in the future, anchor at the watchdog sample.
+                return utc > fallbackUtc.AddSeconds(15) ? fallbackUtc : utc;
+            }
+            catch
+            {
+                return fallbackUtc;
             }
         }
 
