@@ -11,6 +11,8 @@ namespace Bot.ChromeNs
 {
     internal static class KnowledgeEngineV2RuntimeBridge
     {
+        private const int MaxDirectReplyAgeSeconds = 55;
+
         private sealed class V2HandlerWrapper
         {
             private readonly QN _qn;
@@ -88,11 +90,6 @@ namespace Bot.ChromeNs
                     PrepareSeller(seller);
                     var coordinator = coordinatorField.GetValue(qn) as BuyerMessageBurstCoordinator;
                     if (coordinator == null) continue;
-                    // Several runtime features wrap the same handler on independent timers. Looking
-                    // only at current.Target is not idempotent: as soon as another feature becomes
-                    // the outer wrapper, V2 used to wrap the full chain again. VisionFollowUp then
-                    // moved itself outside V2, and the two timers grew an unbounded K(V(K(V(...))))
-                    // chain. Track the coordinator itself so this layer is installed exactly once.
                     if (!PatchedCoordinators.TryAdd(coordinator, 0)) continue;
                     var current = handlerField.GetValue(coordinator) as Func<BuyerMessageBurstLease, Task>;
                     if (current == null)
@@ -206,9 +203,6 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // A buyer message must never pay the cost of first migration/index construction. If the
-            // snapshot is cold (startup, bulk import, delete/disable, explicit rebuild), queue one
-            // background warm and immediately continue the compatibility reply path for this turn.
             if (!KnowledgeEngineV2Service.IsSnapshotReady(burst.SellerNick))
             {
                 QueueWarm(burst.SellerNick);
@@ -241,12 +235,19 @@ namespace Bot.ChromeNs
                 return;
             }
 
+            var detectedAt = burst.Items.Min(x => x.ReceivedAt);
+            if ((DateTime.Now - detectedAt).TotalSeconds > MaxDirectReplyAgeSeconds)
+            {
+                Log.ErrorWithMaxCount(
+                    "Knowledge Engine V2迟到结果超过generation绝对年龄，已丢弃且禁止进入Ready/Sending: buyer="
+                    + burst.BuyerNick + ", generation=" + burst.SessionGeneration
+                    + ", ageMs=" + Math.Max(0, (long)(DateTime.Now - detectedAt).TotalMilliseconds),
+                    50);
+                return;
+            }
+
             var autoSend = Params.Robot.GetIsAutoReply();
 
-            // A direct local decision can finish after the generation watchdog has already made the
-            // turn terminal. Never let that late result resurrect the progress card as Ready or arm
-            // a send watchdog. For auto-send, cross the session-agent stability barrier before any
-            // externally visible answer-ready state is published.
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
             {
                 Log.Info("Knowledge Engine V2迟到结果已丢弃，generation已失效，未进入答案就绪/发送: buyer="
@@ -259,14 +260,14 @@ namespace Bot.ChromeNs
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                 return;
             }
-            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
+            if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested
+                || (DateTime.Now - detectedAt).TotalSeconds > MaxDirectReplyAgeSeconds)
             {
-                Log.Info("Knowledge Engine V2稳定性确认后generation失效，未发布答案: buyer="
+                Log.Info("Knowledge Engine V2稳定性确认后generation失效/超龄，未发布答案: buyer="
                     + burst.BuyerNick + ", generation=" + burst.SessionGeneration);
                 return;
             }
 
-            var detectedAt = burst.Items.Min(x => x.ReceivedAt);
             var ctl = ResponseProgressTracker.BeginAnswer(
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt);
             var answer = BotMessageSuffixService.Apply(burst.SellerNick, decision.Answer);
@@ -301,8 +302,6 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            // The lease was stable before publishing Ready, but re-check immediately before the
-            // side effect as a second barrier against a concurrent hard invalidation.
             if (!lease.IsCurrent || lease.CancellationToken.IsCancellationRequested)
             {
                 if (ctl != null) ctl.SetSendResult(false, "未发送：任务已被人工接管或显式取消");
