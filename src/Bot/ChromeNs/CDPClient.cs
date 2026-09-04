@@ -44,12 +44,15 @@ namespace Bot.ChromeNs
 
         // The execute protocol has no request id, therefore each physical WebSocket session remains
         // strictly single-flight. TaskCompletionSource avoids consuming a ThreadPool worker for the
-        // entire 8-second timeout window while waiting for a WebSocket response.
+        // entire response timeout. The serial gate itself is also bounded: otherwise a burst of
+        // current-buyer/status probes can wait behind several 8s calls and silently turn one send
+        // into a multi-minute operation before its own timeout even starts.
         private readonly ConcurrentQueue<TaskCompletionSource<string>> _requestWaiters =
             new ConcurrentQueue<TaskCompletionSource<string>>();
         private readonly SemaphoreSlim _executeGate = new SemaphoreSlim(1, 1);
         private WebSocketSession _webSocketSession;
         private const int InvokeTimeoutMs = 8000;
+        private const int ExecuteGateWaitTimeoutMs = 1500;
         private int _sessionInvalidated;
         public string Nick { get; set; }
 
@@ -350,9 +353,20 @@ namespace Bot.ChromeNs
 
         private async Task<string> SendExecuteAndWaitCoreAsync(string cmd, string desc)
         {
-            await _executeGate.WaitAsync().ConfigureAwait(false);
+            var gateAcquired = false;
             try
             {
+                gateAcquired = await _executeGate.WaitAsync(ExecuteGateWaitTimeoutMs).ConfigureAwait(false);
+                if (!gateAcquired)
+                {
+                    Log.ErrorWithMaxCount(
+                        "CDP调用等待串行门超时，已快速失败避免排队放大: desc=" + desc
+                        + ", timeoutMs=" + ExecuteGateWaitTimeoutMs
+                        + ", session=" + SessionId,
+                        100);
+                    return string.Empty;
+                }
+
                 if (IsInvalidated || _webSocketSession == null)
                 {
                     Log.Info("CDP调用已跳过：会话已失效，等待注入脚本重连。desc=" + desc + ", session=" + SessionId);
@@ -406,7 +420,7 @@ namespace Bot.ChromeNs
             }
             finally
             {
-                _executeGate.Release();
+                if (gateAcquired) _executeGate.Release();
             }
         }
 
