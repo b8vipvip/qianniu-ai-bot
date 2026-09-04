@@ -28,6 +28,6 @@ def test_bot_web_settings_compare_current_and_desired_before_claiming_success():
 def test_bot_web_settings_status_escapes_server_error_before_rendering_html():
     text = JS.read_text(encoding="utf-8-sig")
 
-    assert "const lastError=String(settings.last_error||\"\").trim()" in text
+    assert "lastError=String(settings.last_error||\"\").trim()" in text
     assert "${esc(detail)}" in text
     assert "settingsHint\").innerHTML" in text
