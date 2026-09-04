@@ -225,7 +225,8 @@ namespace Bot.ChromeNs
             if (desired["order_placed_reply_mode"] != null)
             {
                 var value = NormalizeOrderReplyMode(desired.Value<string>("order_placed_reply_mode"));
-                if (!string.Equals(cfg.OrderPlacedReplyMode, value, StringComparison.Ordinal))
+                var currentValue = NormalizeOrderReplyMode(cfg.OrderPlacedReplyMode);
+                if (!string.Equals(currentValue, value, StringComparison.Ordinal))
                 {
                     cfg.OrderPlacedReplyMode = value;
                     changed = true;
@@ -235,7 +236,8 @@ namespace Bot.ChromeNs
             if (desired["order_placed_api_timeout_seconds"] != null)
             {
                 var value = NormalizeOrderApiTimeout(desired.Value<int>("order_placed_api_timeout_seconds"));
-                if (cfg.OrderPlacedApiTimeoutSeconds != value)
+                var currentValue = NormalizeOrderApiTimeout(cfg.OrderPlacedApiTimeoutSeconds);
+                if (currentValue != value)
                 {
                     cfg.OrderPlacedApiTimeoutSeconds = value;
                     changed = true;
@@ -246,7 +248,7 @@ namespace Bot.ChromeNs
                 var delay = desired.Value<int>("order_placed_reply_delay_seconds");
                 if (delay != 0)
                     throw new InvalidOperationException("下单固定回复当前强制立即发送，delay 必须为 0。" );
-                OrderPlacedReplyDelaySettings.SaveSeconds(0);
+                // Runtime already hard-codes zero seconds. Do not write params.db every sync tick.
             }
 
             // Only the explicitly whitelisted fields above are changed. Notification webhooks,
@@ -302,7 +304,6 @@ namespace Bot.ChromeNs
 
         private static int NormalizeOrderApiTimeout(int value)
         {
-            if (value <= 0) value = 10;
             return Math.Max(3, Math.Min(60, value));
         }
 
