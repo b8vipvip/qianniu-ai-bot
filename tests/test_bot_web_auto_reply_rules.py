@@ -407,7 +407,7 @@ def test_mobile_ui_exposes_safe_order_rules_without_secret_inputs():
         assert forbidden not in lowered
 
     loader = LOADER_JS_PATH.read_text(encoding="utf-8")
-    assert "/static/bot-web-auto-reply-rules.js?v=1" in loader
+    assert "/static/bot-web-auto-reply-rules.js?v=2" in loader
 
 
 def test_server_schema_versions_order_fields_and_never_exposes_order_secrets():
