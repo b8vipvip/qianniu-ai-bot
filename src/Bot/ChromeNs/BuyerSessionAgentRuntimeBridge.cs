@@ -24,13 +24,21 @@ namespace Bot.ChromeNs
             public DateTime LastSeenUtc { get; set; }
         }
 
+        private sealed class WatchedGeneration
+        {
+            public string Seller { get; set; }
+            public string Buyer { get; set; }
+            public long Generation { get; set; }
+            public DateTime GeneratingSinceUtc { get; set; }
+        }
+
         private static readonly Lazy<BuyerSessionAgent> AgentHolder =
             new Lazy<BuyerSessionAgent>(() => new BuyerSessionAgent());
         private static readonly ConcurrentDictionary<QN, byte> Attached = new ConcurrentDictionary<QN, byte>();
         private static readonly ConcurrentDictionary<string, WatchedSession> WatchedSessions =
             new ConcurrentDictionary<string, WatchedSession>(StringComparer.Ordinal);
-        private static readonly ConcurrentDictionary<string, DateTime> GenerationGeneratingSinceUtc =
-            new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations =
+            new ConcurrentDictionary<string, WatchedGeneration>(StringComparer.Ordinal);
         private const int AbsoluteGenerationAgeSeconds = 55;
         private const int DeadlineWatchdogSleepMilliseconds = 250;
         private static Timer _timer;
@@ -74,6 +82,12 @@ namespace Bot.ChromeNs
         private static void SweepGenerationDeadlines()
         {
             var now = DateTime.UtcNow;
+
+            // First discover generations while their BuyerActionAccepted event is still in the
+            // bounded recent-event ring. Once a generation enters Generating it gets its own
+            // persistent watch record below; therefore a busy seller/buyer timeline can no longer
+            // push the accepted event out of the 64-event ring and accidentally disable the 55s
+            // absolute deadline.
             foreach (var pair in WatchedSessions.ToArray())
             {
                 var watched = pair.Value;
@@ -99,45 +113,75 @@ namespace Bot.ChromeNs
                     var watchKey = BuildGenerationWatchKey(watched.Seller, watched.Buyer, generation);
                     if (!Agent.TryGetGenerationState(watched.Seller, watched.Buyer, generation, out state))
                     {
-                        DateTime ignored;
-                        GenerationGeneratingSinceUtc.TryRemove(watchKey, out ignored);
+                        WatchedGeneration ignored;
+                        WatchedGenerations.TryRemove(watchKey, out ignored);
                         continue;
                     }
 
                     if (state == BuyerSessionAgentState.Generating)
                     {
-                        GenerationGeneratingSinceUtc.TryAdd(watchKey, now);
+                        WatchedGenerations.GetOrAdd(
+                            watchKey,
+                            _ => new WatchedGeneration
+                            {
+                                Seller = watched.Seller,
+                                Buyer = watched.Buyer,
+                                Generation = generation,
+                                GeneratingSinceUtc = now
+                            });
                     }
 
                     if (state == BuyerSessionAgentState.Completed
                         || state == BuyerSessionAgentState.Cancelled
                         || state == BuyerSessionAgentState.Failed)
                     {
-                        DateTime ignored;
-                        GenerationGeneratingSinceUtc.TryRemove(watchKey, out ignored);
-                        continue;
+                        WatchedGeneration ignored;
+                        WatchedGenerations.TryRemove(watchKey, out ignored);
                     }
-
-                    DateTime generatingSince;
-                    if (!GenerationGeneratingSinceUtc.TryGetValue(watchKey, out generatingSince)) continue;
-                    var elapsed = now - generatingSince;
-                    if (elapsed.TotalSeconds <= AbsoluteGenerationAgeSeconds) continue;
-
-                    Agent.Cancel(
-                        watched.Seller,
-                        watched.Buyer,
-                        generation,
-                        "absolute_generation_age_exceeded");
-                    DateTime removed;
-                    GenerationGeneratingSinceUtc.TryRemove(watchKey, out removed);
-                    Log.ErrorWithMaxCount(
-                        "generation超过绝对年龄已由独立线程硬取消，禁止迟到结果进入Ready/Sending: seller="
-                        + watched.Seller + ", buyer=" + watched.Buyer
-                        + ", generation=" + generation
-                        + ", elapsedMs=" + (long)elapsed.TotalMilliseconds
-                        + ", limitSeconds=" + AbsoluteGenerationAgeSeconds,
-                        100);
                 }
+            }
+
+            // Sweep the persistent generation registry independently from RecentEvents. This is the
+            // critical part of the watchdog: generation lifetime is not coupled to a diagnostic ring
+            // buffer whose entries can be evicted by duplicate/order/human-reply traffic.
+            foreach (var pair in WatchedGenerations.ToArray())
+            {
+                var watched = pair.Value;
+                if (watched == null)
+                {
+                    WatchedGeneration ignored;
+                    WatchedGenerations.TryRemove(pair.Key, out ignored);
+                    continue;
+                }
+
+                BuyerSessionAgentState state;
+                if (!Agent.TryGetGenerationState(watched.Seller, watched.Buyer, watched.Generation, out state)
+                    || state == BuyerSessionAgentState.Completed
+                    || state == BuyerSessionAgentState.Cancelled
+                    || state == BuyerSessionAgentState.Failed)
+                {
+                    WatchedGeneration ignored;
+                    WatchedGenerations.TryRemove(pair.Key, out ignored);
+                    continue;
+                }
+
+                var elapsed = now - watched.GeneratingSinceUtc;
+                if (elapsed.TotalSeconds <= AbsoluteGenerationAgeSeconds) continue;
+
+                Agent.Cancel(
+                    watched.Seller,
+                    watched.Buyer,
+                    watched.Generation,
+                    "absolute_generation_age_exceeded");
+                WatchedGeneration removed;
+                WatchedGenerations.TryRemove(pair.Key, out removed);
+                Log.ErrorWithMaxCount(
+                    "generation超过绝对年龄已由独立线程硬取消，禁止迟到结果进入Ready/Sending: seller="
+                    + watched.Seller + ", buyer=" + watched.Buyer
+                    + ", generation=" + watched.Generation
+                    + ", elapsedMs=" + (long)elapsed.TotalMilliseconds
+                    + ", limitSeconds=" + AbsoluteGenerationAgeSeconds,
+                    100);
             }
         }
 
