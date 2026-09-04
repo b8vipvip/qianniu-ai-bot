@@ -64,6 +64,18 @@ def test_cdp_execute_gate_wait_is_bounded_before_per_request_timeout():
     assert "private const int InvokeTimeoutMs = 8000;" in cdp
 
 
+def test_active_buyer_confirmation_has_end_to_end_wall_clock_budget():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    method = qn[qn.index("private async Task<bool> EnsureActiveBuyerForSendAsync"):qn.index("public async void SendImageAsync")]
+    assert "ActiveBuyerConfirmDeadlineMs = 9000" in qn
+    assert "ActiveBuyerConfirmPollMs = 250" in qn
+    assert "deadlineUtc = DateTime.UtcNow.AddMilliseconds(ActiveBuyerConfirmDeadlineMs)" in method
+    assert "attempt < 22 && DateTime.UtcNow < deadlineUtc" in method
+    assert "Math.Min(ActiveBuyerConfirmPollMs, remainingMs)" in method
+    assert "无法在会话确认总预算内确认当前会话为目标买家" in method
+    assert "for (var attempt = 0; attempt < 22; attempt++)" not in method
+
+
 def test_vision_followup_keeps_generation_cancellation_and_tolerates_small_clock_skew():
     vision = read("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
     assert "SourceClockSkewToleranceSeconds = 15" in vision
