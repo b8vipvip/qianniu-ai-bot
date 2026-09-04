@@ -41,3 +41,33 @@ def test_owned_draft_forget_helper_clears_state_without_self_recursion():
     assert helper.count("ForgetOwnedDraft();") == 0
     assert "LastSetPlainText = string.Empty;" in helper
     assert "LatestSetTextTime = DateTime.MinValue;" in helper
+
+
+def test_generation_deadline_watch_is_not_tied_to_recent_event_ring():
+    bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    assert "ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations" in bridge
+    assert "foreach (var pair in WatchedGenerations.ToArray())" in bridge
+    assert "WatchedGenerations.GetOrAdd" in bridge
+    assert "generation lifetime is not coupled to a diagnostic ring" in bridge
+    assert "Agent.Cancel(" in bridge
+    assert "absolute_generation_age_exceeded" in bridge
+
+
+def test_cdp_execute_gate_wait_is_bounded_before_per_request_timeout():
+    cdp = read("src/Bot/ChromeNs/CDPClient.cs")
+    assert "private const int ExecuteGateWaitTimeoutMs = 1500;" in cdp
+    assert "_executeGate.WaitAsync(ExecuteGateWaitTimeoutMs)" in cdp
+    assert "CDP调用等待串行门超时，已快速失败避免排队放大" in cdp
+    assert "if (gateAcquired) _executeGate.Release();" in cdp
+    assert "private const int InvokeTimeoutMs = 8000;" in cdp
+
+
+def test_vision_followup_keeps_generation_cancellation_and_tolerates_small_clock_skew():
+    vision = read("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
+    assert "SourceClockSkewToleranceSeconds = 15" in vision
+    assert "elapsed >= TimeSpan.FromSeconds(-SourceClockSkewToleranceSeconds)" in vision
+    assert "elapsed = TimeSpan.Zero;" in vision
+    assert "ResolveSessionAgent(lease)" in vision
+    assert 'GetField(\n                    "_sessionAgent"' in vision
+    assert "SessionGeneration = source.SessionGeneration" in vision
+    assert "SemanticContinuationContext = source.SemanticContinuationContext" in vision
