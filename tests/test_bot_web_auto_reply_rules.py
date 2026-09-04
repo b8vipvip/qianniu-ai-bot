@@ -358,7 +358,9 @@ def test_windows_sync_only_mutates_whitelisted_non_secret_rule_fields():
     assert "cfg.OrderPlacedReplyText =" in text
     assert "cfg.OrderPlacedApiTimeoutSeconds =" in text
     assert "OrderPlacedReplyDelaySettings.GetSeconds()" in text
-    assert "OrderPlacedReplyDelaySettings.SaveSeconds(0)" in text
+    assert "OrderPlacedReplyDelaySettings.SaveSeconds(0)" not in text
+    assert "var currentValue = NormalizeOrderApiTimeout(cfg.OrderPlacedApiTimeoutSeconds);" in text
+    assert "return Math.Max(3, Math.Min(60, value));" in text
     assert "ChromeNs\\BotWebAutoReplyRulesSyncService.cs" in props
     assert "cfg.WeChatWebhook =" not in text
     assert "cfg.SmtpPassword =" not in text
@@ -386,6 +388,8 @@ def test_mobile_ui_exposes_safe_order_rules_without_secret_inputs():
     assert "order_placed_reply_delay_seconds" in text
     assert "settings_schema_version" in text
     assert "order_rules_ready" in text
+    assert "desired.order_placed_api_timeout_seconds || 3" in text
+    assert "$(IDS.orderTimeout).value || 3" in text
     assert "/api/bot-web/auto-reply-rules" in text
     lowered = text.lower()
     for forbidden in (
@@ -415,6 +419,7 @@ def test_server_schema_versions_order_fields_and_never_exposes_order_secrets():
     assert "order_placed_reply_mode" in text
     assert "order_placed_reply_text" in text
     assert "order_placed_api_timeout_seconds" in text
+    assert '"order_placed_api_timeout_seconds": 3' in text
     assert "order_placed_reply_delay_seconds" in text
     assert "OrderPlacedApiUrl" not in text
     assert "OrderPlacedApiToken" not in text
