@@ -19,26 +19,38 @@ def test_generation_deadline_watchdog_uses_dedicated_background_thread():
     assert "Thread.Sleep(DeadlineWatchdogSleepMilliseconds)" in source
 
 
-def test_generation_watchdog_tracks_each_generation_and_hard_cancels_late_work():
+def test_generation_watchdog_tracks_actionable_lifetime_without_generating_sampling_race():
     source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
     assert "BuyerSessionEventKind.BuyerActionAccepted" in source
     assert "Agent.TryGetGenerationState" in source
-    assert "state == BuyerSessionAgentState.Generating" in source
-    assert "GenerationGeneratingSinceUtc.TryAdd(watchKey, now)" in source
+    assert "ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations" in source
+    assert "WatchedGenerations.GetOrAdd" in source
+    assert "AcceptedAtUtc" in source
+    assert "ToUtcSafe(acceptedEvent.ObservedAt, now)" in source
+    assert ".GroupBy(x => x.Generation)" in source
+    assert "state == BuyerSessionAgentState.Generating" not in source
+    assert "foreach (var pair in WatchedGenerations.ToArray())" in source
     assert "elapsed.TotalSeconds <= AbsoluteGenerationAgeSeconds" in source
     assert '"absolute_generation_age_exceeded"' in source
     assert "Agent.Cancel(" in source
     assert "禁止迟到结果进入Ready/Sending" in source
 
 
-def test_generation_watchdog_is_not_triggered_by_human_reply_and_drops_terminal_watches():
+def test_generation_watchdog_covers_ready_sending_waiting_and_drops_only_terminal_watches():
+    source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+
+    assert "Coalescing/Processing/Generating/Ready/" in source
+    assert "Sending/Waiting as one end-to-end generation lifetime" in source
+    assert "state == BuyerSessionAgentState.Completed" in source
+    assert "state == BuyerSessionAgentState.Cancelled" in source
+    assert "state == BuyerSessionAgentState.Failed" in source
+    assert "WatchedGenerations.TryRemove" in source
+
+
+def test_generation_watchdog_is_not_triggered_by_human_reply():
     source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
     assert "WatchSession(seller, buyer);" in source
     assert "SellerHumanReply" in source
     assert "false);" in source
-    assert "state == BuyerSessionAgentState.Completed" in source
-    assert "state == BuyerSessionAgentState.Cancelled" in source
-    assert "state == BuyerSessionAgentState.Failed" in source
-    assert "GenerationGeneratingSinceUtc.TryRemove" in source

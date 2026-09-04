@@ -21,6 +21,7 @@ def test_referential_text_reuses_recent_image_and_keeps_original_lease():
     pipeline = text("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
     assert "FollowUpWindowSeconds = 45" in pipeline
     assert "CaptionWindowSeconds = 15" in pipeline
+    assert "SourceClockSkewToleranceSeconds = 15" in pipeline
     assert "RecentVision" in pipeline
     assert "IsVisionReferentialFollowUp" in pipeline
     assert 'compact == "这个吗"' in pipeline
@@ -33,7 +34,9 @@ def test_referential_text_reuses_recent_image_and_keeps_original_lease():
     assert "var items = new List<BuyerMessageBurstItem> { CloneVisionItem(recent.Item) };" in pipeline
     assert "items.AddRange(burst.Items.Where(x => x != null));" in pipeline
     assert "new BuyerMessageBurst(" in pipeline
-    assert "new BuyerMessageBurstLease(combinedBurst, () => lease.IsCurrent)" in pipeline
+    assert "ResolveSessionAgent(lease)" in pipeline
+    assert "SessionGeneration = source.SessionGeneration" in pipeline
+    assert "SemanticContinuationContext = source.SemanticContinuationContext" in pipeline
     assert "await next(combinedLease);" in pipeline
 
 
@@ -43,6 +46,7 @@ def test_pipeline_stays_outside_streaming_wrapper_and_avoids_stale_image_binding
     assert "handlerField.SetValue(coordinator, wrapped);" in pipeline
     assert "图片指代续问已重新绑定最近图片" in pipeline
     assert "RecentVision.TryRemove(conversationKey" in pipeline
+    assert "elapsed >= TimeSpan.FromSeconds(-SourceClockSkewToleranceSeconds)" in pipeline
     assert "elapsed > TimeSpan.FromSeconds(FollowUpWindowSeconds)" in pipeline
     assert "!referential && !likelyCaption" in pipeline
 

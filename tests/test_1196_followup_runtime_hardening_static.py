@@ -41,3 +41,47 @@ def test_owned_draft_forget_helper_clears_state_without_self_recursion():
     assert helper.count("ForgetOwnedDraft();") == 0
     assert "LastSetPlainText = string.Empty;" in helper
     assert "LatestSetTextTime = DateTime.MinValue;" in helper
+
+
+def test_generation_deadline_watch_is_not_tied_to_recent_event_ring_or_transient_generating_sample():
+    bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    assert "ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations" in bridge
+    assert "foreach (var pair in WatchedGenerations.ToArray())" in bridge
+    assert "WatchedGenerations.GetOrAdd" in bridge
+    assert "BuyerActionAccepted" in bridge
+    assert "one end-to-end generation lifetime" in bridge
+    assert "state == BuyerSessionAgentState.Generating" not in bridge
+    assert "Agent.Cancel(" in bridge
+    assert "absolute_generation_age_exceeded" in bridge
+
+
+def test_cdp_execute_gate_wait_is_bounded_before_per_request_timeout():
+    cdp = read("src/Bot/ChromeNs/CDPClient.cs")
+    assert "private const int ExecuteGateWaitTimeoutMs = 1500;" in cdp
+    assert "_executeGate.WaitAsync(ExecuteGateWaitTimeoutMs)" in cdp
+    assert "CDP调用等待串行门超时，已快速失败避免排队放大" in cdp
+    assert "if (gateAcquired) _executeGate.Release();" in cdp
+    assert "private const int InvokeTimeoutMs = 8000;" in cdp
+
+
+def test_active_buyer_confirmation_has_end_to_end_wall_clock_budget():
+    qn = read("src/Bot/ChromeNs/QN.cs")
+    method = qn[qn.index("private async Task<bool> EnsureActiveBuyerForSendAsync"):qn.index("public async void SendImageAsync")]
+    assert "ActiveBuyerConfirmDeadlineMs = 9000" in qn
+    assert "ActiveBuyerConfirmPollMs = 250" in qn
+    assert "deadlineUtc = DateTime.UtcNow.AddMilliseconds(ActiveBuyerConfirmDeadlineMs)" in method
+    assert "attempt < 22 && DateTime.UtcNow < deadlineUtc" in method
+    assert "Math.Min(ActiveBuyerConfirmPollMs, remainingMs)" in method
+    assert "无法在会话确认总预算内确认当前会话为目标买家" in method
+    assert "for (var attempt = 0; attempt < 22; attempt++)" not in method
+
+
+def test_vision_followup_keeps_generation_cancellation_and_tolerates_small_clock_skew():
+    vision = read("src/Bot/ChromeNs/VisionFollowUpContextPipeline.cs")
+    assert "SourceClockSkewToleranceSeconds = 15" in vision
+    assert "elapsed >= TimeSpan.FromSeconds(-SourceClockSkewToleranceSeconds)" in vision
+    assert "elapsed = TimeSpan.Zero;" in vision
+    assert "ResolveSessionAgent(lease)" in vision
+    assert 'GetField(\n                    "_sessionAgent"' in vision
+    assert "SessionGeneration = source.SessionGeneration" in vision
+    assert "SemanticContinuationContext = source.SemanticContinuationContext" in vision

@@ -12,7 +12,7 @@ def test_send_confirmation_observes_structured_conversation_alias_before_compari
     source = read("src/Bot/ChromeNs/QN.cs")
 
     start = source.index("private async Task<bool> EnsureActiveBuyerForSendAsync")
-    block = source[start: start + 2600]
+    block = source[start: start + 3200]
     observe = block.index("BuyerIdentityAliasService.Observe(")
     equivalent = block.index("BuyerIdentityAliasService.AreEquivalent(sellerNick, currentNick, buyer)")
 
@@ -21,7 +21,8 @@ def test_send_confirmation_observes_structured_conversation_alias_before_compari
     assert "currentConversation.Display" in block
     assert "currentConversation.TargetId" in block
     assert "if (currentNick == buyer)" not in block
-    assert "发送已阻止：无法确认当前会话为目标买家" in block
+    assert "ActiveBuyerConfirmDeadlineMs" in block
+    assert "无法在会话确认总预算内确认当前会话为目标买家" in block
 
 
 def test_incoming_messages_learn_buyer_nick_display_aliases_before_dedup():
