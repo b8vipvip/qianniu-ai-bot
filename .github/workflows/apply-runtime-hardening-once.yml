@@ -4,21 +4,23 @@ on:
   push:
     branches:
       - fix/composer-order-inbound-hardening-20260904
+    paths:
+      - .github/workflows/apply-runtime-hardening-once.yml
 
 permissions:
   contents: write
 
 jobs:
   patch-source:
-    if: github.event.head_commit.message != 'chore: apply runtime hardening source patch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Apply asserted source edits
-        shell: python
+        shell: bash
         run: |
+          python - <<'PY'
           from pathlib import Path
 
           def replace_once(text, old, new, label):
@@ -34,7 +36,7 @@ jobs:
               new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
 
           public string LastSetPlainText { get; private set; }
-'''
+          '''
           new = '''        private static readonly ConcurrentDictionary<string, DateTime> AnswerAttemptStartedAt =
               new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
           private static readonly TimeSpan OwnedDraftRetention = TimeSpan.FromMinutes(30);
@@ -44,11 +46,11 @@ jobs:
           private DateTime _lastOwnedDraftAt = DateTime.MinValue;
 
           public string LastSetPlainText { get; private set; }
-'''
+          '''
           q = replace_once(q, old, new, 'owned draft fields')
 
           marker = '''        internal bool IsKnownBotOwnedDraftText(string currentText)
-'''
+          '''
           helpers = '''        private void RememberOwnedDraft(string buyer, string text)
           {
               buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
@@ -86,11 +88,11 @@ jobs:
               return EditorMatchesExpectedText(currentText, ownedText);
           }
 
-'''
+          '''
           q = replace_once(q, marker, helpers + marker, 'owned draft helpers')
 
           marker = '''        private async Task<bool> HasExpectedDraftFastAsync(string text, int probeTimeoutMs)
-'''
+          '''
           mutation = '''        private async Task<bool> RunUiMutationAsync(Func<bool> action, string stage)
           {
               if (action == null) return false;
@@ -108,12 +110,14 @@ jobs:
               }
           }
 
-'''
+          '''
           q = replace_once(q, marker, mutation + marker, 'ui mutation helper')
 
           start = q.index('        private async Task<bool> ClearStaleComposerBeforeNewDraftAsync(string buyer, string expected)')
           end = q.index('        private async Task<bool> TrySetPlainTextByCdpAsync(string buyer, string text)', start)
           old_method = q[start:end]
+          if '按Bot独占工作区策略先清空' not in old_method:
+              raise SystemExit('stale composer method no longer matches expected legacy semantics')
           new_method = '''        private async Task<bool> ClearStaleComposerBeforeNewDraftAsync(string buyer, string expected)
           {
               try
@@ -215,32 +219,26 @@ jobs:
               }
           }
 
-'''
-          if '按Bot独占工作区策略先清空' not in old_method:
-              raise SystemExit('stale composer method no longer matches expected legacy semantics')
+          '''
           q = q[:start] + new_method + q[end:]
 
-          exact = '''                        LastSetPlainText = expected;
+          old_pair = '''                        LastSetPlainText = text;
                           LatestSetTextTime = DateTime.Now;'''
-          if q.count(exact) != 0:
-              raise SystemExit('unexpected legacy expected assignment remains after method replacement')
+          pair_count = q.count(old_pair)
+          if pair_count < 2:
+              raise SystemExit(f'expected at least two nested owned text assignments, got {pair_count}')
+          q = q.replace(old_pair, '                        RememberOwnedDraft(buyer, text);')
 
-          exact_text = '''                        LastSetPlainText = text;
-                          LatestSetTextTime = DateTime.Now;'''
-          count = q.count(exact_text)
-          if count < 2:
-              raise SystemExit(f'expected at least two owned text assignments, got {count}')
-          q = q.replace(exact_text, '''                        RememberOwnedDraft(buyer, text);''')
-
-          exact_text2 = '''                LastSetPlainText = text;
+          old_pair2 = '''                LastSetPlainText = text;
                   LatestSetTextTime = DateTime.Now;'''
-          count2 = q.count(exact_text2)
-          if count2 < 1:
-              raise SystemExit(f'expected direct owned text assignment, got {count2}')
-          q = q.replace(exact_text2, '''                RememberOwnedDraft(buyer, text);''')
+          pair_count2 = q.count(old_pair2)
+          if pair_count2 < 1:
+              raise SystemExit(f'expected at least one direct owned text assignment, got {pair_count2}')
+          q = q.replace(old_pair2, '                RememberOwnedDraft(buyer, text);')
 
-          q = q.replace('''                    LastSetPlainText = string.Empty;
-                      LatestSetTextTime = DateTime.MinValue;''', '''                    ForgetOwnedDraft();''')
+          old_clear = '''                    LastSetPlainText = string.Empty;
+                      LatestSetTextTime = DateTime.MinValue;'''
+          q = q.replace(old_clear, '                    ForgetOwnedDraft();')
           qnrpa_path.write_text(q, encoding='utf-8')
 
           order_path = Path('src/Bot/ChromeNs/OrderTemplateRequiredFieldsV2.cs')
@@ -252,7 +250,7 @@ jobs:
               for (var attempt = 0; attempt < delays.Length; attempt++)
               {
                   if (delays[attempt] > 0) await Task.Delay(delays[attempt]);
-'''
+          '''
           new = '''            var securityBuyerUid = GetCachedBuyerSecurityId(plan.Seller, plan.Buyer);
               probe.BuyerSecurityIdFound = !string.IsNullOrWhiteSpace(securityBuyerUid);
               var missingAtStart = MissingRequiredFields(plan.Config, snapshot);
@@ -266,12 +264,12 @@ jobs:
               for (var attempt = 0; attempt < delays.Length; attempt++)
               {
                   if (delays[attempt] > 0) await Task.Delay(delays[attempt]);
-'''
+          '''
           o = replace_once(o, old, new, 'order enrichment bounded schedule')
           old = '''                    MergeTrade(snapshot, trade);
                       UpdateProbe(probe, snapshot);
                       if (MissingRequiredFields(plan.Config, snapshot).Count == 0) break;
-'''
+          '''
           new = '''                    MergeTrade(snapshot, trade);
                       UpdateProbe(probe, snapshot);
                       var remaining = MissingRequiredFields(plan.Config, snapshot);
@@ -280,10 +278,10 @@ jobs:
                       {
                           break;
                       }
-'''
+          '''
           o = replace_once(o, old, new, 'order enrichment stop condition')
           order_path.write_text(o, encoding='utf-8')
-
+          PY
       - name: Commit asserted edits
         shell: bash
         run: |
