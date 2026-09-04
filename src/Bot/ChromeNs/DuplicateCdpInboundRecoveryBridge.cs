@@ -46,11 +46,11 @@ namespace Bot.ChromeNs
         }
 
         // The same Qianniu global event is commonly emitted by more than one injected recent.html
-        // page. Business-level message dedupe still exists downstream, but suppressing an exact
-        // cross-page replay here prevents duplicate state transitions, duplicate recovery work and
-        // noisy logs before the event reaches those deeper guards.
-        private static readonly TimeSpan InboundFingerprintWindow = TimeSpan.FromSeconds(3);
-        private static readonly TimeSpan InboundFingerprintRetention = TimeSpan.FromSeconds(30);
+        // page. Hashing the complete payload means distinct messages with identical human text still
+        // have independent ids/timestamps. Keep an exact replay suppressed across watchdog/recovery
+        // cadences instead of accepting the same physical event again after only a few seconds.
+        private static readonly TimeSpan InboundFingerprintWindow = TimeSpan.FromMinutes(2);
+        private static readonly TimeSpan InboundFingerprintRetention = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan SessionSellerRetention = TimeSpan.FromHours(2);
 
         private static readonly ConcurrentDictionary<string, SessionSellerBinding> SessionSellers =
@@ -291,7 +291,7 @@ namespace Bot.ChromeNs
             // Duplicate pages can emit the same event at very high frequency. Keep the first few
             // diagnostics and periodic milestones without writing one log line per replay.
             if (count > 3 && count % 100 != 0) return;
-            Log.Info("重复千牛CDP入站事件已短窗去重: sellerRef=" + PrivacyToken("seller", seller)
+            Log.Info("重复千牛CDP入站事件已长窗去重: sellerRef=" + PrivacyToken("seller", seller)
                 + ", sessionRef=" + PrivacyToken("session", sessionId)
                 + ", type=" + type + ", suppressedTotal=" + count);
         }
