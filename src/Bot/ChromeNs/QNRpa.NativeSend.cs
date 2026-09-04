@@ -15,6 +15,9 @@ namespace Bot.ChromeNs
         private const uint WmLButtonUp = 0x0202;
         private const int MkLButton = 0x0001;
         private const uint GaRoot = 2;
+        private const uint CwpSkipInvisible = 0x0001;
+        private const uint CwpSkipDisabled = 0x0002;
+        private const uint CwpSkipTransparent = 0x0004;
         private const uint ProcessQueryLimitedInformation = 0x1000;
         private const uint TokenQuery = 0x0008;
         private const int TokenIntegrityLevel = 25;
@@ -35,6 +38,9 @@ namespace Bot.ChromeNs
 
         [DllImport("user32.dll")]
         private static extern IntPtr WindowFromPoint(NativePoint point);
+
+        [DllImport("user32.dll")]
+        private static extern IntPtr ChildWindowFromPointEx(IntPtr hwndParent, NativePoint point, uint flags);
 
         [DllImport("user32.dll")]
         private static extern IntPtr GetAncestor(IntPtr hwnd, uint flags);
@@ -101,9 +107,6 @@ namespace Bot.ChromeNs
                 }
                 if (LastSendWasCancelled) return false;
 
-                // Only fall through to another action when the exact owned draft is still present.
-                // If the draft disappeared but submission could not be proven safely, fail closed;
-                // never reconstruct the same text for a second click.
                 if (!await HasExpectedDraftFastAsync(text, 800).ConfigureAwait(false))
                 {
                     SetSendFailure("CDP页面发送按钮后确认", "发送动作后草稿已不存在，但未能完成安全提交确认；禁止重复写入");
@@ -144,11 +147,6 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            // Do not make a physical Mouse.Click the first fallback after HWND rejection. On
-            // machines where Qianniu runs at a higher integrity level that click can throw
-            // AccessDenied even though UI Automation can still invoke the verified left/main
-            // action. Keeping this before the legacy UIA path also prevents the old regression
-            // where unrelated hardening reintroduced a physical-click dependency.
             var safeUiaInvoked = await RunUiActionAsync(
                 TryInvokeCachedSendButtonNow,
                 "发送按钮左侧UIA安全调用（原生前置）",
@@ -179,9 +177,6 @@ namespace Bot.ChromeNs
             if (uiResult) return true;
             if (await StopIfPlatformSendBlockedAsync(buyer, "UIA发送后").ConfigureAwait(false)) return false;
 
-            // The legacy UIA path still contains its historical echo wait. If its click really
-            // submitted the draft but the live echo was missed, recover as submission-success here
-            // instead of allowing the outer reliable sender to write the same text again.
             if (!await HasExpectedDraftFastAsync(text, 650).ConfigureAwait(false))
             {
                 var accepted = await WaitForTextSubmissionAcceptedAsync(
@@ -196,12 +191,6 @@ namespace Bot.ChromeNs
             return false;
         }
 
-        /// <summary>
-        /// This is discovery-by-capability, not an invented IMSDK method. We only click a visible
-        /// DOM control whose own accessible/text label is exactly Send/发送. If Qianniu exposes the
-        /// composer as native Qt only, the expression returns not_found and the next safe method is
-        /// used. Dropdown/arrow/menu identities are always rejected.
-        /// </summary>
         private async Task<bool> TryTriggerSendViaCdpDomAsync(string buyer)
         {
             if (_qn == null || _qn.CDP == null) return false;
@@ -259,8 +248,6 @@ namespace Bot.ChromeNs
             var desk = ResolveSellerDesk();
             if (desk == null || !EnsureSellerDeskBinding(false)) return false;
 
-            // WindowFromPoint must observe the verified seller window rather than a settings/dialog
-            // window that happens to cover the same screen coordinate. This is not a send action.
             desk.BringTop();
             Thread.Sleep(100);
 
@@ -280,18 +267,10 @@ namespace Bot.ChromeNs
                 Y = rect.Top + rect.Height / 2
             };
 
-            var target = WindowFromPoint(screenPoint);
-            if (target == IntPtr.Zero) return false;
-
             var expectedPid = unchecked((uint)desk.ProcessId);
             var expectedRoot = new IntPtr(desk.Hwnd.Handle);
             if (expectedPid == 0 || expectedRoot == IntPtr.Zero) return false;
 
-            // The seller root is the trust anchor. Qianniu can host the composer/send surface in a
-            // helper process, so targetPid alone is not a safe ownership model. First prove that
-            // the cached seller root still belongs to the bound seller process, then require the
-            // point target to have that exact same root HWND. Only after those two proofs may an
-            // auxiliary target PID be accepted.
             uint rootPid;
             GetWindowThreadProcessId(expectedRoot, out rootPid);
             if (rootPid == 0 || rootPid != expectedPid)
@@ -303,8 +282,32 @@ namespace Bot.ChromeNs
                 return false;
             }
 
-            var root = GetAncestor(target, GaRoot);
-            if (root == IntPtr.Zero) root = target;
+            var target = WindowFromPoint(screenPoint);
+            var root = target == IntPtr.Zero ? IntPtr.Zero : GetAncestor(target, GaRoot);
+            if (root == IntPtr.Zero && target != IntPtr.Zero) root = target;
+
+            // Production 1.1.1192 evidence showed WindowFromPoint can be intercepted by an
+            // unrelated overlay even while the verified Qianniu seller root and UIA send-button
+            // rectangle are correct. Do not weaken the cross-root check. Instead, resolve the same
+            // already-verified safe point strictly inside expectedRoot and then re-prove the root.
+            if (target == IntPtr.Zero || root != expectedRoot)
+            {
+                var outsideTarget = target;
+                var outsideRoot = root;
+                var constrained = ResolveTargetInsideVerifiedSellerRoot(expectedRoot, screenPoint);
+                var constrainedRoot = constrained == IntPtr.Zero ? IntPtr.Zero : GetAncestor(constrained, GaRoot);
+                if (constrainedRoot == IntPtr.Zero && constrained != IntPtr.Zero) constrainedRoot = constrained;
+                if (constrained != IntPtr.Zero && constrainedRoot == expectedRoot)
+                {
+                    target = constrained;
+                    root = constrainedRoot;
+                    Log.Info("HWND安全发送已绕过外部覆盖窗口并在已验证卖家根内重新解析安全点: seller="
+                        + SellerNick + ", expectedRoot=" + expectedRoot + ", outsideTarget=" + outsideTarget
+                        + ", outsideRoot=" + outsideRoot + ", resolvedTarget=" + target);
+                }
+            }
+
+            if (target == IntPtr.Zero) return false;
             if (root != expectedRoot)
             {
                 uint rejectedPid;
@@ -355,6 +358,22 @@ namespace Bot.ChromeNs
                 + ", point=" + screenPoint.X + "," + screenPoint.Y
                 + ", arrowGuard=" + arrowGuard);
             return true;
+        }
+
+        private static IntPtr ResolveTargetInsideVerifiedSellerRoot(IntPtr expectedRoot, NativePoint screenPoint)
+        {
+            if (expectedRoot == IntPtr.Zero) return IntPtr.Zero;
+            const uint flags = CwpSkipInvisible | CwpSkipDisabled | CwpSkipTransparent;
+            var current = expectedRoot;
+            for (var depth = 0; depth < 10; depth++)
+            {
+                var local = screenPoint;
+                if (!ScreenToClient(current, ref local)) break;
+                var child = ChildWindowFromPointEx(current, local, flags);
+                if (child == IntPtr.Zero || child == current) break;
+                current = child;
+            }
+            return current;
         }
 
         private void LogInputIntegrityDiagnostic(string reason)
