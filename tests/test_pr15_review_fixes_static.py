@@ -20,22 +20,28 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     assert "HasExpectedDraftFastAsync" in qnrpa
     assert "输入框内容已变化或无法确认，已阻止发送" in qnrpa
 
-    # The desktop Qianniu composer is a Bot work buffer, so a stale draft from a previous
-    # failed Bot send may be cleared. The safety invariant is now stronger and more precise:
-    # prove the target buyer before touching the composer, preserve/adopt an exact current-task
-    # draft, then re-read the editor, re-check the buyer, and require a CDP empty confirmation
-    # before writing anything new. Any uncertainty remains fail-closed.
-    cleanup = qnrpa.index("ClearStaleComposerBeforeNewDraftAsync")
-    buyer_read = qnrpa.index("ReadCurrentBuyerNickAsync()", cleanup)
-    buyer_guard = qnrpa.index("IsExpectedBuyer(buyer, currentBuyer)", buyer_read)
-    exact_draft = qnrpa.index("EditorMatchesExpectedText(currentText, expected)", buyer_guard)
-    clear = qnrpa.index("检测到电脑千牛输入框残留草稿", exact_draft)
-    reread = qnrpa.index("TryGetEditorText(out afterClear)", clear)
-    buyer_after = qnrpa.index("buyerAfterClear", reread)
-    cdp_after = qnrpa.index("残留草稿清理后确认", buyer_after)
-    assert cleanup < buyer_read < buyer_guard < exact_draft < clear < reread < buyer_after < cdp_after
-    assert "清空后CDP无法确认输入框状态，禁止盲目追加写入" in qnrpa
-    assert "输入框已有非本次Bot草稿，已阻止覆盖/追加发送" not in qnrpa
+    # A stale composer may only be mutated after target-buyer proof and exact Bot ownership proof.
+    # Unknown/manual content is preserved fail-closed. The mutation itself is never abandoned on a
+    # timeout, so Ctrl+A/Backspace cannot run later against a newer draft.
+    cleanup = qnrpa.index("private async Task<bool> ClearStaleComposerBeforeNewDraftAsync")
+    cleanup_end = qnrpa.index("private async Task<bool> TrySetPlainTextByCdpAsync", cleanup)
+    block = qnrpa[cleanup:cleanup_end]
+    buyer_read = block.index("ReadCurrentBuyerNickAsync()")
+    buyer_guard = block.index("IsExpectedBuyer(buyer, currentBuyer)", buyer_read)
+    exact_draft = block.index("EditorMatchesExpectedText(observedText, expected)", buyer_guard)
+    ownership = block.index("IsOwnedDraftForBuyer(buyer, observedText)", exact_draft)
+    clear = block.index("检测到同一买家的Bot历史残留草稿", ownership)
+    mutation = block.index("RunUiMutationAsync", clear)
+    reread = block.index("TryGetEditorText(out afterClear)", mutation)
+    buyer_after = block.index("buyerAfterClear", reread)
+    cdp_after = block.index("残留草稿清理后确认", buyer_after)
+    assert buyer_read < buyer_guard < exact_draft < ownership < clear < mutation < reread < buyer_after < cdp_after
+    assert "输入框存在所有权无法证明的内容，已保留并阻止覆盖/追加发送" in block
+    assert "清空后CDP未确认输入框为空，禁止盲目追加写入" in block
+
+    mutation_helper = qnrpa[qnrpa.index("private async Task<bool> RunUiMutationAsync"):qnrpa.index("private async Task<bool> HasExpectedDraftFastAsync")]
+    assert "Task.WhenAny" not in mutation_helper
+    assert "Task.Delay" not in mutation_helper
 
     assert "UIA写入确认" in qnrpa
     open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]
