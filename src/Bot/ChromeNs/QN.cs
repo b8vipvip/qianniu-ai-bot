@@ -76,6 +76,8 @@ namespace Bot.ChromeNs
         private DateTime _lastSellerEchoTime = DateTime.MinValue;
         private readonly SemaphoreSlim _incomingMessageGate = new SemaphoreSlim(1, 1);
         private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);
+        private const int ActiveBuyerConfirmDeadlineMs = 9000;
+        private const int ActiveBuyerConfirmPollMs = 250;
         // Seller echoes may be repeated by several injected pages. Keep their transport-level
         // dedupe separate from buyer business ownership so a malformed/non-business duplicate page
         // can never consume a buyer key before the authoritative processing path claims it.
@@ -247,8 +249,9 @@ namespace Bot.ChromeNs
             buyer = (buyer ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(buyer) || cdp == null) return false;
             var sellerNick = Seller == null ? string.Empty : (Seller.Nick ?? string.Empty).Trim();
+            var deadlineUtc = DateTime.UtcNow.AddMilliseconds(ActiveBuyerConfirmDeadlineMs);
 
-            for (var attempt = 0; attempt < 22; attempt++)
+            for (var attempt = 0; attempt < 22 && DateTime.UtcNow < deadlineUtc; attempt++)
             {
                 try
                 {
@@ -279,10 +282,14 @@ namespace Bot.ChromeNs
                     Log.Info("发送前确认买家会话失败: " + ex.Message);
                     if (attempt == 0) OpenChat(buyer);
                 }
-                await Task.Delay(250);
+
+                var remainingMs = (int)Math.Max(0, (deadlineUtc - DateTime.UtcNow).TotalMilliseconds);
+                if (remainingMs <= 0) break;
+                await Task.Delay(Math.Min(ActiveBuyerConfirmPollMs, remainingMs));
             }
 
-            Log.Error("发送已阻止：无法确认当前会话为目标买家。target=" + buyer);
+            Log.Error("发送已阻止：无法在会话确认总预算内确认当前会话为目标买家。target=" + buyer
+                + ", deadlineMs=" + ActiveBuyerConfirmDeadlineMs);
             return false;
         }
 
