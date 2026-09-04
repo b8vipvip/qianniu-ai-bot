@@ -30,6 +30,8 @@ namespace Bot.ChromeNs
         private const int SyncIntervalSeconds = 5;
         private const string AiOffHoursMode = "AI告知下班时间";
         private const string FixedOffHoursMode = "固定预设答案";
+        private const string FixedOrderReplyMode = "固定预设答案";
+        private const string HttpOrderReplyMode = "调用HTTP接口";
 
         private sealed class ShopRuleState
         {
@@ -130,7 +132,7 @@ namespace Bot.ChromeNs
                     http.Timeout = TimeSpan.FromSeconds(25);
                     request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
                     request.Headers.TryAddWithoutValidation("Accept", "application/json");
-                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-auto-reply-rules/1.0");
+                    request.Headers.TryAddWithoutValidation("User-Agent", "qianniu-bot-web-auto-reply-rules/2.0");
                     request.Headers.TryAddWithoutValidation("X-Shop-Key", state.Shop.ShopKey);
                     request.Content = new StringContent(payload.ToString(Formatting.None), Encoding.UTF8, "application/json");
                     using (var response = await http.SendAsync(request))
@@ -168,7 +170,12 @@ namespace Bot.ChromeNs
                 ["work_start_time"] = NormalizeTime(cfg.WorkStartTime, "09:00"),
                 ["work_end_time"] = NormalizeTime(cfg.WorkEndTime, "18:00"),
                 ["off_hours_reply_mode"] = NormalizeMode(cfg.OffHoursReplyMode),
-                ["off_hours_fixed_text"] = Clean(cfg.OffHoursFixedText, 3000)
+                ["off_hours_fixed_text"] = Clean(cfg.OffHoursFixedText, 3000),
+                ["order_placed_reply_enabled"] = cfg.EnableOrderPlacedReply,
+                ["order_placed_reply_mode"] = NormalizeOrderReplyMode(cfg.OrderPlacedReplyMode),
+                ["order_placed_reply_text"] = Clean(cfg.OrderPlacedReplyText, 5000),
+                ["order_placed_api_timeout_seconds"] = NormalizeOrderApiTimeout(cfg.OrderPlacedApiTimeoutSeconds),
+                ["order_placed_reply_delay_seconds"] = OrderPlacedReplyDelaySettings.GetSeconds()
             };
         }
 
@@ -211,9 +218,40 @@ namespace Bot.ChromeNs
             }
             changed |= SetText(desired, "off_hours_fixed_text", cfg.OffHoursFixedText, 3000, v => cfg.OffHoursFixedText = v);
 
-            // Only the eight explicitly whitelisted fields above are changed. Notification
-            // webhooks, SMTP credentials, order API tokens and every other local rule field
-            // remain untouched on the existing config object.
+            // Post-order remote management deliberately excludes the endpoint URL and Bearer token.
+            // The mobile console may select the existing Windows-local HTTP mode and adjust timeout,
+            // but it can never inject a network target or credential into the Windows client.
+            changed |= SetBool(desired, "order_placed_reply_enabled", cfg.EnableOrderPlacedReply, v => cfg.EnableOrderPlacedReply = v);
+            if (desired["order_placed_reply_mode"] != null)
+            {
+                var value = NormalizeOrderReplyMode(desired.Value<string>("order_placed_reply_mode"));
+                if (!string.Equals(cfg.OrderPlacedReplyMode, value, StringComparison.Ordinal))
+                {
+                    cfg.OrderPlacedReplyMode = value;
+                    changed = true;
+                }
+            }
+            changed |= SetText(desired, "order_placed_reply_text", cfg.OrderPlacedReplyText, 5000, v => cfg.OrderPlacedReplyText = v);
+            if (desired["order_placed_api_timeout_seconds"] != null)
+            {
+                var value = NormalizeOrderApiTimeout(desired.Value<int>("order_placed_api_timeout_seconds"));
+                if (cfg.OrderPlacedApiTimeoutSeconds != value)
+                {
+                    cfg.OrderPlacedApiTimeoutSeconds = value;
+                    changed = true;
+                }
+            }
+            if (desired["order_placed_reply_delay_seconds"] != null)
+            {
+                var delay = desired.Value<int>("order_placed_reply_delay_seconds");
+                if (delay != 0)
+                    throw new InvalidOperationException("下单固定回复当前强制立即发送，delay 必须为 0。" );
+                OrderPlacedReplyDelaySettings.SaveSeconds(0);
+            }
+
+            // Only the explicitly whitelisted fields above are changed. Notification webhooks,
+            // SMTP credentials, OrderPlacedApiUrl, OrderPlacedApiToken and every other local rule
+            // field remain untouched on the existing config object.
             if (changed) BotFeatureStore.SaveAutoReplyRules(cfg);
         }
 
@@ -253,6 +291,19 @@ namespace Bot.ChromeNs
             return string.Equals(Clean(value, 40), FixedOffHoursMode, StringComparison.Ordinal)
                 ? FixedOffHoursMode
                 : AiOffHoursMode;
+        }
+
+        private static string NormalizeOrderReplyMode(string value)
+        {
+            return string.Equals(Clean(value, 40), HttpOrderReplyMode, StringComparison.Ordinal)
+                ? HttpOrderReplyMode
+                : FixedOrderReplyMode;
+        }
+
+        private static int NormalizeOrderApiTimeout(int value)
+        {
+            if (value <= 0) value = 10;
+            return Math.Max(3, Math.Min(60, value));
         }
 
         private static string Clean(string value, int limit)
