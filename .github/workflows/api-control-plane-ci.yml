@@ -95,7 +95,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
       - name: Compile Python
-        run: python -m py_compile app.py bootstrap.py bot_web_bot_enabled.py chat2api_runtime_guard.py deep_test_guard.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py github_vless_proxy.py message_processing_traces.py scheduled_deep_test_retry.py runtime_embedding_guard.py runtime_ocr.py runtime_ocr_priority.py runtime_routing_guard.py runtime_streaming_guard.py version_update_admin.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_bot_update_cache.py tests/test_chat2api_runtime_guard.py tests/test_control_plane.py tests/test_deep_test_guard.py tests/test_github_vless_proxy.py tests/test_message_processing_traces.py tests/test_runtime_embedding_guard.py tests/test_runtime_ocr.py tests/test_scheduled_deep_test_retry.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
+        run: python -m py_compile app.py bootstrap.py bot_web_auto_reply_rules.py bot_web_bot_enabled.py chat2api_runtime_guard.py deep_test_guard.py bot_update_cache.py bot_update_prefetch.py bot_update_progress.py bot_update_push.py github_vless_proxy.py message_processing_traces.py scheduled_deep_test_retry.py runtime_embedding_guard.py runtime_ocr.py runtime_ocr_priority.py runtime_routing_guard.py runtime_streaming_guard.py version_update_admin.py wecom_bridge.py wecom_crypto.py wecom_settings.py tests/test_bot_update_cache.py tests/test_chat2api_runtime_guard.py tests/test_control_plane.py tests/test_deep_test_guard.py tests/test_github_vless_proxy.py tests/test_message_processing_traces.py tests/test_runtime_embedding_guard.py tests/test_runtime_ocr.py tests/test_scheduled_deep_test_retry.py tests/test_runtime_routing_guard.py tests/test_runtime_streaming_guard.py tests/test_wecom_bridge.py tests/test_wecom_message_content.py tests/test_wecom_settings.py
       - name: Run control plane tests
         env:
           DATA_DIR: ${{ runner.temp }}/qianniu-api-control-plane-test-data
@@ -116,6 +116,7 @@ jobs:
       - name: Check browser JavaScript syntax
         run: |
           node --check static/app.js
+          node --check static/bot-web-auto-reply-rules.js
           node --check static/bot-web-bot-enabled.js
           node --check static/message-traces.js
           node --check static/version-update.js
@@ -177,6 +178,7 @@ jobs:
             services/api-control-plane/bot_update_progress.py
             services/api-control-plane/bot_update_push.py
             services/api-control-plane/github_vless_proxy.py
+            services/api-control-plane/bot_web_auto_reply_rules.py
             services/api-control-plane/bot_web_bot_enabled.py
             services/api-control-plane/scheduled_deep_test_retry.py
             services/api-control-plane/runtime_embedding_guard.py
