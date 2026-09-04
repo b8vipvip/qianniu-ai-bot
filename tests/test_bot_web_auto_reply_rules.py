@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import sqlite3
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -21,9 +22,13 @@ needs_server_deps = pytest.mark.skipif(not HAS_FASTAPI, reason="server dependenc
 
 
 def load_module():
-    spec = importlib.util.spec_from_file_location("bot_web_auto_reply_rules_under_test", MODULE_PATH)
+    name = "bot_web_auto_reply_rules_under_test"
+    spec = importlib.util.spec_from_file_location(name, MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
+    # Match normal Python import semantics. Pydantic resolves postponed annotations
+    # through sys.modules while the model classes are being constructed.
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
