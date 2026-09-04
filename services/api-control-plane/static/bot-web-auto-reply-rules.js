@@ -121,7 +121,7 @@
     $(IDS.orderEnabled).checked = desired.order_placed_reply_enabled === true;
     $(IDS.orderMode).value = desired.order_placed_reply_mode === "调用HTTP接口" ? "调用HTTP接口" : "固定预设答案";
     $(IDS.orderText).value = desired.order_placed_reply_text || "";
-    $(IDS.orderTimeout).value = String(Number(desired.order_placed_api_timeout_seconds || 10));
+    $(IDS.orderTimeout).value = String(Number(desired.order_placed_api_timeout_seconds || 3));
     $(IDS.orderDelay).value = "0";
     renderMode();
     renderOrderMode();
@@ -191,7 +191,7 @@
       return;
     }
     if (orderRulesReady()) {
-      const timeout = Number($(IDS.orderTimeout).value || 10);
+      const timeout = Number($(IDS.orderTimeout).value || 3);
       if (!Number.isInteger(timeout) || timeout < 3 || timeout > 60) {
         toast("下单 HTTP 超时必须是 3-60 秒整数");
         return;
