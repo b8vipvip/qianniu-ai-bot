@@ -21,7 +21,7 @@ def test_text_ai_budget_finishes_before_absolute_generation_watchdog():
     assert "提前进入非流式兜底" in pipeline
     assert "SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)" in pipeline
     assert "AI失败离线安全兜底" in pipeline
-    assert "GenerationAbsoluteAgeSeconds = 55" in watchdog
+    assert "AbsoluteGenerationAgeSeconds = 55" in watchdog
 
 
 def test_bot_web_sync_404_is_deployment_skew_not_five_second_error_storm():
