@@ -11,6 +11,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 MODULE_PATH = ROOT / "services" / "api-control-plane" / "bot_web_auto_reply_rules.py"
 WINDOWS_SYNC_PATH = ROOT / "src" / "Bot" / "ChromeNs" / "BotWebAutoReplyRulesSyncService.cs"
+WINDOWS_PROPS_PATH = ROOT / "src" / "Bot" / "Directory.Build.props"
 BOOTSTRAP_PATH = ROOT / "services" / "api-control-plane" / "bootstrap.py"
 DOCKERFILE_PATH = ROOT / "services" / "api-control-plane" / "Dockerfile"
 WEB_JS_PATH = ROOT / "services" / "api-control-plane" / "static" / "bot-web-auto-reply-rules.js"
@@ -182,6 +183,7 @@ def test_validation_rejects_bad_time_and_empty_fixed_reply(tmp_path):
 
 def test_windows_sync_only_mutates_whitelisted_non_secret_rule_fields():
     text = WINDOWS_SYNC_PATH.read_text(encoding="utf-8-sig")
+    props = WINDOWS_PROPS_PATH.read_text(encoding="utf-8-sig")
     assert "/api/runtime/v1/bot-web/auto-reply-rules/sync" in text
     assert "BuildCurrentSettings()" in text
     assert "BotFeatureStore.GetAutoReplyRules()" in text
@@ -193,6 +195,7 @@ def test_windows_sync_only_mutates_whitelisted_non_secret_rule_fields():
     assert "cfg.WorkEndTime =" in text
     assert "cfg.OffHoursReplyMode =" in text
     assert "cfg.OffHoursFixedText =" in text
+    assert "ChromeNs\\BotWebAutoReplyRulesSyncService.cs" in props
     assert "cfg.WeChatWebhook =" not in text
     assert "cfg.SmtpPassword =" not in text
     assert "cfg.OrderPlacedApiToken =" not in text
