@@ -10,38 +10,51 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8-sig")
 
 
-def test_stale_desktop_composer_is_cleared_only_after_target_buyer_is_proven():
+def test_stale_desktop_composer_is_cleared_only_when_bot_ownership_and_target_buyer_are_proven():
     text = _read(QNRPA)
-    method = text.index("ClearStaleComposerBeforeNewDraftAsync")
-    target_read = text.index("var currentBuyer = await ReadCurrentBuyerNickAsync()", method)
-    target_guard = text.index("if (!IsExpectedBuyer(buyer, currentBuyer))", target_read)
-    clear_log = text.index("检测到电脑千牛输入框残留草稿", target_guard)
-    ctrl_a = text.index("PressCtrlA();", clear_log)
-    backspace = text.index("PressBackspace();", ctrl_a)
-    reread = text.index("TryGetEditorText(out afterClear)", backspace)
-    second_target = text.index("var buyerAfterClear = await ReadCurrentBuyerNickAsync()", reread)
-    cdp_probe = text.index("残留草稿清理后确认", second_target)
+    method = text.index("private async Task<bool> ClearStaleComposerBeforeNewDraftAsync")
+    method_end = text.index("private async Task<bool> TrySetPlainTextByCdpAsync", method)
+    block = text[method:method_end]
+    target_read = block.index("var currentBuyer = await ReadCurrentBuyerNickAsync()")
+    target_guard = block.index("if (!IsExpectedBuyer(buyer, currentBuyer))", target_read)
+    ownership = block.index("if (!IsOwnedDraftForBuyer(buyer, observedText))", target_guard)
+    clear_log = block.index("检测到同一买家的Bot历史残留草稿", ownership)
+    mutation = block.index("RunUiMutationAsync", clear_log)
+    exact_recheck = block.index("EditorMatchesExpectedText(latestText, ownedText)", mutation)
+    ownership_recheck = block.index("IsOwnedDraftForBuyer(buyer, latestText)", exact_recheck)
+    ctrl_a = block.index("PressCtrlA();", ownership_recheck)
+    backspace = block.index("PressBackspace();", ctrl_a)
+    second_target = block.index("var buyerAfterClear = await ReadCurrentBuyerNickAsync()", backspace)
+    cdp_probe = block.index("残留草稿清理后确认", second_target)
 
-    assert method < target_read < target_guard < clear_log < ctrl_a < backspace < reread < second_target < cdp_probe
-    assert "输入框残留内容清空失败，已阻止追加写入" in text
-    assert "清空后二次确认仍检测到非本次内容，已阻止覆盖/追加发送" in text
+    assert target_read < target_guard < ownership < clear_log < mutation < exact_recheck < ownership_recheck < ctrl_a < backspace < second_target < cdp_probe
+    assert "输入框存在所有权无法证明的内容，已保留并阻止覆盖/追加发送" in block
+    assert "RunUiActionAsync" not in block
+    assert "RunUiMutationAsync" in block
 
 
-def test_exact_current_task_draft_is_never_deleted_or_duplicated():
+def test_exact_current_task_draft_is_adopted_and_side_effect_mutations_are_never_timed_out():
     text = _read(QNRPA)
-    method = text.index("ClearStaleComposerBeforeNewDraftAsync")
-    exact = text.index("EditorMatchesExpectedText(currentText, expected)", method)
-    clear_log = text.index("检测到电脑千牛输入框残留草稿", exact)
-    concurrent_exact = text.index("残留草稿清理后并发草稿确认", clear_log)
-    adopt = text.index("直接接管发送", concurrent_exact)
+    method = text.index("private async Task<bool> ClearStaleComposerBeforeNewDraftAsync")
+    method_end = text.index("private async Task<bool> TrySetPlainTextByCdpAsync", method)
+    block = text[method:method_end]
+    exact = block.index("EditorMatchesExpectedText(observedText, expected)")
+    remember = block.index("RememberOwnedDraft(buyer, expected)", exact)
+    ownership = block.index("IsOwnedDraftForBuyer(buyer, observedText)", remember)
+    clear_log = block.index("检测到同一买家的Bot历史残留草稿", ownership)
+    assert exact < remember < ownership < clear_log
 
-    assert method < exact < clear_log < concurrent_exact < adopt
-    assert "输入框已有非本次Bot草稿，已阻止覆盖/追加发送" not in text
+    mutation = text.index("private async Task<bool> RunUiMutationAsync")
+    mutation_end = text.index("private async Task<bool> HasExpectedDraftFastAsync", mutation)
+    assert "Task.WhenAny" not in text[mutation:mutation_end]
+    assert "Task.Delay" not in text[mutation:mutation_end]
+    assert "return await Task.Run(action).ConfigureAwait(false);" in text[mutation:mutation_end]
+    assert "OwnedDraftRetention = TimeSpan.FromMinutes(30)" in text
 
 
 def test_text_send_clears_stale_buffer_before_new_cdp_insert_and_image_path_does_too():
     text = _read(QNRPA)
-    setter = text.index("TrySetPlainTextByCdpAsync")
+    setter = text.index("private async Task<bool> TrySetPlainTextByCdpAsync")
     cleanup = text.index("ClearStaleComposerBeforeNewDraftAsync(buyer, text)", setter)
     recheck = text.index("新任务写入前清空确认", cleanup)
     insert = text.index("InsertText2Inputbox(buyer, text)", recheck)

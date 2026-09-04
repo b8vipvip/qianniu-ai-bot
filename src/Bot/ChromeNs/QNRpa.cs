@@ -42,6 +42,11 @@ namespace Bot.ChromeNs
 
         private static readonly ConcurrentDictionary<string, DateTime> AnswerAttemptStartedAt =
             new ConcurrentDictionary<string, DateTime>(StringComparer.Ordinal);
+        private static readonly TimeSpan OwnedDraftRetention = TimeSpan.FromMinutes(30);
+
+        private string _lastOwnedDraftBuyer = string.Empty;
+        private string _lastOwnedDraftText = string.Empty;
+        private DateTime _lastOwnedDraftAt = DateTime.MinValue;
 
         public string LastSetPlainText { get; private set; }
 
@@ -106,6 +111,43 @@ namespace Bot.ChromeNs
                 && string.Equals((LastSetPlainText ?? string.Empty).Trim(), text, StringComparison.Ordinal)
                 && LatestSetTextTime != DateTime.MinValue
                 && (DateTime.Now - LatestSetTextTime).TotalSeconds <= 20;
+        }
+
+        private void RememberOwnedDraft(string buyer, string text)
+        {
+            buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
+            text = (text ?? string.Empty).Trim();
+            _lastOwnedDraftBuyer = buyer ?? string.Empty;
+            _lastOwnedDraftText = text;
+            _lastOwnedDraftAt = text.Length == 0 ? DateTime.MinValue : DateTime.Now;
+            LastSetPlainText = text;
+            LatestSetTextTime = _lastOwnedDraftAt;
+        }
+
+        private void ForgetOwnedDraft()
+        {
+            _lastOwnedDraftBuyer = string.Empty;
+            _lastOwnedDraftText = string.Empty;
+            _lastOwnedDraftAt = DateTime.MinValue;
+            LastSetPlainText = string.Empty;
+            LatestSetTextTime = DateTime.MinValue;
+        }
+
+        private bool IsOwnedDraftForBuyer(string buyer, string currentText)
+        {
+            buyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, buyer);
+            var ownedBuyer = BuyerIdentityAliasService.ResolveInternalNick(SellerNick, _lastOwnedDraftBuyer);
+            var ownedText = (_lastOwnedDraftText ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(buyer)
+                || string.IsNullOrWhiteSpace(ownedBuyer)
+                || ownedText.Length == 0
+                || _lastOwnedDraftAt == DateTime.MinValue
+                || DateTime.Now - _lastOwnedDraftAt > OwnedDraftRetention)
+            {
+                return false;
+            }
+            if (!BuyerIdentityAliasService.AreEquivalent(SellerNick, ownedBuyer, buyer)) return false;
+            return EditorMatchesExpectedText(currentText, ownedText);
         }
 
         internal bool IsKnownBotOwnedDraftText(string currentText)
@@ -223,6 +265,23 @@ namespace Bot.ChromeNs
             try
             {
                 return await worker.ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                SetSendFailure(stage, ex.Message);
+                Log.Info(stage + "失败: " + ex.Message);
+                return false;
+            }
+        }
+
+        private async Task<bool> RunUiMutationAsync(Func<bool> action, string stage)
+        {
+            if (action == null) return false;
+            try
+            {
+                // Side-effecting UI work must never be abandoned after a timeout. A timed-out
+                // Task.Run can still press Ctrl+A/Backspace later and erase a newer draft.
+                return await Task.Run(action).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -929,8 +988,7 @@ namespace Bot.ChromeNs
                         || !FocusEditor()) return;
                     PressCtrlA();
                     PressBackspace();
-                    LastSetPlainText = string.Empty;
-                    LatestSetTextTime = DateTime.MinValue;
+                    ForgetOwnedDraft();
                     Log.Info("已安全清除发送失败的Bot精确草稿: buyer=" + buyer + ", reason=" + reason);
                 });
             }
@@ -944,9 +1002,6 @@ namespace Bot.ChromeNs
         {
             try
             {
-                // Desktop Qianniu's composer is treated as the Bot's work buffer. The user-facing
-                // safety boundary is the proven seller+buyer conversation, not preservation of a
-                // stale desktop draft left by a previous failed Bot send.
                 var currentBuyer = await ReadCurrentBuyerNickAsync().ConfigureAwait(false);
                 if (!IsExpectedBuyer(buyer, currentBuyer))
                 {
@@ -962,39 +1017,64 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                var cleared = await RunUiActionAsync(() =>
+                string observedText;
+                if (!TryGetEditorText(out observedText))
                 {
-                    string currentText;
-                    if (!TryGetEditorText(out currentText)) return false;
-                    var normalized = NormalizeEditorText(currentText);
-                    if (string.IsNullOrWhiteSpace(normalized)) return true;
+                    SetSendFailure("残留草稿清理", "无法读取当前输入框内容，禁止盲目清空");
+                    return false;
+                }
+                if (string.IsNullOrWhiteSpace(NormalizeEditorText(observedText))) return true;
 
-                    // A racing retry may already have placed this exact answer. Never clear an exact
-                    // current-task draft; the caller re-probes and adopts it instead of appending.
-                    if (!string.IsNullOrEmpty(expected) && EditorMatchesExpectedText(currentText, expected))
+                // A concurrent retry may already have placed this exact current answer. Adopt it;
+                // never delete it and never append another copy.
+                if (!string.IsNullOrEmpty(expected) && EditorMatchesExpectedText(observedText, expected))
+                {
+                    RememberOwnedDraft(buyer, expected);
+                    Log.Info("输入框已存在本次任务精确草稿，已接管且不会重复写入: buyer=" + buyer);
+                    return true;
+                }
+
+                // Only a draft previously recorded by this QNRpa instance for the same buyer may be
+                // deleted. Unknown/manual text is preserved fail-closed.
+                if (!IsOwnedDraftForBuyer(buyer, observedText))
+                {
+                    SetSendFailure("残留草稿清理",
+                        "输入框存在所有权无法证明的内容，已保留并阻止覆盖/追加发送");
+                    Log.Info("残留草稿未清理：无法证明属于同一买家的Bot历史草稿。buyer=" + buyer
+                        + ", chars=" + NormalizeEditorText(observedText).Length);
+                    return false;
+                }
+
+                var ownedText = observedText;
+                Log.Info("检测到同一买家的Bot历史残留草稿，准备安全清空后执行新发送任务: buyer="
+                    + buyer + ", chars=" + NormalizeEditorText(ownedText).Length);
+
+                var cleared = await RunUiMutationAsync(() =>
+                {
+                    string latestText;
+                    if (!TryGetEditorText(out latestText)
+                        || !EditorMatchesExpectedText(latestText, ownedText)
+                        || !IsOwnedDraftForBuyer(buyer, latestText)
+                        || !FocusEditor())
                     {
-                        return true;
+                        return false;
                     }
-
-                    Log.Info("检测到电脑千牛输入框残留草稿，按Bot独占工作区策略先清空再执行新发送任务: buyer="
-                        + buyer + ", chars=" + normalized.Length);
-                    if (!FocusEditor()) return false;
                     PressCtrlA();
                     PressBackspace();
                     Thread.Sleep(120);
-
                     string afterClear;
-                    if (!TryGetEditorText(out afterClear)) return false;
-                    if (!string.IsNullOrWhiteSpace(NormalizeEditorText(afterClear))) return false;
-
-                    LastSetPlainText = string.Empty;
-                    LatestSetTextTime = DateTime.MinValue;
+                    if (!TryGetEditorText(out afterClear)
+                        || !string.IsNullOrWhiteSpace(NormalizeEditorText(afterClear)))
+                    {
+                        return false;
+                    }
+                    ForgetOwnedDraft();
                     return true;
-                }, "残留草稿清理", UiActionTimeoutMs).ConfigureAwait(false);
+                }, "Bot历史残留草稿清理").ConfigureAwait(false);
 
                 if (!cleared)
                 {
-                    SetSendFailure("残留草稿清理", "输入框残留内容清空失败，已阻止追加写入");
+                    SetSendFailure("残留草稿清理", "Bot历史残留草稿清空失败，已阻止追加写入");
                     return false;
                 }
 
@@ -1007,37 +1087,14 @@ namespace Bot.ChromeNs
                 }
 
                 var after = await ProbeInputboxEmptyAsync("残留草稿清理后确认", CdpQuickProbeTimeoutMs).ConfigureAwait(false);
-                if (!after.Completed)
+                if (!after.Completed || !after.IsEmpty)
                 {
-                    SetSendFailure("残留草稿清理", "清空后CDP无法确认输入框状态，禁止盲目追加写入");
+                    SetSendFailure("残留草稿清理", "清空后CDP未确认输入框为空，禁止盲目追加写入");
                     return false;
                 }
 
-                if (after.IsEmpty)
-                {
-                    Log.Info("电脑千牛残留草稿已清空并二次确认为空，可继续写入新Bot任务: buyer=" + buyer);
-                    return true;
-                }
-
-                // If another concurrent attempt wrote exactly the same target answer between the
-                // UIA clear and CDP re-probe, adopt it instead of deleting or duplicating it.
-                if (!string.IsNullOrEmpty(expected))
-                {
-                    var exactExisting = await RunUiActionAsync(
-                        () => HasExpectedDraft(expected),
-                        "残留草稿清理后并发草稿确认",
-                        UiActionTimeoutMs).ConfigureAwait(false);
-                    if (exactExisting)
-                    {
-                        LastSetPlainText = expected;
-                        LatestSetTextTime = DateTime.Now;
-                        Log.Info("残留草稿清理期间检测到并发写入的同任务精确草稿，直接接管发送: buyer=" + buyer);
-                        return true;
-                    }
-                }
-
-                SetSendFailure("残留草稿清理", "清空后二次确认仍检测到非本次内容，已阻止覆盖/追加发送");
-                return false;
+                Log.Info("同一买家的Bot历史残留草稿已清空并二次确认为空，可继续写入新任务: buyer=" + buyer);
+                return true;
             }
             catch (Exception ex)
             {
@@ -1078,8 +1135,7 @@ namespace Bot.ChromeNs
                         UiActionTimeoutMs).ConfigureAwait(false);
                     if (exactExisting)
                     {
-                        LastSetPlainText = text;
-                        LatestSetTextTime = DateTime.Now;
+                        RememberOwnedDraft(buyer, text);
                         Log.Info("输入框已存在与本次答案完全一致的草稿，直接接管发送且不追加: buyer=" + buyer);
                         return true;
                     }
@@ -1103,8 +1159,7 @@ namespace Bot.ChromeNs
                             UiActionTimeoutMs).ConfigureAwait(false);
                         if (exactAfterClear)
                         {
-                            LastSetPlainText = text;
-                            LatestSetTextTime = DateTime.Now;
+                            RememberOwnedDraft(buyer, text);
                             Log.Info("清理残留草稿期间同任务草稿已写入，直接接管发送且不追加: buyer=" + buyer);
                             return true;
                         }
@@ -1118,8 +1173,7 @@ namespace Bot.ChromeNs
                 if (!await RunCdpActionAsync(() => _qn.InsertText2Inputbox(buyer, text), "CDP写入输入框", CdpActionTimeoutMs).ConfigureAwait(false))
                     return false;
 
-                LastSetPlainText = text;
-                LatestSetTextTime = DateTime.Now;
+                RememberOwnedDraft(buyer, text);
 
                 await Task.Delay(260).ConfigureAwait(false);
                 var after = await ProbeInputboxEmptyAsync("写入后输入框检查", CdpQuickProbeTimeoutMs).ConfigureAwait(false);

@@ -57,9 +57,11 @@ def test_v2_enrichment_waits_for_trade_fields_before_rendering_owned_plan():
     trade_call = v2.index("TryEnrichFromTradeApiAsync", enrich_start)
     assert trade_call < process_call
 
-    # This bounded retry schedule is deliberate: configured dynamic fields get a chance to arrive
-    # from the exact trade query, without making the ordinary no-field order path wait forever.
-    assert "500" in v2 and "1000" in v2 and "2000" in v2 and "3000" in v2 and "5000" in v2 and "7000" in v2
+    # Dynamic SKU/buyer-remark fields get a short eventual-consistency window, while ordinary
+    # fields query once. This replaces the old cumulative 18.5-second ladder seen in production.
+    assert 'missingAtStart.Contains("sku") || missingAtStart.Contains("buyer_remark")' in v2
+    assert "new[] { 0, 250, 500, 1000, 1500 }" in v2
+    assert "new[] { 0, 500, 1000, 2000, 3000, 5000, 7000 }" not in v2
     assert "TradeQueryAttempts" in v2
     assert "SkuFound" in v2
     assert "BuyerRemarkFound" in v2
