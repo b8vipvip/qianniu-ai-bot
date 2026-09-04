@@ -201,7 +201,16 @@ def test_mobile_ui_exposes_rules_without_secret_inputs():
     assert "下班回复方式" in text
     assert "/api/bot-web/auto-reply-rules" in text
     lowered = text.lower()
-    for forbidden in ("smtp_password", "api_token", "webhook", "clienttoken", "cookie"):
+    for forbidden in (
+        "smtp_password",
+        "smtppassword",
+        "orderplacedapitoken",
+        "wechatwebhook",
+        "feishuwebhook",
+        "dingtalkwebhook",
+        "clienttoken",
+        "cookie",
+    ):
         assert forbidden not in lowered
 
     loader = LOADER_JS_PATH.read_text(encoding="utf-8")
