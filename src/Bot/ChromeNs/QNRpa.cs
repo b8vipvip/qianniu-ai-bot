@@ -129,7 +129,8 @@ namespace Bot.ChromeNs
             _lastOwnedDraftBuyer = string.Empty;
             _lastOwnedDraftText = string.Empty;
             _lastOwnedDraftAt = DateTime.MinValue;
-            ForgetOwnedDraft();
+            LastSetPlainText = string.Empty;
+            LatestSetTextTime = DateTime.MinValue;
         }
 
         private bool IsOwnedDraftForBuyer(string buyer, string currentText)

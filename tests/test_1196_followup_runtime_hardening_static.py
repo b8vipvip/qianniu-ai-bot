@@ -33,3 +33,11 @@ def test_exact_duplicate_cdp_payloads_stay_suppressed_across_recovery_cadences()
     assert "InboundFingerprintRetention = TimeSpan.FromMinutes(5)" in bridge
     assert "BuildInboundFingerprint(seller, type, response)" in bridge
     assert "+ (response ?? string.Empty)" in bridge
+
+
+def test_owned_draft_forget_helper_clears_state_without_self_recursion():
+    q = read("src/Bot/ChromeNs/QNRpa.cs")
+    helper = q[q.index("private void ForgetOwnedDraft()"):q.index("private bool IsOwnedDraftForBuyer", q.index("private void ForgetOwnedDraft()"))]
+    assert helper.count("ForgetOwnedDraft();") == 0
+    assert "LastSetPlainText = string.Empty;" in helper
+    assert "LatestSetTextTime = DateTime.MinValue;" in helper
