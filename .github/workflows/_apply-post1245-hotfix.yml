@@ -1,0 +1,304 @@
+name: Apply post-1.1.1245 runtime hotfix
+
+on:
+  push:
+    branches:
+      - fix/post-1245-runtime-hardening-20260904
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/post-1245-runtime-hardening-20260904
+          fetch-depth: 0
+
+      - name: Apply bounded AI budgets and Bot Web sync backoff
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, got {count}")
+              return text.replace(old, new, 1)
+
+          pipeline_path = Path("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+          pipeline = pipeline_path.read_text(encoding="utf-8-sig")
+          pipeline = replace_once(
+              pipeline,
+              "internal const int TotalAiBudgetSeconds = 50;",
+              "internal const int TotalAiBudgetSeconds = 40;",
+              "total AI budget")
+          pipeline = replace_once(
+              pipeline,
+              "internal static class StreamingBuyerAnswerService\n    {\n        private sealed class StreamResult",
+              "internal static class StreamingBuyerAnswerService\n    {\n        // Keep the provider pipeline well inside BuyerSessionAgent's 55-second absolute-age watchdog.\n        // The stream phase has its own budget so multiple endpoints can never consume the entire\n        // generation lifetime and starve the structured fallback.\n        private const int StreamPhaseBudgetSeconds = 20;\n        private const int StreamAttemptDefaultSeconds = 15;\n        private const int StreamAttemptMaxSeconds = 18;\n        private const int StructuredFallbackSeconds = 15;\n\n        private sealed class StreamResult",
+              "streaming budget constants")
+          old_stream_loop = '''            var endpoints = AiEndpointStore.GetEnabledEndpoints();
+            var errors = new List<string>();
+            foreach (var endpoint in endpoints)
+            {
+                token.ThrowIfCancellationRequested();
+                var result = await StreamOneAsync(endpoint, messages, token, partial);
+                BotRuntimeStats.RecordAiCall(
+                    endpoint,
+                    result.InputTokens,
+                    result.OutputTokens,
+                    result.Success,
+                    result.LatencyMs,
+                    result.Success ? "流式成功" : result.Error);
+                endpoint.LastLatencyMs = result.LatencyMs;
+                endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
+                if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                {
+                    var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
+                    if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                    errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
+                    continue;
+                }
+                errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
+            }
+
+            token.ThrowIfCancellationRequested();'''
+          new_stream_loop = '''            var endpoints = AiEndpointStore.GetEnabledEndpoints();
+            var errors = new List<string>();
+            using (var streamPhaseCts = CancellationTokenSource.CreateLinkedTokenSource(token))
+            {
+                streamPhaseCts.CancelAfter(TimeSpan.FromSeconds(StreamPhaseBudgetSeconds));
+                try
+                {
+                    foreach (var endpoint in endpoints)
+                    {
+                        token.ThrowIfCancellationRequested();
+                        var result = await StreamOneAsync(endpoint, messages, streamPhaseCts.Token, partial);
+                        BotRuntimeStats.RecordAiCall(
+                            endpoint,
+                            result.InputTokens,
+                            result.OutputTokens,
+                            result.Success,
+                            result.LatencyMs,
+                            result.Success ? "流式成功" : result.Error);
+                        endpoint.LastLatencyMs = result.LatencyMs;
+                        endpoint.LastStatus = result.Success ? "可用" : "失败：" + result.Error;
+                        if (result.Success && !string.IsNullOrWhiteSpace(result.Answer))
+                        {
+                            var sanitized = ReplyTranscriptSanitizer.Sanitize(result.Answer);
+                            if (!string.IsNullOrWhiteSpace(sanitized)) return sanitized;
+                            errors.Add((endpoint.Name ?? "接口") + "：模型仅返回了内部时间线标签，已丢弃");
+                            continue;
+                        }
+                        errors.Add((endpoint.Name ?? "接口") + "：" + result.Error);
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    if (token.IsCancellationRequested) throw;
+                    errors.Add("流式阶段达到" + StreamPhaseBudgetSeconds + "秒预算，提前进入非流式兜底");
+                }
+            }
+
+            token.ThrowIfCancellationRequested();'''
+          pipeline = replace_once(pipeline, old_stream_loop, new_stream_loop, "stream phase budget")
+          pipeline = replace_once(
+              pipeline,
+              "MyOpenAI.CallStructuredChat(messages, 220, 0.15, 30, token)",
+              "MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token)",
+              "structured fallback timeout")
+          old_timeout = '''            var timeoutSeconds = endpoint.TimeoutSeconds <= 0
+                ? 30
+                : Math.Max(8, Math.Min(35, endpoint.TimeoutSeconds));'''
+          new_timeout = '''            var timeoutSeconds = endpoint.TimeoutSeconds <= 0
+                ? StreamAttemptDefaultSeconds
+                : Math.Max(8, Math.Min(StreamAttemptMaxSeconds, endpoint.TimeoutSeconds));'''
+          pipeline = replace_once(pipeline, old_timeout, new_timeout, "stream attempt timeout")
+          old_empty = '''            var answer = await StreamMessagesAsync(messages, token, partial);
+            if (string.IsNullOrWhiteSpace(answer))
+            {
+                return "错误：所有AI接口均未返回有效答案。";
+            }'''
+          new_empty = '''            var answer = await StreamMessagesAsync(messages, token, partial);
+            if (string.IsNullOrWhiteSpace(answer))
+            {
+                if (SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)
+                    && best != null
+                    && best.Entry != null)
+                {
+                    var safeFallback = BotFeatureStore.ApplyOutputPolicy(best.Entry.Answer);
+                    KnowledgeLearningService.RegisterAnswerSource(
+                        seller, buyer, question, safeFallback, "智能路由-AI失败离线安全兜底");
+                    MessageProcessingTraceService.RecordKnowledgeDecision(
+                        seller,
+                        buyer,
+                        "AI接口失败，使用安全离线知识兜底",
+                        "knowledgeId=" + best.Entry.Id + "；route=" + plan.Route,
+                        0);
+                    Log.Info("Smart Reply AI失败后使用安全离线知识兜底: buyer=" + buyer
+                        + ", knowledgeId=" + best.Entry.Id);
+                    return safeFallback;
+                }
+                return "错误：所有AI接口均未返回有效答案。";
+            }'''
+          pipeline = replace_once(pipeline, old_empty, new_empty, "safe offline fallback")
+          pipeline_path.write_text(pipeline, encoding="utf-8")
+
+          sync_path = Path("src/Bot/ChromeNs/BotWebAutoReplyRulesSyncService.cs")
+          sync = sync_path.read_text(encoding="utf-8-sig")
+          sync = replace_once(
+              sync,
+              "private const int SyncIntervalSeconds = 5;\n        private const string AiOffHoursMode",
+              "private const int SyncIntervalSeconds = 5;\n        private const int UnsupportedEndpointBackoffMinutes = 15;\n        private const int AuthFailureBackoffMinutes = 5;\n        private const int TransientBackoffBaseSeconds = 15;\n        private const int TransientBackoffMaxSeconds = 300;\n        private const string AiOffHoursMode",
+              "sync backoff constants")
+          sync = replace_once(
+              sync,
+              "public int Syncing;\n            public string LastApplyError = string.Empty;",
+              "public int Syncing;\n            public int ConsecutiveFailures;\n            public bool UnsupportedEndpointLogged;\n            public string LastApplyError = string.Empty;",
+              "sync state fields")
+          old_catch = '''                catch (Exception ex)
+                {
+                    using (ShopSettingsScope.Enter(state.Shop))
+                        Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步失败：" + Safe(ex.Message, 260), 20);
+                }'''
+          new_catch = '''                catch (Exception ex)
+                {
+                    var delay = ScheduleTransientBackoff(state);
+                    using (ShopSettingsScope.Enter(state.Shop))
+                        Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步暂时失败，已退避重试："
+                            + Safe(ex.Message, 260) + "，retrySeconds=" + (int)delay.TotalSeconds, 20);
+                }'''
+          sync = replace_once(sync, old_catch, new_catch, "sync exception backoff")
+          old_status = '''                        var body = await response.Content.ReadAsStringAsync();
+                        if (!response.IsSuccessStatusCode)
+                            throw new Exception("HTTP " + (int)response.StatusCode + " " + Safe(body, 300));
+                        var root = JObject.Parse(body);'''
+          new_status = '''                        var body = await response.Content.ReadAsStringAsync();
+                        if (!response.IsSuccessStatusCode)
+                        {
+                            var code = (int)response.StatusCode;
+                            if (response.StatusCode == HttpStatusCode.NotFound
+                                || response.StatusCode == HttpStatusCode.MethodNotAllowed)
+                            {
+                                state.ConsecutiveFailures = 0;
+                                state.NextSyncUtc = DateTime.UtcNow.AddMinutes(UnsupportedEndpointBackoffMinutes);
+                                if (!state.UnsupportedEndpointLogged)
+                                {
+                                    state.UnsupportedEndpointLogged = true;
+                                    Log.Info("本店 Bot Web自动回复规则同步端点尚未部署，保留Windows本地规则并降频探测：HTTP "
+                                        + code + "，retryMinutes=" + UnsupportedEndpointBackoffMinutes);
+                                }
+                                return;
+                            }
+                            if (response.StatusCode == HttpStatusCode.Unauthorized
+                                || response.StatusCode == HttpStatusCode.Forbidden)
+                            {
+                                state.ConsecutiveFailures++;
+                                state.NextSyncUtc = DateTime.UtcNow.AddMinutes(AuthFailureBackoffMinutes);
+                                Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步鉴权失败，保留本地规则并退避：HTTP "
+                                    + code + " " + Safe(body, 300) + "，retryMinutes=" + AuthFailureBackoffMinutes, 10);
+                                return;
+                            }
+
+                            var delay = ScheduleTransientBackoff(state);
+                            Log.ErrorWithMaxCount("本店 Bot Web自动回复规则同步服务暂不可用，保留本地规则并退避：HTTP "
+                                + code + " " + Safe(body, 300) + "，retrySeconds=" + (int)delay.TotalSeconds, 20);
+                            return;
+                        }
+                        state.ConsecutiveFailures = 0;
+                        state.UnsupportedEndpointLogged = false;
+                        state.NextSyncUtc = DateTime.UtcNow.AddSeconds(SyncIntervalSeconds);
+                        var root = JObject.Parse(body);'''
+          sync = replace_once(sync, old_status, new_status, "HTTP status backoff")
+          helper_anchor = '''        private static JObject BuildCurrentSettings()
+        {'''
+          helper = '''        private static TimeSpan ScheduleTransientBackoff(ShopRuleState state)
+        {
+            state.ConsecutiveFailures = Math.Min(16, state.ConsecutiveFailures + 1);
+            var exponent = Math.Min(5, Math.Max(0, state.ConsecutiveFailures - 1));
+            var seconds = Math.Min(
+                TransientBackoffMaxSeconds,
+                TransientBackoffBaseSeconds * (1 << exponent));
+            var delay = TimeSpan.FromSeconds(seconds);
+            state.NextSyncUtc = DateTime.UtcNow.Add(delay);
+            return delay;
+        }
+
+        private static JObject BuildCurrentSettings()
+        {'''
+          sync = replace_once(sync, helper_anchor, helper, "sync backoff helper")
+          sync_path.write_text(sync, encoding="utf-8")
+
+          test_path = Path("tests/test_knowledge_optimization_order_streaming_static.py")
+          test = test_path.read_text(encoding="utf-8-sig")
+          test = replace_once(
+              test,
+              'assert "internal const int TotalAiBudgetSeconds = 50" in pipeline; assert "CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds))" in pipeline',
+              'assert "internal const int TotalAiBudgetSeconds = 40" in pipeline; assert "CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds))" in pipeline',
+              "stream budget regression assertion")
+          test = replace_once(
+              test,
+              'assert "MyOpenAI.CallStructuredChat(messages, 220, 0.15, 30, token)" in pipeline; assert "BuyerStreamingReplyPipeline.Initialize();" in app; assert "ChromeNs\\\\BuyerStreamingReplyPipeline.cs" in targets',
+              'assert "MyOpenAI.CallStructuredChat(messages, 220, 0.15, StructuredFallbackSeconds, token)" in pipeline; assert "BuyerStreamingReplyPipeline.Initialize();" in app; assert "ChromeNs\\\\BuyerStreamingReplyPipeline.cs" in targets',
+              "structured fallback regression assertion")
+          test_path.write_text(test, encoding="utf-8")
+
+          regression = Path("tests/test_post_1245_runtime_hardening_static.py")
+          regression.write_text('''from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text(encoding="utf-8-sig")
+
+
+def test_text_ai_budget_finishes_before_absolute_generation_watchdog():
+    pipeline = read("src/Bot/ChromeNs/BuyerStreamingReplyPipeline.cs")
+    watchdog = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+
+    assert "internal const int TotalAiBudgetSeconds = 40" in pipeline
+    assert "StreamPhaseBudgetSeconds = 20" in pipeline
+    assert "StreamAttemptDefaultSeconds = 15" in pipeline
+    assert "StreamAttemptMaxSeconds = 18" in pipeline
+    assert "StructuredFallbackSeconds = 15" in pipeline
+    assert "streamPhaseCts.CancelAfter(TimeSpan.FromSeconds(StreamPhaseBudgetSeconds))" in pipeline
+    assert "if (token.IsCancellationRequested) throw;" in pipeline
+    assert "提前进入非流式兜底" in pipeline
+    assert "SmartReplyRouterService.CanUseOfflineKnowledgeFallback(plan)" in pipeline
+    assert "AI失败离线安全兜底" in pipeline
+    assert "GenerationAbsoluteAgeSeconds = 55" in watchdog
+
+
+def test_bot_web_sync_404_is_deployment_skew_not_five_second_error_storm():
+    sync = read("src/Bot/ChromeNs/BotWebAutoReplyRulesSyncService.cs")
+
+    assert "UnsupportedEndpointBackoffMinutes = 15" in sync
+    assert "AuthFailureBackoffMinutes = 5" in sync
+    assert "TransientBackoffBaseSeconds = 15" in sync
+    assert "TransientBackoffMaxSeconds = 300" in sync
+    assert "response.StatusCode == HttpStatusCode.NotFound" in sync
+    assert "response.StatusCode == HttpStatusCode.MethodNotAllowed" in sync
+    assert "保留Windows本地规则并降频探测" in sync
+    assert "ScheduleTransientBackoff(state)" in sync
+    assert "state.UnsupportedEndpointLogged = false" in sync
+''', encoding="utf-8")
+
+          workflow = Path(".github/workflows/_apply-post1245-hotfix.yml")
+          workflow.unlink()
+
+      - name: Commit hotfix
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: harden post-1.1.1245 runtime fallbacks"
+          git push origin HEAD:fix/post-1245-runtime-hardening-20260904
