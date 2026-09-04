@@ -111,8 +111,12 @@ def test_server_only_retention_never_requires_fake_windows_field(tmp_path):
 def test_bootstrap_installs_ack_after_console_and_initializes_table():
     text = BOOTSTRAP_PATH.read_text(encoding="utf-8-sig")
     assert "import bot_web_settings_ack" in text
-    assert "bot_web_console.install(control_plane)\nbot_web_settings_ack.install(control_plane, bot_web_console)" in text
-    assert "bot_web_console.init_bot_web_db()\n    bot_web_settings_ack.init_db()" in text
+    console_install = text.index("bot_web_console.install(control_plane)")
+    ack_install = text.index("bot_web_settings_ack.install(control_plane, bot_web_console)")
+    assert console_install < ack_install
+    console_init = text.index("bot_web_console.init_bot_web_db()")
+    ack_init = text.index("bot_web_settings_ack.init_db()")
+    assert console_init < ack_init
 
 
 def test_api_control_plane_image_packages_ack_module_imported_by_bootstrap():
