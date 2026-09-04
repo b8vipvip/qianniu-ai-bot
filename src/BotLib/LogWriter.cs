@@ -204,19 +204,13 @@ namespace BotLib
             public LoopSaveFile(string fn, int maxFileByte, bool saveLogByDay)
             {
                 FileName = fn;
-                // Runtime log files must never grow beyond one 1024 KiB segment. Honor a smaller
-                // caller limit, but clamp legacy larger/default limits to the production contract.
+                // Runtime log files are strict 1024 KiB segments. A normal process restart keeps
+                // appending to the same active file; only size rollover may archive it here.
                 _limitFileSize = maxFileByte > 0
                     ? Math.Min(maxFileByte, DefaultSegmentBytes)
                     : DefaultSegmentBytes;
                 _saveLogByDay = saveLogByDay;
                 EnsureDirectory();
-
-                // A new Bot process (including an auto-update restart) owns a new active log file.
-                // Archive any previous non-empty active file before this run writes its startup
-                // banner. The archived file is retained by the normal 24-hour policy; it is never
-                // deleted merely because an update/restart occurred.
-                RotatePreviousRunFileAtStartup();
                 MaintainLogFiles(true);
                 _timer = new NoReEnterTimer(WriteLoop, 1000, 0);
             }
@@ -235,22 +229,6 @@ namespace BotLib
                 }
                 catch
                 {
-                }
-            }
-
-            private void RotatePreviousRunFileAtStartup()
-            {
-                try
-                {
-                    if (!File.Exists(FileName)) return;
-                    var existing = new FileInfo(FileName);
-                    if (existing.Length <= 0) return;
-                    RotateCurrentFile();
-                }
-                catch
-                {
-                    // Logging startup must remain fail-open. If archival is temporarily blocked,
-                    // normal size/retention maintenance will retry later without deleting data.
                 }
             }
 
@@ -370,9 +348,7 @@ namespace BotLib
                     if (File.Exists(FileName))
                     {
                         var current = new FileInfo(FileName);
-                        if (current.Length > 0
-                            && (current.Length >= _limitFileSize
-                                || current.CreationTimeUtc < nowUtc.Subtract(LogRetention)))
+                        if (current.Length >= _limitFileSize)
                         {
                             RotateCurrentFile();
                         }
@@ -382,6 +358,8 @@ namespace BotLib
                 {
                 }
 
+                // Retention only deletes archived segments. It must never roll the active file
+                // merely because that file is older than 24 hours.
                 DeleteExpiredSegments(nowUtc.Subtract(LogRetention));
             }
 

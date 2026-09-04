@@ -5,6 +5,8 @@ NATIVE = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.NativeSend.cs"
 PLATFORM = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.PlatformSendGuard.cs"
 RELIABLE = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.ReliableSend.cs"
 LOG_WRITER = ROOT / "src" / "BotLib" / "LogWriter.cs"
+APP_LIFE = ROOT / "src" / "Bot" / "StartUp" / "AppLife.cs"
+RUNTIME_IDENTITY = ROOT / "src" / "Bot" / "Update" / "RuntimeBuildIdentityService.cs"
 KNOWLEDGE_V2 = ROOT / "src" / "Bot" / "ChromeNs" / "KnowledgeEngineV2RuntimeBridge.cs"
 
 
@@ -69,20 +71,43 @@ def test_stale_answer_cancellation_clears_only_exact_bot_owned_draft():
     assert "避免旧答案滞留千牛输入框" in text
 
 
-def test_new_process_rotates_previous_active_log_and_only_24h_retention_deletes_archives():
+def test_normal_restart_keeps_active_log_and_retention_only_deletes_archives():
     text = read(LOG_WRITER)
 
     ctor = text.index("public LoopSaveFile(string fn")
-    startup_rotate = text.index("RotatePreviousRunFileAtStartup();", ctor)
     maintenance = text.index("MaintainLogFiles(true);", ctor)
     timer = text.index("new NoReEnterTimer", maintenance)
-    assert ctor < startup_rotate < maintenance < timer
+    assert ctor < maintenance < timer
 
-    helper = text.index("private void RotatePreviousRunFileAtStartup()")
-    assert "RotateCurrentFile();" in text[helper:helper + 900]
+    assert "RotatePreviousRunFileAtStartup" not in text
+    assert "CreationTimeUtc <" not in text
+    assert "current.Length >= _limitFileSize" in text
     assert "LogRetention = TimeSpan.FromHours(24)" in text
     assert "if (info.LastWriteTimeUtc < cutoffUtc) info.Delete();" in text
     assert "if (string.Equals(path, FileName, StringComparison.OrdinalIgnoreCase)) continue;" in text
+
+
+def test_undersized_log_rotation_requires_real_version_change_and_updater_handoff():
+    app = read(APP_LIFE)
+    identity = read(RUNTIME_IDENTITY)
+
+    prepare = app.index("RuntimeBuildIdentityService.PrepareRuntimeLogForStartup")
+    open_log = app.index("Log.Initiate(", prepare)
+    assert prepare < open_log
+
+    assert 'UpdateHealthFileEnvironmentVariable = "QIANNIU_BOT_UPDATE_HEALTH_FILE"' in identity
+    assert 'RuntimeLogVersionMarkerFileName = "runtime-log-release-version.txt"' in identity
+    assert "ReadRuntimeLogVersionMarker(markerPath)" in identity
+    assert "string.IsNullOrWhiteSpace(previousVersion)" in identity
+    assert "TryPersistRuntimeLogVersionMarker(markerPath, currentVersion)" in identity
+    assert "string.Equals(previousVersion, currentVersion" in identity
+
+    marker_write = identity.index("if (!TryPersistRuntimeLogVersionMarker(markerPath, currentVersion))")
+    updater_gate = identity.index("Environment.GetEnvironmentVariable(UpdateHealthFileEnvironmentVariable)", marker_write)
+    rotate = identity.index("RotateRuntimeLogForVerifiedUpdate(activeLogPath)", updater_gate)
+    assert marker_write < updater_gate < rotate
+    assert "File.Move(activeLogPath, destination);" in identity
+    assert "检测到真实客户端版本更新，已允许不足1024KiB的活动日志归档一次" in identity
 
 
 def test_knowledge_v2_absolute_age_barrier_precedes_answer_ready():
