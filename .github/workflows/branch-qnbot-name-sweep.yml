@@ -18,7 +18,7 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
-      - name: Keep pre-merge greetings from advancing the shared generation state
+      - name: Keep pre-merge greetings state-neutral
         shell: bash
         run: |
           python - <<'PY'
@@ -30,78 +30,21 @@ jobs:
               bom = raw.startswith(b"\xef\xbb\xbf")
               text = raw.decode("utf-8-sig")
               if old not in text:
-                  raise SystemExit(f"expected fragment missing in {path}: {old[:120]!r}")
+                  raise SystemExit("expected fragment missing in " + path)
               text = text.replace(old, new, 1)
               p.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
 
-          path = "src/Bot/ChromeNs/DeterministicAutoReplyService.cs"
-          replace_once(path,
-          '''            var sessionAgent = new BuyerSessionAgent();
-            if (item.SessionGeneration > 0
-                && !sessionAgent.TryTransition(
-                    item.SellerNick,
-                    item.BuyerNick,
-                    item.SessionGeneration,
-                    BuyerSessionAgentState.Ready,
-                    "fixed_reply_ready"))
-            {
-                Log.Info(source + "生成结果到达时generation已失效，禁止记录Ready和真实发送: seller="
-                    + item.SellerNick + ", buyer=" + item.BuyerNick
-                    + ", generation=" + item.SessionGeneration);
-                return false;
-            }
-''',
-          '''            var sessionAgent = new BuyerSessionAgent();
-            if (item.SessionGeneration > 0
-                && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
-            {
-                Log.Info(source + "生成结果到达时generation已失效，禁止记录答案和真实发送: seller="
-                    + item.SellerNick + ", buyer=" + item.BuyerNick
-                    + ", generation=" + item.SessionGeneration);
-                return false;
-            }
-''')
+          ready_old = "!sessionAgent.TryTransition(\n                    item.SellerNick,\n                    item.BuyerNick,\n                    item.SessionGeneration,\n                    BuyerSessionAgentState.Ready,\n                    \"fixed_reply_ready\")"
+          ready_new = "!sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)"
+          sending_old = "!sessionAgent.TryTransition(\n                        item.SellerNick,\n                        item.BuyerNick,\n                        item.SessionGeneration,\n                        BuyerSessionAgentState.Sending,\n                        \"fixed_reply_sending\")"
+          sending_new = "!sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)"
+          replace_once("src/Bot/ChromeNs/DeterministicAutoReplyService.cs", ready_old, ready_new)
+          replace_once("src/Bot/ChromeNs/DeterministicAutoReplyService.cs", sending_old, sending_new)
 
-          replace_once(path,
-          '''                if (item.SessionGeneration > 0
-                    && !sessionAgent.TryTransition(
-                        item.SellerNick,
-                        item.BuyerNick,
-                        item.SessionGeneration,
-                        BuyerSessionAgentState.Sending,
-                        "fixed_reply_sending"))
-                {
-                    if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
-                    Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
-                        + item.SellerNick + ", buyer=" + item.BuyerNick
-                        + ", generation=" + item.SessionGeneration);
-                    return false;
-                }
-''',
-          '''                if (item.SessionGeneration > 0
-                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
-                {
-                    if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
-                    Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
-                        + item.SellerNick + ", buyer=" + item.BuyerNick
-                        + ", generation=" + item.SessionGeneration);
-                    return false;
-                }
-''')
-
-          replace_once("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs",
-          '''                    // The deterministic service owns the only same-buyer gate. Its bounded 1.8s
-                    // acquisition fails open for later generations, so an unhealthy fixed send can
-                    // no longer strand the whole buyer in Coalescing. We deliberately await the
-                    // selected rule task here: starting AI while that task can still send would
-                    // create a duplicate/out-of-order side-effect race.
-''',
-          '''                    // The deterministic service owns the only same-buyer gate. Ordinary fixed
-                    // rules now wait with the current generation cancellation token rather than
-                    // timing out and fail-opening into AI. We deliberately await the selected rule
-                    // task here: starting AI while that task can still send would create a
-                    // duplicate/out-of-order side-effect race.
-''')
+          coordinator = "src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs"
+          replace_once(coordinator, "// The deterministic service owns the only same-buyer gate. Its bounded 1.8s", "// The deterministic service owns the only same-buyer gate. Ordinary fixed rules")
+          replace_once(coordinator, "// acquisition fails open for later generations, so an unhealthy fixed send can", "// wait with the current generation cancellation token instead of timing out into AI;")
+          replace_once(coordinator, "// no longer strand the whole buyer in Coalescing. We deliberately await the", "// explicit generation invalidation is the bounded escape path. We deliberately await the")
           print("fixed-reply generation gate patch applied")
           PY
 
