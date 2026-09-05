@@ -1,0 +1,35 @@
+name: One-shot V2 sync no-op hardening
+
+on:
+  push:
+    branches:
+      - fix/knowledge-authority-stale-turn-runtime-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/knowledge-authority-stale-turn-runtime-20260905
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install focused test dependency
+        run: python -m pip install pytest
+      - name: Harden V2 synchronization no-op path
+        run: python .github/scripts/knowledge_sync_noop_hardening_20260905.py
+      - name: Run focused regression tests
+        run: python -m pytest -q tests/test_1272_knowledge_authority_and_turn_lifecycle_static.py
+      - name: Commit source hardening
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs tests/test_1272_knowledge_authority_and_turn_lifecycle_static.py
+          git commit -m "perf: skip already-synchronized V2 learning records"
+          git push origin HEAD:fix/knowledge-authority-stale-turn-runtime-20260905
