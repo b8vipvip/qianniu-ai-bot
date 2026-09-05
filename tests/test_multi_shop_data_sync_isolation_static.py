@@ -27,7 +27,9 @@ def test_feature_cloud_and_runtime_settings_are_shop_encrypted():
         assert f'"{scope}"' in bridge
     assert "ProtectedData.Protect" in settings
     assert "ProtectedData.Unprotect" in settings
-    assert '"qnbot|shop-settings|" + _shop.ShopKey' in settings
+    # Repository rename must not change DPAPI entropy or existing encrypted settings become unreadable.
+    assert '"qianniu" + "-ai-bot|shop-settings|" + _shop.ShopKey' in settings
+    assert 'Schema = "qnbot.shop-settings"' in settings
     assert "ExportValues" in settings
     assert "ReplaceValues" in settings
 
