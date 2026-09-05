@@ -52,3 +52,9 @@ def test_streaming_pipeline_uses_session_agent_as_terminal_owner():
     assert 'lease.MarkFailed("streaming_send_failed")' in pipeline
     assert 'lease.MarkCompleted("streaming_answer_generated_only")' in pipeline
     assert 'return MarkReady("send_barrier_stable");' in coordinator
+
+def test_explicit_human_answer_is_not_rewritten_by_ai_organizer():
+    learning = read("src/Bot/ChromeNs/KnowledgeLearningService.cs")
+    assert "KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(sourceType)" in learning
+    assert "learnedAnswer = safeAnswer;" in learning
+
