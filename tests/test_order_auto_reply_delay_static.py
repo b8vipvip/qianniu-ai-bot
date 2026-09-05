@@ -25,4 +25,4 @@ def test_order_reply_keeps_delay_gate_but_forced_zero_reaches_mandatory_sender_i
 def test_direct_order_event_is_dispatched_before_normal_message_loop_and_uses_shared_send_gate():
     qn = read("src/Bot/ChromeNs/QN.cs"); bridge = read("src/Bot/ChromeNs/DirectOrderEventBridge.cs")
     event_raise = 'EvRecieveNewMessage(this, e);'; normal_loop = 'await ProcessIncomingMessageAsync(message);'
-    assert qn.index(event_raise) < qn.index(normal_loop); assert 'qn.EvRecieveNewMessage += OnReceiveNewMessage;' in bridge; assert 'await qn.ProcessDirectOrderMessageAsync' in bridge; assert 'private readonly SemaphoreSlim _sendGate' in qn; assert 'await _sendGate.WaitAsync();' in qn
+    assert qn.index(event_raise) < qn.index(normal_loop); assert 'qn.EvRecieveNewMessage += OnReceiveNewMessage;' in bridge; assert 'await qn.ProcessDirectOrderMessageAsync' in bridge; assert 'private readonly SemaphoreSlim _sendGate' in qn; assert 'await _sendGate.WaitAsync(cancellationToken);' in qn

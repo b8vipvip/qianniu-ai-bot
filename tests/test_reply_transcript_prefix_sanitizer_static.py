@@ -14,7 +14,7 @@ def test_streaming_reply_strips_internal_timeline_prefix_before_ui_send_and_lear
     sanitize = source.index("var sanitizedAnswer = ReplyTranscriptSanitizer.Sanitize(answer);")
     dedupe = source.index("ReplyDeduplicationService.EnsureDistinct(")
     answer_ready = source.index("ResponseProgressTracker.SetAnswerReady(")
-    send = source.index("SendTextWithRetryAsync(burst.BuyerNick, answer, 1)")
+    send = source.index("burst.BuyerNick, answer, 1, lease.CancellationToken")
     learn = source.index("KnowledgeLearningService.QueueLearn(")
 
     assert sanitize < dedupe < answer_ready < send < learn

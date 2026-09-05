@@ -101,4 +101,4 @@ def test_multiple_buyers_get_independent_ai_workers_while_real_sends_remain_seri
     # Only the actual Qianniu UI send is serialized, which is required to prevent cross-buyer sends.
     assert "private readonly SemaphoreSlim _sendGate = new SemaphoreSlim(1, 1);" in qn
     send_method = qn.index("public async Task<bool> SendTextWithRetryAsync")
-    assert "await _sendGate.WaitAsync();" in qn[send_method:send_method + 2500]
+    assert "await _sendGate.WaitAsync(cancellationToken);" in qn[send_method:send_method + 2500]
