@@ -33,7 +33,7 @@ def test_stale_desktop_composer_is_cleared_only_when_bot_ownership_and_target_bu
     assert "RunUiMutationAsync" in block
 
 
-def test_exact_current_task_draft_is_adopted_and_side_effect_mutations_are_never_timed_out():
+def test_exact_current_task_draft_is_adopted_and_side_effect_mutations_use_bounded_exclusive_lease():
     text = _read(QNRPA)
     method = text.index("private async Task<bool> ClearStaleComposerBeforeNewDraftAsync")
     method_end = text.index("private async Task<bool> TrySetPlainTextByCdpAsync", method)
@@ -46,9 +46,12 @@ def test_exact_current_task_draft_is_adopted_and_side_effect_mutations_are_never
 
     mutation = text.index("private async Task<bool> RunUiMutationAsync")
     mutation_end = text.index("private async Task<bool> HasExpectedDraftFastAsync", mutation)
-    assert "Task.WhenAny" not in text[mutation:mutation_end]
-    assert "Task.Delay" not in text[mutation:mutation_end]
-    assert "return await Task.Run(action).ConfigureAwait(false);" in text[mutation:mutation_end]
+    helper = text[mutation:mutation_end]
+    assert "Task.WhenAny" in helper
+    assert "Task.Delay(UiMutationTimeoutMs)" in helper
+    assert "_activeUiMutationTask != null && !_activeUiMutationTask.IsCompleted" in helper
+    assert "原任务保持独占租约直到安全退出" in helper
+    assert "Thread.Abort" not in helper
     assert "OwnedDraftRetention = TimeSpan.FromMinutes(30)" in text
 
 
