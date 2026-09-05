@@ -7,22 +7,24 @@ def read(rel):
     return (ROOT / rel).read_text(encoding="utf-8-sig")
 
 
-def test_deterministic_rule_gates_are_bounded_with_correct_failure_policy():
+def test_deterministic_rule_gates_follow_generation_cancellation_with_correct_failure_policy():
     s = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     assert "await gate.WaitAsync();" not in s
-    assert "gate.WaitAsync(1800)" in s
 
-    # Ordinary work-hours fixed rules remain bounded + fail-open so one unhealthy greeting/local
-    # reply cannot strand normal traffic. Off-hours has a separate bounded fail-closed gate because
-    # no Knowledge/AI answer is allowed during the configured off-hours window.
+    # Ordinary work-hours fixed rules must serialize for the lifetime of the current generation.
+    # A timeout must not fail-open into AI while an earlier deterministic reply may still be sending.
     ordinary_gate = s.index("var gate = BuyerGates.GetOrAdd")
-    ordinary_try = s.index("try", ordinary_gate)
-    ordinary_block = s[ordinary_gate:ordinary_try]
-    assert "gate.WaitAsync(1800)" in ordinary_block
-    assert "已放行消息合并/AI链路" in ordinary_block
-    assert "return true;" in ordinary_block
-
     offhours = s.index("private static async Task<bool> HandleOffHoursExclusiveAsync")
+    ordinary_block = s[ordinary_gate:offhours]
+    assert "GetCancellationToken(" in ordinary_block
+    assert "await gate.WaitAsync(generationToken)" in ordinary_block
+    assert "gate.WaitAsync(1800)" not in ordinary_block
+    assert "已放行消息合并/AI链路" not in ordinary_block
+    assert "固定规则串行等待期间generation已失效" in ordinary_block
+    assert "return false;" in ordinary_block
+
+    # Off-hours remains separately bounded + fail-closed because no Knowledge/AI answer is allowed
+    # during the configured off-hours window.
     scoped = s.index("private static async Task<bool> HandleScopedBeforeMergeAsync", offhours)
     offhours_block = s[offhours:scoped]
     assert "gate.WaitAsync(1800)" in offhours_block
