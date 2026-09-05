@@ -1,4 +1,4 @@
-using Bot.ShopScope;
+﻿using Bot.ShopScope;
 using BotLib;
 using Newtonsoft.Json;
 using System;
@@ -354,6 +354,9 @@ namespace Bot.ChromeNs
             }
 
             var sessionAgent = new BuyerSessionAgent();
+            var generationToken = item.SessionGeneration > 0
+                ? sessionAgent.GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration)
+                : CancellationToken.None;
             if (item.SessionGeneration > 0
                 && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
             {
@@ -400,7 +403,7 @@ namespace Bot.ChromeNs
                     return false;
                 }
 
-                var ok = await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3).ConfigureAwait(false);
+                var ok = await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken).ConfigureAwait(false);
                 if (ok)
                 {
                     ReplyDeduplicationService.RememberDelivered(
@@ -429,6 +432,14 @@ namespace Bot.ChromeNs
                     source + "前置真实发送完成: seller=" + item.SellerNick
                     + ", buyer=" + item.BuyerNick + ", success=" + ok);
                 return ok;
+            }
+            catch (OperationCanceledException)
+            {
+                if (ctl != null) ctl.SetSendResult(false, "generation已失效，固定回复发送已取消");
+                Log.Info(source + "等待发送资源/会话确认期间generation失效，已在后续UI副作用前取消: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick
+                    + ", generation=" + item.SessionGeneration);
+                return false;
             }
             catch (Exception ex)
             {

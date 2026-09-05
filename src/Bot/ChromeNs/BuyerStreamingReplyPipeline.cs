@@ -1,4 +1,4 @@
-using Bot.Automation.ChatDeskNs;
+﻿using Bot.Automation.ChatDeskNs;
 using BotLib;
 using Newtonsoft.Json.Linq;
 using System;
@@ -282,7 +282,21 @@ namespace Bot.ChromeNs
                 return;
             }
 
-            var sendOk = await qn.SendTextWithRetryAsync(burst.BuyerNick, answer, 1);
+            bool sendOk;
+            try
+            {
+                sendOk = await qn.SendTextWithRetryAsync(
+                    burst.BuyerNick, answer, 1, lease.CancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                const string cancelledDuringSend = "未发送：generation在等待发送资源/会话确认期间已失效";
+                if (conversationCtl != null) conversationCtl.SetSendResult(false, cancelledDuringSend);
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, cancelledDuringSend);
+                Log.Info("Smart Reply发送期间generation硬失效，已停止后续UI发送副作用: buyer="
+                    + burst.BuyerNick);
+                return;
+            }
             if (sendOk)
             {
                 ReplyDeduplicationService.RememberDelivered(burst.SellerNick, burst.BuyerNick, answer);
