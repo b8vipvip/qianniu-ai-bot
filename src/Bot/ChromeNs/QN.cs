@@ -1,4 +1,4 @@
-using Bot.ChromeNs;
+﻿using Bot.ChromeNs;
 using DbEntity.Response;
 using DbEntity;
 using System;
@@ -121,8 +121,18 @@ namespace Bot.ChromeNs
         }
 
 
-        public async Task<bool> SendTextWithRetryAsync(string buyer, string text, int retryCount = 1)
+        public Task<bool> SendTextWithRetryAsync(string buyer, string text, int retryCount = 1)
         {
+            return SendTextWithRetryAsync(buyer, text, retryCount, CancellationToken.None);
+        }
+
+        public async Task<bool> SendTextWithRetryAsync(
+            string buyer,
+            string text,
+            int retryCount,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             const string segmentToken = "{分段符}";
             if (!string.IsNullOrEmpty(text) && text.IndexOf(segmentToken, StringComparison.Ordinal) >= 0)
             {
@@ -134,8 +144,8 @@ namespace Bot.ChromeNs
                 {
                     var segment = segments[segmentIndex];
                     Log.Info("分段自动发送: buyer=" + buyer + ", segment=" + (segmentIndex + 1) + "/" + segments.Count);
-                    if (!await SendTextWithRetryAsync(buyer, segment, retryCount)) return false;
-                    if (segmentIndex + 1 < segments.Count) await Task.Delay(220);
+                    if (!await SendTextWithRetryAsync(buyer, segment, retryCount, cancellationToken)) return false;
+                    if (segmentIndex + 1 < segments.Count) await Task.Delay(220, cancellationToken);
                 }
                 return true;
             }
@@ -144,16 +154,18 @@ namespace Bot.ChromeNs
                 Seller == null ? string.Empty : Seller.Nick,
                 text);
 
-            await _sendGate.WaitAsync();
+            await _sendGate.WaitAsync(cancellationToken);
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 rpa.ResetSendFailure();
-                if (!await EnsureActiveBuyerForSendAsync(buyer))
+                if (!await EnsureActiveBuyerForSendAsync(buyer, cancellationToken))
                 {
                     rpa.SetSendFailure("会话确认", "无法确认目标买家会话");
                     return false;
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 var sendStartedAt = DateTime.Now;
                 var ok = await SendTextAsync(buyer, text);
                 if (!ok && rpa.LastSendWasCancelled)
@@ -162,7 +174,7 @@ namespace Bot.ChromeNs
                         + ", reason=" + rpa.GetSendFailureReason());
                     return false;
                 }
-                if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900))
+                if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900, cancellationToken))
                 {
                     rpa.ResetSendFailure();
                     ok = true;
@@ -175,8 +187,9 @@ namespace Bot.ChromeNs
                 {
                     Log.Info("自动发送失败，准备重试第" + (i + 1) + "次。buyer=" + buyer
                         + ", reason=" + rpa.GetSendFailureReason() + ", text=" + text);
+                    cancellationToken.ThrowIfCancellationRequested();
                     rpa.InvalidateChatControls();
-                    await Task.Delay(1800);
+                    await Task.Delay(1800, cancellationToken);
 
                     // Seller echo is the source of truth. It can arrive after UIA timed out but
                     // before this retry window ends; sending again would create a duplicate.
@@ -189,11 +202,12 @@ namespace Bot.ChromeNs
                         break;
                     }
 
-                    if (!await EnsureActiveBuyerForSendAsync(buyer))
+                    if (!await EnsureActiveBuyerForSendAsync(buyer, cancellationToken))
                     {
                         rpa.SetSendFailure("重试会话确认", "无法确认目标买家会话");
                         return false;
                     }
+                    cancellationToken.ThrowIfCancellationRequested();
                     ok = await SendTextAsync(buyer, text);
                     if (!ok && rpa.LastSendWasCancelled)
                     {
@@ -201,7 +215,7 @@ namespace Bot.ChromeNs
                             + ", reason=" + rpa.GetSendFailureReason());
                         return false;
                     }
-                    if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900))
+                    if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 900, cancellationToken))
                     {
                         rpa.ResetSendFailure();
                         ok = true;
@@ -210,7 +224,7 @@ namespace Bot.ChromeNs
                     }
                 }
 
-                if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 1400))
+                if (!ok && await WaitForSellerEchoGraceAsync(buyer, text, sendStartedAt, 1400, cancellationToken))
                 {
                     rpa.ResetSendFailure();
                     ok = true;
@@ -233,18 +247,20 @@ namespace Bot.ChromeNs
             string buyer,
             string text,
             DateTime since,
-            int milliseconds)
+            int milliseconds,
+            CancellationToken cancellationToken)
         {
             var deadline = DateTime.Now.AddMilliseconds(Math.Max(0, milliseconds));
             while (DateTime.Now <= deadline)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 if (HasRecentSellerEcho(buyer, text, since)) return true;
-                await Task.Delay(120);
+                await Task.Delay(120, cancellationToken);
             }
             return HasRecentSellerEcho(buyer, text, since);
         }
 
-        private async Task<bool> EnsureActiveBuyerForSendAsync(string buyer)
+        private async Task<bool> EnsureActiveBuyerForSendAsync(string buyer, CancellationToken cancellationToken)
         {
             buyer = (buyer ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(buyer) || cdp == null) return false;
@@ -253,6 +269,7 @@ namespace Bot.ChromeNs
 
             for (var attempt = 0; attempt < 22 && DateTime.UtcNow < deadlineUtc; attempt++)
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 try
                 {
                     var current = await GetCurrentConversationID();
@@ -273,6 +290,7 @@ namespace Bot.ChromeNs
                     }
                     if (attempt == 0)
                     {
+                        cancellationToken.ThrowIfCancellationRequested();
                         Log.Info("发送前切换目标买家: target=" + buyer + ", current=" + currentNick);
                         OpenChat(buyer);
                     }
@@ -280,12 +298,16 @@ namespace Bot.ChromeNs
                 catch (Exception ex)
                 {
                     Log.Info("发送前确认买家会话失败: " + ex.Message);
-                    if (attempt == 0) OpenChat(buyer);
+                    if (attempt == 0)
+                    {
+                        cancellationToken.ThrowIfCancellationRequested();
+                        OpenChat(buyer);
+                    }
                 }
 
                 var remainingMs = (int)Math.Max(0, (deadlineUtc - DateTime.UtcNow).TotalMilliseconds);
                 if (remainingMs <= 0) break;
-                await Task.Delay(Math.Min(ActiveBuyerConfirmPollMs, remainingMs));
+                await Task.Delay(Math.Min(ActiveBuyerConfirmPollMs, remainingMs), cancellationToken);
             }
 
             Log.Error("发送已阻止：无法在会话确认总预算内确认当前会话为目标买家。target=" + buyer

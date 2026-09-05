@@ -31,7 +31,7 @@ def test_fixed_rules_run_before_any_burst_quiet_delay_or_context_merge():
     assert "HandleOffHoursExclusiveAsync" in deterministic
     assert "OffHoursRepeatMinutes = 2" in deterministic
     assert "下班独占串行门等待超时，已fail-closed阻止Knowledge/AI链路" in deterministic
-    assert "SendTextWithRetryAsync(item.BuyerNick, answer, 3)" in deterministic
+    assert "SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken)" in deterministic
 
     # First-inquiry is still mandatory during work hours: a failed send consumes the message and
     # cannot fall through into a later local-short/context/AI response.

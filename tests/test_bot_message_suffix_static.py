@@ -31,7 +31,7 @@ def test_final_send_path_applies_suffix_before_echo_tracking_and_retry():
     start = source.index("public async Task<bool> SendTextWithRetryAsync")
     block = source[start:start + 5000]
     apply_pos = block.index("BotMessageSuffixService.Apply(")
-    gate_pos = block.index("await _sendGate.WaitAsync()")
+    gate_pos = block.index("await _sendGate.WaitAsync(cancellationToken)")
     send_pos = block.index("var ok = await SendTextAsync(buyer, text)")
     assert apply_pos < gate_pos < send_pos
     assert 'HasRecentSellerEcho(buyer, text, sendStartedAt)' in block

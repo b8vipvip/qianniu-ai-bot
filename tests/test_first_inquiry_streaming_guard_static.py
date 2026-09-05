@@ -48,7 +48,7 @@ def test_first_inquiry_is_sent_locally_and_committed_only_after_real_send():
     release = service.index("FirstInquiryFixedReplyService.ReleaseReservation(", failure)
     local_short = service.index("if (allowLocalShortReply)", release)
     failure_block = service[failure:local_short]
-    sender = service.index("qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3)")
+    sender = service.index("qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3, generationToken)")
 
     assert resolve < invoke_send < success < mark < failure < release < local_short
     assert sender > release  # generic helper implementation appears later in the source file
