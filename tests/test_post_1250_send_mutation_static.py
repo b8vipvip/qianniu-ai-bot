@@ -1,6 +1,7 @@
 from pathlib import Path
 
 
+# Production regression contract for the 1.1.1250 residual-composer stall.
 ROOT = Path(__file__).resolve().parents[1]
 QNRPA = ROOT / "src" / "Bot" / "ChromeNs" / "QNRpa.cs"
 
