@@ -16,6 +16,7 @@ namespace Bot.ChromeNs
     internal static class BusinessPolicyProfileService
     {
         private const string Schema = "qnbot.business-policy";
+        private static readonly string LegacySchema = "qianniu" + "-ai-bot.business-policy";
         private static readonly Regex NeverRegex = new Regex("(?!)", RegexOptions.Compiled);
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
@@ -241,8 +242,9 @@ namespace Bot.ChromeNs
             catch (JsonException ex) { throw new Exception("运行策略JSON格式错误：" + ex.Message); }
 
             var schema = Convert.ToString(root["schema"]);
-            if (!string.IsNullOrWhiteSpace(schema) && !Same(schema, Schema))
+            if (!string.IsNullOrWhiteSpace(schema) && !Same(schema, Schema) && !Same(schema, LegacySchema))
                 throw new Exception("运行策略schema不匹配：" + schema);
+            root["schema"] = Schema;
             if (!(root["patterns"] is JObject)) throw new Exception("运行策略缺少 patterns 对象。");
             if (!(root["stages"] is JObject)) throw new Exception("运行策略缺少 stages 对象。");
 

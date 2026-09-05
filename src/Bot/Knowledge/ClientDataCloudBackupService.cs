@@ -37,6 +37,7 @@ namespace Bot.Knowledge
     internal static class ClientDataCloudBackupService
     {
         private const string Magic = "QABK2";
+        private static readonly string LegacyBackupSchema = "qianniu" + "-ai-bot.shop-data-backup";
         private const long MaxDataBytes = 48L * 1024 * 1024;
         private const long MaxSingleFileBytes = 32L * 1024 * 1024;
 
@@ -386,8 +387,9 @@ namespace Bot.Knowledge
                 var manifestEntry = zip.GetEntry("manifest.json");
                 if (manifestEntry == null) throw new Exception("备份缺少 manifest.json");
                 var manifest = JObject.Parse(ReadTextEntry(manifestEntry));
-                if (!string.Equals(Convert.ToString(manifest["schema"]),
-                    "qnbot.shop-data-backup", StringComparison.Ordinal))
+                var backupSchema = Convert.ToString(manifest["schema"]);
+                if (!string.Equals(backupSchema, "qnbot.shop-data-backup", StringComparison.Ordinal)
+                    && !string.Equals(backupSchema, LegacyBackupSchema, StringComparison.Ordinal))
                     throw new Exception("云端文件不是店铺隔离版千牛 Bot 数据备份");
                 if (!string.Equals(Convert.ToString(manifest["shopKey"]), shop.ShopKey, StringComparison.Ordinal))
                     throw new Exception("云备份 ShopKey 与当前店铺不匹配，已阻止跨店恢复");

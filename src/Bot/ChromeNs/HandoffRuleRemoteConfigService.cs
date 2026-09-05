@@ -56,6 +56,7 @@ namespace Bot.ChromeNs
     internal static class HandoffRuleRemoteConfigService
     {
         private const string Schema = "qnbot.handoff-policy";
+        private static readonly string LegacySchema = "qianniu" + "-ai-bot.handoff-policy";
         private const int CurrentVersion = 1;
         private const string DefaultAccountSafeReply =
             "可以的，月卡可以给朋友或其他账号充值，您再拍对应月卡即可；下单后按页面提示提供需要充值的账号。";
@@ -120,7 +121,8 @@ namespace Bot.ChromeNs
             {
                 var schema = Convert.ToString(root["schema"]);
                 if (!string.IsNullOrWhiteSpace(schema)
-                    && !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase))
+                    && !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(schema, LegacySchema, StringComparison.OrdinalIgnoreCase))
                     throw new Exception("文件类型不匹配：" + schema);
                 array = root["rules"] as JArray ?? root["Rules"] as JArray;
             }
