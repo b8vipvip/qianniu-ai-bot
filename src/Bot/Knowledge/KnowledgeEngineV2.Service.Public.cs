@@ -186,11 +186,7 @@ namespace Bot.Knowledge
 
         private static bool IsApprovedProductionMatch(KnowledgeV2Match match)
         {
-            var record = match == null ? null : match.Record;
-            return record != null
-                && record.Enabled
-                && !string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
-                && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
+            return KnowledgeV2AuthorityPolicy.IsProductionApproved(match == null ? null : match.Record);
         }
 
         public static List<KnowledgeV2Record> GetRecords(string seller)
@@ -198,15 +194,14 @@ namespace Bot.Knowledge
             return KnowledgeEngineV2Repository.LoadAll(seller)
                 .Where(x => x != null)
                 .Select(Clone)
+                .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead)
                 .ToList();
         }
 
         public static List<KnowledgeV2Conflict> GetConflicts(string seller)
         {
             return GetSnapshot(seller).Records
-                .Where(x => x.Enabled
-                    && !string.Equals(x.Status, "candidate", StringComparison.OrdinalIgnoreCase)
-                    && !string.Equals(x.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase))
+                .Where(KnowledgeV2AuthorityPolicy.IsProductionApproved)
                 .GroupBy(KnowledgeEngineV2Semantics.FactKey)
                 .Where(g => !string.IsNullOrWhiteSpace(g.Key) && g.Count() > 1)
                 .Select(g => new KnowledgeV2Conflict
@@ -223,14 +218,17 @@ namespace Bot.Knowledge
         public static KnowledgeV2Stats GetStats(string seller)
         {
             var snapshot = GetSnapshot(seller);
-            var all = KnowledgeEngineV2Repository.LoadAll(seller).Where(x => x != null).ToList();
+            var all = KnowledgeEngineV2Repository.LoadAll(seller)
+                .Where(x => x != null)
+                .Select(KnowledgeV2AuthorityPolicy.NormalizeForRead)
+                .ToList();
             return new KnowledgeV2Stats
             {
                 Total = all.Count,
                 BusinessFacts = all.Count(x => x.Type == "business_fact" || x.Type == "presale"),
                 Procedures = all.Count(x => x.Type == "procedure"),
                 SafetyRules = all.Count(x => x.Type == "safety_rule"),
-                LearningCandidates = all.Count(x => x.Status == "candidate" || x.Type == "learning_candidate"),
+                LearningCandidates = all.Count(KnowledgeV2AuthorityPolicy.IsCandidate),
                 ProductBound = all.Count(x => x.ProductIds != null && x.ProductIds.Count > 0),
                 Conflicts = GetConflicts(seller).Count,
                 SnapshotBuiltAt = snapshot.BuiltAt,
@@ -262,9 +260,7 @@ namespace Bot.Knowledge
         {
             var record = GetRecords(seller).FirstOrDefault(x => x.Id == id);
             if (record == null) return;
-            record.Status = "active";
-            if (record.Type == "learning_candidate") record.Type = "business_fact";
-            record.Confidence = Math.Max(record.Confidence, 0.82);
+            KnowledgeV2AuthorityPolicy.Promote(record);
             KnowledgeEngineV2Repository.Save(seller, record);
         }
     }

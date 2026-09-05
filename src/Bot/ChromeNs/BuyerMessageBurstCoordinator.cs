@@ -197,8 +197,7 @@ namespace Bot.ChromeNs
                 return false;
             }
             if (!IsCurrent) return false;
-            MarkReady("send_barrier_stable");
-            return true;
+            return MarkReady("send_barrier_stable");
         }
 
         public bool MarkProcessing(string reason)

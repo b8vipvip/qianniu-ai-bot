@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.CodeDom.Compiler;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -220,6 +220,8 @@ namespace Bot.AssistWindow.Widget.Robot
             try
             {
                 var result = await KnowledgeLearningService.LearnAsync(e.Question, wnd.EditedAnswer, "人工修改", e.Seller, e.Buyer);
+                if (result.Success)
+                    await Task.Run(() => KnowledgeEngineV2LearningBridge.SynchronizeSeller(e.Seller));
                 ctl.SetStatus(result.Success ? result.Message : "答案已修改，但知识库整理失败：" + result.Message, result.Success);
             }
             catch (Exception ex)

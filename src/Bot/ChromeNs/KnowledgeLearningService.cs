@@ -537,6 +537,11 @@ namespace Bot.ChromeNs
                     keywords = arr == null
                         ? Convert.ToString(parsed["keywords"])
                         : string.Join(",", arr.Select(x => x.ToString().Trim()).Where(x => x.Length > 0));
+                    // AI may enrich the reusable question/category/keywords, but an answer that was
+                    // explicitly confirmed by a human is immutable provenance. Never let the
+                    // organizer paraphrase or broaden the human-confirmed answer text.
+                    if (KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(sourceType))
+                        learnedAnswer = safeAnswer;
                 }
             }
             catch (Exception ex)
