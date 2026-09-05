@@ -1,4 +1,4 @@
-name: One-shot qnbot name sweep
+name: One-shot qnbot rename compatibility
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  sweep:
+  patch-compatibility:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
@@ -18,51 +18,92 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
-      - name: Replace retired repository slug in tracked text files
+      - name: Preserve legacy data compatibility while emitting qnbot identifiers
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
-          import subprocess
 
-          root = Path.cwd()
-          retired = "qianniu" + "-ai-bot"
-          pattern = re.compile(re.escape(retired), re.IGNORECASE)
-          replacement = "qnbot"
-          changed = []
-
-          tracked = subprocess.check_output(["git", "ls-files", "-z"]).decode("utf-8").split("\0")
-          for rel in tracked:
-              if not rel:
-                  continue
-              path = root / rel
-              try:
-                  raw = path.read_bytes()
-                  text = raw.decode("utf-8-sig")
-              except (UnicodeDecodeError, OSError):
-                  continue
-              updated = pattern.sub(replacement, text)
-              if updated == text:
-                  continue
+          def patch(path, replacements):
+              p = Path(path)
+              raw = p.read_bytes()
               bom = raw.startswith(b"\xef\xbb\xbf")
-              path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + updated.encode("utf-8"))
-              changed.append(rel)
+              text = raw.decode("utf-8-sig")
+              for old, new in replacements:
+                  if old not in text:
+                      raise SystemExit(f"expected source fragment missing in {path}: {old[:100]!r}")
+                  text = text.replace(old, new, 1)
+              p.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
 
-          print(f"updated {len(changed)} tracked text files")
-          for rel in changed:
-              print(rel)
+          legacy_prefix_cs = '"qianniu" + "-ai-bot'
+
+          patch("src/Bot/ShopScope/ShopScopedSettingsStore.cs", [
+              ('private const string Schema = "qnbot.shop-settings";',
+               'private const string Schema = "qnbot.shop-settings";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.shop-settings";'),
+              ('return Encoding.UTF8.GetBytes("qnbot|shop-settings|" + _shop.ShopKey);',
+               'return Encoding.UTF8.GetBytes(' + legacy_prefix_cs + '|shop-settings|" + _shop.ShopKey);'),
+              ('|| !string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                || document.SchemaVersion != SchemaVersion',
+               '|| (!string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                    && !string.Equals(document.Schema, LegacySchema, StringComparison.Ordinal))\n                || document.SchemaVersion != SchemaVersion'),
+          ])
+
+          patch("src/Bot/ShopScope/ShopTokenStore.cs", [
+              ('private const string Schema = "qnbot.shop-token";',
+               'private const string Schema = "qnbot.shop-token";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.shop-token";'),
+              ('"qnbot|control-plane-token|" + _shop.ShopKey',
+               legacy_prefix_cs + '|control-plane-token|" + _shop.ShopKey'),
+              ('|| !string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                || document.SchemaVersion != SchemaVersion',
+               '|| (!string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                    && !string.Equals(document.Schema, LegacySchema, StringComparison.Ordinal))\n                || document.SchemaVersion != SchemaVersion'),
+          ])
+
+          patch("src/Bot/ShopScope/ShopProfileStore.cs", [
+              ('private const string RegistrySchema = "qnbot.shop-registry";',
+               'private const string RegistrySchema = "qnbot.shop-registry";\n        private static readonly string LegacyRegistrySchema = ' + legacy_prefix_cs + '.shop-registry";'),
+              ('if (!string.Equals(registry.Schema, RegistrySchema, StringComparison.Ordinal))\n                throw new InvalidDataException("Unsupported shop registry schema.");',
+               'if (!string.Equals(registry.Schema, RegistrySchema, StringComparison.Ordinal)\n                && !string.Equals(registry.Schema, LegacyRegistrySchema, StringComparison.Ordinal))\n                throw new InvalidDataException("Unsupported shop registry schema.");'),
+              ('private void SaveRegistry(ShopRegistryDocument registry)\n        {\n            AtomicWrite(',
+               'private void SaveRegistry(ShopRegistryDocument registry)\n        {\n            registry.Schema = RegistrySchema;\n            AtomicWrite('),
+          ])
+
+          patch("src/Bot/ChromeNs/BusinessPolicyProfileService.cs", [
+              ('private const string Schema = "qnbot.business-policy";',
+               'private const string Schema = "qnbot.business-policy";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.business-policy";'),
+              ('if (!string.IsNullOrWhiteSpace(schema) && !Same(schema, Schema))\n                throw new Exception("运行策略schema不匹配：" + schema);',
+               'if (!string.IsNullOrWhiteSpace(schema) && !Same(schema, Schema) && !Same(schema, LegacySchema))\n                throw new Exception("运行策略schema不匹配：" + schema);\n            root["schema"] = Schema;'),
+          ])
+
+          patch("src/Bot/ChromeNs/HandoffRuleRemoteConfigService.cs", [
+              ('private const string Schema = "qnbot.handoff-policy";',
+               'private const string Schema = "qnbot.handoff-policy";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.handoff-policy";'),
+              ('&& !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase))\n                    throw new Exception("文件类型不匹配：" + schema);',
+               '&& !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase)\n                    && !string.Equals(schema, LegacySchema, StringComparison.OrdinalIgnoreCase))\n                    throw new Exception("文件类型不匹配：" + schema);'),
+          ])
+
+          patch("src/Bot/Knowledge/ClientDataCloudBackupService.cs", [
+              ('private const string Magic = "QABK2";',
+               'private const string Magic = "QABK2";\n        private static readonly string LegacyBackupSchema = ' + legacy_prefix_cs + '.shop-data-backup";'),
+              ('if (!string.Equals(Convert.ToString(manifest["schema"]),\n                    "qnbot.shop-data-backup", StringComparison.Ordinal))\n                    throw new Exception("云端文件不是店铺隔离版千牛 Bot 数据备份");',
+               'var backupSchema = Convert.ToString(manifest["schema"]);\n                if (!string.Equals(backupSchema, "qnbot.shop-data-backup", StringComparison.Ordinal)\n                    && !string.Equals(backupSchema, LegacyBackupSchema, StringComparison.Ordinal))\n                    throw new Exception("云端文件不是店铺隔离版千牛 Bot 数据备份");'),
+          ])
+
+          patch("src/Bot/Knowledge/RulePolicyImportExportUi.cs", [
+              ('if (!string.IsNullOrWhiteSpace(schema)\n                && !string.Equals(schema, expected, StringComparison.OrdinalIgnoreCase))',
+               'if (!string.IsNullOrWhiteSpace(schema)\n                && !SchemaMatches(schema, expected))'),
+              ('        private static void ValidateSchema(JObject root, string expected)\n',
+               '        private static bool SchemaMatches(string actual, string expected)\n        {\n            if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) return true;\n            if (string.IsNullOrWhiteSpace(expected)\n                || !expected.StartsWith("qnbot.", StringComparison.OrdinalIgnoreCase)) return false;\n            var legacyExpected = ("qianniu" + "-ai-bot") + expected.Substring("qnbot".Length);\n            return string.Equals(actual, legacyExpected, StringComparison.OrdinalIgnoreCase);\n        }\n\n        private static void ValidateSchema(JObject root, string expected)\n'),
+          ])
+
+          print("rename compatibility patch applied")
           PY
 
-      - name: Commit sweep
+      - name: Commit compatibility patch
         shell: bash
         run: |
           if git diff --quiet; then
-            echo "No retired slug remains in tracked UTF-8 text files."
+            echo "Compatibility patch already applied."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "chore: replace retired project slug with qnbot [skip ci]"
+          git commit -m "fix: preserve legacy data compatibility after qnbot rename [skip ci]"
           git push origin HEAD:${{ github.ref_name }}
