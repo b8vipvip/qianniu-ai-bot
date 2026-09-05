@@ -1,0 +1,43 @@
+name: Refresh post-1.1.1250 mutation contracts
+
+on:
+  push:
+    branches:
+      - fix/post-1250-send-mutation-20260905
+    paths:
+      - .github/workflows/post-1250-mutation-contract-refresh.yml
+
+permissions:
+  contents: write
+
+jobs:
+  refresh-tests:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install pytest
+        run: python -m pip install --disable-pip-version-check pytest
+      - name: Refresh stale mutation contracts
+        run: python tools/update_post_1250_mutation_contract_tests.py
+      - name: Run focused composer safety tests
+        run: >-
+          python -m pytest -q
+          tests/test_1196_followup_runtime_hardening_static.py
+          tests/test_pr15_review_fixes_static.py
+          tests/test_stale_composer_cleanup_and_log_retention_static.py
+          tests/test_post_1250_send_mutation_static.py
+      - name: Commit refreshed contracts and remove one-shot helpers
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath tools/update_post_1250_mutation_contract_tests.py
+          Remove-Item -LiteralPath .github/workflows/post-1250-mutation-contract-refresh.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "test: align composer mutation contracts with bounded lease"
+          git push origin HEAD:fix/post-1250-send-mutation-20260905
