@@ -22,8 +22,8 @@ def test_control_plane_image_contains_runtime_streaming_guard_and_ci_starts_cont
 def test_server_updater_preserves_data_uses_master_and_verifies_baota_domain():
     script = read("scripts/update-api-control-plane.sh")
 
-    assert 'REPO_URL="${REPO_URL:-git@github.com:b8vipvip/qianniu-ai-bot.git}"' in script
-    assert 'REPO_DIR="${REPO_DIR:-/opt/qianniu-ai-bot}"' in script
+    assert 'REPO_URL="${REPO_URL:-git@github.com:b8vipvip/qnbot.git}"' in script
+    assert 'REPO_DIR="${REPO_DIR:-/opt/qnbot}"' in script
     assert 'LEGACY_DIR="${LEGACY_DIR:-/opt/qianniu-api-control-plane}"' in script
     assert 'BRANCH="${BRANCH:-master}"' in script
     assert "data.tar.gz" in script
@@ -53,7 +53,7 @@ def test_update_manual_records_current_production_environment():
     manual = read("docs/UPDATE_AND_DEPLOY.md")
 
     assert "https://aboter.mv3.cn" in manual
-    assert "/opt/qianniu-ai-bot" in manual
+    assert "/opt/qnbot" in manual
     assert "http://127.0.0.1:18081" in manual
     assert "scripts/update-api-control-plane.sh" in manual
     assert "scripts\\update-bot.ps1" in manual

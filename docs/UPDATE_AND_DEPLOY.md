@@ -6,10 +6,10 @@
 
 ### Ubuntu / 宝塔 API 控制面
 
-- GitHub 仓库：`git@github.com:b8vipvip/qianniu-ai-bot.git`
+- GitHub 仓库：`git@github.com:b8vipvip/qnbot.git`
 - Git 分支：`master`
-- Git 仓库目录：`/opt/qianniu-ai-bot`
-- API 服务目录：`/opt/qianniu-ai-bot/services/api-control-plane`
+- Git 仓库目录：`/opt/qnbot`
+- API 服务目录：`/opt/qnbot/services/api-control-plane`
 - 旧 ZIP 部署目录兼容：`/opt/qianniu-api-control-plane`
 - 生产域名：`https://aboter.mv3.cn`
 - 宝塔反向代理目标：`http://127.0.0.1:18081`
@@ -29,11 +29,11 @@
 ```bash
 cd /opt
 
-# 已存在 /opt/qianniu-ai-bot/.git 时跳过 clone。
-[ -d /opt/qianniu-ai-bot/.git ] || \
-  git clone git@github.com:b8vipvip/qianniu-ai-bot.git /opt/qianniu-ai-bot
+# 已存在 /opt/qnbot/.git 时跳过 clone。
+[ -d /opt/qnbot/.git ] || \
+  git clone git@github.com:b8vipvip/qnbot.git /opt/qnbot
 
-cd /opt/qianniu-ai-bot
+cd /opt/qnbot
 sudo bash scripts/update-api-control-plane.sh
 ```
 
@@ -54,7 +54,7 @@ sudo bash scripts/update-api-control-plane.sh
 备份默认保存在：
 
 ```text
-/opt/qianniu-ai-bot-backups/YYYYMMDD-HHMMSS/
+/opt/qnbot-backups/YYYYMMDD-HHMMSS/
 ```
 
 其中包含：
@@ -71,21 +71,21 @@ new-git-commit.txt
 只需要：
 
 ```bash
-cd /opt/qianniu-ai-bot
+cd /opt/qnbot
 sudo bash scripts/update-api-control-plane.sh
 ```
 
 查看当前版本：
 
 ```bash
-cd /opt/qianniu-ai-bot
+cd /opt/qnbot
 git rev-parse HEAD
 ```
 
 查看服务状态：
 
 ```bash
-cd /opt/qianniu-ai-bot/services/api-control-plane
+cd /opt/qnbot/services/api-control-plane
 docker compose -f docker-compose.bt.yml ps
 ```
 
@@ -108,11 +108,11 @@ curl -fsS https://aboter.mv3.cn/healthz
 
 ```bash
 sudo env \
-  REPO_DIR=/opt/qianniu-ai-bot \
+  REPO_DIR=/opt/qnbot \
   LEGACY_DIR=/opt/qianniu-api-control-plane \
   BRANCH=master \
   VERIFY_URL=https://aboter.mv3.cn/healthz \
-  bash /opt/qianniu-ai-bot/scripts/update-api-control-plane.sh
+  bash /opt/qnbot/scripts/update-api-control-plane.sh
 ```
 
 不要在生产 `.env` 中随意更换 `API_KEY_ENCRYPTION_KEY`。更换后，数据库中已经加密保存的上游 ApiKey、企业微信 Secret、Token 等将无法正常解密。
@@ -151,20 +151,20 @@ scripts/update-bot.ps1
 8. 启动新 Bot 并确认进程保持运行；
 9. 启动失败时自动恢复旧程序和永久数据备份。
 
-脚本会拒绝把运行包覆盖到包含 `.git` 的源码仓库，防止误删 `C:\qianniu-ai-bot` 源码目录。
+脚本会拒绝把运行包覆盖到包含 `.git` 的源码仓库，防止误删 `C:\qnbot` 源码目录。
 
 ## Windows：标准更新命令
 
 假设：
 
-- 源码仓库：`C:\qianniu-ai-bot`
+- 源码仓库：`C:\qnbot`
 - 下载包位于：`C:\Users\codex\Downloads`
 - Bot 当前处于运行状态，脚本可自动识别实际运行目录。
 
 先更新本地脚本：
 
 ```powershell
-cd C:\qianniu-ai-bot
+cd C:\qnbot
 git checkout master
 git pull --ff-only origin master
 ```
@@ -174,20 +174,20 @@ git pull --ff-only origin master
 ```powershell
 cd C:\Users\codex\Downloads
 Set-ExecutionPolicy -Scope Process Bypass -Force
-& C:\qianniu-ai-bot\scripts\update-bot.ps1 `
+& C:\qnbot\scripts\update-bot.ps1 `
   -PackagePath .\qianniu-bot-pr16-final-93516b8-x64.zip
 ```
 
 PowerShell 中也可以写成一行：
 
 ```powershell
-cd C:\Users\codex\Downloads; Set-ExecutionPolicy -Scope Process Bypass -Force; & C:\qianniu-ai-bot\scripts\update-bot.ps1 -PackagePath .\qianniu-bot-pr16-final-93516b8-x64.zip
+cd C:\Users\codex\Downloads; Set-ExecutionPolicy -Scope Process Bypass -Force; & C:\qnbot\scripts\update-bot.ps1 -PackagePath .\qianniu-bot-pr16-final-93516b8-x64.zip
 ```
 
 Bot 没有运行、无法自动识别安装目录时，明确指定真正的运行目录：
 
 ```powershell
-& C:\qianniu-ai-bot\scripts\update-bot.ps1 `
+& C:\qnbot\scripts\update-bot.ps1 `
   -PackagePath C:\Users\codex\Downloads\qianniu-bot-pr16-final-93516b8-x64.zip `
   -InstallDir C:\QianniuAiBot
 ```
@@ -196,7 +196,7 @@ Bot 没有运行、无法自动识别安装目录时，明确指定真正的运�
 
 ```powershell
 cd C:\Users\codex\Downloads
-& C:\qianniu-ai-bot\scripts\update-bot.ps1
+& C:\qnbot\scripts\update-bot.ps1
 ```
 
 Windows 更新备份默认保存在当前用户目录：

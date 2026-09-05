@@ -26,13 +26,13 @@ Web 设置页中的“启用 Bot”是店铺级总开关：
 默认 Git 仓库目录：
 
 ```text
-/opt/qianniu-ai-bot
+/opt/qnbot
 ```
 
 在服务器终端执行：
 
 ```bash
-cd /opt/qianniu-ai-bot
+cd /opt/qnbot
 git status --short
 sudo BRANCH=master bash scripts/update-api-control-plane.sh
 ```
@@ -51,7 +51,7 @@ sudo BRANCH=master bash scripts/update-api-control-plane.sh
 服务端备份默认位于：
 
 ```text
-/opt/qianniu-ai-bot-backups/<时间戳>/
+/opt/qnbot-backups/<时间戳>/
 ```
 
 部署 PR 分支进行临时验收时，可把 `BRANCH=master` 改为：
@@ -69,13 +69,13 @@ BRANCH=feat/multi-shop-data-sync-isolation
 如果本机源码目录是：
 
 ```text
-C:\qianniu-ai-bot
+C:\qnbot
 ```
 
 以管理员身份打开 PowerShell：
 
 ```powershell
-cd C:\qianniu-ai-bot
+cd C:\qnbot
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\update-bot.ps1 -PackagePath "$env:USERPROFILE\Downloads\<完整x64包名>.zip"
 ```

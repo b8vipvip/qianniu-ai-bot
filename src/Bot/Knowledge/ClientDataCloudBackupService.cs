@@ -271,7 +271,7 @@ namespace Bot.Knowledge
                     }
                     var manifest = new JObject
                     {
-                        ["schema"] = "qianniu-ai-bot.shop-data-backup",
+                        ["schema"] = "qnbot.shop-data-backup",
                         ["version"] = 2,
                         ["shopKey"] = shop.ShopKey,
                         ["platform"] = shop.Platform,
@@ -387,7 +387,7 @@ namespace Bot.Knowledge
                 if (manifestEntry == null) throw new Exception("备份缺少 manifest.json");
                 var manifest = JObject.Parse(ReadTextEntry(manifestEntry));
                 if (!string.Equals(Convert.ToString(manifest["schema"]),
-                    "qianniu-ai-bot.shop-data-backup", StringComparison.Ordinal))
+                    "qnbot.shop-data-backup", StringComparison.Ordinal))
                     throw new Exception("云端文件不是店铺隔离版千牛 Bot 数据备份");
                 if (!string.Equals(Convert.ToString(manifest["shopKey"]), shop.ShopKey, StringComparison.Ordinal))
                     throw new Exception("云备份 ShopKey 与当前店铺不匹配，已阻止跨店恢复");

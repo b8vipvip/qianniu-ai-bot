@@ -9,7 +9,7 @@ namespace Bot.ShopScope
 {
     internal sealed class ShopProfileStore
     {
-        private const string RegistrySchema = "qianniu-ai-bot.shop-registry";
+        private const string RegistrySchema = "qnbot.shop-registry";
         private const int CurrentSchemaVersion = 1;
         private static readonly object RegistrySync = new object();
         private readonly IShopScopedPathProvider _paths;

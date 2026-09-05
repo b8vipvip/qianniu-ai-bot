@@ -15,7 +15,7 @@ namespace Bot.ChromeNs
 {
     internal static class BusinessPolicyProfileService
     {
-        private const string Schema = "qianniu-ai-bot.business-policy";
+        private const string Schema = "qnbot.business-policy";
         private static readonly Regex NeverRegex = new Regex("(?!)", RegexOptions.Compiled);
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);

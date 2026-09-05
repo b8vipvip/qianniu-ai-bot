@@ -137,7 +137,7 @@ shop-runtime
 云备份 schema：
 
 ```text
-qianniu-ai-bot.shop-data-backup / version 2
+qnbot.shop-data-backup / version 2
 ```
 
 备份包只包含当前 ShopKey：

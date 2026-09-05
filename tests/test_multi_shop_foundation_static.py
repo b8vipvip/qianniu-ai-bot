@@ -38,7 +38,7 @@ def test_profile_store_preserves_shop_key_when_display_name_changes():
     assert "ShopKey collision detected" in source
     assert "duplicate seller identity" in source
     assert "AtomicWrite" in source
-    assert 'RegistrySchema = "qianniu-ai-bot.shop-registry"' in source
+    assert 'RegistrySchema = "qnbot.shop-registry"' in source
 
 
 def test_scoped_path_provider_creates_global_shop_and_compatibility_boundaries():

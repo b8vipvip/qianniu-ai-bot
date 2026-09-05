@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_DIR="${REPO_DIR:-/opt/qianniu-ai-bot}"
+REPO_DIR="${REPO_DIR:-/opt/qnbot}"
 DATA_DIR="${DATA_DIR:-$REPO_DIR/services/api-control-plane/data}"
 UPDATE_DIR="${UPDATE_DIR:-$DATA_DIR/server-update}"
 REQUEST_FILE="$UPDATE_DIR/request.json"

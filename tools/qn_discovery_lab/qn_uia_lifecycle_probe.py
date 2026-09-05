@@ -27,7 +27,7 @@ SCENARIOS = (
 
 def _inside_repo(path: Path) -> bool:
     resolved = path.resolve()
-    for parent in (ROOT.parents[1], Path(r"C:\qianniu-ai-bot")):
+    for parent in (ROOT.parents[1], Path(r"C:\qnbot")):
         try:
             resolved.relative_to(parent.resolve())
             return True

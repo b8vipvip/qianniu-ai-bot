@@ -31,7 +31,7 @@ Bot 启动约 20 秒后执行第一次后台检查，之后每 30 分钟检查�
 
 客户端只识别仓库：
 
-`b8vipvip/qianniu-ai-bot`
+`b8vipvip/qnbot`
 
 中的正式 GitHub Release，并且只接受：
 

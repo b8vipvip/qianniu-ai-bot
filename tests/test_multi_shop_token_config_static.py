@@ -13,7 +13,7 @@ def test_shop_tokens_are_dpapi_current_user_protected_and_shop_bound():
     assert "ProtectedData.Protect" in source
     assert "ProtectedData.Unprotect" in source
     assert "DataProtectionScope.CurrentUser" in source
-    assert '"qianniu-ai-bot|control-plane-token|" + _shop.ShopKey' in source
+    assert '"qnbot|control-plane-token|" + _shop.ShopKey' in source
     assert 'JsonProperty("protected_token")' in source
     assert 'JsonProperty("fingerprint")' in source
     assert "Array.Clear" in source
@@ -92,12 +92,12 @@ def test_token_binding_conflict_is_checked_before_new_token_is_saved():
 
 def test_shop_ai_settings_payload_is_dpapi_protected_and_shop_key_bound():
     source = read("src/Bot/ShopScope/ShopScopedSettingsStore.cs")
-    assert 'Schema = "qianniu-ai-bot.shop-settings"' in source
+    assert 'Schema = "qnbot.shop-settings"' in source
     assert 'GetConfigPath(_shop, "settings.json")' in source
     assert "ProtectedData.Protect" in source
     assert "ProtectedData.Unprotect" in source
     assert "DataProtectionScope.CurrentUser" in source
-    assert '"qianniu-ai-bot|shop-settings|" + _shop.ShopKey' in source
+    assert '"qnbot|shop-settings|" + _shop.ShopKey' in source
     assert 'JsonProperty("protected_values")' in source
     assert 'JsonProperty("values")' not in source
     assert "[JsonIgnore]" in source

@@ -88,8 +88,8 @@ namespace Bot.UpdateNs
 
     internal static class BotUpdateService
     {
-        private const string ReleasesApi = "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases?per_page=20";
-        private const string ReleasesPage = "https://github.com/b8vipvip/qianniu-ai-bot/releases";
+        private const string ReleasesApi = "https://api.github.com/repos/b8vipvip/qnbot/releases?per_page=20";
+        private const string ReleasesPage = "https://github.com/b8vipvip/qnbot/releases";
         private const string PackageAssetName = "qianniu-bot-x64.zip";
         private const string ManifestAssetName = "update.json";
         private static readonly object SettingsSync = new object();

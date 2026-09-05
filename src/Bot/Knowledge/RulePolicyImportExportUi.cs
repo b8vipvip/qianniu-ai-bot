@@ -29,9 +29,9 @@ namespace Bot.Knowledge
 {
     internal static class RulePolicyImportExportUi
     {
-        private const string StoreSchema = "qianniu-ai-bot.store-rules";
-        private const string PolicySchema = "qianniu-ai-bot.knowledge-policies";
-        private const string KnowledgePackageSchema = "qianniu-ai-bot.knowledge-package";
+        private const string StoreSchema = "qnbot.store-rules";
+        private const string PolicySchema = "qnbot.knowledge-policies";
+        private const string KnowledgePackageSchema = "qnbot.knowledge-package";
         private const int ExportVersion = 2;
 
         private static readonly ConditionalWeakTable<Window, object> Attached =

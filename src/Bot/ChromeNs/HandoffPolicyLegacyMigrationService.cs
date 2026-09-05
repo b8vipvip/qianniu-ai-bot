@@ -105,7 +105,7 @@ namespace Bot.ChromeNs
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             var payload = new JObject
             {
-                ["schema"] = "qianniu-ai-bot.handoff-policy-server-migration",
+                ["schema"] = "qnbot.handoff-policy-server-migration",
                 ["shopKey"] = shop.ShopKey,
                 ["migratedAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                 ["revision"] = revision ?? string.Empty,

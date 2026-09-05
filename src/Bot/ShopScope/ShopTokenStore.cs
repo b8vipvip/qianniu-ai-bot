@@ -8,7 +8,7 @@ namespace Bot.ShopScope
 {
     internal sealed class ShopTokenStore
     {
-        private const string Schema = "qianniu-ai-bot.shop-token";
+        private const string Schema = "qnbot.shop-token";
         private const int SchemaVersion = 1;
         private const string Algorithm = "DPAPI-CurrentUser";
         private static readonly object Sync = new object();
@@ -169,7 +169,7 @@ namespace Bot.ShopScope
         private byte[] Entropy()
         {
             return Encoding.UTF8.GetBytes(
-                "qianniu-ai-bot|control-plane-token|" + _shop.ShopKey);
+                "qnbot|control-plane-token|" + _shop.ShopKey);
         }
 
         private void Validate(TokenDocument document)

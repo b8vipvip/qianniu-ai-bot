@@ -11,7 +11,7 @@ def read(path: Path) -> str:
 
 def test_store_rule_center_has_versioned_json_import_export():
     source = read(SOURCE)
-    assert '"qianniu-ai-bot.store-rules"' in source
+    assert '"qnbot.store-rules"' in source
     assert 'Title = "导入店铺规则"' in source
     assert 'Title = "导出店铺规则"' in source
     assert 'StorePromptProfileService.ParseRulesJson' in source
@@ -32,7 +32,7 @@ def test_knowledge_policy_export_contains_complete_config_and_learning_stats():
     start = source.index("private static JObject BuildPolicyExportObject")
     end = source.index("private static string BackupKnowledgePolicies", start)
     block = source[start:end]
-    assert '"qianniu-ai-bot.knowledge-policies"' in source
+    assert '"qnbot.knowledge-policies"' in source
     assert '"answerMode"' in block
     assert '"confidence"' in block
     assert "DirectSelectedCount" in block

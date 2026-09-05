@@ -25,8 +25,8 @@ sudo apt-get update
 sudo apt-get install -y docker.io docker-compose-plugin git
 sudo systemctl enable --now docker
 
-git clone https://github.com/b8vipvip/qianniu-ai-bot.git
-cd qianniu-ai-bot
+git clone https://github.com/b8vipvip/qnbot.git
+cd qnbot
 # PR 验证阶段使用下行；合并后可省略。
 git checkout agent/reply-dedup-knowledge-navigation
 cd services/api-control-plane

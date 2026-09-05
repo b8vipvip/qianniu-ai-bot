@@ -97,7 +97,7 @@ function renderVersionUpdate(data){
   const serverCurrent=server.current_short_sha||"未知";
   const serverLatest=gh.short_sha||"同步失败";
   const serverStatus=server.sync_error?badge("GitHub 同步失败","bad"):(!server.current_commit?badge("等待识别当前版本","gray"):(server.update_available?badge("发现新版本","warn"):badge("已是最新","good")));
-  const agentHint=agent.online?"":`<p class="hint">首次启用服务端网页更新需要在 Ubuntu 执行一次：<code>sudo bash /opt/qianniu-ai-bot/scripts/install-api-control-plane-update-agent.sh</code></p>`;
+  const agentHint=agent.online?"":`<p class="hint">首次启用服务端网页更新需要在 Ubuntu 执行一次：<code>sudo bash /opt/qnbot/scripts/install-api-control-plane-update-agent.sh</code></p>`;
   const gitTransport=(agent.git_transport||serverNet.git_transport||"ssh-443")==="ssh-443"?"Git SSH 443":esc(agent.git_transport||serverNet.git_transport||"SSH");
   $("serverVersionCard").innerHTML=`
     <div class="provider-card">

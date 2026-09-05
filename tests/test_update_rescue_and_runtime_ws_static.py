@@ -12,7 +12,7 @@ def read(path):
 def test_rescue_updater_bypasses_broken_legacy_client_bootstrap():
     rescue = read("scripts/qianniu-bot-rescue-update.ps1")
 
-    assert "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest" in rescue
+    assert "https://api.github.com/repos/b8vipvip/qnbot/releases/latest" in rescue
     assert "qianniu-bot-x64.zip" in rescue
     assert "BotAutoUpdater.ps1" in rescue
     assert "Windows PowerShell 5.1" in rescue

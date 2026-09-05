@@ -55,7 +55,7 @@ namespace Bot.ChromeNs
 
     internal static class HandoffRuleRemoteConfigService
     {
-        private const string Schema = "qianniu-ai-bot.handoff-policy";
+        private const string Schema = "qnbot.handoff-policy";
         private const int CurrentVersion = 1;
         private const string DefaultAccountSafeReply =
             "可以的，月卡可以给朋友或其他账号充值，您再拍对应月卡即可；下单后按页面提示提供需要充值的账号。";

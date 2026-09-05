@@ -38,7 +38,7 @@ namespace Bot.ShopScope
 
     internal static class ShopLegacyDataMigrationService
     {
-        private const string MarkerSchema = "qianniu-ai-bot.shop-legacy-migration";
+        private const string MarkerSchema = "qnbot.shop-legacy-migration";
         private static readonly ShopScopedPathProvider Paths = new ShopScopedPathProvider();
         private static readonly ShopProfileStore Profiles = new ShopProfileStore(Paths);
         private static readonly object MigrationSync = new object();
@@ -319,7 +319,7 @@ namespace Bot.ShopScope
             }
             var payload = new JObject
             {
-                ["schema"] = "qianniu-ai-bot.shop-legacy-migration-source",
+                ["schema"] = "qnbot.shop-legacy-migration-source",
                 ["shopKey"] = shop.ShopKey,
                 ["createdAt"] = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"),
                 ["legacyRoot"] = PathEx.GlobalDataDir,
