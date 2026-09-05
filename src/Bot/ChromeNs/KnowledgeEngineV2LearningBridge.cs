@@ -132,7 +132,7 @@ namespace Bot.Knowledge
                 || source.IndexOf("human_reviewed", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        public static bool ShouldImportLegacyEntry(KnowledgeBaseEntry entry)
+        public static bool ShouldImportLegacyEntry(Bot.ChromeNs.KnowledgeBaseEntry entry)
         {
             if (entry == null || string.IsNullOrWhiteSpace(entry.Answer)) return false;
             if (IsExplicitHumanConfirmationSource(entry.SourceType)) return true;
@@ -143,7 +143,7 @@ namespace Bot.Knowledge
                 || value.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        public static bool IsPersistedStateSynchronized(KnowledgeV2Record record, KnowledgeBaseEntry entry)
+        public static bool IsPersistedStateSynchronized(KnowledgeV2Record record, Bot.ChromeNs.KnowledgeBaseEntry entry)
         {
             if (record == null || entry == null) return false;
             var expectedSource = string.IsNullOrWhiteSpace(entry.SourceType) ? "legacy_learning" : entry.SourceType.Trim();
@@ -163,7 +163,7 @@ namespace Bot.Knowledge
                 && string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
         }
 
-        public static void ApplyImportedLegacyProvenance(KnowledgeV2Record record, KnowledgeBaseEntry entry)
+        public static void ApplyImportedLegacyProvenance(KnowledgeV2Record record, Bot.ChromeNs.KnowledgeBaseEntry entry)
         {
             if (record == null || entry == null) return;
             record.SourceType = string.IsNullOrWhiteSpace(entry.SourceType) ? "legacy_learning" : entry.SourceType;
