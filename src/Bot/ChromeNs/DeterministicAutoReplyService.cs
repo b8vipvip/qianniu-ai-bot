@@ -355,12 +355,7 @@ namespace Bot.ChromeNs
 
             var sessionAgent = new BuyerSessionAgent();
             if (item.SessionGeneration > 0
-                && !sessionAgent.TryTransition(
-                    item.SellerNick,
-                    item.BuyerNick,
-                    item.SessionGeneration,
-                    BuyerSessionAgentState.Ready,
-                    "fixed_reply_ready"))
+                && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
             {
                 Log.Info(source + "生成结果到达时generation已失效，禁止记录Ready和真实发送: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick
@@ -396,12 +391,7 @@ namespace Bot.ChromeNs
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
 
                 if (item.SessionGeneration > 0
-                    && !sessionAgent.TryTransition(
-                        item.SellerNick,
-                        item.BuyerNick,
-                        item.SessionGeneration,
-                        BuyerSessionAgentState.Sending,
-                        "fixed_reply_sending"))
+                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
                 {
                     if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
                     Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
