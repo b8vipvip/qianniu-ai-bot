@@ -46,13 +46,16 @@ def test_ordinary_fixed_rule_gate_never_fail_opens_into_ai_after_timeout():
     assert "固定规则串行等待期间generation已失效" in method
 
 
-def test_fixed_send_checks_generation_before_ready_and_sending():
+def test_fixed_send_checks_generation_age_without_advancing_pre_merge_state():
     source = read("src/Bot/ChromeNs/DeterministicAutoReplyService.cs")
     method = source[source.index("private static async Task<bool> SendFixedAsync"):source.index("public static async Task<bool> TryHandleAsync")]
-    assert "fixed_reply_ready" in method
-    assert "fixed_reply_sending" in method
-    assert "TryTransition(" in method
+    assert method.count("sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration)") >= 2
+    assert "fixed_reply_ready" not in method
+    assert "fixed_reply_sending" not in method
     assert "SendTextWithRetryAsync" in method
+    # A successful first-inquiry greeting is allowed to continue into the ordinary merge/AI path,
+    # so the pre-merge sender must not leave the shared generation stuck in Sending.
+    assert "BuyerSessionAgentState.Sending" not in method
 
 
 def test_repository_does_not_reintroduce_retired_hyphenated_project_name():
@@ -73,9 +76,33 @@ def test_repository_does_not_reintroduce_retired_hyphenated_project_name():
     assert not offenders, "retired project name found in: " + ", ".join(offenders)
 
 
+def test_legacy_encrypted_store_entropy_is_preserved_without_retired_plaintext_slug():
+    settings = read("src/Bot/ShopScope/ShopScopedSettingsStore.cs")
+    token = read("src/Bot/ShopScope/ShopTokenStore.cs")
+    assert '"qianniu" + "-ai-bot|shop-settings|"' in settings
+    assert '"qianniu" + "-ai-bot|control-plane-token|"' in token
+    assert "LegacySchema" in settings
+    assert "LegacySchema" in token
+    assert 'private const string Schema = "qnbot.shop-settings"' in settings
+    assert 'private const string Schema = "qnbot.shop-token"' in token
+
+
+def test_legacy_schema_inputs_remain_readable_while_new_outputs_use_qnbot():
+    profile = read("src/Bot/ShopScope/ShopProfileStore.cs")
+    business = read("src/Bot/ChromeNs/BusinessPolicyProfileService.cs")
+    handoff = read("src/Bot/ChromeNs/HandoffRuleRemoteConfigService.cs")
+    backup = read("src/Bot/Knowledge/ClientDataCloudBackupService.cs")
+    import_export = read("src/Bot/Knowledge/RulePolicyImportExportUi.cs")
+    assert "LegacyRegistrySchema" in profile and "registry.Schema = RegistrySchema" in profile
+    assert "LegacySchema" in business and 'root["schema"] = Schema' in business
+    assert "LegacySchema" in handoff
+    assert "LegacyBackupSchema" in backup
+    assert "SchemaMatches" in import_export
+    assert '("qianniu" + "-ai-bot") + expected.Substring("qnbot".Length)' in import_export
+
+
 def test_legacy_appdata_identity_remains_untouched_for_existing_installations():
-    # The repository rename must not orphan existing users' database/configuration directories.
-    # QianniuAiBot is a historical product/data identity, not the retired hyphenated repository name.
+    # QianniuAiBot is a historical product/data identity, not the retired repository slug.
     matches = []
     for path in (ROOT / "src").rglob("*.cs"):
         try:
