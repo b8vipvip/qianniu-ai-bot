@@ -96,20 +96,35 @@ namespace Bot.ChromeNs
             }
 
             var gate = BuyerGates.GetOrAdd(key, _ => new SemaphoreSlim(1, 1));
-            var gateAcquired = await gate.WaitAsync(1800).ConfigureAwait(false);
-            if (!gateAcquired)
-            {
-                // Work-hours-only deterministic rules still fail open after a bounded wait so one
-                // unhealthy greeting/local short reply cannot strand unrelated normal generations.
-                // Off-hours traffic never reaches this branch because it is intercepted above.
-                Log.ErrorWithMaxCount(
-                    "普通固定规则内部串行门等待超时，已放行消息合并/AI链路: seller="
-                    + item.SellerNick + ", buyer=" + item.BuyerNick + ", waitMs=1800",
-                    50);
-                return true;
-            }
+            var gateAcquired = false;
+            var sessionAgent = new BuyerSessionAgent();
+            var generationToken = item.SessionGeneration > 0
+                ? sessionAgent.GetCancellationToken(item.SellerNick, item.BuyerNick, item.SessionGeneration)
+                : CancellationToken.None;
             try
             {
+                await gate.WaitAsync(generationToken).ConfigureAwait(false);
+                gateAcquired = true;
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Info("固定规则串行等待期间generation已失效，禁止超时后放行AI链路: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick
+                    + ", generation=" + item.SessionGeneration);
+                return false;
+            }
+
+            try
+            {
+                if (item.SessionGeneration > 0
+                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                {
+                    Log.Info("固定规则获得串行门时generation已失效，已消费该旧任务且不进入AI链路: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", generation=" + item.SessionGeneration);
+                    return false;
+                }
+
                 if (shop != null)
                 {
                     using (ShopSettingsScope.Enter(shop))
@@ -123,6 +138,17 @@ namespace Bot.ChromeNs
                     + item.SellerNick + ", buyer=" + item.BuyerNick,
                     20);
                 return true;
+            }
+            catch (OperationCanceledException)
+            {
+                if (generationToken.IsCancellationRequested)
+                {
+                    Log.Info("固定规则执行期间generation已失效，禁止继续发送或进入AI链路: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", generation=" + item.SessionGeneration);
+                    return false;
+                }
+                throw;
             }
             catch (Exception ex)
             {
@@ -327,6 +353,21 @@ namespace Bot.ChromeNs
                 return false;
             }
 
+            var sessionAgent = new BuyerSessionAgent();
+            if (item.SessionGeneration > 0
+                && !sessionAgent.TryTransition(
+                    item.SellerNick,
+                    item.BuyerNick,
+                    item.SessionGeneration,
+                    BuyerSessionAgentState.Ready,
+                    "fixed_reply_ready"))
+            {
+                Log.Info(source + "生成结果到达时generation已失效，禁止记录Ready和真实发送: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick
+                    + ", generation=" + item.SessionGeneration);
+                return false;
+            }
+
             var detectedAt = item.ReceivedAt == DateTime.MinValue ? DateTime.Now : item.ReceivedAt;
             var ctl = ResponseProgressTracker.BeginAnswer(
                 item.SellerNick,
@@ -354,6 +395,21 @@ namespace Bot.ChromeNs
                     source + "在消息合并前命中，不等待合并窗口、不检查AI接口: seller="
                     + item.SellerNick + ", buyer=" + item.BuyerNick);
 
+                if (item.SessionGeneration > 0
+                    && !sessionAgent.TryTransition(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        item.SessionGeneration,
+                        BuyerSessionAgentState.Sending,
+                        "fixed_reply_sending"))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
+                    Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", generation=" + item.SessionGeneration);
+                    return false;
+                }
+
                 var ok = await qn.SendTextWithRetryAsync(item.BuyerNick, answer, 3).ConfigureAwait(false);
                 if (ok)
                 {
@@ -361,6 +417,15 @@ namespace Bot.ChromeNs
                         item.SellerNick,
                         item.BuyerNick,
                         answer);
+                }
+                else if (item.SessionGeneration > 0)
+                {
+                    sessionAgent.TryTransition(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        item.SessionGeneration,
+                        BuyerSessionAgentState.Failed,
+                        "fixed_reply_send_failed");
                 }
                 if (ctl != null)
                 {
@@ -377,6 +442,15 @@ namespace Bot.ChromeNs
             }
             catch (Exception ex)
             {
+                if (item.SessionGeneration > 0)
+                {
+                    sessionAgent.TryTransition(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        item.SessionGeneration,
+                        BuyerSessionAgentState.Failed,
+                        "fixed_reply_send_exception");
+                }
                 if (ctl != null) ctl.SetSendResult(false, "发送失败：" + ex.Message);
                 Log.ErrorWithMaxCount(
                     source + "前置发送异常: seller=" + item.SellerNick
