@@ -1,0 +1,68 @@
+name: One-shot qnbot name sweep
+
+on:
+  push:
+    branches:
+      - fix/runtime-stale-generation-qnbot-rename-20260905
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Replace retired repository slug in tracked text files
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import subprocess
+
+          root = Path.cwd()
+          retired = "qianniu" + "-ai-bot"
+          pattern = re.compile(re.escape(retired), re.IGNORECASE)
+          replacement = "qnbot"
+          changed = []
+
+          tracked = subprocess.check_output(["git", "ls-files", "-z"]).decode("utf-8").split("\0")
+          for rel in tracked:
+              if not rel:
+                  continue
+              path = root / rel
+              try:
+                  raw = path.read_bytes()
+                  text = raw.decode("utf-8-sig")
+              except (UnicodeDecodeError, OSError):
+                  continue
+              updated = pattern.sub(replacement, text)
+              if updated == text:
+                  continue
+              bom = raw.startswith(b"\xef\xbb\xbf")
+              path.write_bytes((b"\xef\xbb\xbf" if bom else b"") + updated.encode("utf-8"))
+              changed.append(rel)
+
+          print(f"updated {len(changed)} tracked text files")
+          for rel in changed:
+              print(rel)
+          PY
+
+      - name: Commit sweep
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No retired slug remains in tracked UTF-8 text files."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: replace retired project slug with qnbot [skip ci]"
+          git push origin HEAD:${{ github.ref_name }}
