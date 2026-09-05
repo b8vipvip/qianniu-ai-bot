@@ -20,6 +20,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Install focused test dependency
+        run: python -m pip install pytest
       - name: Apply lifecycle ownership repair
         run: python .github/scripts/lifecycle_repair_20260905.py
       - name: Run focused regression tests
