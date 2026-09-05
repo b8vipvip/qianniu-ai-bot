@@ -21,8 +21,8 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     assert "输入框内容已变化或无法确认，已阻止发送" in qnrpa
 
     # A stale composer may only be mutated after target-buyer proof and exact Bot ownership proof.
-    # Unknown/manual content is preserved fail-closed. The mutation itself is never abandoned on a
-    # timeout, so Ctrl+A/Backspace cannot run later against a newer draft.
+    # Unknown/manual content is preserved fail-closed. Caller wait is bounded, while a timed-out
+    # COM/UIA worker retains an exclusive lease until it exits so a second mutation cannot race it.
     cleanup = qnrpa.index("private async Task<bool> ClearStaleComposerBeforeNewDraftAsync")
     cleanup_end = qnrpa.index("private async Task<bool> TrySetPlainTextByCdpAsync", cleanup)
     block = qnrpa[cleanup:cleanup_end]
@@ -40,8 +40,11 @@ def test_text_send_fails_closed_without_exact_draft_or_target_buyer():
     assert "清空后CDP未确认输入框为空，禁止盲目追加写入" in block
 
     mutation_helper = qnrpa[qnrpa.index("private async Task<bool> RunUiMutationAsync"):qnrpa.index("private async Task<bool> HasExpectedDraftFastAsync")]
-    assert "Task.WhenAny" not in mutation_helper
-    assert "Task.Delay" not in mutation_helper
+    assert "Task.WhenAny" in mutation_helper
+    assert "Task.Delay(UiMutationTimeoutMs)" in mutation_helper
+    assert "_activeUiMutationTask != null && !_activeUiMutationTask.IsCompleted" in mutation_helper
+    assert "原任务保持独占租约直到安全退出" in mutation_helper
+    assert "Thread.Abort" not in mutation_helper
 
     assert "UIA写入确认" in qnrpa
     open_send = qnrpa[qnrpa.index("private async Task<bool> OpenAndSendText"):]

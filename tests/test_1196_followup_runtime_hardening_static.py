@@ -7,15 +7,18 @@ def read(path: str) -> str:
     return (ROOT / path).read_text(encoding="utf-8-sig")
 
 
-def test_unknown_composer_text_is_never_deleted_and_mutation_has_no_abandoned_timeout():
+def test_unknown_composer_text_is_never_deleted_and_timed_out_mutation_retains_exclusive_lease():
     q = read("src/Bot/ChromeNs/QNRpa.cs")
     method = q[q.index("ClearStaleComposerBeforeNewDraftAsync"):q.index("TrySetPlainTextByCdpAsync")]
     assert "IsOwnedDraftForBuyer(buyer, observedText)" in method
     assert "输入框存在所有权无法证明的内容，已保留" in method
     assert "RunUiMutationAsync" in method
     helper = q[q.index("private async Task<bool> RunUiMutationAsync"):q.index("private async Task<bool> HasExpectedDraftFastAsync")]
-    assert "Task.WhenAny" not in helper
-    assert "Task.Delay" not in helper
+    assert "Task.WhenAny" in helper
+    assert "Task.Delay(UiMutationTimeoutMs)" in helper
+    assert "_activeUiMutationTask != null && !_activeUiMutationTask.IsCompleted" in helper
+    assert "原任务保持独占租约直到安全退出" in helper
+    assert "Thread.Abort" not in helper
 
 
 def test_order_sku_uses_raw_structured_parser_and_bounded_retry_window():
