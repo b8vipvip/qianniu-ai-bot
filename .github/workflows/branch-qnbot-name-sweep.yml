@@ -1,4 +1,4 @@
-name: One-shot qnbot rename compatibility
+name: One-shot fixed-reply compatibility patch
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  patch-compatibility:
+  patch-fixed-reply:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
@@ -18,92 +18,102 @@ jobs:
           ref: ${{ github.ref_name }}
           fetch-depth: 0
 
-      - name: Preserve legacy data compatibility while emitting qnbot identifiers
+      - name: Keep pre-merge greetings from advancing the shared generation state
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
 
-          def patch(path, replacements):
+          def replace_once(path, old, new):
               p = Path(path)
               raw = p.read_bytes()
               bom = raw.startswith(b"\xef\xbb\xbf")
               text = raw.decode("utf-8-sig")
-              for old, new in replacements:
-                  if old not in text:
-                      raise SystemExit(f"expected source fragment missing in {path}: {old[:100]!r}")
-                  text = text.replace(old, new, 1)
+              if old not in text:
+                  raise SystemExit(f"expected fragment missing in {path}: {old[:120]!r}")
+              text = text.replace(old, new, 1)
               p.write_bytes((b"\xef\xbb\xbf" if bom else b"") + text.encode("utf-8"))
 
-          legacy_prefix_cs = '"qianniu" + "-ai-bot'
+          path = "src/Bot/ChromeNs/DeterministicAutoReplyService.cs"
+          replace_once(path,
+          '''            var sessionAgent = new BuyerSessionAgent();
+            if (item.SessionGeneration > 0
+                && !sessionAgent.TryTransition(
+                    item.SellerNick,
+                    item.BuyerNick,
+                    item.SessionGeneration,
+                    BuyerSessionAgentState.Ready,
+                    "fixed_reply_ready"))
+            {
+                Log.Info(source + "生成结果到达时generation已失效，禁止记录Ready和真实发送: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick
+                    + ", generation=" + item.SessionGeneration);
+                return false;
+            }
+''',
+          '''            var sessionAgent = new BuyerSessionAgent();
+            if (item.SessionGeneration > 0
+                && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+            {
+                Log.Info(source + "生成结果到达时generation已失效，禁止记录答案和真实发送: seller="
+                    + item.SellerNick + ", buyer=" + item.BuyerNick
+                    + ", generation=" + item.SessionGeneration);
+                return false;
+            }
+''')
 
-          patch("src/Bot/ShopScope/ShopScopedSettingsStore.cs", [
-              ('private const string Schema = "qnbot.shop-settings";',
-               'private const string Schema = "qnbot.shop-settings";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.shop-settings";'),
-              ('return Encoding.UTF8.GetBytes("qnbot|shop-settings|" + _shop.ShopKey);',
-               'return Encoding.UTF8.GetBytes(' + legacy_prefix_cs + '|shop-settings|" + _shop.ShopKey);'),
-              ('|| !string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                || document.SchemaVersion != SchemaVersion',
-               '|| (!string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                    && !string.Equals(document.Schema, LegacySchema, StringComparison.Ordinal))\n                || document.SchemaVersion != SchemaVersion'),
-          ])
+          replace_once(path,
+          '''                if (item.SessionGeneration > 0
+                    && !sessionAgent.TryTransition(
+                        item.SellerNick,
+                        item.BuyerNick,
+                        item.SessionGeneration,
+                        BuyerSessionAgentState.Sending,
+                        "fixed_reply_sending"))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
+                    Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", generation=" + item.SessionGeneration);
+                    return false;
+                }
+''',
+          '''                if (item.SessionGeneration > 0
+                    && !sessionAgent.IsCurrent(item.SellerNick, item.BuyerNick, item.SessionGeneration))
+                {
+                    if (ctl != null) ctl.SetSendResult(false, "generation已失效，禁止发送迟到固定回复");
+                    Log.Info(source + "进入真实发送前generation已失效，已阻止迟到回复: seller="
+                        + item.SellerNick + ", buyer=" + item.BuyerNick
+                        + ", generation=" + item.SessionGeneration);
+                    return false;
+                }
+''')
 
-          patch("src/Bot/ShopScope/ShopTokenStore.cs", [
-              ('private const string Schema = "qnbot.shop-token";',
-               'private const string Schema = "qnbot.shop-token";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.shop-token";'),
-              ('"qnbot|control-plane-token|" + _shop.ShopKey',
-               legacy_prefix_cs + '|control-plane-token|" + _shop.ShopKey'),
-              ('|| !string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                || document.SchemaVersion != SchemaVersion',
-               '|| (!string.Equals(document.Schema, Schema, StringComparison.Ordinal)\n                    && !string.Equals(document.Schema, LegacySchema, StringComparison.Ordinal))\n                || document.SchemaVersion != SchemaVersion'),
-          ])
-
-          patch("src/Bot/ShopScope/ShopProfileStore.cs", [
-              ('private const string RegistrySchema = "qnbot.shop-registry";',
-               'private const string RegistrySchema = "qnbot.shop-registry";\n        private static readonly string LegacyRegistrySchema = ' + legacy_prefix_cs + '.shop-registry";'),
-              ('if (!string.Equals(registry.Schema, RegistrySchema, StringComparison.Ordinal))\n                throw new InvalidDataException("Unsupported shop registry schema.");',
-               'if (!string.Equals(registry.Schema, RegistrySchema, StringComparison.Ordinal)\n                && !string.Equals(registry.Schema, LegacyRegistrySchema, StringComparison.Ordinal))\n                throw new InvalidDataException("Unsupported shop registry schema.");'),
-              ('private void SaveRegistry(ShopRegistryDocument registry)\n        {\n            AtomicWrite(',
-               'private void SaveRegistry(ShopRegistryDocument registry)\n        {\n            registry.Schema = RegistrySchema;\n            AtomicWrite('),
-          ])
-
-          patch("src/Bot/ChromeNs/BusinessPolicyProfileService.cs", [
-              ('private const string Schema = "qnbot.business-policy";',
-               'private const string Schema = "qnbot.business-policy";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.business-policy";'),
-              ('if (!string.IsNullOrWhiteSpace(schema) && !Same(schema, Schema))\n                throw new Exception("运行策略schema不匹配：" + schema);',
-               'if (!string.IsNullOrWhiteSpace(schema) && !Same(schema, Schema) && !Same(schema, LegacySchema))\n                throw new Exception("运行策略schema不匹配：" + schema);\n            root["schema"] = Schema;'),
-          ])
-
-          patch("src/Bot/ChromeNs/HandoffRuleRemoteConfigService.cs", [
-              ('private const string Schema = "qnbot.handoff-policy";',
-               'private const string Schema = "qnbot.handoff-policy";\n        private static readonly string LegacySchema = ' + legacy_prefix_cs + '.handoff-policy";'),
-              ('&& !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase))\n                    throw new Exception("文件类型不匹配：" + schema);',
-               '&& !string.Equals(schema, Schema, StringComparison.OrdinalIgnoreCase)\n                    && !string.Equals(schema, LegacySchema, StringComparison.OrdinalIgnoreCase))\n                    throw new Exception("文件类型不匹配：" + schema);'),
-          ])
-
-          patch("src/Bot/Knowledge/ClientDataCloudBackupService.cs", [
-              ('private const string Magic = "QABK2";',
-               'private const string Magic = "QABK2";\n        private static readonly string LegacyBackupSchema = ' + legacy_prefix_cs + '.shop-data-backup";'),
-              ('if (!string.Equals(Convert.ToString(manifest["schema"]),\n                    "qnbot.shop-data-backup", StringComparison.Ordinal))\n                    throw new Exception("云端文件不是店铺隔离版千牛 Bot 数据备份");',
-               'var backupSchema = Convert.ToString(manifest["schema"]);\n                if (!string.Equals(backupSchema, "qnbot.shop-data-backup", StringComparison.Ordinal)\n                    && !string.Equals(backupSchema, LegacyBackupSchema, StringComparison.Ordinal))\n                    throw new Exception("云端文件不是店铺隔离版千牛 Bot 数据备份");'),
-          ])
-
-          patch("src/Bot/Knowledge/RulePolicyImportExportUi.cs", [
-              ('if (!string.IsNullOrWhiteSpace(schema)\n                && !string.Equals(schema, expected, StringComparison.OrdinalIgnoreCase))',
-               'if (!string.IsNullOrWhiteSpace(schema)\n                && !SchemaMatches(schema, expected))'),
-              ('        private static void ValidateSchema(JObject root, string expected)\n',
-               '        private static bool SchemaMatches(string actual, string expected)\n        {\n            if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) return true;\n            if (string.IsNullOrWhiteSpace(expected)\n                || !expected.StartsWith("qnbot.", StringComparison.OrdinalIgnoreCase)) return false;\n            var legacyExpected = ("qianniu" + "-ai-bot") + expected.Substring("qnbot".Length);\n            return string.Equals(actual, legacyExpected, StringComparison.OrdinalIgnoreCase);\n        }\n\n        private static void ValidateSchema(JObject root, string expected)\n'),
-          ])
-
-          print("rename compatibility patch applied")
+          replace_once("src/Bot/ChromeNs/BuyerMessageBurstCoordinator.cs",
+          '''                    // The deterministic service owns the only same-buyer gate. Its bounded 1.8s
+                    // acquisition fails open for later generations, so an unhealthy fixed send can
+                    // no longer strand the whole buyer in Coalescing. We deliberately await the
+                    // selected rule task here: starting AI while that task can still send would
+                    // create a duplicate/out-of-order side-effect race.
+''',
+          '''                    // The deterministic service owns the only same-buyer gate. Ordinary fixed
+                    // rules now wait with the current generation cancellation token rather than
+                    // timing out and fail-opening into AI. We deliberately await the selected rule
+                    // task here: starting AI while that task can still send would create a
+                    // duplicate/out-of-order side-effect race.
+''')
+          print("fixed-reply generation gate patch applied")
           PY
 
-      - name: Commit compatibility patch
+      - name: Commit fixed-reply patch
         shell: bash
         run: |
           if git diff --quiet; then
-            echo "Compatibility patch already applied."
+            echo "Patch already applied."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "fix: preserve legacy data compatibility after qnbot rename [skip ci]"
+          git commit -m "fix: keep pre-merge fixed replies state-neutral [skip ci]"
           git push origin HEAD:${{ github.ref_name }}
