@@ -9,39 +9,38 @@ def text(path):
 
 
 def test_generation_deadline_watchdog_uses_dedicated_background_thread():
+    agent = text("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
-    assert "AbsoluteGenerationAgeSeconds = 55" in source
+    assert "AbsoluteGenerationAgeSeconds = 55" in agent
     assert "DeadlineWatchdogSleepMilliseconds = 250" in source
     assert "new Thread(GenerationDeadlineWatchdogLoop)" in source
     assert "IsBackground = true" in source
-    assert 'Name = "Qianniu.GenerationDeadlineWatchdog"' in source
+    assert 'Name = "QnBot.GenerationDeadlineWatchdog"' in source
     assert "Thread.Sleep(DeadlineWatchdogSleepMilliseconds)" in source
 
 
-def test_generation_watchdog_tracks_actionable_lifetime_without_generating_sampling_race():
+def test_generation_watchdog_tracks_actionable_lifetime_without_discovery_race():
     source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
-    assert "BuyerSessionEventKind.BuyerActionAccepted" in source
+    assert "RegisterAcceptedGeneration(" in source
+    assert "WatchedGenerations.AddOrUpdate" in source
     assert "Agent.TryGetGenerationState" in source
+    assert "Agent.TryGetGenerationAcceptedAtUtc" in source
     assert "ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations" in source
-    assert "WatchedGenerations.GetOrAdd" in source
     assert "AcceptedAtUtc" in source
-    assert "ToUtcSafe(acceptedEvent.ObservedAt, now)" in source
-    assert ".GroupBy(x => x.Generation)" in source
     assert "state == BuyerSessionAgentState.Generating" not in source
     assert "foreach (var pair in WatchedGenerations.ToArray())" in source
-    assert "elapsed.TotalSeconds <= AbsoluteGenerationAgeSeconds" in source
+    assert "elapsed.TotalSeconds <= BuyerSessionAgent.AbsoluteGenerationAgeSeconds" in source
     assert '"absolute_generation_age_exceeded"' in source
     assert "Agent.Cancel(" in source
     assert "禁止迟到结果进入Ready/Sending" in source
 
 
-def test_generation_watchdog_covers_ready_sending_waiting_and_drops_only_terminal_watches():
+def test_generation_watchdog_covers_all_non_terminal_states_and_drops_terminal_watches():
     source = text("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
 
-    assert "Coalescing/Processing/Generating/Ready/" in source
-    assert "Sending/Waiting as one end-to-end generation lifetime" in source
+    assert "Every generation is registered synchronously" in source
     assert "state == BuyerSessionAgentState.Completed" in source
     assert "state == BuyerSessionAgentState.Cancelled" in source
     assert "state == BuyerSessionAgentState.Failed" in source
