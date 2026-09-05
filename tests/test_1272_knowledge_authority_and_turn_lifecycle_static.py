@@ -58,3 +58,10 @@ def test_explicit_human_answer_is_not_rewritten_by_ai_organizer():
     assert "KnowledgeV2AuthorityPolicy.IsExplicitHumanConfirmationSource(sourceType)" in learning
     assert "learnedAnswer = safeAnswer;" in learning
 
+def test_v2_learning_bridge_skips_already_synchronized_unchanged_entries():
+    bridge = read("src/Bot/ChromeNs/KnowledgeEngineV2LearningBridge.cs")
+    assert "IsPersistedStateSynchronized(existing, entry)" in bridge
+    assert "public static bool IsPersistedStateSynchronized" in bridge
+    assert 'record.Authority >= 0.98' in bridge
+    assert 'record.Confidence >= 0.94' in bridge
+

@@ -62,6 +62,12 @@ namespace Bot.ChromeNs
                     KnowledgeV2Record existing = null;
                     if (!string.IsNullOrWhiteSpace(entry.Id))
                         byId.TryGetValue(entry.Id, out existing);
+                    if (existing != null
+                        && Same(existing.Answer, entry.Answer)
+                        && KnowledgeV2AuthorityPolicy.IsPersistedStateSynchronized(existing, entry))
+                    {
+                        continue;
+                    }
 
                     KnowledgePolicyProfile profile = null;
                     try
@@ -135,6 +141,26 @@ namespace Bot.Knowledge
                 || value.IndexOf("人工回复", StringComparison.OrdinalIgnoreCase) >= 0
                 || value.IndexOf("manual", StringComparison.OrdinalIgnoreCase) >= 0
                 || value.IndexOf("session", StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        public static bool IsPersistedStateSynchronized(KnowledgeV2Record record, KnowledgeBaseEntry entry)
+        {
+            if (record == null || entry == null) return false;
+            var expectedSource = string.IsNullOrWhiteSpace(entry.SourceType) ? "legacy_learning" : entry.SourceType.Trim();
+            if (!string.Equals((record.SourceType ?? string.Empty).Trim(), expectedSource, StringComparison.OrdinalIgnoreCase))
+                return false;
+            if (record.Enabled != entry.Enabled) return false;
+
+            if (IsExplicitHumanConfirmationSource(expectedSource))
+            {
+                return string.Equals(record.Status, "active", StringComparison.OrdinalIgnoreCase)
+                    && !string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase)
+                    && record.Authority >= 0.98
+                    && record.Confidence >= 0.94;
+            }
+
+            return string.Equals(record.Status, "candidate", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(record.Type, "learning_candidate", StringComparison.OrdinalIgnoreCase);
         }
 
         public static void ApplyImportedLegacyProvenance(KnowledgeV2Record record, KnowledgeBaseEntry entry)
