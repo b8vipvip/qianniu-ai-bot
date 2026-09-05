@@ -107,6 +107,12 @@ namespace Bot.ChromeNs
                 burst.BuyerNick,
                 burst.CombinedQuestion,
                 detectedAt);
+            if (!lease.MarkGenerating("streaming_answer_started"))
+            {
+                ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick,
+                    "generation已失效，未进入答案生成");
+                return;
+            }
             var aiStartedAt = DateTime.Now;
             var generationCts = new CancellationTokenSource();
             generationCts.CancelAfter(TimeSpan.FromSeconds(TotalAiBudgetSeconds));
@@ -141,6 +147,7 @@ namespace Bot.ChromeNs
                         conversationCtl.SetProcessing("AI总超时预算已耗尽");
                         conversationCtl.SetStatus(timeout, false);
                     }
+                    lease.MarkFailed("streaming_ai_budget_exhausted");
                     ResponseProgressTracker.Fail(burst.SellerNick, burst.BuyerNick, timeout);
                     Log.Info("文本AI流总预算超时: buyer=" + burst.BuyerNick
                         + ", budgetSeconds=" + TotalAiBudgetSeconds);
@@ -203,6 +210,7 @@ namespace Bot.ChromeNs
                     conversationCtl.SetProcessing("AI未生成可用答案");
                     conversationCtl.SetStatus(failure, false);
                 }
+                lease.MarkFailed("streaming_answer_invalid");
                 ResponseProgressTracker.Fail(
                     burst.SellerNick,
                     burst.BuyerNick,
@@ -232,6 +240,7 @@ namespace Bot.ChromeNs
                 burst.SellerNick, burst.BuyerNick, burst.CombinedQuestion, detectedAt, out relevanceReason))
             {
                 var suppressed = "并发旧答案已抑制：" + relevanceReason;
+                lease.MarkCompleted("streaming_relevance_suppressed");
                 if (conversationCtl != null) conversationCtl.SetStatus(suppressed, false);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, suppressed);
                 Log.Info("并发旧答案已抑制: buyer=" + burst.BuyerNick + ", reason=" + relevanceReason);
@@ -259,14 +268,15 @@ namespace Bot.ChromeNs
 
             if (!autoSend)
             {
+                lease.MarkCompleted("streaming_answer_generated_only");
                 if (conversationCtl != null) conversationCtl.SetStatus("仅生成答案", true);
                 ResponseProgressTracker.Complete(burst.SellerNick, burst.BuyerNick);
                 return;
             }
 
-            if (!lease.IsCurrent)
+            if (!lease.MarkSending("streaming_send_started"))
             {
-                const string invalidBeforeSend = "未发送：任务已因显式硬失效而取消";
+                const string invalidBeforeSend = "未发送：generation在发送前已失效";
                 if (conversationCtl != null) conversationCtl.SetSendResult(false, invalidBeforeSend);
                 ResponseProgressTracker.Cancel(burst.SellerNick, burst.BuyerNick, invalidBeforeSend);
                 return;
@@ -286,6 +296,10 @@ namespace Bot.ChromeNs
                         burst.BuyerNick);
                 }
             }
+            if (sendOk)
+                lease.MarkCompleted("streaming_send_completed");
+            else
+                lease.MarkFailed("streaming_send_failed");
             if (conversationCtl != null)
             {
                 conversationCtl.SetSendResult(

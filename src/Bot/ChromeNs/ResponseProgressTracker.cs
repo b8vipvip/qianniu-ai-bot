@@ -10,6 +10,11 @@ using System.Threading;
 
 namespace Bot.ChromeNs
 {
+    /// <summary>
+    /// UI/metrics observer only. BuyerSessionAgent is the sole business lifecycle authority.
+    /// A terminal/stale observation may remove or update an existing turn, but must never recreate
+    /// a turn or fall through onto another generation.
+    /// </summary>
     internal static class ResponseProgressTracker
     {
         private sealed class Entry
@@ -197,24 +202,24 @@ namespace Bot.ChromeNs
             if (answerReadyAt == DateTime.MinValue) answerReadyAt = DateTime.Now;
             var detected = detectedAt == DateTime.MinValue ? answerReadyAt : detectedAt;
             var turnKey = ResolveOperationOrDetectedTurnKey(seller, buyer, detected);
-            if (!Entries.ContainsKey(turnKey))
+            Entry entry;
+            if (string.IsNullOrWhiteSpace(turnKey)
+                || !Entries.TryGetValue(turnKey, out entry)
+                || entry == null)
             {
-                ObserveQuestion(seller, buyer, question, detected);
-                turnKey = TurnKey(seller, buyer, detected);
+                Log.Info("已丢弃失效turn的迟到答案就绪观察，不重建回复进度: seller=" + seller
+                    + ", buyer=" + buyer + ", turn=" + (turnKey ?? string.Empty));
+                return null;
             }
             OperationTurnKey.Value = turnKey;
             var control = SetExactQuestionByTurn(turnKey, question, detected);
             var answerStartedAt = detected;
-            Entry entry;
-            if (Entries.TryGetValue(turnKey, out entry) && entry != null)
+            lock (entry.Sync)
             {
-                lock (entry.Sync)
-                {
-                    entry.AnswerReadyAt = answerReadyAt;
-                    entry.Answer = answer ?? string.Empty;
-                    answerStartedAt = entry.AnswerStartedAt == DateTime.MinValue ? detected : entry.AnswerStartedAt;
-                    control = entry.Control ?? control;
-                }
+                entry.AnswerReadyAt = answerReadyAt;
+                entry.Answer = answer ?? string.Empty;
+                answerStartedAt = entry.AnswerStartedAt == DateTime.MinValue ? detected : entry.AnswerStartedAt;
+                control = entry.Control ?? control;
             }
             if (control != null)
             {
@@ -316,10 +321,10 @@ namespace Bot.ChromeNs
 
         public static void Fail(string seller, string buyer, string detail)
         {
-            MessageProcessingTraceService.RecordFailure(seller, buyer, detail);
             var turnKey = ResolveTerminalTurnKey(seller, buyer);
             Entry entry;
             if (!TryRemoveTurn(turnKey, out entry) || entry == null) return;
+            MessageProcessingTraceService.RecordFailure(seller, buyer, detail);
             lock (entry.Sync)
             {
                 if (entry.Control != null)
@@ -332,10 +337,10 @@ namespace Bot.ChromeNs
 
         public static void Cancel(string seller, string buyer, string detail)
         {
-            MessageProcessingTraceService.RecordCancelled(seller, buyer, detail);
             var turnKey = ResolveTerminalTurnKey(seller, buyer);
             Entry entry;
             if (!TryRemoveTurn(turnKey, out entry) || entry == null) return;
+            MessageProcessingTraceService.RecordCancelled(seller, buyer, detail);
             lock (entry.Sync)
             {
                 if (entry.Control != null)
@@ -488,14 +493,7 @@ namespace Bot.ChromeNs
         {
             var conversationKey = Key(seller, buyer);
             var operationKey = OperationTurnKey.Value;
-            Entry operationEntry;
-            if (!string.IsNullOrWhiteSpace(operationKey)
-                && Entries.TryGetValue(operationKey, out operationEntry)
-                && operationEntry != null
-                && string.Equals(operationEntry.ConversationKey, conversationKey, StringComparison.Ordinal))
-            {
-                return operationKey;
-            }
+            if (!string.IsNullOrWhiteSpace(operationKey)) return operationKey;
             return TurnKey(seller, buyer, NormalizeDetectedAt(detectedAt));
         }
 
@@ -503,14 +501,7 @@ namespace Bot.ChromeNs
         {
             var conversationKey = Key(seller, buyer);
             var operationKey = OperationTurnKey.Value;
-            Entry operationEntry;
-            if (!string.IsNullOrWhiteSpace(operationKey)
-                && Entries.TryGetValue(operationKey, out operationEntry)
-                && operationEntry != null
-                && string.Equals(operationEntry.ConversationKey, conversationKey, StringComparison.Ordinal))
-            {
-                return operationKey;
-            }
+            if (!string.IsNullOrWhiteSpace(operationKey)) return operationKey;
             string currentKey;
             return CurrentTurns.TryGetValue(conversationKey, out currentKey)
                 ? currentKey
