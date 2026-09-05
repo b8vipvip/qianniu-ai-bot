@@ -90,6 +90,7 @@ namespace Bot.ChromeNs
         public string SessionKey { get; set; }
         public long Generation { get; set; }
         public CancellationToken CancellationToken { get; set; }
+        public DateTime AcceptedAtUtc { get; set; }
         public bool SupersededPreviousGeneration { get; set; }
         public bool Duplicate { get; set; }
         // Compatibility field retained for callers compiled against the intermediate model.
@@ -109,6 +110,7 @@ namespace Bot.ChromeNs
         private const int MaxRememberedMessageKeys = 64;
         private const int MaxRememberedEvents = 64;
         private const int MaxRememberedGenerationStates = 128;
+        internal const int AbsoluteGenerationAgeSeconds = 55;
         private static readonly ConcurrentDictionary<string, SessionState> Sessions =
             new ConcurrentDictionary<string, SessionState>(StringComparer.Ordinal);
 
@@ -130,6 +132,7 @@ namespace Bot.ChromeNs
             long generation;
             bool hadParallelGeneration;
             CancellationToken token;
+            DateTime acceptedAtUtc;
             lock (state.SyncRoot)
             {
                 state.SellerNick = Normalize(sellerNick);
@@ -147,11 +150,13 @@ namespace Bot.ChromeNs
                         && duplicateCts != null
                         ? duplicateCts.Token
                         : CancellationToken.None;
+                    state.GenerationAcceptedAtUtc.TryGetValue(state.Generation, out acceptedAtUtc);
                     return new BuyerSessionAgentObservation
                     {
                         SessionKey = key,
                         Generation = state.Generation,
                         CancellationToken = token,
+                        AcceptedAtUtc = acceptedAtUtc,
                         SupersededPreviousGeneration = false,
                         Duplicate = true,
                         ReusedCoalescingGeneration = false
@@ -162,9 +167,11 @@ namespace Bot.ChromeNs
                 hadParallelGeneration = state.ActiveGenerations.Count > 0;
                 state.Generation++;
                 generation = state.Generation;
+                acceptedAtUtc = DateTime.UtcNow;
                 var cts = new CancellationTokenSource();
                 state.GenerationCancellation = cts;
                 state.ActiveGenerations[generation] = cts;
+                state.GenerationAcceptedAtUtc[generation] = acceptedAtUtc;
                 SetGenerationStateLocked(state, generation, BuyerSessionAgentState.Observed);
                 token = cts.Token;
                 state.LastMessageKey = messageKey;
@@ -175,11 +182,17 @@ namespace Bot.ChromeNs
                     messageKey,
                     sortValue,
                     state.LastObservedAt,
-                    state.LastObservedAt,
+                    DateTime.Now,
                     generation,
                     false,
                     "actionable_buyer_message");
             }
+
+            BuyerSessionAgentRuntimeBridge.RegisterAcceptedGeneration(
+                sellerNick,
+                buyerNick,
+                generation,
+                acceptedAtUtc);
 
             Log.Info("BuyerSessionAgent observed: seller=" + Normalize(sellerNick)
                 + ", buyer=" + Normalize(buyerNick)
@@ -194,6 +207,7 @@ namespace Bot.ChromeNs
                 SessionKey = key,
                 Generation = generation,
                 CancellationToken = token,
+                AcceptedAtUtc = acceptedAtUtc,
                 SupersededPreviousGeneration = false,
                 Duplicate = false,
                 ReusedCoalescingGeneration = false
@@ -271,6 +285,7 @@ namespace Bot.ChromeNs
                     if (state.ActiveGenerations.TryGetValue(state.Generation, out cancel))
                         state.ActiveGenerations.Remove(state.Generation);
                     if (state.GenerationCancellation == cancel) state.GenerationCancellation = null;
+                    SetGenerationStateLocked(state, state.Generation, BuyerSessionAgentState.Cancelled);
                     SetStateLocked(state, BuyerSessionAgentState.Cancelled, reason);
                     result.CancelledCurrentGeneration = true;
                 }
@@ -296,13 +311,30 @@ namespace Bot.ChromeNs
         {
             SessionState state;
             if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            var expired = false;
+            long elapsedMs = 0;
             lock (state.SyncRoot)
             {
                 CancellationTokenSource cts;
-                return state.ActiveGenerations.TryGetValue(generation, out cts)
-                    && cts != null
-                    && !cts.IsCancellationRequested;
+                if (!state.ActiveGenerations.TryGetValue(generation, out cts)
+                    || cts == null
+                    || cts.IsCancellationRequested)
+                {
+                    return false;
+                }
+                expired = IsGenerationExpiredLocked(state, generation, DateTime.UtcNow, out elapsedMs);
+                if (!expired) return true;
             }
+
+            Cancel(sellerNick, buyerNick, generation, "absolute_generation_age_current_gate");
+            Log.ErrorWithMaxCount(
+                "generation超过绝对年龄已被同步current门禁取消: seller=" + Normalize(sellerNick)
+                + ", buyer=" + Normalize(buyerNick)
+                + ", generation=" + generation
+                + ", elapsedMs=" + elapsedMs
+                + ", limitSeconds=" + AbsoluteGenerationAgeSeconds,
+                100);
+            return false;
         }
 
         public CancellationToken GetCancellationToken(string sellerNick, string buyerNick, long generation)
@@ -321,7 +353,10 @@ namespace Bot.ChromeNs
             if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
             BuyerSessionAgentState previous;
             CancellationTokenSource completedCts = null;
+            CancellationTokenSource expiredCts = null;
             var updateLatestState = false;
+            var expired = false;
+            long elapsedMs = 0;
             lock (state.SyncRoot)
             {
                 CancellationTokenSource active;
@@ -334,21 +369,56 @@ namespace Bot.ChromeNs
 
                 if (!state.GenerationStates.TryGetValue(generation, out previous))
                     previous = BuyerSessionAgentState.Observed;
-                if (!CanTransition(previous, next)) return false;
-                SetGenerationStateLocked(state, generation, next);
 
-                updateLatestState = state.Generation == generation;
-                if (updateLatestState)
-                    SetStateLocked(state, next, reason);
-
-                if (next == BuyerSessionAgentState.Completed
-                    || next == BuyerSessionAgentState.Cancelled
-                    || next == BuyerSessionAgentState.Failed)
+                if (next != BuyerSessionAgentState.Cancelled
+                    && next != BuyerSessionAgentState.Failed
+                    && IsGenerationExpiredLocked(state, generation, DateTime.UtcNow, out elapsedMs))
                 {
-                    if (state.ActiveGenerations.TryGetValue(generation, out completedCts))
-                        state.ActiveGenerations.Remove(generation);
-                    if (state.GenerationCancellation == completedCts) state.GenerationCancellation = null;
+                    expired = true;
+                    expiredCts = active;
+                    state.ActiveGenerations.Remove(generation);
+                    SetGenerationStateLocked(state, generation, BuyerSessionAgentState.Cancelled);
+                    if (state.GenerationCancellation == expiredCts) state.GenerationCancellation = null;
+                    updateLatestState = state.Generation == generation;
+                    if (updateLatestState)
+                        SetStateLocked(state, BuyerSessionAgentState.Cancelled, "absolute_generation_age_transition_gate");
                 }
+                else
+                {
+                    if (!CanTransition(previous, next)) return false;
+                    SetGenerationStateLocked(state, generation, next);
+
+                    updateLatestState = state.Generation == generation;
+                    if (updateLatestState)
+                        SetStateLocked(state, next, reason);
+
+                    if (next == BuyerSessionAgentState.Completed
+                        || next == BuyerSessionAgentState.Cancelled
+                        || next == BuyerSessionAgentState.Failed)
+                    {
+                        if (state.ActiveGenerations.TryGetValue(generation, out completedCts))
+                            state.ActiveGenerations.Remove(generation);
+                        if (state.GenerationCancellation == completedCts) state.GenerationCancellation = null;
+                    }
+                }
+            }
+
+            if (expiredCts != null)
+            {
+                try { expiredCts.Cancel(); } catch { }
+                try { expiredCts.Dispose(); } catch { }
+            }
+            if (expired)
+            {
+                Log.ErrorWithMaxCount(
+                    "generation超过绝对年龄，状态转换硬门禁已拒绝迟到结果: seller=" + Normalize(sellerNick)
+                    + ", buyer=" + Normalize(buyerNick)
+                    + ", generation=" + generation
+                    + ", attemptedState=" + next
+                    + ", elapsedMs=" + elapsedMs
+                    + ", limitSeconds=" + AbsoluteGenerationAgeSeconds,
+                    100);
+                return false;
             }
 
             if (completedCts != null)
@@ -432,6 +502,22 @@ namespace Bot.ChromeNs
             }
         }
 
+        public bool TryGetGenerationAcceptedAtUtc(
+            string sellerNick,
+            string buyerNick,
+            long generation,
+            out DateTime acceptedAtUtc)
+        {
+            acceptedAtUtc = default(DateTime);
+            SessionState state;
+            if (!Sessions.TryGetValue(BuildKey(sellerNick, buyerNick), out state)) return false;
+            lock (state.SyncRoot)
+            {
+                return state.GenerationAcceptedAtUtc.TryGetValue(generation, out acceptedAtUtc)
+                    && acceptedAtUtc != default(DateTime);
+            }
+        }
+
         public BuyerSessionAgentSnapshot GetSnapshot(string sellerNick, string buyerNick)
         {
             SessionState state;
@@ -511,6 +597,25 @@ namespace Bot.ChromeNs
                     ? cts.Token
                     : CancellationToken.None;
             }
+        }
+
+        private static bool IsGenerationExpiredLocked(
+            SessionState state,
+            long generation,
+            DateTime nowUtc,
+            out long elapsedMs)
+        {
+            elapsedMs = 0;
+            DateTime acceptedAtUtc;
+            if (!state.GenerationAcceptedAtUtc.TryGetValue(generation, out acceptedAtUtc)
+                || acceptedAtUtc == default(DateTime))
+            {
+                return false;
+            }
+            var elapsed = nowUtc - acceptedAtUtc;
+            if (elapsed < TimeSpan.Zero) elapsed = TimeSpan.Zero;
+            elapsedMs = Math.Max(0, (long)elapsed.TotalMilliseconds);
+            return elapsed.TotalSeconds > AbsoluteGenerationAgeSeconds;
         }
 
         private static bool IsOlderThanLatestBuyerLocked(SessionState state, long sortValue, DateTime sourceTimestamp)
@@ -642,6 +747,7 @@ namespace Bot.ChromeNs
                     break;
                 }
                 state.GenerationStates.Remove(oldest);
+                state.GenerationAcceptedAtUtc.Remove(oldest);
             }
         }
 
@@ -679,6 +785,8 @@ namespace Bot.ChromeNs
                 new Dictionary<long, CancellationTokenSource>();
             public readonly Dictionary<long, BuyerSessionAgentState> GenerationStates =
                 new Dictionary<long, BuyerSessionAgentState>();
+            public readonly Dictionary<long, DateTime> GenerationAcceptedAtUtc =
+                new Dictionary<long, DateTime>();
             public readonly Queue<long> GenerationStateOrder = new Queue<long>();
             public long EventSequence;
             public BuyerSessionEventKind LastEventKind;

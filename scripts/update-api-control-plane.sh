@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_URL="${REPO_URL:-git@github.com:b8vipvip/qianniu-ai-bot.git}"
-REPO_DIR="${REPO_DIR:-/opt/qianniu-ai-bot}"
+REPO_URL="${REPO_URL:-git@github.com:b8vipvip/qnbot.git}"
+REPO_DIR="${REPO_DIR:-/opt/qnbot}"
 LEGACY_DIR="${LEGACY_DIR:-/opt/qianniu-api-control-plane}"
 BRANCH="${BRANCH:-master}"
-BACKUP_ROOT="${BACKUP_ROOT:-/opt/qianniu-ai-bot-backups}"
+BACKUP_ROOT="${BACKUP_ROOT:-/opt/qnbot-backups}"
 CONTAINER_NAME="${CONTAINER_NAME:-qianniu-api-control-plane}"
 VERIFY_URL="${VERIFY_URL:-}"
 

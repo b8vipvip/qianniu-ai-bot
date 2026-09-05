@@ -28,7 +28,7 @@ LOCAL_PROXY = f"socks5h://{LISTEN_HOST}:{LISTEN_PORT}"
 SING_BOX_BIN = os.getenv("SING_BOX_BIN", "/usr/local/bin/sing-box").strip()
 CONFIG_PATH = Path(os.getenv("GITHUB_VLESS_PROXY_CONFIG", "/tmp/qianniu-github-vless-proxy.json"))
 LOG_PATH = Path(os.getenv("GITHUB_VLESS_PROXY_LOG", "/tmp/qianniu-github-vless-proxy.log"))
-GITHUB_TEST_URL = "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest"
+GITHUB_TEST_URL = "https://api.github.com/repos/b8vipvip/qnbot/releases/latest"
 
 _LOCK = threading.RLock()
 _PROCESS: Optional[subprocess.Popen[Any]] = None

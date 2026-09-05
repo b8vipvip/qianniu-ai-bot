@@ -23,9 +23,9 @@ namespace Bot.UpdateNs
     internal static partial class BotUpdateService
     {
         private const string GitHubLatestReleaseApi =
-            "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest";
+            "https://api.github.com/repos/b8vipvip/qnbot/releases/latest";
         private const string ReleasesPage =
-            "https://github.com/b8vipvip/qianniu-ai-bot/releases";
+            "https://github.com/b8vipvip/qnbot/releases";
         private const string PackageAssetName = "qianniu-bot-x64.zip";
         private const string ManifestAssetName = "update.json";
         private const string ControlPlaneScope = "ai-control-plane";

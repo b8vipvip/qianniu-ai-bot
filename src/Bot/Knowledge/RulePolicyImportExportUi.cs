@@ -29,9 +29,9 @@ namespace Bot.Knowledge
 {
     internal static class RulePolicyImportExportUi
     {
-        private const string StoreSchema = "qianniu-ai-bot.store-rules";
-        private const string PolicySchema = "qianniu-ai-bot.knowledge-policies";
-        private const string KnowledgePackageSchema = "qianniu-ai-bot.knowledge-package";
+        private const string StoreSchema = "qnbot.store-rules";
+        private const string PolicySchema = "qnbot.knowledge-policies";
+        private const string KnowledgePackageSchema = "qnbot.knowledge-package";
         private const int ExportVersion = 2;
 
         private static readonly ConditionalWeakTable<Window, object> Attached =
@@ -669,12 +669,21 @@ namespace Bot.Knowledge
                 new UTF8Encoding(false));
         }
 
+        private static bool SchemaMatches(string actual, string expected)
+        {
+            if (string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) return true;
+            if (string.IsNullOrWhiteSpace(expected)
+                || !expected.StartsWith("qnbot.", StringComparison.OrdinalIgnoreCase)) return false;
+            var legacyExpected = ("qianniu" + "-ai-bot") + expected.Substring("qnbot".Length);
+            return string.Equals(actual, legacyExpected, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static void ValidateSchema(JObject root, string expected)
         {
             if (root == null) throw new Exception("导入文件为空。");
             var schema = Convert.ToString(root["schema"]);
             if (!string.IsNullOrWhiteSpace(schema)
-                && !string.Equals(schema, expected, StringComparison.OrdinalIgnoreCase))
+                && !SchemaMatches(schema, expected))
             {
                 throw new Exception("文件类型不匹配：" + schema);
             }

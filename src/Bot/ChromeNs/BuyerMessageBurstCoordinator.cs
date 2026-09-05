@@ -335,9 +335,9 @@ namespace Bot.ChromeNs
                 var continueToMerge = true;
                 try
                 {
-                    // The deterministic service owns the only same-buyer gate. Its bounded 1.8s
-                    // acquisition fails open for later generations, so an unhealthy fixed send can
-                    // no longer strand the whole buyer in Coalescing. We deliberately await the
+                    // The deterministic service owns the only same-buyer gate. Ordinary fixed rules
+                    // wait with the current generation cancellation token instead of timing out into AI;
+                    // explicit generation invalidation is the bounded escape path. We deliberately await the
                     // selected rule task here: starting AI while that task can still send would
                     // create a duplicate/out-of-order side-effect race.
                     continueToMerge = await DeterministicAutoReplyService.HandleBeforeMergeAsync(

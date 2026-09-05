@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-REPO_DIR="${REPO_DIR:-/opt/qianniu-ai-bot}"
+REPO_DIR="${REPO_DIR:-/opt/qnbot}"
 SERVICE_NAME="qianniu-api-update-agent.service"
 UNIT_PATH="/etc/systemd/system/$SERVICE_NAME"
 AGENT_SCRIPT="$REPO_DIR/scripts/api-control-plane-update-agent.sh"

@@ -1,7 +1,7 @@
 # Qianniu AI Bot 项目交接上下文
 
 更新时间：2026-09-04 16:40 +08:00 之后  
-仓库：`b8vipvip/qianniu-ai-bot`  
+仓库：`b8vipvip/qnbot`  
 默认分支：`master`  
 当前稳定基线：`6291c3d137bdaa8154d18ab3a1a488b034d959a3`（PR #220 已合并）  
 当前正式客户端：`bot-v1.1.1213`

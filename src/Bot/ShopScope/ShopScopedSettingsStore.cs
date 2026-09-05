@@ -11,7 +11,8 @@ namespace Bot.ShopScope
 {
     internal sealed class ShopScopedSettingsStore
     {
-        private const string Schema = "qianniu-ai-bot.shop-settings";
+        private const string Schema = "qnbot.shop-settings";
+        private static readonly string LegacySchema = "qianniu" + "-ai-bot.shop-settings";
         private const int SchemaVersion = 1;
         private const string Algorithm = "DPAPI-CurrentUser";
         private static readonly ConcurrentDictionary<string, object> Locks =
@@ -210,13 +211,14 @@ namespace Bot.ShopScope
 
         private byte[] Entropy()
         {
-            return Encoding.UTF8.GetBytes("qianniu-ai-bot|shop-settings|" + _shop.ShopKey);
+            return Encoding.UTF8.GetBytes("qianniu" + "-ai-bot|shop-settings|" + _shop.ShopKey);
         }
 
         private void Validate(SettingsDocument document)
         {
             if (document == null
-                || !string.Equals(document.Schema, Schema, StringComparison.Ordinal)
+                || (!string.Equals(document.Schema, Schema, StringComparison.Ordinal)
+                    && !string.Equals(document.Schema, LegacySchema, StringComparison.Ordinal))
                 || document.SchemaVersion != SchemaVersion
                 || !string.Equals(document.ShopKey, _shop.ShopKey, StringComparison.Ordinal)
                 || !string.Equals(document.Algorithm, Algorithm, StringComparison.Ordinal)

@@ -36,7 +36,7 @@ def test_knowledge_center_has_complete_package_import_export():
     io = read("src/Bot/Knowledge/RulePolicyImportExportUi.cs")
     assert '导入知识库完整包' in center
     assert '导出知识库完整包' in center
-    assert 'KnowledgePackageSchema = "qianniu-ai-bot.knowledge-package"' in io
+    assert 'KnowledgePackageSchema = "qnbot.knowledge-package"' in io
     assert 'BotFeatureStore.SaveKnowledgeBase(importedKnowledge)' in io
     assert '["policy"] = policy' in io
     assert '["settings"] = settings' in io

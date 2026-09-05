@@ -2,7 +2,7 @@
 param(
     [string]$InstallDir = "",
     [string]$ControlPlaneUrl = "",
-    [string]$ReleaseApi = "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest",
+    [string]$ReleaseApi = "https://api.github.com/repos/b8vipvip/qnbot/releases/latest",
     [string]$PackagePath = "",
     [string]$ExpectedVersion = "",
     [string]$ExpectedSha256 = ""

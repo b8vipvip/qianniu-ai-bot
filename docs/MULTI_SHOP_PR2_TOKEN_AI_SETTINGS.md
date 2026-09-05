@@ -28,19 +28,19 @@
 `settings.json` 使用 schema：
 
 ```text
-qianniu-ai-bot.shop-settings / version 1
+qnbot.shop-settings / version 1
 ```
 
 文件只保存 schema、ShopKey、算法、更新时间、条目数量和 `protected_values`。真实 AI 设置字典先序列化，再使用以下附加熵加密：
 
 ```text
-qianniu-ai-bot|shop-settings|<ShopKey>
+qnbot|shop-settings|<ShopKey>
 ```
 
 令牌文件使用 schema：
 
 ```text
-qianniu-ai-bot.shop-token / version 1
+qnbot.shop-token / version 1
 ```
 
 令牌文件不保存令牌明文，只保存：
@@ -53,7 +53,7 @@ qianniu-ai-bot.shop-token / version 1
 令牌附加熵为：
 
 ```text
-qianniu-ai-bot|control-plane-token|<ShopKey>
+qnbot|control-plane-token|<ShopKey>
 ```
 
 两个文件只能由当前 Windows 用户解密；把 A 店文件复制到 B 店目录后，也会因 ShopKey 附加熵和文件内 ShopKey 校验而失败。

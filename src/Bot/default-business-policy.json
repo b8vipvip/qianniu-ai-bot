@@ -1,5 +1,5 @@
 {
-  "schema": "qianniu-ai-bot.business-policy",
+  "schema": "qnbot.business-policy",
   "version": 2,
   "updatedAt": "2026-08-03 11:45:00",
   "patterns": {

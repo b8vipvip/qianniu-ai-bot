@@ -43,7 +43,7 @@ def test_background_updates_are_server_push_and_manual_check_keeps_safe_fallback
     # Version discovery remains unchanged: server metadata first, GitHub metadata fallback.
     assert "/api/public/v1/bot-update/latest" in code
     assert "ServiceMetadataTimeoutSeconds = 6" in code
-    assert "https://api.github.com/repos/b8vipvip/qianniu-ai-bot/releases/latest" in code
+    assert "https://api.github.com/repos/b8vipvip/qnbot/releases/latest" in code
     assert "FetchLatestFromControlPlaneAsync" in code
     assert "FetchLatestFromGitHubAsync" in code
     assert 'Name="UseOptimizedBotUpdateService"' in props

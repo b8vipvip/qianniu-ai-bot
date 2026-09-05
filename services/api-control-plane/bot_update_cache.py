@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 router = APIRouter()
 
-REPOSITORY = "b8vipvip/qianniu-ai-bot"
+REPOSITORY = "b8vipvip/qnbot"
 GITHUB_LATEST_RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
 PACKAGE_ASSET_NAME = "qianniu-bot-x64.zip"
 MANIFEST_ASSET_NAME = "update.json"

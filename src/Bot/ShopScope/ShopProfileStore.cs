@@ -9,7 +9,8 @@ namespace Bot.ShopScope
 {
     internal sealed class ShopProfileStore
     {
-        private const string RegistrySchema = "qianniu-ai-bot.shop-registry";
+        private const string RegistrySchema = "qnbot.shop-registry";
+        private static readonly string LegacyRegistrySchema = "qianniu" + "-ai-bot.shop-registry";
         private const int CurrentSchemaVersion = 1;
         private static readonly object RegistrySync = new object();
         private readonly IShopScopedPathProvider _paths;
@@ -119,7 +120,8 @@ namespace Bot.ShopScope
         {
             if (registry == null || registry.Shops == null)
                 throw new InvalidDataException("Shop registry is empty or invalid.");
-            if (!string.Equals(registry.Schema, RegistrySchema, StringComparison.Ordinal))
+            if (!string.Equals(registry.Schema, RegistrySchema, StringComparison.Ordinal)
+                && !string.Equals(registry.Schema, LegacyRegistrySchema, StringComparison.Ordinal))
                 throw new InvalidDataException("Unsupported shop registry schema.");
             if (registry.SchemaVersion != CurrentSchemaVersion)
                 throw new InvalidDataException("Unsupported shop registry schema version.");
@@ -144,6 +146,7 @@ namespace Bot.ShopScope
 
         private void SaveRegistry(ShopRegistryDocument registry)
         {
+            registry.Schema = RegistrySchema;
             AtomicWrite(
                 _paths.RegistryPath,
                 JsonConvert.SerializeObject(registry, Formatting.Indented));

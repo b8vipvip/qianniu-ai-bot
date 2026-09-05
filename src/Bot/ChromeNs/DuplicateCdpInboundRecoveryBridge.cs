@@ -52,6 +52,7 @@ namespace Bot.ChromeNs
         private static readonly TimeSpan InboundFingerprintWindow = TimeSpan.FromMinutes(2);
         private static readonly TimeSpan InboundFingerprintRetention = TimeSpan.FromMinutes(5);
         private static readonly TimeSpan SessionSellerRetention = TimeSpan.FromHours(2);
+        private const int MaxPendingInboundEvents = 512;
 
         private static readonly ConcurrentDictionary<string, SessionSellerBinding> SessionSellers =
             new ConcurrentDictionary<string, SessionSellerBinding>(StringComparer.Ordinal);
@@ -64,6 +65,7 @@ namespace Bot.ChromeNs
         private static int _draining;
         private static int _cleanupTick;
         private static long _suppressedDuplicateCount;
+        private static long _droppedPendingCount;
 
         public static object InitializeForApp()
         {
@@ -71,7 +73,8 @@ namespace Bot.ChromeNs
             {
                 MyWebSocketServer.WSocketSvrInst.OnRecieveMessage += OnWebSocketMessage;
                 _retryTimer = new Timer(_ => DrainPending(), null, 250, 250);
-                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话。");
+                Log.Info("重复千牛CDP入站消息恢复桥已启动：发送通道仍保持单一权威会话；暂存队列上限="
+                    + MaxPendingInboundEvents + "。");
             }
             return new object();
         }
@@ -122,9 +125,10 @@ namespace Bot.ChromeNs
 
             if (!TryDeliverLive(item))
             {
-                Pending.Enqueue(item);
+                EnqueuePendingBounded(item, "initial");
                 Log.Info("千牛入站消息已暂存等待权威CDP就绪: sellerRef=" + PrivacyToken("seller", seller)
-                    + ", sessionRef=" + PrivacyToken("session", sessionId) + ", type=" + e.Type);
+                    + ", sessionRef=" + PrivacyToken("session", sessionId) + ", type=" + e.Type
+                    + ", pending=" + Pending.Count + "/" + MaxPendingInboundEvents);
             }
         }
 
@@ -318,6 +322,27 @@ namespace Bot.ChromeNs
             }
         }
 
+        private static void EnqueuePendingBounded(PendingInboundEvent item, string reason)
+        {
+            if (item == null) return;
+
+            PendingInboundEvent dropped;
+            while (Pending.Count >= MaxPendingInboundEvents && Pending.TryDequeue(out dropped))
+            {
+                var total = Interlocked.Increment(ref _droppedPendingCount);
+                if (total <= 3 || total % 50 == 0)
+                {
+                    Log.ErrorWithMaxCount(
+                        "重复CDP入站暂存队列达到上限，已丢弃最旧补偿事件以保护进程内存: droppedTotal="
+                        + total + ", limit=" + MaxPendingInboundEvents
+                        + ", reason=" + (reason ?? string.Empty)
+                        + ", droppedType=" + (dropped == null ? string.Empty : dropped.Type),
+                        100);
+                }
+            }
+            Pending.Enqueue(item);
+        }
+
         private static bool TryDeliverLive(PendingInboundEvent item)
         {
             var qn = QN.FindExistingBySellerNick(item.Seller);
@@ -348,7 +373,8 @@ namespace Bot.ChromeNs
             if (Interlocked.Exchange(ref _draining, 1) != 0) return;
             try
             {
-                var count = Pending.Count;
+                MaybeCleanupTransientState(DateTime.Now);
+                var count = Math.Min(Pending.Count, MaxPendingInboundEvents);
                 for (var i = 0; i < count; i++)
                 {
                     PendingInboundEvent item;
@@ -366,7 +392,7 @@ namespace Bot.ChromeNs
                     var target = qn == null ? null : qn.CDP;
                     if (target == null || target.IsInvalidated)
                     {
-                        Pending.Enqueue(item);
+                        EnqueuePendingBounded(item, "retry_wait_authoritative_cdp");
                         continue;
                     }
 

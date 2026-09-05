@@ -26,7 +26,7 @@ def test_business_phrases_are_client_json_not_progress_guard_constants():
 
 def test_default_policy_has_all_runtime_sections_and_regexes_compile():
     data = policy()
-    assert data["schema"] == "qianniu-ai-bot.business-policy"
+    assert data["schema"] == "qnbot.business-policy"
     assert data["version"] >= 2
     for key in ("patterns", "stages", "facts", "buyerGoals", "prompts", "validationIssues", "handoffOverrides"):
         assert key in data

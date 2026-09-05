@@ -19,7 +19,7 @@ import bot_update_push
 router = APIRouter()
 _cp: Any = None
 
-REPOSITORY = "b8vipvip/qianniu-ai-bot"
+REPOSITORY = "b8vipvip/qnbot"
 GITHUB_MASTER_API = f"https://api.github.com/repos/{REPOSITORY}/commits/master"
 DATA_DIR = Path(os.getenv("DATA_DIR", "/data")).resolve()
 SERVER_UPDATE_DIR = DATA_DIR / "server-update"

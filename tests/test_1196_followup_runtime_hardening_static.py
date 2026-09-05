@@ -36,6 +36,9 @@ def test_exact_duplicate_cdp_payloads_stay_suppressed_across_recovery_cadences()
     assert "InboundFingerprintRetention = TimeSpan.FromMinutes(5)" in bridge
     assert "BuildInboundFingerprint(seller, type, response)" in bridge
     assert "+ (response ?? string.Empty)" in bridge
+    assert "MaxPendingInboundEvents = 512" in bridge
+    assert "EnqueuePendingBounded(item, \"initial\")" in bridge
+    assert "EnqueuePendingBounded(item, \"retry_wait_authoritative_cdp\")" in bridge
 
 
 def test_owned_draft_forget_helper_clears_state_without_self_recursion():
@@ -46,13 +49,19 @@ def test_owned_draft_forget_helper_clears_state_without_self_recursion():
     assert "LatestSetTextTime = DateTime.MinValue;" in helper
 
 
-def test_generation_deadline_watch_is_not_tied_to_recent_event_ring_or_transient_generating_sample():
+def test_generation_deadline_watch_uses_actual_acceptance_clock_and_direct_registration():
+    agent = read("src/Bot/ChromeNs/BuyerSessionAgent.cs")
     bridge = read("src/Bot/ChromeNs/BuyerSessionAgentRuntimeBridge.cs")
+    assert "GenerationAcceptedAtUtc" in agent
+    assert "acceptedAtUtc = DateTime.UtcNow" in agent
+    assert "RegisterAcceptedGeneration(" in agent
+    assert "absolute_generation_age_transition_gate" in agent
+    assert "absolute_generation_age_current_gate" in agent
     assert "ConcurrentDictionary<string, WatchedGeneration> WatchedGenerations" in bridge
     assert "foreach (var pair in WatchedGenerations.ToArray())" in bridge
-    assert "WatchedGenerations.GetOrAdd" in bridge
-    assert "BuyerActionAccepted" in bridge
-    assert "one end-to-end generation lifetime" in bridge
+    assert "RegisterAcceptedGeneration(" in bridge
+    assert "TryGetGenerationAcceptedAtUtc(" in bridge
+    assert "BuyerActionAccepted" not in bridge
     assert "state == BuyerSessionAgentState.Generating" not in bridge
     assert "Agent.Cancel(" in bridge
     assert "absolute_generation_age_exceeded" in bridge
